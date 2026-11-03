@@ -286,7 +286,8 @@ def _report_commit(r, rel: str, text: bytes) -> str:
 
 def _report_to_base(r) -> None:
     """integration의 최종 report.md를 base에도 남긴다. 거부되면 최신 base 위에서 한 번 더.
-    그래도 실패하면 경고뿐이다(실행 결과·종료 코드는 그대로, 다음 gs go도 재시도하지 않는다)."""
+    그래도 실패하면 경고뿐이다(실행 결과·종료 코드는 그대로, 다음 gs go도 재시도하지 않는다).
+    시도를 마치면 base_report_tried를 남긴다. 그 전에 끊긴 실행은 다음 재개가 처음으로 시도한다."""
     rel = f"{WORK}/{r.name}/report.md"
     error: Exception | None = None
     for _ in range(2):
@@ -295,10 +296,11 @@ def _report_to_base(r) -> None:
         except Exception as e:  # noqa: BLE001 — 보고서 push는 최선. 병합·검증 결과를 바꾸지 않는다
             error = e
             continue
+        _save(r, base_report_tried=True, **({"base_report": sha} if sha else {}))
         if sha:
-            _save(r, base_report=sha)
             print(f"■ 최종 보고서를 {r.base}에 push했다({sha[:8]})", flush=True)
         return
+    _save(r, base_report_tried=True)
     print(f"■ 경고: 최종 보고서를 {r.base}에 push하지 못했다(두 번 시도). 실행 결과는 그대로다: {error}", flush=True)
 
 
@@ -310,8 +312,6 @@ def run(r) -> tuple[str | None, bool]:
     anchor = f.get("head") or f.get("merge_head")
     resume = bool(anchor and git.run(r.iwt, "merge-base", "--is-ancestor", anchor, "HEAD", check=False).returncode == 0
                   and not git.out(r.iwt, "log", f"{anchor}..HEAD", "--format=%H", f"--grep=^gs-ticket: {r.name}/"))
-    # 지난 실행이 이미 마무리했으면 base 보고서 push를 다시 하지 않는다(실패했어도 재시도 없음, spec 2-6).
-    finished_before = resume and f.get("phase") in BASE_REPORT_PHASES
     if resume and f.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed", "verified", "reverted"):
         # summarize가 돌려준 것과 같게(파일 끝 줄바꿈 제외). 재개가 보고서를 바꾸면 base의 보고서와 어긋난다.
         summary = (directory / "summary.md").read_text(encoding="utf-8").strip()
@@ -371,6 +371,7 @@ def run(r) -> tuple[str | None, bool]:
     git.run(r.repo, "fetch", "-q", r.remote, r.base)
     merge_base(r)
     _update(r, summary)
-    if f["phase"] in BASE_REPORT_PHASES and not finished_before:
+    # 지난 실행이 이미 시도했으면 다시 하지 않는다(실패했어도 재시도 없음, spec 2-6). 새 마무리는 finish를 비운다.
+    if f["phase"] in BASE_REPORT_PHASES and not f.get("base_report_tried"):
         _report_to_base(r)
     return f.get("url"), ok

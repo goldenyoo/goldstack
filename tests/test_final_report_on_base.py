@@ -176,6 +176,37 @@ class FinalReportOnBaseTest(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.tip(), moved[1])
 
+    def test_update_failure_before_first_attempt_is_tried_on_resume(self):
+        """verified 뒤 보고서 갱신(gh pr edit)이 실패해 base push를 한 번도 시도하지 못했으면 다음 gs go가 시도한다."""
+        from gs import finish
+        failed, real_gh = [], finish._gh
+
+        def gh(r, *args):
+            if args[:1] == ("edit",) and r.st.finish.get("phase") == "verified" and not failed:
+                failed.append(args)
+                raise git.GitError("gh pr edit: temporary failure")
+            return real_gh(r, *args)
+
+        before = self.tip()
+        with mock.patch("gs.finish._gh", side_effect=gh):
+            code, out, err = self.go("--only", "01")
+        self.assertNotEqual(code, 0, out + err)
+        self.assertEqual(len(failed), 1)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "verified")
+        self.assertNotIn("base_report_tried", f)
+        self.assertNotIn(SUBJECT, sh(self.remote, "git", "log", "--format=%s", "main"))
+        self.assertNotEqual(self.tip(), before)  # 병합은 됐다
+
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "verified")
+        self.assertEqual(self.under_report(), f["merge_sha"])
+        self.assertEqual(self.base_report(), self.final_report())
+        self.assertEqual(f["base_report"], self.tip())
+        self.assertTrue(f["base_report_tried"])
+
 
 if __name__ == "__main__":
     unittest.main()
