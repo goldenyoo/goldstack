@@ -73,7 +73,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 - 이 worktree 안의 파일만 바꾼다.
 - 끝나면 변경을 이 브랜치에 커밋한다(여러 커밋 가능). 커밋이 없으면 실패로 처리된다.
 - push, PR 생성, 병합은 하지 않는다. gs가 한다.
-- 검증 명령 `{spec.verify}`를 커밋 전에 돌려 통과시킨다. gs가 다시 돌려 확인한다.
+- 검증 명령 `{spec.ticket_verify}`를 커밋 전에 돌려 통과시킨다. gs가 다시 돌려 확인한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.
 - 완료 조건이 이 티켓의 명세다. 범위 밖은 건드리지 않는다.
 

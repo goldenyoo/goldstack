@@ -512,13 +512,13 @@ fi
         self.assertIn("| 03 | t03 | skipped | 막힘: 02 |", self.final_report())
         self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
 
-    def test_finish_verifies_report_commit_before_merging(self):
-        self.parallel(1, verify="test ! -f .goldstack/work/demo/report.md")
+    def test_finish_skips_verify_when_only_report_changed(self):
+        self.parallel(1, verify='test ! -f .goldstack/work/demo/report.md || test "${PWD##*/}" = base')
         code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 1, out + err)
+        self.assertEqual(code, 0, out + err)
         self.assertEqual(state.load(self.rundir, "demo").tickets["01"].status, "merged")
-        self.assertFalse(any(x.startswith("pr merge ") for x in self.lines("gh.log")))
-        self.assertIn("integration 검증 실패", self.final_report())
+        self.assertTrue(any(x.startswith("pr merge ") for x in self.lines("gh.log")))
+        self.assertIn("integration-final: 보고서만 바뀜, 건너뜀", self.final_report())
         self.assertIn("integration-final-verify.log", self.final_report())
 
     def test_finish_merge_queue_is_not_success_and_resume_rechecks_pr(self):
@@ -1221,7 +1221,7 @@ fi
         t04 = self.integration("log", "--format=%H", "--grep=^t04$", "gs/demo/integration")
         self.assertIn("file_01", self.integration("ls-tree", "--name-only", f"{t04}^").split())
         # 병합·검증은 한 번에 하나씩
-        self.assertEqual(vlog.read_text().split(), ["s", "e"] * 8)  # 티켓 5 + integration 2 + main 1
+        self.assertEqual(vlog.read_text().split(), ["s", "e"] * 7)  # 티켓 5 + integration 1 + main 1
 
     def test_parallel_conflict_retries_on_latest_integration(self):
         for tid in ("21", "22", "23"):

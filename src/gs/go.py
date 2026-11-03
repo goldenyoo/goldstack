@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from . import adapters, clean, config, failure, finish, git, graph, herdr, notify, report, review, setup, state, verify, worker
@@ -931,9 +931,16 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
 
 def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path]:
     log = Path(r.st.ticket(t.id).log).parent / "verify.log"
-    say(f"[{t.id}] 검증: {r.feat.spec.verify}")
+    spec = r.feat.spec
+    # 별도 명령이 없으면 기존처럼 integration의 미완 병합 트리를 검증한다.
+    wt = Path(r.st.ticket(t.id).worktree) if spec.verify_ticket is not None else r.iwt
+    command = spec.ticket_verify
+    say(f"[{t.id}] 검증: {command}")
     with log.open("w", encoding="utf-8") as f:
-        res = verify.run(r.feat.spec, r.iwt, f)
+        if spec.verify_ticket is not None:
+            f.write(f"$ {command}\ncwd: {wt}\n")
+        res = verify.run(replace(spec, verify=command), wt, f)
+        verify.flaky(res, f"ticket-{t.id}", f)
     if res.timed_out:
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
     return res, log

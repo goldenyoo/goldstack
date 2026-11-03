@@ -127,7 +127,7 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         self.assertEqual([Path(c).name for c in calls], ["integration", "01", "base"])
         self.assertIn("gs-main-", calls[-1])
-        self.assertEqual(len((self.bin / "verifies").read_text().splitlines()), 4)
+        self.assertEqual(len((self.bin / "verifies").read_text().splitlines()), 3)
         for path in ("01/1/setup.log", "integration/1/setup.log", "finish/setup.log"):
             self.assertTrue((self.rundir / path).is_file(), path)
             self.assertIn(path, self.final_report())

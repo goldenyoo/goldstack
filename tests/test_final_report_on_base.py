@@ -116,7 +116,7 @@ class FinalReportOnBaseTest(unittest.TestCase):
         self.assertIn("\n마무리: not_merged · merged 티켓 없음\n", self.final_report())
 
     def test_integration_failure_pushes_nothing(self):
-        self.parallel(1, verify="test ! -f .goldstack/work/demo/report.md")
+        self.parallel(1, verify="git rev-parse -q --verify MERGE_HEAD >/dev/null")
         before = self.tip()
         self.assertEqual(self.go("--only", "01")[0], 1)
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "not_merged")

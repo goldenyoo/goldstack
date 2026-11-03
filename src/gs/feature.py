@@ -12,7 +12,8 @@ from . import frontmatter
 
 FAMILIES = ("claude", "codex", "agy")
 SPEC_REQUIRED = ("feature", "verify")
-SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20}
+SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20, "verify_retries": 0}
+SPEC_OPTIONAL = ("verify_ticket",)
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
 TICKET_OPTIONAL = ("touches", "second_reviewer")
 WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
@@ -46,6 +47,12 @@ class Spec:
     idle_minutes: int
     verify_minutes: int
     path: Path
+    verify_ticket: str | None = None
+    verify_retries: int = 0
+
+    @property
+    def ticket_verify(self) -> str:
+        return self.verify_ticket if self.verify_ticket is not None else self.verify
 
 
 @dataclass
@@ -143,24 +150,29 @@ def _load_spec(path: Path, name: str, repo: Path, problems: list[Problem]) -> Sp
     if isinstance(data.get("feature"), str) and data["feature"] != name:
         problems.append(Problem("오류", where, f"feature `{data['feature']}`가 디렉터리 이름 `{name}`과 다르다"))
         ok = False
-    verify = data.get("verify")
-    if isinstance(verify, str) and (not verify.strip() or "\n" in verify or "\r" in verify):
-        # 빈 명령은 `sh -c ""`로 늘 성공해서 검증이 조용히 사라진다
-        problems.append(Problem("오류", where, "`verify`는 비어 있지 않은 한 줄 셸 명령이어야 한다"))
-        ok = False
+    for key in ("verify", "verify_ticket"):
+        if key not in data:
+            continue
+        command = data[key]
+        if not isinstance(command, str) or not command.strip() or "\n" in command or "\r" in command:
+            # 빈 명령은 `sh -c ""`로 늘 성공해서 검증이 조용히 사라진다
+            problems.append(Problem("오류", where, f"`{key}`는 비어 있지 않은 한 줄 셸 명령이어야 한다"))
+            ok = False
     ints = {}
     for key, default in SPEC_DEFAULTS.items():
         raw = data.get(key, str(default))
-        if not (isinstance(raw, str) and re.fullmatch(r"[0-9]+", raw) and int(raw) >= 1):
-            problems.append(Problem("오류", where, f"`{key}`는 1 이상의 정수여야 한다: {raw!r}"))
+        minimum = 0 if key == "verify_retries" else 1
+        if not (isinstance(raw, str) and re.fullmatch(r"[0-9]+", raw) and int(raw) >= minimum):
+            problems.append(Problem("오류", where, f"`{key}`는 {minimum} 이상의 정수여야 한다: {raw!r}"))
             ok = False
             continue
         ints[key] = int(raw)
-    for key in data.keys() - set(SPEC_REQUIRED) - set(SPEC_DEFAULTS):
+    for key in data.keys() - set(SPEC_REQUIRED) - set(SPEC_DEFAULTS) - set(SPEC_OPTIONAL):
         problems.append(Problem("경고", where, f"알 수 없는 키 `{key}`"))
     if not ok:
         return None
-    return Spec(feature=data["feature"], verify=data["verify"], path=path, **ints)
+    return Spec(feature=data["feature"], verify=data["verify"], path=path,
+                verify_ticket=data.get("verify_ticket"), **ints)
 
 
 def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | None:
