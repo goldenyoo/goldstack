@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gs import cli, config
+from gs import cli, config, git
 
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
@@ -55,7 +55,8 @@ class SkillTest(unittest.TestCase):
     def test_filled_templates_pass_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            (repo / ".git").mkdir()
+            git.run(repo, "init", "-q")
+            git.run(repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
             (repo / ".goldstack").mkdir()
             (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
             root = repo / ".goldstack/work" / "demo"
@@ -70,6 +71,75 @@ class SkillTest(unittest.TestCase):
                 code = cli.main(["--repo", str(repo), "check", "demo"])
             self.assertEqual((code, err.getvalue()), (0, ""), out.getvalue())
             self.assertIn("오류 0, 경고 0", out.getvalue())
+
+    def test_every_skill_named_after_its_directory(self):
+        names = sorted(path.parent.name for path in SKILLS.glob("*/SKILL.md"))
+        self.assertIn("idea", names)
+        for name in names:
+            with self.subTest(name):
+                data, body = skill_frontmatter((SKILLS / name / "SKILL.md").read_text(encoding="utf-8"))
+                self.assertEqual(data["name"], name)
+                self.assertTrue(data["description"])
+                self.assertTrue(body.strip())
+
+
+def steps(body):
+    """번호 단계(`\\nN. `)를 {N: 글}로 자른다."""
+    parts, n = {}, 1
+    rest = body.partition("\n1. ")[2]
+    while rest:
+        head, _, rest = rest.partition(f"\n{n + 1}. ")
+        parts[n], n = head, n + 1
+    return parts
+
+
+class IdeaFlowTest(unittest.TestCase):
+    """아이디어가 /retro·/idea → .goldstack/ideas → 다음 /grill로 흐르는 고리(goldstack-v3 07)."""
+
+    def read(self, name):
+        return (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_idea_skill(self):
+        data, body = skill_frontmatter(self.read("idea"))
+        self.assertEqual(data["name"], "idea")
+        self.assertEqual(data["disable-model-invocation"], "true")
+        self.assertIn("/idea <한 줄>", data["description"])
+        self.assertLess(len(body.split()), 400)
+        self.assertIn(".goldstack/ideas/README.md", body)  # 형식은 README 한 곳에
+        self.assertTrue((REPO / ".goldstack/ideas/README.md").is_file())
+        parts = steps(body)
+        self.assertIn("gs backlog", parts[1])  # 비슷한 것을 먼저 찾는다
+        self.assertIn("덧붙일까", parts[2])
+        for key in ("date", "severity", "source", "status", "feature"):
+            self.assertIn(f"`{key}`", parts[3])
+        self.assertIn("한 줄로", parts[4])
+        self.assertIn("커밋하지 않는다", parts[4])
+        self.assertNotIn("git commit", body)
+
+    def test_grill_asks_backlog_first_and_marks_taken(self):
+        parts = steps(self.read("grill"))
+        self.assertIn("gs backlog", parts[1])
+        self.assertIn("라운드 1의 첫 질문", parts[3])
+        self.assertIn("이번 feature에 넣을 후보", parts[3])
+        self.assertIn('status: "taken"', parts[6])
+        self.assertIn('feature: "$ARGUMENTS"', parts[6])
+
+    def test_ideas_committed_by_grill_and_go(self):
+        for name, step in (("grill", 6), ("go", 2)):
+            with self.subTest(name):
+                text = steps(self.read(name))[step]
+                self.assertRegex(text, r"git add -- \.goldstack/work/\$ARGUMENTS \.goldstack/out-of-scope \.goldstack/ideas &&")
+
+    def test_retro_reads_feature_run(self):
+        data, body = skill_frontmatter(self.read("retro"))
+        self.assertIn("feature", data["description"])
+        for source in ("report.md", "run/state.json", "worker.log", "`review`", "`fix`", "grill 기록",
+                       ".goldstack/work/*/report.md", "~/.claude/usage-data/report-*.html"):
+            self.assertIn(source, body)
+        self.assertIn("`run/`이 없으면", body)
+        self.assertIn("`[반복]`", body)
+        self.assertIn("idea/SKILL.md", body)  # 고른 후보는 /idea 형식으로
+        self.assertTrue((SKILLS / "idea" / "SKILL.md").is_file())
 
 
 MATT_COMMIT = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"

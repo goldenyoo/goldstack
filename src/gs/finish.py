@@ -16,6 +16,10 @@ import tempfile
 from pathlib import Path
 
 from . import git, report, state, verify
+from .feature import WORK
+
+# 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
+BASE_REPORT_PHASES = ("verified", "reverted")
 
 
 def _save(r, **fields) -> None:
@@ -24,8 +28,9 @@ def _save(r, **fields) -> None:
 
 
 def _gh(r, *args: str) -> str:
+    repository = git.github_repo(r.repo, r.remote)
     try:
-        cp = subprocess.run([os.environ.get("GS_GH", "gh"), "pr", *args], cwd=r.repo,
+        cp = subprocess.run([os.environ.get("GS_GH", "gh"), "pr", *args, "--repo", repository], cwd=r.repo,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True)
     except OSError as e:
         raise git.GitError(f"gh pr {args[0]}: {e}") from e
@@ -258,6 +263,47 @@ def _update(r, summary: str) -> None:
         _gh(r, "edit", r.st.finish["url"], "--body-file", str(path.resolve()))
 
 
+def _report_commit(r, rel: str, text: bytes) -> str:
+    """원격 base의 최신 끝 위에 report.md만 바꾼 커밋을 만들어 일반 push한다. base에 이미 같으면 빈 문자열."""
+    git.run(r.repo, "fetch", "-q", r.remote, r.base)
+    with tempfile.TemporaryDirectory(prefix="gs-report-", dir=r.rundir) as tmp:
+        wt = Path(tmp) / "base"
+        git.run(r.repo, "worktree", "add", "--detach", str(wt), r.base_ref)
+        try:
+            path = wt / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(text)
+            git.run(wt, "add", "--", rel)
+            if git.run(wt, "diff", "--cached", "--quiet", "--", rel, check=False).returncode == 0:
+                return ""
+            git.run(wt, "commit", "-q", "-m", f"gs: {r.name} 최종 보고서(병합 후)", "--only", "--", rel)
+            # 절대로 force하지 않는다. 거부되면(base가 움직임) 부른 쪽이 최신 base 위에서 다시 만든다.
+            git.run(wt, "push", r.remote, f"HEAD:refs/heads/{r.base}")
+            return git.sha(wt, "HEAD")
+        finally:
+            git.remove_worktree(r.repo, wt)
+
+
+def _report_to_base(r) -> None:
+    """integration의 최종 report.md를 base에도 남긴다. 거부되면 최신 base 위에서 한 번 더.
+    그래도 실패하면 경고뿐이다(실행 결과·종료 코드는 그대로, 다음 gs go도 재시도하지 않는다).
+    시도를 마치면 base_report_tried를 남긴다. 그 전에 끊긴 실행은 다음 재개가 처음으로 시도한다."""
+    rel = f"{WORK}/{r.name}/report.md"
+    error: Exception | None = None
+    for _ in range(2):
+        try:
+            sha = _report_commit(r, rel, (r.iwt / rel).read_bytes())
+        except Exception as e:  # noqa: BLE001 — 보고서 push는 최선. 병합·검증 결과를 바꾸지 않는다
+            error = e
+            continue
+        _save(r, base_report_tried=True, **({"base_report": sha} if sha else {}))
+        if sha:
+            print(f"■ 최종 보고서를 {r.base}에 push했다({sha[:8]})", flush=True)
+        return
+    _save(r, base_report_tried=True)
+    print(f"■ 경고: 최종 보고서를 {r.base}에 push하지 못했다(두 번 시도). 실행 결과는 그대로다: {error}", flush=True)
+
+
 def run(r) -> tuple[str | None, bool]:
     directory = r.rundir / "finish"
     directory.mkdir(parents=True, exist_ok=True)
@@ -267,7 +313,8 @@ def run(r) -> tuple[str | None, bool]:
     resume = bool(anchor and git.run(r.iwt, "merge-base", "--is-ancestor", anchor, "HEAD", check=False).returncode == 0
                   and not git.out(r.iwt, "log", f"{anchor}..HEAD", "--format=%H", f"--grep=^gs-ticket: {r.name}/"))
     if resume and f.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed", "verified", "reverted"):
-        summary = (directory / "summary.md").read_text(encoding="utf-8")
+        # summarize가 돌려준 것과 같게(파일 끝 줄바꿈 제외). 재개가 보고서를 바꾸면 base의 보고서와 어긋난다.
+        summary = (directory / "summary.md").read_text(encoding="utf-8").strip()
     else:
         prev = r.st.finish
         r.st.finish = {}
@@ -324,4 +371,7 @@ def run(r) -> tuple[str | None, bool]:
     git.run(r.repo, "fetch", "-q", r.remote, r.base)
     merge_base(r)
     _update(r, summary)
+    # 지난 실행이 이미 시도했으면 다시 하지 않는다(실패했어도 재시도 없음, spec 2-6). 새 마무리는 finish를 비운다.
+    if f["phase"] in BASE_REPORT_PHASES and not f.get("base_report_tried"):
+        _report_to_base(r)
     return f.get("url"), ok

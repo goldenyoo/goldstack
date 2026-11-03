@@ -31,6 +31,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="실행 상태(state.json)를 표로 본다(읽기 전용)")
     p.add_argument("feature", nargs="?", help=".goldstack/work/<feature>(생략하면 실행 중인 feature 전부)")
 
+    p = sub.add_parser("backlog", help="아이디어와 범위 밖의 다시 볼 조건을 본다(읽기 전용)")
+    p.add_argument("--all", action="store_true", help="taken·dropped를 포함하고 status 열을 보인다")
+
     p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
     p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
                    help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON)")
@@ -62,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "status":
         from .status import status
         return status(repo, args.feature, sys.stdout)
+    if args.cmd == "backlog":
+        from .backlog import backlog
+        return backlog(repo, args.all, sys.stdout, sys.stderr)
     return 2  # argparse가 막으므로 오지 않는다
 
 
