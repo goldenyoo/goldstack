@@ -25,7 +25,13 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("status", help="실행 상태(state.json)를 표로 본다(읽기 전용)")
     p.add_argument("feature", nargs="?", help=".work/<feature>(생략하면 실행 중인 feature 전부)")
 
+    p = sub.add_parser("hook", help="Claude Code hook 진입점(plugin이 부른다). GS_ROLE=worker일 때만 막는다")
+    p.add_argument("event", choices=["pretooluse"], help="hook 이벤트")
+
     args = parser.parse_args(argv)
+    if args.cmd == "hook":  # 레포를 찾지 않는다. 일반 세션에서 아무 디렉터리에서나 불린다
+        from . import hook
+        return hook.main([args.event])
     repo = args.repo or featmod.find_repo_root(Path.cwd())
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
