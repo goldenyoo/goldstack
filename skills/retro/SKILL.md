@@ -26,7 +26,7 @@ disable-model-invocation: true
           ```
           agy -p "<프롬프트>" --sandbox --dangerously-skip-permissions --disable-slash-commands --model "$model"
           ```
-          프롬프트에는 `worker.log` 경로 목록(레포 루트 기준)을 넣고, 파일을 고치지 말고 읽기만 하라고 적고, 티켓·시도별로 다음을 요약하게 한다: 실패 이유, 재시도 횟수, 리뷰 지적의 반복(같은 지적이 시도나 티켓을 건너 다시 나왔나), 오래 걸린 단계. 근거마다 로그 경로와 줄 번호를 붙이게 한다.
+          프롬프트에는 경로 목록(레포 루트 기준)을 넣는다: `worker.log` 전부, 리뷰 답 `run/NN/<시도>/review/review.txt` 전부(수정 worker를 띄우지 않은 지적은 `worker.log`에 없다), 단계별 `started_at`·`ended_at`이 든 `run/state.json`(각 티켓의 `phases`). 파일을 고치지 말고 읽기만 하라고 적고, 티켓·시도별로 다음을 요약하게 한다: 실패 이유, 재시도 횟수, 리뷰 지적의 반복(같은 지적이 시도나 티켓을 건너 다시 나왔나), 오래 걸린 단계. 근거마다 로그 경로와 줄 번호를 붙이게 한다.
      - **agy가 없거나 실패하면**(`command -v agy`가 비었다, 종료 코드가 0이 아니다, 답이 비었다) 다시 부르지 않는다. 사람에게 그 사실을 한 줄로 말하고 200KB 미만 방식(로그마다 끝부분과 오류 줄)으로 간다.
    - `spec.md`의 "grill 기록": 정한 것과 실제 실행이 어긋난 곳.
    - 다른 feature의 `.goldstack/work/*/report.md`: 같은 실패가 전에도 있었나(**반복**).
