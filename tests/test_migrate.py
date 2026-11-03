@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from gs import cli, config
+from support import isolate_git_env
 
 SPEC = '---\nfeature: demo\nverify: "true"\n---\n'
 TICKET = '---\nid: "01"\ntitle: a\nblocked_by: []\nmodel: claude\nreviewer: codex\n---\n## 목표\na\n'
@@ -20,6 +21,7 @@ def sh(cwd, *args):
 
 class MigrateTest(unittest.TestCase):
     def setUp(self):
+        isolate_git_env(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name).resolve() / "repo"
         self.env = mock.patch.dict(os.environ, {
@@ -29,6 +31,7 @@ class MigrateTest(unittest.TestCase):
         self.env.start()
         self.repo.mkdir()
         sh(self.repo, "git", "init", "-q", "-b", "main")
+        sh(self.repo, "git", "remote", "add", "origin", "https://github.com/owner/repo.git")
         work = self.repo / ".work/demo"
         (work / "tickets").mkdir(parents=True)
         (work / "spec.md").write_text(SPEC)

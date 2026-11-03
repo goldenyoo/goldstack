@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gs import cli, config
+from gs import cli, config, git
 
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
@@ -55,7 +55,8 @@ class SkillTest(unittest.TestCase):
     def test_filled_templates_pass_check(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            (repo / ".git").mkdir()
+            git.run(repo, "init", "-q")
+            git.run(repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
             (repo / ".goldstack").mkdir()
             (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
             root = repo / ".goldstack/work" / "demo"

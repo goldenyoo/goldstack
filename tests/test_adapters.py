@@ -20,6 +20,7 @@ from gs.feature import Ticket
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_go import FAKE_GH, SPEC, sh  # noqa: E402
+from support import isolate_git_env
 
 MODELS = config.ModelsConfig("judge-test", "review-test", "agy-test", "")
 
@@ -59,6 +60,7 @@ def git_repo_with_worktree(root: Path, branch="gs/demo/01"):
 
 class Base(unittest.TestCase):
     def setUp(self):
+        isolate_git_env(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(os.path.realpath(self.tmp.name))
@@ -433,7 +435,9 @@ class AgyGoAndCheckTest(Base):
         (tickets / "02-t.md").write_text(AGY_TICKET.format(tid="02", model="codex"))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", "init")
-        sh(self.repo, "git", "remote", "add", "origin", str(remote))
+        url = "https://github.com/test/origin.git"
+        sh(self.repo, "git", "remote", "add", "origin", url)
+        sh(self.repo, "git", "config", f"url.{remote}.insteadOf", url)
         sh(self.repo, "git", "push", "-q", "-u", "origin", "main")
 
     def cli(self, *args):
