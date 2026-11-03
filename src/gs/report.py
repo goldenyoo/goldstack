@@ -10,7 +10,7 @@ import os
 import shlex
 from pathlib import Path
 
-from . import git, review, state
+from . import config, git, review, state
 from .feature import WORK
 
 LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
@@ -58,13 +58,16 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             timings.append(f"- {tid} 단계별 소요: " + (" · ".join(spent) or "모두 1분 미만"))
         reason += kept(ts)
         rows.append("| " + " | ".join(cell(s) for s in (tid, r.feat.tickets[tid].title, ts.status, reason)) + " |")
-        rec = ts.review
-        for key in ("note", "fix"):
-            if rec.get(key):
-                notes.append(f"- {tid}: {rec[key]}")
-        for finding in review.remaining(rec):
-            notes.append(f"- {tid} [{finding['severity']}] {finding['location']}: {finding['claim']}\n"
-                         f"  근거: {finding['evidence'] or '없음'}; 판단: {finding.get('why', '')}")
+        recs = state.reviews(ts)
+        for rec in recs:
+            # 리뷰마다 계열 이름을 붙인다(두 번째 리뷰어가 있으면 한 티켓에 리뷰가 둘이다)
+            who = f"{tid} 리뷰({rec.get('reviewer') or '?'})"
+            for key in ("note", "fix"):
+                if rec.get(key):
+                    notes.append(f"- {who}: {rec[key]}")
+            for finding in review.remaining(rec):
+                notes.append(f"- {who} [{finding['severity']}] {finding['location']}: {finding['claim']}\n"
+                             f"  근거: {finding['evidence'] or '없음'}; 판단: {finding.get('why', '')}")
         # 지난 시도의 로그는 실행마다 쌓이므로 가장 최근 것만 붙인다(전부는 실행 디렉터리에 있다).
         found = list((r.rundir / tid).glob("**/verify.log"))
         if found:
@@ -82,7 +85,14 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             + f"티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `{r.rundir.resolve()}/<티켓>/`\n\n")
     for log in logs:
         text += _log(r, log, tail)
-    return text
+    return text + f"\n{agy_usage(r)}\n"
+
+
+def agy_usage(r) -> str:
+    """이번 실행에서 gs가 띄운 agy 호출 수와 상한(spec 1-9)."""
+    cfg = getattr(r, "cfg", None)
+    limit = cfg.agy.max_calls_per_run if cfg is not None else config.AgyConfig().max_calls_per_run
+    return f"agy 사용: {r.st.agy_calls}/{limit}"
 
 
 def summarize(r) -> str:

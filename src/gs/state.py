@@ -54,6 +54,8 @@ class TicketState:
     # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
     # 지적마다 severity·location·claim·evidence·action(fix|report)·why·fix_attempt. 재리뷰가 없어 지적은 모두 남아 보고서(08)에 들어간다
     review: dict = field(default_factory=dict)
+    # 두 번째 리뷰(second_reviewer)의 기록. 모양은 review와 같다. second_reviewer가 없는 티켓은 비어 있다
+    second_review: dict = field(default_factory=dict)
     # 단계 전환마다 추가한다. attempt는 worker 실행 디렉터리 번호(중단 재개 때도 재사용하지 않음).
     # 각 항목: attempt, phase, model, started_at, ended_at. 지난 시도도 보고서에 합산한다.
     phases: list[dict] = field(default_factory=list)
@@ -71,9 +73,20 @@ class State:
     finish: dict = field(default_factory=dict)  # 08: PR·병합·main 검증·revert의 재개 지점
     phase: str = ""  # feature 전체 마무리 중이면 finish
     progress: dict = field(default_factory=dict)
+    agy_calls: int = 0  # 이번 실행에서 gs가 띄운 agy 호출 수(worker 1번·리뷰 1번 = 1회, 재시도·수정 포함). 실행마다 0에서
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
+
+
+def reviews(ts: TicketState) -> list[dict]:
+    """티켓의 리뷰 기록들: 첫 리뷰, 있으면 두 번째 리뷰. 빈 기록은 뺀다."""
+    return [rec for rec in (ts.review, ts.second_review) if rec]
+
+
+def agy_reached(st: State, limit: int) -> bool:
+    """이번 실행의 agy 호출이 상한에 닿았나. 닿았으면 더 띄우지 않는다."""
+    return st.agy_calls >= limit
 
 
 PHASE_LABELS = {"worker": "worker", "review": "리뷰", "fix": "수정", "verify": "검증", "finish": "마무리"}
