@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import adapters, cli, herdr, state, worker
+from gs import adapters, cli, herdr, review, state, worker
 
 
 def git_clean(wt):
@@ -39,6 +39,11 @@ echo "$GS_TICKET" >> "$here/calls.log"
 echo $$ > "$here/pid_$GS_TICKET"
 echo "start $GS_TICKET" >> "$here/events.log"
 trap 'echo "end $GS_TICKET" >> "$here/events.log"' EXIT
+if grep -q '^## 리뷰 지적(고칠 것)' "$GS_BRIEF"; then  # 리뷰 뒤 수정 worker(06)
+  echo "fix $GS_TICKET" >> "$here/fix.log"
+  if [ -f "$here/fixfail" ]; then echo bad > "badfix_$GS_TICKET"; git add -A; git commit -qm "bad fix"; exit 3; fi
+  echo fixed > "fixed_$GS_TICKET"; git add -A; git commit -qm "fix $GS_TICKET"; exit 0
+fi
 if [ -f "$here/barrier" ]; then  # 시작한 worker가 barrier개가 될 때까지 기다린다(최대 10초): 동시 실행의 증거
   for i in $(seq 200); do [ "$(grep -c '^start' "$here/events.log")" -ge "$(cat "$here/barrier")" ] && break; sleep 0.05; done
 fi
@@ -96,6 +101,29 @@ case "$1 $2" in
 esac
 """
 
+FAKE_REVIEWER = """\
+# 가짜 reviewer: 프롬프트와 diff를 남기고, findings.json이 있으면 그것을(설명과 코드 블록으로 감싸) 답한다.
+here="$(dirname "$0")"
+echo "$GS_REVIEWER" >> "$here/review.calls"
+cat > "$here/review.prompt"
+cp "$(grep -o '/[^ `]*diff.patch' "$here/review.prompt" | head -n 1)" "$here/review.diff"
+if [ -f "$here/findings.json" ]; then echo '리뷰 결과:'; echo '```json'; cat "$here/findings.json"; echo '```'
+else echo '{"findings": []}'; fi
+"""
+
+# 가짜 판단 모델(리뷰 분류): claim에 FIX가 있으면 fix, 아니면 report. 프롬프트에서 findings.json 경로만 읽는다.
+FAKE_REVIEW_JUDGE = """\
+here="$(dirname "$0")"
+echo "$@" >> "$here/judge.calls"
+cat > "$here/judge.input"
+"$PY" - "$(grep -o '/[^ `]*findings.json' "$here/judge.input" | head -n 1)" <<'PYEOF'
+import json, sys
+fs = json.load(open(sys.argv[1]))["findings"]
+print(json.dumps({"decisions": [{"id": f["id"], "action": "fix" if "FIX" in f["claim"] else "report", "why": "가짜"}
+                                for f in fs]}))
+PYEOF
+"""
+
 FAKE_JUDGE = """\
 here="$(dirname "$0")"
 echo "$@" >> "$here/judge.calls"
@@ -133,7 +161,9 @@ class GoTest(unittest.TestCase):
         (self.bin / "gh").chmod(0o755)
         (self.bin / "judge").write_text("#!/bin/bash\n" + FAKE_JUDGE)
         (self.bin / "judge").chmod(0o755)
+        (self.bin / "reviewer.sh").write_text(FAKE_REVIEWER)
         self.env = mock.patch.dict(os.environ, {
+            "GS_REVIEWER_CMD": f"bash {self.bin / 'reviewer.sh'}",
             "GS_RUNNER": "subprocess",
             "GS_WORKER_CMD": f"bash {self.bin / 'worker.sh'}",
             "GS_GH": str(self.bin / "gh"),
@@ -207,6 +237,112 @@ class GoTest(unittest.TestCase):
 
     def events(self):
         return (self.bin / "events.log").read_text().split("\n")[:-1]
+
+    # --- 다른 계열 리뷰와 수정 1회(06) ---
+    def review_with(self, findings):
+        """가짜 reviewer가 낼 지적과 가짜 판단 모델(FIX가 claim에 있으면 fix)을 건다."""
+        (self.bin / "findings.json").write_text(json.dumps({"findings": findings}, ensure_ascii=False))
+        (self.bin / "judge").write_text("#!/bin/bash\n" + FAKE_REVIEW_JUDGE)
+        return mock.patch.dict(os.environ, {"PY": sys.executable})
+
+    def review_state(self, tid="01"):
+        return state.load(self.rundir, "demo").tickets[tid].review
+
+    def lines(self, name):
+        p = self.bin / name
+        return p.read_text().splitlines() if p.exists() else []
+
+    def test_review_fix_once_then_merge(self):
+        self.assertEqual(self.go("--only", "01")[0], 0)  # 01이 먼저 integration에 있다: diff는 04만이어야 한다
+        with self.review_with([
+            {"severity": "high", "location": "file_04:1", "claim": "FIX: 값이 틀렸다", "evidence": "cat file_04 → 04"},
+            {"severity": "low", "location": "file_04", "claim": "FIX 이름이 마음에 안 든다", "evidence": ""},
+            {"severity": "medium", "location": "file_04", "claim": "설명 문서가 없다", "evidence": "티켓 완료 조건"},
+        ]):
+            code, out, err = self.go("--only", "01,04")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.calls(), ["01", "04", "04"])  # 구현 worker, 수정 worker 한 번
+        self.assertEqual(self.lines("fix.log"), ["fix 04"])
+        self.assertEqual(self.lines("review.calls"), ["codex", "codex"])  # 01·04 한 번씩. 수정 뒤 재리뷰 없음
+        self.assertEqual(self.merged(), ["01", "04"])
+        files = self.integration("ls-tree", "--name-only", "gs/demo/integration").split()
+        self.assertIn("fixed_04", files)  # 수정 커밋이 병합에 들어갔다
+        self.assertIn("수정 worker 시작: 지적 1개", out)
+        self.assertIn("[04] 검증 통과", out)
+        self.assertTrue((self.rundir / "04/1/fix/verify.log").exists())  # 재리뷰 대신 verify
+
+        # reviewer에게는 merge-base 기준 그 티켓 diff와 티켓·spec 경로를 줬다
+        diff = (self.bin / "review.diff").read_text()
+        self.assertIn("file_04", diff)
+        self.assertNotIn("file_01", diff)
+        prompt = (self.bin / "review.prompt").read_text()
+        self.assertIn(str(self.repo.resolve() / ".work/demo/tickets/04-t.md"), prompt)
+        self.assertIn(str(self.repo.resolve() / ".work/demo/spec.md"), prompt)
+        # 판단 모델은 새 claude -p(Opus)이고 파일 경로만 받는다
+        self.assertIn("-p --model opus", (self.bin / "judge.calls").read_text())
+        self.assertNotIn("값이 틀렸다", (self.bin / "judge.input").read_text())
+
+        rec = self.review_state("04")
+        self.assertEqual([(f["action"], f["fixed"]) for f in rec["findings"]],
+                         [("fix", True), ("report", False), ("report", False)])  # 근거 없는 지적은 report
+        self.assertIn("근거 없음", rec["findings"][1]["why"])
+        self.assertEqual([f["claim"] for f in review.remaining(rec)], ["FIX 이름이 마음에 안 든다", "설명 문서가 없다"])
+        self.assertIn("재리뷰 없음", rec["fix"])
+        brief = (self.rundir / "04/1/fix/brief.md").read_text()
+        self.assertIn("FIX: 값이 틀렸다", brief)
+        self.assertNotIn("마음에 안 든다", brief)
+        self.assertIn("04 병합 · 남은 리뷰 지적 2", out)
+
+    def test_review_report_only_merges_directly(self):
+        with self.review_with([{"severity": "low", "location": "file_01", "claim": "변수 이름이 짧다",
+                                "evidence": "file_01 첫 줄"}]):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.calls(), ["01"])  # 수정 worker 없음
+        self.assertEqual(self.lines("fix.log"), [])
+        self.assertEqual(self.merged(), ["01"])
+        self.assertFalse((self.rundir / "01/1/fix").exists())
+        rec = self.review_state()
+        self.assertEqual(rec["reviewer"], "codex")
+        self.assertEqual([(f["severity"], f["action"]) for f in rec["findings"]], [("low", "report")])
+        self.assertEqual(len(review.remaining(rec)), 1)
+
+    def test_same_family_reviewer_is_refused(self):
+        (self.repo / ".work/demo/tickets/10-t.md").write_text(ticket("10").replace("reviewer: codex", "reviewer: claude"))
+        sh(self.repo, "git", "add", "-A")
+        sh(self.repo, "git", "commit", "-qm", "same family")
+        sh(self.repo, "git", "push", "-q", "origin", "main")
+        code, out, err = self.go("--only", "10")
+        self.assertEqual(code, 1)
+        self.assertIn("리뷰는 다른 계열이어야 한다", err)
+        self.assertIn("아무것도 띄우지 않았다", err)
+        self.assertEqual((self.calls(), self.lines("review.calls")), ([], []))
+        # 리뷰 단계 자체도 같은 계열이면 reviewer를 부르지 않고 거부한다
+        with self.assertRaisesRegex(review.Refused, "같은 계열"):
+            review.run(repo=self.repo, worktree=self.repo, rdir=self.rundir / "x", base="main", branch="main",
+                       ticket=Path("t"), spec=Path("s"), model="claude", reviewer="claude")
+        self.assertEqual(self.lines("review.calls"), [])
+
+    def test_failed_fix_is_discarded_and_reviewed_work_merged(self):
+        (self.bin / "fixfail").touch()
+        with self.review_with([{"severity": "high", "location": "file_01", "claim": "FIX: 틀렸다", "evidence": "e"}]):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.calls(), ["01", "01"])
+        files = self.integration("ls-tree", "--name-only", "gs/demo/integration").split()
+        self.assertIn("file_01", files)
+        self.assertNotIn("badfix_01", files)  # 실패한 수정은 버렸다
+        rec = self.review_state()
+        self.assertIn("수정 worker 실패(종료 코드 3)", rec["fix"])
+        self.assertEqual(len(review.remaining(rec)), 1)  # 고치지 못한 fix 지적이 남는다
+        self.assertEqual(state.load(self.rundir, "demo").tickets["01"].failures, 0)  # 티켓 실패로 세지 않는다
+
+    def test_reviewer_failure_is_recorded_and_ticket_still_merges(self):
+        with mock.patch.dict(os.environ, {"GS_REVIEWER_CMD": "echo 'not json'"}):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.calls(), ["01"])
+        self.assertIn("리뷰 없음", self.review_state()["note"])
 
     # --- 실패·멈춤과 재시도(07) ---
     def timeout_retry(self, runner):

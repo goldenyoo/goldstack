@@ -406,7 +406,8 @@ class AgyGoAndCheckTest(Base):
         (self.bin / "gh").write_text("#!/bin/bash\n" + FAKE_GH)
         (self.bin / "gh").chmod(0o755)
         patch = mock.patch.dict(os.environ, {"GS_RUNNER": "subprocess", "GS_GH": str(self.bin / "gh"),
-                                            "GS_JUDGE": "/usr/bin/true"})
+                                            "GS_JUDGE": "/usr/bin/true",
+                                            "GS_REVIEWER_CMD": "echo '{\"findings\": []}'"})
         patch.start()
         self.addCleanup(patch.stop)
         remote = self.root / "remote.git"

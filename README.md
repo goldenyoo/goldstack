@@ -41,6 +41,15 @@ pane을 끝낸다. 종료 코드, 커밋 없음, 시간 초과, 검증 실패, �
 실패 worktree는 삭제하지 않는다. state의 `failed_worktrees`에 경로를 보존하며, 시도별 `failure.log`,
 `failure-summary.md`, 검증·충돌 로그도 남긴다.
 
+리뷰(06): worker가 성공하면 병합 전에 티켓의 `reviewer`(구현 `model`과 다른 계열, 같으면 거부)가 그 티켓 diff
+(최신 integration과의 merge-base 기준)를 읽기 전용으로 리뷰한다. reviewer에게는 diff·티켓·spec 경로를 주고, 답은 고정된
+JSON(`{"findings": [{"severity": "high|medium|low", "location", "claim", "evidence"}]}`)이다. 새 `claude -p --model opus`
+(판단 모델, 파일 경로만 받는다)가 지적마다 fix·report를 정한다. 근거(evidence)가 빈 지적은 늘 report다(코드 규칙).
+fix가 있으면 같은 구현 모델로 수정 worker를 같은 브랜치에 한 번 띄운다(지적을 brief에 붙인다). 재리뷰는 없고 verify만 돈다.
+수정 worker가 실패하면 수정 커밋을 버리고 리뷰한 구현을 병합·검증한다(티켓 실패로 세지 않는다). reviewer·판단 모델
+호출이 실패해도 티켓은 그대로 간다(관문은 verify). 기록은 state의 `review`(지적, fix 여부, 메모)와 시도 디렉터리의
+`review/`(diff, 프롬프트, 답), `fix/`(수정 worker)에 남는다. 고치지 않은 지적이 보고서(08)의 남은 지적이다.
+
 상태(03): `run/state.json`이 상태의 원천이다. 티켓별 상태(pending, running, merged, failed, skipped), 시도 횟수,
 브랜치, pane, 시작·끝 시각, 로그 경로, 실패 이유. 쓰기는 임시 파일 뒤 rename(원자적). `gs go`의 요약·PR 본문과
 `gs status`가 모두 이 파일을 읽는다(마지막 출력 시각은 worker 로그의 수정 시각).
@@ -49,7 +58,8 @@ pane을 끝낸다. 종료 코드, 커밋 없음, 시간 초과, 검증 실패, �
 잡고 pid를 적는다. 프로세스가 죽으면 커널이 잠금을 풀어 저절로 회수된다.
 
 바꿔 끼우는 곳(시험 seam): `GS_RUNNER=subprocess|herdr`(기본: herdr 안이면 herdr), `GS_WORKER_CMD`(worker 셸 명령,
-어댑터를 건너뛴다), `GS_GH`(gh 경로), `GS_AGY`(agy 경로), `GS_JUDGE`(실패 요약용 Claude CLI 경로).
+어댑터를 건너뛴다), `GS_GH`(gh 경로), `GS_AGY`(agy 경로), `GS_JUDGE`(실패 요약·리뷰 분류용 Claude CLI 경로),
+`GS_REVIEWER_CMD`(reviewer 셸 명령: stdin = 프롬프트, stdout = JSON 답).
 
 ## 모델 어댑터(05)
 `src/gs/adapters.py`. 어댑터마다 같은 입력(brief, worktree, 로그 경로)을 받아 준비(`prepare`), 환경(`env`, 모두

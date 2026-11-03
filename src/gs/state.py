@@ -50,6 +50,9 @@ class TicketState:
     failures: int = 0  # 이번 실행의 실패 횟수. 중단 후 이어갈 때도 재시도 한도를 유지한다
     failed_worktrees: list[str] = field(default_factory=list)  # 재시도·재실행 뒤에도 보존
     failure_summary: str = ""  # 재시도 brief에 붙일 판단 모델 요약 파일
+    # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
+    # 지적마다 severity·location·claim·evidence·action(fix|report)·why·fixed. 남은 지적은 보고서(08)에 들어간다
+    review: dict = field(default_factory=dict)
 
 
 @dataclass
