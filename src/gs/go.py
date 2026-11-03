@@ -1,6 +1,7 @@
-"""`gs go`: 티켓을 위상 순서로 하나씩 worker에 맡기고 integration에 모아 PR을 연다(최소형, 02).
+"""`gs go`: 시작할 수 있는 티켓을 max_workers개까지 동시에 worker에 맡기고 integration에 모아 PR을 연다.
 
-순차 실행, 재시도 없음, 리뷰 없음, PR 병합 없음. 병렬(04), 리뷰(06), 재시도(07), 병합(08)은 뒤 티켓.
+병렬 실행(04). 병합·검증은 한 번에 하나씩. 재시도 없음, 리뷰 없음, PR 병합 없음:
+리뷰(06), 재시도·충돌 후 재실행(07), 병합(08)은 뒤 티켓.
 진행 상태는 `.work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
@@ -9,6 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -18,6 +20,7 @@ from .feature import Feature, Ticket
 
 MAIN = "main"
 BASE = "origin/main"  # PR 대상. 로컬 main은 뒤처지거나 앞설 수 있어 쓰지 않는다
+CONFLICT = "conflict"  # 최신 integration과 충돌한 티켓의 실패 이유(07이 이것을 보고 다시 한다)
 
 
 def integration_branch(feature: str) -> str:
@@ -42,6 +45,7 @@ class Run:
     g: dict[str, list[str]] = field(default_factory=dict)
     order: list[str] = field(default_factory=list)
     prior: set[str] = field(default_factory=set)  # 이번 실행 전에 이미 병합돼 있던 티켓(표시용)
+    ihead: str = ""  # gs가 아는 integration 끝. 병합할 때만 움직인다
 
     @property
     def name(self) -> str:
@@ -168,89 +172,176 @@ def _already_merged(r: Run, tid: str) -> bool:
     return bool(git.out(r.iwt, "log", "-1", "--format=%H", "--fixed-strings", f"--grep={trailer(r.name, tid)}"))
 
 
+@dataclass
+class Active:
+    """지금 돌고 있는 worker 하나."""
+    t: Ticket
+    proc: worker.Proc
+    branch: str
+    wt: Path
+    base: str  # worker를 띄울 때의 integration 끝
+
+
 def _loop(r: Run) -> None:
+    """frontier에서 max_workers개까지 띄우고, 하나 끝날 때마다 병합·검증한 뒤 frontier를 다시 계산해 채운다.
+
+    루프는 스레드 하나다. worker는 각자 pane·프로세스에서 돌고, 병합과 검증은 이 루프 안에서 하나씩 한다(직렬).
+    """
+    cap = max(1, r.feat.spec.max_workers)
     say(f"■ 순서: {' '.join(r.order)}")
+    say(f"■ 동시 worker: 최대 {cap}")
     say(f"■ 상태: {state.path(r.rundir)}")
-    runner = worker.make_runner(r.repo, r.name)
-    bad: set[str] = set()
+    # 병합 여부는 integration의 gs-ticket 표시로 확인한다. state가 merged인데 표시가 없으면 다시 한다.
     for tid in r.order:
-        t = r.feat.tickets[tid]
-        blockers = [d for d in r.g[tid] if d in bad]
-        if blockers:
-            _set(r, tid, status=state.SKIPPED, reason=f"막힘: {', '.join(blockers)}", ended_at=state.now())
-            bad.add(tid)
-            say(f"[{tid}] 건너뜀: {', '.join(blockers)} 실패")
-            continue
-        # 병합 여부는 integration의 gs-ticket 표시로 확인한다. state가 merged인데 표시가 없으면 다시 한다.
         if _already_merged(r, tid):
             if r.st.tickets[tid].status != state.MERGED:
                 _set(r, tid, status=state.MERGED, reason="", ended_at=state.now())
             r.prior.add(tid)
             say(f"[{tid}] 이미 병합됨")
-            continue
-        if r.st.tickets[tid].status == state.MERGED:
+        elif r.st.tickets[tid].status == state.MERGED:
             say(f"[{tid}] state는 병합이라는데 integration에 표시가 없다. 다시 한다")
-        if not _one(r, t, runner):
-            bad.add(tid)
+            _set(r, tid, status=state.PENDING)
+    r.ihead = git.sha(r.iwt, "HEAD")
+    runner = worker.make_runner(r.repo, r.name)
+    active: dict[str, Active] = {}
+    while True:
+        _skip_blocked(r)
+        while len(active) < cap:
+            ready = [tid for tid in _frontier(r) if tid not in active]
+            if not ready:
+                break
+            a = _start(r, r.feat.tickets[ready[0]], runner)
+            if a is None:  # 띄우기 전에 실패했다. 막힌 티켓을 다시 고른다
+                _skip_blocked(r)
+            else:
+                active[a.t.id] = a
+        if not active:
+            return
+        tid, code = _wait_any(r, active, runner)
+        a = active.pop(tid)
+        _finish(r, a, code, others=sorted(active))
 
 
-def _one(r: Run, t: Ticket, runner) -> bool:
+def _frontier(r: Run) -> list[str]:
+    """state에서 다시 계산한 frontier: 대기 중이고 막는 티켓이 모두 병합된 것. r.order 순."""
+    st = r.st.tickets
+    merged = [tid for tid in r.order if st[tid].status == state.MERGED]
+    ready = set(graph.frontier(r.g, merged))
+    return [tid for tid in r.order if tid in ready and st[tid].status == state.PENDING]
+
+
+def _skip_blocked(r: Run) -> None:
+    """실패·건너뜀 티켓에 막힌 대기 티켓을 건너뜀으로 적는다(줄줄이)."""
+    bad = (state.FAILED, state.SKIPPED)
+    for tid in r.order:  # r.order는 위상 순서라 한 번 훑으면 줄줄이 막힌 것까지 닿는다
+        if r.st.tickets[tid].status != state.PENDING:
+            continue
+        blockers = [d for d in r.g[tid] if d in r.g and r.st.tickets[d].status in bad]  # 범위 밖 의존은 끝난 것
+        if blockers:
+            _set(r, tid, status=state.SKIPPED, reason=f"막힘: {', '.join(blockers)}", ended_at=state.now())
+            say(f"[{tid}] 건너뜀: {', '.join(blockers)} 실패")
+
+
+def _wait_any(r: Run, active: dict[str, Active], runner) -> tuple[str, int]:
+    """돌고 있는 worker 중 하나가 끝날 때까지 기다린다. 동시에 끝났으면 r.order 앞쪽부터."""
+    while True:
+        for tid in r.order:
+            if tid in active:
+                code = active[tid].proc.poll()
+                if code is not None:
+                    return tid, code
+        time.sleep(worker.poll_interval(runner))
+
+
+def _start(r: Run, t: Ticket, runner) -> Active | None:
+    """최신 integration 끝에서 티켓 브랜치를 새로 만들고 worker를 띄운다. 띄우지 못하면 실패로 적고 None."""
     branch = ticket_branch(r.name, t.id)
     wt = r.rundir / "wt" / t.id
-    base = git.sha(r.iwt, "HEAD")
-    git.remove_worktree(r.repo, wt, branch)  # 02는 이어가기가 없다: 지난 시도는 버리고 새로
+    base = r.ihead
+    git.remove_worktree(r.repo, wt, branch)  # 이어가기는 없다: 지난 시도는 버리고 새로
     git.ensure_worktree(r.repo, wt, branch, start=base)
     job = worker.Job(ticket=t, worktree=wt.resolve(), rundir=(r.rundir / t.id).resolve())
     job.rundir.mkdir(parents=True, exist_ok=True)
     job.log.unlink(missing_ok=True)
     _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
          log=str(job.log), started_at=state.now(), ended_at="", reason="")
-    spec = r.feat.spec
-    worker.write_brief(job, spec, r.name, branch)
+    worker.write_brief(job, r.feat.spec, r.name, branch)
     try:
         cmd = worker.worker_command(t)
     except ValueError as e:
-        return _fail(r, t, str(e))
+        _fail(r, t, str(e))
+        return None
     worker.write_script(job, cmd)
-    def started(where: str) -> None:
-        _set(r, t.id, pane=where)
-        say(f"[{t.id}] 시작: {t.title} ({where}, 로그 {job.log})")
+    proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}")
+    _set(r, t.id, pane=proc.where)
+    say(f"[{t.id}] 시작: {t.title} ({proc.where}, 로그 {job.log})")
+    return Active(t, proc, branch, wt, base)
 
-    code = worker.run(job, runner, f"gs:{r.name}:{t.id}", on_start=started)
-    commits = git.count(r.repo, f"{base}..{branch}")
+
+def _finish(r: Run, a: Active, code: int, others: list[str] = ()) -> bool:
+    """끝난 worker 하나를 확인하고, 최신 integration을 티켓 브랜치에 합쳐 본 뒤 integration에 병합·검증한다.
+
+    others는 아직 돌고 있는 다른 worker다. integration이 바뀌었을 때 누구 짓인지 가리는 데 쓴다.
+    """
+    t, wt, branch = a.t, a.wt, a.branch
+    commits = git.count(r.repo, f"{a.base}..{branch}")
     say(f"[{t.id}] worker 끝: 종료 코드 {code}, 새 커밋 {commits}")
-    # worker가 integration을 건드렸으면(커밋, 미커밋 변경, 브랜치 이동) 되돌리고 실패로 친다
-    if _reset_integration(r, base):
-        runner.finish(False)
-        return _fail(r, t, "worker가 integration worktree를 바꿨다(되돌림)")
+
+    def fail(reason: str) -> bool:
+        a.proc.finish(False)
+        return _fail(r, t, reason)
+
+    # worker가 integration을 건드렸으면(커밋, 미커밋 변경, 브랜치 이동) 되돌린다. 돌던 worker가 이것 하나뿐이면
+    # 이 worker 짓이라 실패로 친다. 여럿이 돌았으면 누구 짓인지 모르니 되돌리기만 하고 경고한다.
+    if _reset_integration(r, r.ihead):
+        if not others:
+            return fail("worker가 integration worktree를 바꿨다(되돌림)")
+        say(f"[{t.id}] 경고: integration worktree가 바뀌어 되돌렸다. 함께 돌던 worker({', '.join([t.id, *others])}) 중 "
+            "누구 짓인지 모른다")
     if code != 0:
-        runner.finish(False)
-        return _fail(r, t, f"worker 종료 코드 {code}" if code >= 0 else "worker 실행기가 사라졌다")
+        return fail(f"worker 종료 코드 {code}" if code >= 0 else "worker 실행기가 사라졌다")
     if commits == 0:
-        runner.finish(False)
-        return _fail(r, t, "커밋 없음")
+        return fail("커밋 없음")
     if not git.is_clean(wt):
         say(f"[{t.id}] 경고: worktree에 커밋 안 된 변경이 남았다(병합에 들어가지 않는다)")
+
+    # 그 사이 다른 티켓이 병합됐을 수 있다. 최신 integration 끝을 티켓 브랜치에 먼저 합쳐 본다.
+    if not _catch_up(r, a):
+        return fail(CONFLICT)
 
     # 병합은 커밋하지 않고 두고 검증한다. 통과해야만 gs-ticket 표시를 붙여 커밋한다.
     # 중간에 죽으면 표시 없는 미완 병합만 남고, 다음 실행이 그것을 버리고 티켓을 다시 한다.
     res = git.run(r.iwt, "merge", "--no-ff", "--no-commit", branch, check=False)
     if res.returncode:
-        _reset_integration(r, base)
-        runner.finish(False)
-        return _fail(r, t, "integration 병합 충돌")
+        _reset_integration(r, r.ihead)
+        return fail("integration 병합 충돌")
     ok, log = _verify(r, t)
     if not ok:
-        _reset_integration(r, base)
-        runner.finish(False)
-        return _fail(r, t, f"검증 실패(로그 {log})")
+        _reset_integration(r, r.ihead)
+        return fail(f"검증 실패(로그 {log})")
     msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
     git.run(r.iwt, "commit", "-q", "--no-verify", "-m", msg)  # index만 커밋한다
     _reset_integration(r)  # 검증이 남긴 파일은 버린다
-    runner.finish(True)
+    r.ihead = git.sha(r.iwt, "HEAD")
+    a.proc.finish(True)
     _set(r, t.id, status=state.MERGED, ended_at=state.now())
     say(f"[{t.id}] 검증 통과 → integration 병합")
     return True
+
+
+def _catch_up(r: Run, a: Active) -> bool:
+    """r.ihead를 티켓 브랜치에 합친다(티켓 worktree에서). 충돌하면 병합을 취소하고 False."""
+    if git.run(r.repo, "merge-base", "--is-ancestor", r.ihead, a.branch, check=False).returncode == 0:
+        return True  # 이미 최신 integration 위에 있다
+    res = git.run(a.wt, "merge", "--no-edit", "--no-verify", "-m",
+                  f"gs: 최신 integration을 {a.t.id}에 합침", r.ihead, check=False)
+    if res.returncode == 0:
+        return True
+    files = git.out(a.wt, "diff", "--name-only", "--diff-filter=U").split()
+    git.run(a.wt, "merge", "--abort", check=False)
+    detail = ", ".join(files) if files else (res.stderr or res.stdout).strip()
+    say(f"[{a.t.id}] 최신 integration({r.ihead[:8]})과 충돌: {detail}")
+    return False
 
 
 def _fail(r: Run, t: Ticket, reason: str) -> bool:
@@ -309,7 +400,7 @@ def _label(r: Run, tid: str) -> str:
 def _pr_body(r: Run) -> str:
     rows = "\n".join(f"| {tid} | {r.feat.tickets[tid].title} | {LABEL[_label(r, tid)]} | {r.st.tickets[tid].reason} |"
                      for tid in r.order)
-    return (f"`gs go {r.name}`" + (f" --only {','.join(r.only)}" if r.only else "") + " 결과(최소 엔진, 02).\n\n"
+    return (f"`gs go {r.name}`" + (f" --only {','.join(r.only)}" if r.only else "") + " 결과.\n\n"
             "| 티켓 | 제목 | 결과 | 이유 |\n|---|---|---|---|\n" + rows + "\n\n"
             "08 전까지 gs는 PR을 병합하지 않는다. 리뷰 후 사람이 병합한다.\n")
 

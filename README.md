@@ -18,9 +18,12 @@ gs status [<feature>]           # 실행 상태 표(읽기 전용). 생략하면
 uv run python -m unittest discover -s tests   # 검증 명령
 ```
 
-`gs go`(02 최소형): 위상 순서로 하나씩, worker마다 herdr 새 탭에서 `claude -p`(headless)를 돌린다.
-worker는 `gs/<feature>/NN` worktree에서 커밋하고 끝나며, gs가 검증을 다시 돌려 통과한 것만
-`gs/<feature>/integration`에 병합한다. 끝나면 integration을 push하고 PR을 연다(병합은 08부터).
+`gs go`: 시작할 수 있는 티켓(frontier)을 spec의 `max_workers`(기본 3)개까지 동시에 돌린다(04). worker마다
+`claude -p`(headless)를 herdr pane에서 돌리고, pane들은 feature마다 탭 하나(`gs:<feature>`)에 모인다.
+worker는 최신 integration 끝에서 만든 `gs/<feature>/NN` worktree에서 커밋하고 끝난다. 하나 끝날 때마다 gs가
+state에서 frontier를 다시 계산해 빈자리를 채운다. 병합·검증은 한 번에 하나씩: 먼저 최신 integration 끝을 티켓
+브랜치에 합쳐 보고(충돌하면 그 티켓은 실패, 이유 `conflict`), 검증을 다시 돌려 통과한 것만
+`gs/<feature>/integration`에 병합한다. `max_workers: 1`이면 02와 같은 위상 순서로 하나씩 돈다. 끝나면 integration을 push하고 PR을 연다(병합은 08부터).
 실행 흔적은 `.work/<feature>/run/`(gitignore): `NN/brief.md`, `NN/run.sh`, `NN/worker.log`, `NN/verify.log`, `wt/`.
 
 상태(03): `run/state.json`이 상태의 원천이다. 티켓별 상태(pending, running, merged, failed, skipped), 시도 횟수,
