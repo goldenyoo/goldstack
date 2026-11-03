@@ -120,6 +120,8 @@ def environment_problems(repo: Path, cfg: config.Config, feat: featmod.Feature,
     for tid in scope:
         t = feat.tickets[tid]
         required.update((t.model, t.reviewer))
+        if t.second_reviewer is not None:
+            required.add(t.second_reviewer)
     problems = [featmod.Problem("오류", "", f"필요한 CLI `{name}`가 PATH에 없다")
                 for name in sorted(required) if shutil.which(name) is None]
     if shutil.which("git") is not None:
@@ -128,6 +130,19 @@ def environment_problems(repo: Path, cfg: config.Config, feat: featmod.Feature,
         except git.GitError as e:
             problems.append(featmod.Problem("오류", "", str(e)))
     return problems
+
+
+def agy_problems(cfg: config.Config, feat: featmod.Feature,
+                 scope: Iterable[str]) -> list[featmod.Problem]:
+    """각 역할의 첫 호출만 센다. 실행 중 재시도·수정 호출은 미리 세지 않는다."""
+    calls = sum(family == "agy" for tid in scope
+                for family in (feat.tickets[tid].model, feat.tickets[tid].reviewer,
+                               feat.tickets[tid].second_reviewer))
+    limit = cfg.agy.max_calls_per_run
+    if calls > limit:
+        return [featmod.Problem("경고", "",
+                f"범위 안 agy 배정 {calls}회가 상한 agy.max_calls_per_run={limit}회를 넘는다")]
+    return []
 
 
 def notify_problems(repo: Path, cfg: config.Config) -> list[featmod.Problem]:
@@ -174,6 +189,7 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
             ext = ", ".join(f"{t} ← {' '.join(ds)}" for t, ds in external.items())
             lines.append(f"범위 밖 의존(끝났다고 가정): {ext}")
     feat.problems.extend(touches_problems(feat, full_graph, g))
+    feat.problems.extend(agy_problems(cfg, feat, g))
     feat.problems.extend(environment_problems(repo, cfg, feat, g))
     lines.append("순서: " + " ".join(graph.topo_order(g)))
     lines.append("지금 시작 가능: " + " ".join(graph.frontier(g)))
