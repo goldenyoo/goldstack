@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from gs import cli
+from gs import feature as featmod
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -120,6 +121,20 @@ class CheckTest(unittest.TestCase):
         self.write("01-a.md", ticket("01"))
         (self.repo / ".work" / "demo" / "spec.md").write_text('---\nfeature: demo\nverify: "true"\nmax_workers: ²\n---\n')
         self.assert_error("`max_workers`는 1 이상의 정수")
+
+    def test_spec_verify_minutes(self):
+        self.write("01-a.md", ticket("01"))
+        spec = self.repo / ".work" / "demo" / "spec.md"
+        for value in ("0", "abc"):
+            with self.subTest(value):
+                spec.write_text(f'---\nfeature: demo\nverify: "true"\nverify_minutes: {value}\n---\n')
+                self.assert_error("`verify_minutes`는 1 이상의 정수")
+        spec.write_text('---\nfeature: demo\nverify: "true"\nverify_minutes: 7\n---\n')
+        self.assertEqual(featmod.load(self.repo, "demo").spec.verify_minutes, 7)
+        self.assertEqual(self.run_check()[::2], (0, ""))
+        spec.write_text(SPEC)  # 키가 없으면 기본 20, 경고 없음
+        self.assertEqual(featmod.load(self.repo, "demo").spec.verify_minutes, 20)
+        self.assertEqual(self.run_check()[::2], (0, ""))
 
     def test_no_tickets(self):
         self.assert_error("티켓이 없다")

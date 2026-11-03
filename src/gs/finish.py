@@ -12,7 +12,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import git, report, state
+from . import git, report, state, verify
 
 BASE = "origin/main"
 
@@ -112,28 +112,24 @@ def _merge(r, rev: str) -> None:
 
 
 def _verify(r, wt: Path, label: str) -> bool:
-    """명령과 실제 출력·종료 코드를 보존한다. 검증이 worktree를 바꾸면 통과로 인정하지 않는다."""
+    """명령과 실제 출력·종료 코드를 보존한다. 검증이 worktree를 바꾸면 통과로 인정하지 않는다.
+    시간을 넘기면(verify.run) 로그 끝이 `시간 초과: <N>분` 줄이고 실패다."""
     log = r.rundir / "finish" / f"{label}-verify.log"
     head = git.sha(wt, "HEAD")
     branch = git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout
-    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "GS_ROLE")}
     print(f"■ {label} 검증: {r.feat.spec.verify}", flush=True)
     with log.open("w", encoding="utf-8") as stream:
         stream.write(f"$ {r.feat.spec.verify}\nHEAD: {head}\n")
-        stream.flush()
-        try:
-            cp = subprocess.run(["bash", "-c", r.feat.spec.verify], cwd=wt, stdin=subprocess.DEVNULL,
-                                stdout=stream, stderr=subprocess.STDOUT, env=env)
-            code = cp.returncode
-        except OSError as e:
-            stream.write(f"검증 명령 실행 실패: {e}\n")
-            code = 1
+        res = verify.run(r.feat.spec, wt, stream)
+        if res.timed_out:
+            print(f"■ {label} 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다", flush=True)
+            return False
         changed = (git.sha(wt, "HEAD") != head or not git.is_clean(wt)
                    or git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout != branch)
-        stream.write(f"\n종료 코드: {code}\n")
+        stream.write(f"\n종료 코드: {res.code}\n")
         if changed:
             stream.write("검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
-    return code == 0 and not changed
+    return res.ok and not changed
 
 
 def _restore_integration(r, head: str) -> None:

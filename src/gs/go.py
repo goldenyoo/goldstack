@@ -9,13 +9,12 @@ worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰�
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, failure, finish, git, graph, herdr, review, state, worker
+from . import adapters, failure, finish, git, graph, herdr, review, state, verify, worker
 from .check import check
 from .feature import Feature, Ticket
 
@@ -86,6 +85,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
             _require_committed(repo, name)
             _begin(r)
             _prepare_integration(r)
+            _resume_merged(r)
             # 병합 확인·main 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
             if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
                 r.ihead = git.sha(r.iwt, "HEAD")
@@ -211,6 +211,69 @@ def _already_merged(r: Run, tid: str) -> bool:
     return bool(git.out(r.iwt, "log", "-1", "--format=%H", "--fixed-strings", f"--grep={trailer(r.name, tid)}"))
 
 
+def _resume_merged(r: Run) -> None:
+    """integration의 표시로 상태를 회복하고, 중단 전에 남은 성공 worktree를 정리한다."""
+    for tid in dict.fromkeys([*r.order, *r.st.tickets]):
+        ts = r.st.tickets[tid]
+        if tid not in r.order and ts.status != state.MERGED:
+            continue
+        if _already_merged(r, tid):
+            if ts.status != state.MERGED:
+                _set(r, tid, status=state.MERGED, reason="", ended_at=state.now())
+            if tid in r.order:
+                r.prior.add(tid)
+                say(f"[{tid}] 이미 병합됨")
+            _cleanup_merged(r, tid)
+        elif ts.status == state.MERGED and tid in r.order:
+            say(f"[{tid}] state는 병합이라는데 integration에 표시가 없다. 다시 한다")
+            _set(r, tid, status=state.PENDING, failures=0, failure_summary="")
+
+
+def _cleanup_merged(r: Run, tid: str) -> None:
+    """성공한 시도만 정리한다. 경로·브랜치 기록은 재시작과 증거용으로 남긴다. 정리 오류는 경고뿐이다."""
+    ts = r.st.tickets[tid]
+    if ts.status != state.MERGED:
+        return
+    try:
+        wt = Path(ts.worktree).resolve() if ts.worktree else None
+        if wt in {Path(p).resolve() for p in ts.failed_worktrees}:
+            return
+        # state가 가리키더라도 integration이나 티켓 밖의 경로·브랜치는 지우지 않는다.
+        prefix = ticket_branch(r.name, tid)
+        suffix = ts.branch.removeprefix(prefix)
+        valid = ts.branch == prefix or (ts.branch.startswith(prefix + "-retry-")
+                                       and suffix.removeprefix("-retry-").isdigit())
+        if (not valid or ts.branch == integration_branch(r.name) or wt == r.iwt.resolve()
+                or (wt and wt != (r.rundir / "wt" / (tid + suffix)).resolve())):
+            say(f"[{tid}] 경고: 정리 대상이 티켓 worktree·브랜치가 아니다: {ts.worktree}, {ts.branch}")
+            return
+        current = git.worktrees(r.repo)
+        if wt and wt.exists():
+            if wt not in current or current[wt] != ts.branch:
+                say(f"[{tid}] 경고: worktree의 브랜치가 달라 정리를 건너뛴다: {wt}")
+                return
+            if not git.is_clean(wt):
+                if ts.worktree not in ts.kept_worktrees:
+                    _set(r, tid, kept_worktrees=[*ts.kept_worktrees, ts.worktree])
+                say(f"[{tid}] 경고: 남긴 worktree: {wt} (미커밋 변경)")
+                return
+        if wt and wt in current:
+            # 검사 뒤 생긴 변경도 git이 지키도록 --force는 쓰지 않는다.
+            git.run(r.repo, "worktree", "remove", str(wt))
+            say(f"[{tid}] worktree 정리: {wt}")
+        if ts.worktree in ts.kept_worktrees:
+            _set(r, tid, kept_worktrees=[p for p in ts.kept_worktrees if p != ts.worktree])
+        if git.branch_exists(r.repo, ts.branch):
+            included = git.run(r.repo, "merge-base", "--is-ancestor", f"refs/heads/{ts.branch}",
+                               f"refs/heads/{integration_branch(r.name)}", check=False)
+            if included.returncode:
+                say(f"[{tid}] 경고: 브랜치 끝이 integration에 포함되지 않아 남긴다: {ts.branch}")
+                return
+            git.run(r.repo, "branch", "-D", ts.branch)
+    except (git.GitError, OSError) as e:
+        say(f"[{tid}] 경고: worktree·브랜치 정리 실패: {_err(e)}")
+
+
 @dataclass
 class Active:
     """지금 돌고 있는 worker 하나."""
@@ -252,16 +315,6 @@ def _loop(r: Run) -> None:
     say(f"■ 순서: {' '.join(r.order)}")
     say(f"■ 동시 worker: 최대 {cap}")
     say(f"■ 상태: {state.path(r.rundir)}")
-    # 병합 여부는 integration의 gs-ticket 표시로 확인한다. state가 merged인데 표시가 없으면 다시 한다.
-    for tid in r.order:
-        if _already_merged(r, tid):
-            if r.st.tickets[tid].status != state.MERGED:
-                _set(r, tid, status=state.MERGED, reason="", ended_at=state.now())
-            r.prior.add(tid)
-            say(f"[{tid}] 이미 병합됨")
-        elif r.st.tickets[tid].status == state.MERGED:
-            say(f"[{tid}] state는 병합이라는데 integration에 표시가 없다. 다시 한다")
-            _set(r, tid, status=state.PENDING, failures=0, failure_summary="")  # 지난 실행의 실패 횟수를 들고 가지 않는다
     r.ihead = git.sha(r.iwt, "HEAD")
     runner = worker.make_runner(r.repo, r.name)
     active: dict[str, Active] = {}
@@ -291,7 +344,7 @@ def _loop(r: Run) -> None:
                 if nxt is not None:  # 수정 worker를 띄웠다. 끝나면 다시 _finish로 온다
                     active[tid] = nxt
             except (git.GitError, OSError) as e:
-                # 브랜치 삭제·검증 실행 오류도 이 티켓의 실패로 한정한다. 리뷰 단계의 뜻밖의 오류는 _review가 막는다.
+                # 병합·검증 실행 오류는 이 티켓의 실패로 한정한다. 리뷰 단계의 뜻밖의 오류는 _review가 막는다.
                 a.proc.stop()
                 _reset_integration(r, r.ihead)
                 _fail(r, a.t, f"worker 결과 처리 중 오류: {_err(e)}")
@@ -457,10 +510,10 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         _reset_integration(r, r.ihead)
         return fail("integration 병합 충돌")
     merged = _merge_state(r)  # 검증할 것: 병합 결과 트리
-    ok, log = _verify(r, t)
-    if not ok:
+    res, log = _verify(r, t)
+    if not res.ok:
         _reset_integration(r, r.ihead)
-        return fail(f"검증 실패(로그 {log})")
+        return fail(f"검증 시간 초과({res.minutes}분, 로그 {log})" if res.timed_out else f"검증 실패(로그 {log})")
     # 검증하는 동안 다른 worker가 integration(index, HEAD, 병합 상태)을 바꿨으면 검증한 것과 커밋할 것이 다르다
     expected = (r.ihead, f"refs/heads/{integration_branch(r.name)}")
     if _merge_state(r) != merged or merged[:2] != expected or not all(merged):
@@ -479,6 +532,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
     a.proc.finish(True)
     _set(r, t.id, status=state.MERGED, ended_at=state.now())
     say(f"[{t.id}] 검증 통과 → integration 병합")
+    _cleanup_merged(r, t.id)
     return None
 
 
@@ -625,14 +679,14 @@ def _fail(r: Run, t: Ticket, reason: str) -> bool:
     return False
 
 
-def _verify(r: Run, t: Ticket) -> tuple[bool, Path]:
+def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path]:
     log = Path(r.st.ticket(t.id).log).parent / "verify.log"
     say(f"[{t.id}] 검증: {r.feat.spec.verify}")
-    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "GS_ROLE")}
     with log.open("w", encoding="utf-8") as f:
-        code = subprocess.run(["bash", "-c", r.feat.spec.verify], cwd=r.iwt, stdin=subprocess.DEVNULL,
-                              stdout=f, stderr=subprocess.STDOUT, env=env).returncode
-    return code == 0, log
+        res = verify.run(r.feat.spec, r.iwt, f)
+    if res.timed_out:
+        say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
+    return res, log
 
 
 LABEL = {"merged": "병합", "already": "이미 병합", "failed": "실패", "skipped": "건너뜀", "pending": "대기",

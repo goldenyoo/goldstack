@@ -44,6 +44,8 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
     for tid in r.order:
         ts = r.st.tickets[tid]
         reason = ts.reason or ("integration에 병합·검증됨" if ts.status == "merged" else "")
+        for path in ts.kept_worktrees:
+            reason += f"\n남긴 worktree: {path} (미커밋 변경)"
         rows.append("| " + " | ".join(cell(s) for s in (tid, r.feat.tickets[tid].title, ts.status, reason)) + " |")
         rec = ts.review
         for key in ("note", "fix"):
