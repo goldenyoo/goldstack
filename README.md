@@ -1,133 +1,114 @@
 # goldstack
 
-Claude Code로 프로젝트를 진행하는 개인 운영 kit. 처음에 grill로 깊게 정렬하고, `go` 한 번 뒤에는 구현 완료와 main 병합까지 알아서 진행한다.
+Claude Code로 feature 하나를 끝까지 보내는 개인 운영 kit.
+`/grill <feature>`로 사람과 결정을 모두 정해 spec과 티켓을 쓰고, `/go <feature>` 한 번이면 그 뒤로는 사람에게 묻지 않는다.
+티켓마다 다른 모델(Claude·codex·agy)이 구현하고 다른 계열이 리뷰하며, 검증을 통과한 것만 모아 PR을 main에 병합한 뒤 다시 검증한다(실패하면 revert).
 
-- 철학: [pstack](https://github.com/cursor/plugins/tree/main/pstack)의 "if you want to go fast, go deep first", "never block on the human".
-- 모델: Claude · codex · gemini를 티켓마다 고르고, 리뷰는 항상 다른 계열이 한다. herdr pane에서 worker를 보이게 돌린다.
-- 상태: 레포 안 markdown 파일(`.work/<feature>/spec.md`, `tickets/NN.md`)과 git.
+철학은 [pstack](https://github.com/cursor/plugins/tree/main/pstack)의 "if you want to go fast, go deep first"와 "never block on the human"이다. 시작 배경은 [docs/ORIGINS.md](docs/ORIGINS.md).
 
-시작 배경과 요구사항은 [docs/ORIGINS.md](docs/ORIGINS.md), 참고한 kit 분석은 [docs/research/](docs/research/)(pstack, mattpocock/skills, 비교표).
+## 설치
 
-## 설치와 사용
-사람이 쓰는 명령은 Claude Code의 `/grill <feature>`와 `/go <feature>` 둘이다(plugin skill, 아래 "plugin" 절로 설치).
-- `/grill <feature>`: 사실은 직접 찾고 결정만 번호 붙인 라운드로 묻는다(선택지마다 예시, 추천과 이유, "yes" = 추천 전부).
-  답은 라운드마다 `.work/<feature>/spec.md`에 적고, 마지막 라운드에서 티켓 분해를 확인받아 `tickets/`와 `.out-of-scope/`를
-  쓴 뒤 `gs check`가 통과할 때까지 고친다. 파일 형식은 `skills/grill/templates/`.
-- `/go <feature>`: `gs check` → herdr pane에서 `gs go` → 끝나면 report.md의 세 줄 요약과 PR 링크. 중간에 묻지 않는다.
+필요한 것: Python 3.12+와 [uv](https://docs.astral.sh/uv/), `git`, 로그인한 `gh`(GitHub), `claude`(Claude Code). 티켓이 쓰는 모델이 있으면 `codex`, `agy`. `herdr`(터미널 멀티플렉서)는 선택이다. `gs go`를 herdr 안에서 돌리면 worker마다 pane이 보이고, 아니면 worker가 화면 없는 프로세스로 돈다.
 
-그 아래의 `gs` CLI:
+**1. `gs` CLI** — 이 레포를 받아 설치한다. main을 새로 받을 때마다 다시 실행한다(고정 복사로 설치된다).
 ```sh
-uv tool install --reinstall .   # 고정 복사로 설치. main을 받은 뒤 다시 실행한다
-gs check <feature>              # .work/<feature>/의 spec과 티켓 그래프 검사
-gs check <feature> --only 03,04 # 일부 티켓만 기준으로 순서·frontier 계산
-gs go <feature> [--only 03,04]  # 티켓 실행 → 보고서·PR → 병합 → main 재검증
-gs status [<feature>]           # 실행 상태 표(읽기 전용). 생략하면 실행 중인 feature 전부
-uv run python -m unittest discover -s tests   # 검증 명령
+git clone https://github.com/goldenyoo/goldstack && cd goldstack
+uv tool install --reinstall .
+gs --help
 ```
 
-spec frontmatter: `feature`, `verify`(셸 명령 한 줄)는 필수, 숫자 키는 모두 1 이상 정수로 `max_workers`(기본 3),
-`idle_minutes`(기본 20), `verify_minutes`(기본 20)다. 그 밖의 키는 `gs check` 경고, 0·정수 아닌 값은 오류다.
-
-`gs go`: 시작할 수 있는 티켓(frontier)을 spec의 `max_workers`(기본 3)개까지 동시에 돌린다(04). worker마다
-티켓 `model`의 headless CLI(아래 "모델 어댑터")를 herdr pane에서 돌리고, pane들은 feature마다 탭 하나(`gs:<feature>`)에 모인다.
-worker는 최신 integration 끝에서 만든 `gs/<feature>/NN` worktree에서 커밋하고 끝난다. 하나 끝날 때마다 gs가
-state에서 frontier를 다시 계산해 빈자리를 채운다. 병합·검증은 한 번에 하나씩: 먼저 최신 integration 끝을 티켓
-브랜치에 합쳐 보고(충돌 이유 `conflict`), 검증을 다시 돌려 통과한 것만
-`gs/<feature>/integration`에 병합한다. `max_workers: 1`이면 02와 같은 위상 순서로 하나씩 돈다.
-끝나면 새 Opus 호출로 요약을 작성하고 티켓 결과·남은 리뷰 지적·실제 검증 출력·되돌리는 법을
-`.work/<feature>/report.md`에 모아 integration에 커밋한다. integration을 일반 push하고 PR을 만들거나
-갱신한다. PR 본문은 이 보고서와 같다.
-
-merged 티켓이 하나 이상이고 보고서 커밋까지 integration 검증이 통과하면 `gh pr merge --merge`를 실행한다.
-PR을 다시 읽어 실제 MERGED와 병합 커밋을 확인한 뒤, 최신 `origin/main`을 임시 detached worktree에 받아
-재검증한다. 실패하면 그 병합 커밋을 `git revert`하고 main에 일반 push한다(force push 없음).
-main 검증 결과와 revert SHA도 보고서·PR 본문에 반영한다. 병합 큐 대기와 main 검증 실패는 종료 코드 1이다.
-마무리 상태는 `run/state.json`에 남겨 중단 뒤 다시 실행해도 중복 병합·revert를 피한다.
-마지막 출력은 세 줄 요약(티켓 결과, 마무리 결과, 보고서·남은 지적)과 PR 링크다.
-실행 흔적은 `.work/<feature>/run/`(gitignore): `NN/<시도>/brief.md`, `run.sh`, `worker.log`, `verify.log`, `wt/`.
-티켓이 integration에 병합되면 성공한 시도의 worktree(`wt/NN` 또는 `wt/NN-retry-<번호>`)를 바로 지우고
-`[NN] worktree 정리: <경로>`를 출력한다. 로컬 티켓 브랜치는 끝이 integration에 포함될 때만
-(`merge-base --is-ancestor`) 지우며, 포함되지 않으면 경고하고 남긴다. `gs go`를 다시 시작할 때도 이미 병합된
-티켓의 남은 worktree·브랜치를 같은 규칙으로 정리한다. integration worktree와 로컬·원격 integration 브랜치는 보존한다.
-
-실패 처리(07): worker의 로그 출력도 새 커밋도 없이 spec의 `idle_minutes`(기본 20분)가 지나면 프로세스와
-pane을 끝낸다. verify 명령(티켓 병합 전, integration, integration-final, main·main-recheck 모두 `src/gs/verify.py`)은
-새 프로세스 그룹에서 돌고, spec의 `verify_minutes`(기본 20분, `GS_VERIFY_TIMEOUT`(초)이 있으면 그 값)를 넘기면 그룹 전체에
-SIGTERM, 5초 뒤 남았으면 SIGKILL을 보내 자손까지 끝낸다. 로그 끝에 `시간 초과: <N>분` 줄을 남기고 검증 실패로 친다:
-티켓이면 실패 이유 `검증 시간 초과(<N>분, 로그 <경로>)`로 재시도, integration이면 병합 안 함, main이면 병합 커밋 revert.
-종료 코드, 커밋 없음, 시간 초과, 검증 실패(시간 초과 포함), 병합 충돌은 같은 모델로 한 번 재시도한다.
-매번 최신 integration에서 새 브랜치·worktree(`NN-retry-<번호>`)를 만들고, 새 `claude -p --model opus` 호출이
-요약한 실패 로그를 brief에 붙인다. 요약 호출이 실패하면 증거 파일 경로를 붙여 재시도한다.
-두 번째 실패는 `failed`, 여기에 직접·간접으로 막힌 티켓은 `skipped`로 두고 나머지는 계속한다.
-실패 worktree는 삭제하지 않는다. state의 `failed_worktrees`에 경로를 보존하며, 시도별 `failure.log`,
-`failure-summary.md`, 검증·충돌 로그도 남긴다.
-같은 티켓의 재시도가 병합돼도 실패한 시도의 worktree·브랜치는 남는다. 병합된 worktree에 미커밋 변경이 있으면
-worktree·브랜치를 모두 남기고 티켓 상태의 `kept_worktrees`에 경로를 적는다. 보고서 티켓 결과에도
-`남긴 worktree: <경로> (미커밋 변경)`을 표시한다. 정리 중 오류는 경고만 하며 티켓의 merged 상태와 실행 결과를 바꾸지 않는다.
-
-리뷰(06): worker가 성공하면 병합 전에 티켓의 `reviewer`(구현 `model`과 다른 계열, 같으면 거부)가 그 티켓 diff
-(최신 integration과의 merge-base 기준)를 읽기 전용으로 리뷰한다. reviewer에게는 diff·티켓·spec 경로를 주고, 답은 고정된
-JSON(`{"findings": [{"severity": "high|medium|low", "location", "claim", "evidence"}]}`)이다. 새 `claude -p --model opus`
-(판단 모델, 파일 경로만 받는다)가 지적마다 fix·report를 정한다. 근거(evidence)가 빈 지적은 늘 report다(코드 규칙).
-fix가 있으면 같은 구현 모델로 수정 worker를 같은 브랜치에 한 번 띄운다(지적을 brief에 붙인다). 재리뷰는 없고 verify만 돈다.
-수정 worker가 실패하면 수정 커밋을 버리고 리뷰한 구현을 병합·검증한다(티켓 실패로 세지 않는다). reviewer·판단 모델
-호출이 실패해도 티켓은 그대로 간다(관문은 verify). 기록은 state의 `review`(지적, fix 여부, 메모)와 시도 디렉터리의
-`review/`(diff, 프롬프트, 답), `fix/`(수정 worker)에 남는다. 고치지 않은 지적이 보고서(08)의 남은 지적이다.
-
-상태(03): `run/state.json`이 상태의 원천이다. 티켓별 상태(pending, running, merged, failed, skipped), 시도 횟수,
-브랜치, pane, 시작·끝 시각, 로그 경로, 실패 이유. 쓰기는 임시 파일 뒤 rename(원자적). `gs go`의 요약·PR 본문과
-`gs status`가 모두 이 파일을 읽는다(마지막 출력 시각은 worker 로그의 수정 시각).
-다시 실행하면 integration에 병합된 티켓은 건너뛰고, 실패·건너뜀 티켓은 다시 한다. 지난 `gs`가 죽어 running으로 남은
-티켓은 실패로 세지 않고(시도 횟수에서 뺀다) 새로 시작한다. 같은 feature에 `gs go`는 하나만 돈다: `run/lock`에 flock을
-잡고 pid를 적는다. 프로세스가 죽으면 커널이 잠금을 풀어 저절로 회수된다.
-
-바꿔 끼우는 곳(시험 seam): `GS_RUNNER=subprocess|herdr`(기본: herdr 안이면 herdr), `GS_WORKER_CMD`(worker 셸 명령,
-어댑터를 건너뛴다), `GS_GH`(gh 경로), `GS_AGY`(agy 경로), `GS_JUDGE`(실패 요약·리뷰 분류·보고서용 Claude CLI 경로),
-`GS_REVIEWER_CMD`(reviewer 셸 명령: stdin = 프롬프트, stdout = JSON 답), `GS_VERIFY_TIMEOUT`(verify 시간 제한 초,
-spec `verify_minutes`를 덮는다).
-
-## 모델 어댑터(05)
-`src/gs/adapters.py`. 어댑터마다 같은 입력(brief, worktree, 로그 경로)을 받아 준비(`prepare`), 환경(`env`, 모두
-`GS_ROLE=worker`), 셸 명령(`command`), 종료 판정(`outcome`)을 한다. 실행 스크립트가 명령을 감싸 로그와 exit 파일을 남긴다.
-
-| model | 명령 | 차단 장치 |
-|---|---|---|
-| claude | `claude -p --output-format stream-json --permission-mode bypassPermissions --disallowedTools … < brief` | plugin hook(09) + 도구 차단 |
-| codex | `codex exec --json -s workspace-write -c sandbox_workspace_write.network_access=false -C <wt> --add-dir … "<안내>" < brief` | sandbox(네트워크 꺼짐, worktree 밖 쓰기 불가) |
-| agy | `agy -p "$(cat brief)" --output-format stream-json --dangerously-skip-permissions --disable-slash-commands --settings '<deny 규칙>' --model gemini-4-argon-high` | deny 규칙 + `gs hook agy-pretooluse`(두 겹) |
-
-- codex: worktree의 git 디렉터리는 주 레포 `.git/` 아래라 sandbox 밖이다. 그대로면 커밋이 `index.lock: Operation not
-  permitted`로 실패하고, `.git` 전체를 `--add-dir`해도 codex가 막는다. 그래서 이 worktree의 git 디렉터리, `objects`, 이
-  브랜치의 ref·reflog 디렉터리만 연다. sandbox에서 못 도는 시험(localhost 등, ORIGINS 실패 13)은 멈추지 말고 커밋하라는
-  안내를 brief 앞에 붙인다. 검증은 어차피 gs가 sandbox 밖에서 다시 돌린다.
-- agy(docs/research/agy.md §6): `--mode auto`, `--sandbox`, `--print-timeout`은 넣지 않는다. hook은 worktree의
-  `.agents/hooks.json`에 쓰고 git exclude(`/.agents/hooks.json`)에 넣는다. 전역 agy 설정은 건드리지 않는다. hook 명령은
-  지금 도는 gs와 같은 python(`<python> -m gs.cli hook agy-pretooluse`)이다. agy 입력(`toolCall`)을 09의 판정으로 바꾸고
-  stdout JSON(`{"decision":"deny","reason":…}`)으로 답한다. `lastUserInput`(프롬프트)은 보지 않는다. worktree의 `.agents/`를
-  바꾸거나 읽는 일도 막는다.
-  띄우기 전에 `agy -p /hooks`(모델 호출 없음)에 gs hook 줄이 있는지, hook 명령이 실제로 `git push`를 막는지 확인한다.
-  둘 중 하나라도 아니면 그 티켓을 실패로 적고 worker를 띄우지 않는다. `gs check`도 범위에 agy 티켓이 있으면 같은 확인을
-  버리는 디렉터리에서 해서, 안 되면 경고한다.
-  종료 0은 성공이 아니다. 성공은 종료 0 + 마지막 `result` 이벤트의 `status: SUCCESS` + `finished_reason` 없음이다.
-  `warning:` 줄(모드 무시 같은 조용한 강등), ERROR 단계 수, `denied_actions`는 실패 이유·로그 메모에 붙는다.
-
-## Claude Code plugin과 worker 차단 hook(09)
-이 레포가 곧 plugin이자 로컬 marketplace다(`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
-`hooks/hooks.json`). 먼저 `gs`를 설치하고(위 `uv tool install`, hook은 별도 런타임 없이 PATH의 `gs`를 부른다), Claude Code에서:
+**2. Claude Code plugin** — `/grill`·`/go` 같은 skill, worker 차단 hook, 진행 바 mod가 들어 있다. Claude Code에서:
 ```
 /plugin marketplace add /path/to/goldstack   # 이 레포 디렉터리를 로컬 marketplace로 등록
-/plugin install goldstack@goldstack          # user scope로 설치: 모든 프로젝트의 worker에 적용
+/plugin install goldstack@goldstack          # user scope: 모든 프로젝트에서 쓴다
 ```
-명령줄로는 `claude plugin marketplace add /path/to/goldstack && claude plugin install goldstack@goldstack`.
-레포를 바꾼 뒤에는 `/plugin marketplace update goldstack`. 설치 없이 한 세션만 쓰려면 `claude --plugin-dir /path/to/goldstack`.
+명령줄로는 `claude plugin marketplace add /path/to/goldstack && claude plugin install goldstack@goldstack`. 레포를 새로 받은 뒤에는 `/plugin marketplace update goldstack`.
 
-PreToolUse hook은 `gs hook pretooluse`다. `GS_ROLE=worker`일 때만 판정하고, 없으면 입력도 읽지 않고 통과한다(일반 세션에
-영향 없음). `gs go`는 worker 실행 스크립트에 `GS_ROLE=worker`, `GS_WORKTREE`를 넣는다. worker일 때 막는 것은 되돌릴 수 없는 일뿐이다:
-- `git push`(모든 형태: `-C`, `cd .. &&`, `bash -c`, `$(…)` 안), force 계열(`--force`, `--force-with-lease`, `push -f`)
-- `gh` 쓰기 명령(`pr create`·`merge`·`close`, `release …`, `repo …`, 쓰기 `gh api` 등). 읽기(`pr view`, `run view` …)는 통과
-- worktree 밖 쓰기(Write·Edit 도구, 셸 리다이렉션·`rm`·`mv`·`cp`·`tee`, 밖에서 하는 `git commit` 등). 임시 디렉터리와 `/dev`는 통과
-- 비밀 파일 읽기(`~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`·`.env.*`(`.env.example` 등 제외), `~/.netrc`, gh 인증 파일, `gh auth token`)
+**3. 대상 레포에서 `gs init`** — goldstack을 쓸 레포 루트에서 한 번 돌린다. 이미 있는 파일은 그대로 둔다.
+```console
+$ gs init
+만듦: .goldstack/config.toml
+만듦: .goldstack/local.env.example
+추가: .gitignore (.goldstack/local.env, .goldstack/work/*/run/)
+.goldstack/config.toml을 확인하고, local.env.example을 local.env로 복사해 값을 채워라
+```
+`config.toml`의 `git.base`는 `origin/HEAD`에서 찾아 적는다(못 찾으면 `main`). 값이 맞는지 보고, 세 파일을 커밋한다:
+`git add .goldstack/config.toml .goldstack/local.env.example .gitignore && git commit -m "goldstack init"`.
 
-막으면 이유와 "이 일은 `gs`가 한다"를 돌려준다. hook은 안전띠라 스크립트 파일 안까지 따라가지 않으므로 worker 명령의
-도구 차단 옵션(`--disallowedTools "Bash(git push *)" "Bash(gh *)"`)도 남겨 둔다(이중 장치). codex는 sandbox, agy는 deny 규칙과
-`gs hook agy-pretooluse`로 막는다(위 "모델 어댑터").
+**4. `local.env` 채우기(텔레그램 알림을 받을 때만)** — 비밀은 커밋하지 않는 이 파일에만 둔다. gs는 환경 변수를 보지 않는다.
+```sh
+cp .goldstack/local.env.example .goldstack/local.env
+# TG_TOKEN=<BotFather에서 받은 봇 토큰>, TG_CHAT_ID=<알림 받을 채팅 ID>
+```
+그리고 `config.toml`에서 `[notify] telegram = true`. 켰는데 값이 비면 `gs check`가 경고한다.
+
+**5. 진행 바 mod가 안 보일 때** — `gs go`가 도는 동안 Claude Code 프롬프트 위에 `▓▓▓░░░░░ <feature> 3/8 · 04 리뷰 중(codex) · 24분 · 약 40분 남음` 같은 줄이 떠야 한다.
+- 그 Claude Code 세션이 대상 레포 루트에서 열렸는지 본다. mod는 지금 디렉터리의 `.goldstack/work/*/run/state.json`만 읽고, 끝나지 않았고 최근 10분 안에 바뀐 실행만 그린다.
+- mod(hooks API)는 early-access라 Claude Code 버전에 따라 동작이 바뀔 수 있다(2.1.317에서 확인). marketplace 설치본에서 mod가 안 뜨면 레포 디렉터리를 직접 싣는다: `claude --plugin-dir /path/to/goldstack`, 또는 늘 그렇게 하려면 환경(또는 settings의 `env`)에 `CLAUDE_CODE_PLUGIN_DIRS=/path/to/goldstack`.
+- 바가 없어도 실행에는 영향이 없다. 같은 줄을 `gs status <feature>`가 표 아래에 보여 준다.
+
+## 5분 따라 하기
+
+대상 레포의 base 브랜치(예: main)에서 Claude Code를 열고 시작한다. feature 이름은 `csv-export`라고 하자.
+
+**1. `/grill csv-export`** — Claude가 레포를 먼저 읽고(사실은 묻지 않는다), 사람이 정할 것만 번호 붙여 한 번에 묻는다:
+```
+라운드 1
+1. 출력 위치: A 표준 출력(`tally --csv a.txt > out.csv`) / B 파일 인자(`tally --csv out.csv a.txt`)
+   추천 A: 다른 출력 옵션과 같은 모양이다
+2. 헤더 줄: A 늘 쓴다(`file,lines,words`) / B `--no-header`로 끌 수 있게
+   추천 A: 범위가 작다. 끄는 옵션은 범위 밖에 둔다
+yes = 추천 전부 수락. 바꿀 것만 번호로
+```
+`yes`나 `2. B`처럼 답하면 "이렇게 읽었다"를 한 줄씩 되짚고 `.goldstack/work/csv-export/spec.md`에 적은 뒤 다음 라운드로 간다. 마지막 라운드에서 티켓 분해(순서, 티켓별 구현 모델과 리뷰 계열)를 확인받고 `tickets/`·`.goldstack/out-of-scope/`를 써서 `gs check`가 통과하면 커밋하고 끝낸다.
+
+**2. `/go csv-export`** — `gs check` → base push → `gs go`를 백그라운드로 돌리고 끝날 때까지 기다린다. 중간에 아무것도 묻지 않는다. 기다리는 동안 프롬프트 위의 진행 바나 `gs status csv-export`를 본다.
+
+**3. 결과** — 끝나면 `gs go`의 마지막 줄과 `report.md`를 읽어 세 줄 요약과 PR 링크를 보인다:
+```
+■ 요약: 병합 3
+■ 마무리: integration·main 검증 통과, PR 병합 완료
+■ 보고서: .goldstack/work/csv-export/report.md · 남은 리뷰 지적 1
+■ PR: https://github.com/you/tally/pull/7
+```
+`notify.telegram = true`면 같은 때 텔레그램 한 통이 온다:
+```
+✅ csv-export · main 병합
+티켓 3/3 병합 · 41분 · 남은 지적 1
+PR https://github.com/you/tally/pull/7
+```
+티켓이 하나라도 병합되지 않았거나 마무리가 끝나지 않았으면 `❌` 한 줄이다. 예: `❌ csv-export · integration·main 검증 통과, PR 병합 완료 · 티켓 2/3 (03 실패: 검증 실패(로그 …)) · 보고서 .goldstack/work/csv-export/report.md`(병합된 두 티켓은 main에 들어갔다). 다음 할 일은 [docs/guide.md](docs/guide.md#실패했을-때).
+
+## skill
+
+모두 이 plugin에 들어 있다. "사용자"는 사람이 `/이름`으로 부를 때만 돈다. "모델"은 Claude가 상황을 보고 스스로 부른다.
+
+| skill | 무엇 | 언제 쓰나 | 예시 | 호출 |
+|---|---|---|---|---|
+| `/grill` | 라운드 질문으로 결정을 모두 받아 spec·티켓·범위 밖을 쓰고 `gs check`를 통과시킨다 | 새 feature를 시작할 때, 이어서 정할 것이 남았을 때 | `/grill csv-export` | 사용자 |
+| `/go` | `gs go`로 티켓 실행부터 main 병합·재검증까지 돌리고 세 줄 요약과 PR을 보인다 | grill이 끝나 커밋된 feature를 실행할 때 | `/go csv-export` | 사용자 |
+| `/wait-what` | 방금 설명을 맥락부터, 쉬운 말로, 선택지마다 예시를 붙여 다시 하게 한다 | Claude의 말을 못 따라갔을 때(grill 질문 포함) | `/wait-what` | 사용자 |
+| `/handoff` | 지금 대화를 다른 agent가 이어받을 인계 문서로 줄여 임시 디렉터리에 쓴다 | 세션을 바꾸거나 곁가지 일을 떼어 줄 때 | `/handoff 03 실패 원인을 이어서 찾는다` | 사용자 |
+| `/retro` | 세션 하나를 돌아보고 agent 환경(검사, 포인터, 리뷰 기준, 도구)을 고칠 후보를 심각한 순으로 제안한다. 고치지는 않는다 | 실행이 꼬였거나 같은 실수가 반복될 때, feature 하나를 끝낸 뒤 | `/retro` | 사용자 |
+| `/writing-for-agents` | agent가 읽는 문서(skill, `CLAUDE.md`·`AGENTS.md`)의 글쓰기 기준을 문맥에 싣는다 | skill이나 `CLAUDE.md`를 새로 쓰거나 고칠 때 | `/writing-for-agents` 뒤 "이 skill description을 다듬어 줘" | 사용자 |
+| `diagnosing-bugs` | 실패 신호(피드백 루프)를 먼저 만들고 재현 → 가설 → 계측 → 수정 → 회귀 시험으로 버그를 잡는다 | 무언가 깨졌다·실패한다·느리다고 말할 때 | "`gs status`가 끝난 실행을 실행 중으로 보여. 진단해" | 모델 |
+
+`/wait-what`부터 아래 다섯은 [mattpocock/skills](https://github.com/mattpocock/skills)(MIT)를 한국어로 옮겨 goldstack에 맞춘 것이다([skills/NOTICE-mattpocock.md](skills/NOTICE-mattpocock.md)). 장면별 예시는 [docs/guide.md](docs/guide.md#skill-사용-장면).
+
+## 추천 흐름
+
+1. 레포마다 한 번: `gs init` → config 확인 → 커밋(텔레그램을 쓰면 `local.env`).
+2. feature마다: `/grill <f>` → `/go <f>` → 진행 바나 `gs status <f>`로 지켜본다 → 세 줄 요약·PR·텔레그램.
+3. 실패하면 `report.md`를 읽고, 고칠 것이 있으면 `/grill <f>`로 spec·티켓을 고친 뒤 다시 `/go <f>`(병합된 티켓은 건너뛴다).
+4. 곁에서: 말을 놓치면 `/wait-what`, 버그는 "진단해"(`diagnosing-bugs`), 세션을 넘길 때 `/handoff`, 끝나고 `/retro`, skill·`CLAUDE.md`를 쓸 때 `/writing-for-agents`.
+
+## 문서 지도
+
+| 문서 | 내용 |
+|---|---|
+| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 새 feature, 다른 레포에 들이기, 실행 중 보기, 실패했을 때, `gs migrate`, skill 사용 장면 |
+| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, 상태, 병렬, 실패 처리, 리뷰, 마무리, 진행 계산, 알림, 모델 어댑터, plugin·hook·mod, 시험 seam |
+| [skills/grill/templates/](skills/grill/templates/) | spec·티켓·범위 밖 파일 형식 |
+| [docs/ORIGINS.md](docs/ORIGINS.md) | 시작 배경과 요구사항, 지난 실패 목록 |
+| [docs/research/](docs/research/) | 참고한 kit 분석(pstack, mattpocock/skills, 비교표), agy·어댑터 조사 |
+| [docs/trials/](docs/trials/) | skill 시험 기록 |
