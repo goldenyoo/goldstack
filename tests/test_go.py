@@ -291,6 +291,11 @@ class GoTest(unittest.TestCase):
     def final_report(self):
         return self.integration("show", "gs/demo/integration:.goldstack/work/demo/report.md")
 
+    def under_report(self):
+        """마무리가 verified·reverted면 원격 base 끝은 gs의 최종 보고서 커밋(goldstack-v3 02)이다. 그 아래 끝."""
+        self.assertEqual(sh(self.remote, "git", "log", "-1", "--format=%s", self.BASE), "gs: demo 최종 보고서(병합 후)")
+        return sh(self.remote, "git", "rev-parse", f"{self.BASE}^")
+
     def test_progress_is_saved_during_each_phase(self):
         snapshots = []
         save = state.save
@@ -450,7 +455,7 @@ fi
         f = state.load(self.rundir, "demo").finish
         self.assertEqual(f["phase"], "verified")
         self.assertTrue(f["integration_ok"] and f["main_ok"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["merge_sha"])
+        self.assertEqual(self.under_report(), f["merge_sha"])
         self.assertEqual(self.integration("rev-parse", "main"), initial)  # 호출 worktree는 움직이지 않는다
         self.assertEqual(len(self.integration("rev-list", "--parents", "-n", "1", f["merge_sha"]).split()), 3)
         self.assertEqual(self.integration("show", "origin/main:file_01"), "01 worker")
@@ -479,16 +484,16 @@ fi
         self.assertEqual(f["phase"], "reverted")
         self.assertTrue(f["integration_ok"])
         self.assertFalse(f["main_ok"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["revert_sha"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^"), f["merge_sha"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^{tree}"),
+        self.assertEqual(self.under_report(), f["revert_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['revert_sha']}^"), f["merge_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['revert_sha']}^{{tree}}"),
                          sh(self.remote, "git", "rev-parse", f"{initial}^{{tree}}"))
         self.assertIn(f["revert_sha"], self.final_report())
         self.assertIn("종료 코드: 1", self.final_report())
         self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
         self.assertIn("revert", out)
         self.assertEqual(self.go("--only", "01")[0], 1)  # 같은 병합을 두 번 revert하지 않는다
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["revert_sha"])
+        self.assertEqual(self.under_report(), f["revert_sha"])
 
     def test_finish_no_merged_ticket_keeps_report_pr_without_merging(self):
         initial = sh(self.remote, "git", "rev-parse", "main")
@@ -562,7 +567,7 @@ fi
         self.assertNotEqual(sh(self.remote, "git", "rev-parse", "main"), revert)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), revert)
+        self.assertEqual(self.under_report(), revert)
         self.assertEqual(sum(x.startswith("pr merge ") for x in self.lines("gh.log")), 1)
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "reverted")
 
@@ -616,8 +621,8 @@ fi
         f = state.load(self.rundir, "demo").finish
         self.assertEqual(f["phase"], "reverted", f)
         self.assertNotEqual(f["revert_sha"], stale)
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["revert_sha"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^"), moved)  # force 없이 최신 main 위에
+        self.assertEqual(self.under_report(), f["revert_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['revert_sha']}^"), moved)  # force 없이 최신 main 위에
         self.assertNotIn("file_01", self.remote_files())
         self.assertIn("other.txt", self.remote_files())
         self.assertEqual(sum(x.startswith("pr merge ") for x in self.lines("gh.log")), 1)
@@ -632,7 +637,7 @@ fi
         f = state.load(self.rundir, "demo").finish
         self.assertEqual(f["phase"], "reverted", f)
         self.assertEqual(f["revert_sha"], theirs)
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), theirs)  # gs는 다시 revert하지 않는다
+        self.assertEqual(self.under_report(), theirs)  # gs는 다시 revert하지 않는다(보고서 커밋만 위에)
         self.assertIn("이미", f["outcome"])
 
     def test_finish_moves_on_when_someone_fixed_main(self):
@@ -645,7 +650,7 @@ fi
         self.assertEqual(f["phase"], "verified", f)
         self.assertTrue(f["main_ok"])
         self.assertNotIn("revert_sha", f)
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), fixed)
+        self.assertEqual(self.under_report(), fixed)
 
     def test_finish_revert_keeps_feature_code_in_integration(self):  # medium: revert 뒤 integration에서 코드가 사라짐
         self.parallel(1, verify='test "$(git log -1 --format=%s)" != "Merge feature"')
@@ -666,7 +671,10 @@ fi
     def test_prepare_keeps_feature_code_after_main_reverted(self):  # medium: 일반 준비 경로도 같은 방식으로 잃지 않는다
         self.assertEqual(self.go("--only", "01")[0], 0)
         merge = state.load(self.rundir, "demo").finish["merge_sha"]
-        self.someone(f"git revert --no-edit -m 1 {merge}")
+        # 위에 gs의 최종 보고서 커밋이 있어 report.md가 충돌한다. 보고서의 되돌리는 법대로 지금 보고서를 남긴다.
+        self.assertIn("revert --continue --no-edit", self.final_report())
+        self.someone(f"! git revert --no-edit -m 1 {merge}",
+                     "git checkout HEAD -- .goldstack/work/demo/report.md", "git revert --continue --no-edit")
         self.assertNotIn("file_01", self.remote_files())
         self.add_ticket("09")
         code, out, err = self.go("--only", "09")
@@ -1173,9 +1181,9 @@ fi
         self.assertEqual(f["phase"], "reverted")
         self.assertTrue(f["integration_ok"])
         self.assertFalse(f["main_ok"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["revert_sha"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^"), f["merge_sha"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^{tree}"),
+        self.assertEqual(self.under_report(), f["revert_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['revert_sha']}^"), f["merge_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['revert_sha']}^{{tree}}"),
                          sh(self.remote, "git", "rev-parse", f"{initial}^{{tree}}"))
         log = (self.rundir / "finish/main-verify.log").read_text()
         self.assertTrue(log.endswith("\n시간 초과: 0.02분\n"), log)
@@ -1642,6 +1650,7 @@ class TrunkUpstreamTest(unittest.TestCase):
     setUp, tearDown, go = GoTest.setUp, GoTest.tearDown, GoTest.go
     rundir, integration, parallel, lines, final_report = (GoTest.rundir, GoTest.integration, GoTest.parallel,
                                                           GoTest.lines, GoTest.final_report)
+    under_report = GoTest.under_report
 
     def test_go_merges_and_verifies_on_configured_base_and_remote(self):
         initial = sh(self.remote, "git", "rev-parse", "trunk")
@@ -1650,7 +1659,7 @@ class TrunkUpstreamTest(unittest.TestCase):
         f = state.load(self.rundir, "demo").finish
         self.assertEqual(f["phase"], "verified")
         self.assertTrue(f["integration_ok"] and f["main_ok"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "trunk"), f["merge_sha"])
+        self.assertEqual(self.under_report(), f["merge_sha"])
         self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['merge_sha']}^1"), initial)
         self.assertEqual(sh(self.remote, "git", "branch", "--list", "main"), "")
         self.assertEqual(self.integration("remote"), "upstream")
@@ -1673,9 +1682,9 @@ class TrunkUpstreamTest(unittest.TestCase):
         self.assertEqual(code, 1, out + err)
         f = state.load(self.rundir, "demo").finish
         self.assertEqual(f["phase"], "reverted", out + err)
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "trunk"), f["revert_sha"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "trunk^"), f["merge_sha"])
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "trunk^{tree}"),
+        self.assertEqual(self.under_report(), f["revert_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['revert_sha']}^"), f["merge_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['revert_sha']}^{{tree}}"),
                          sh(self.remote, "git", "rev-parse", f"{initial}^{{tree}}"))
         self.assertIn("trunk에 push함", f["outcome"])
 
