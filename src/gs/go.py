@@ -49,6 +49,7 @@ class Run:
     prior: set[str] = field(default_factory=set)  # 이번 실행 전에 이미 병합돼 있던 티켓(표시용)
     ihead: str = ""  # gs가 아는 integration 끝. 병합할 때만 움직인다
     saved: float = 0.0  # 마지막 save()의 time.monotonic(). heartbeat가 본다
+    history_median_s: float | None = None  # 실행 시작에 한 번 읽은 다른 feature의 ETA 표본 중앙값
 
     @property
     def name(self) -> str:
@@ -79,7 +80,8 @@ class Run:
     def save(self) -> None:
         self.st.progress = state.calculate_progress(
             self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
-            models={tid: self.feat.tickets[tid].model for tid in self.order})
+            models={tid: self.feat.tickets[tid].model for tid in self.order},
+            history_median_s=self.history_median_s)
         state.save(self.rundir, self.st)
         self.saved = time.monotonic()
 
@@ -183,6 +185,7 @@ def _begin(r: Run) -> None:
     st.pid, st.only, st.started_at, st.finished_at, st.phase = os.getpid(), r.only, state.now(), "", ""
     st.agy_calls = 0  # 상한은 실행마다다(spec 1-9)
     r.st = st
+    r.history_median_s = state.load_eta_history(r.repo, r.name)
     r.save()
 
 

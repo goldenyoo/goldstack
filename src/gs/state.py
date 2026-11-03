@@ -18,6 +18,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 
 PENDING, RUNNING, MERGED, FAILED, SKIPPED = "pending", "running", "merged", "failed", "skipped"
 STATUSES = (PENDING, RUNNING, MERGED, FAILED, SKIPPED)
@@ -125,9 +126,34 @@ def phase_durations(ts: TicketState) -> dict[str, float]:
     return totals
 
 
+def load_eta_history(repo: Path, feature: str) -> float | None:
+    """다른 feature의 merged 티켓 소요 중앙값(초). 로컬 실행 기록만 읽는다."""
+    durations = []
+    for p in (repo / ".goldstack" / "work").glob("*/run/state.json"):
+        if p.parent.parent.name == feature:
+            continue
+        try:
+            st = load(p.parent, p.parent.parent.name)
+            samples = []
+            for ts in st.tickets.values():
+                if ts.status != MERGED:
+                    continue
+                starts = [start for phase in ts.phases
+                          if (start := parse_time(phase["started_at"]))]
+                start = min(starts) if starts else parse_time(ts.started_at)
+                end = parse_time(ts.ended_at)
+                if start and end and end >= start:
+                    samples.append((end - start).total_seconds())
+            durations.extend(samples)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            continue  # 깨졌거나 읽을 수 없는 이력은 실행을 막지 않는다
+    return median(durations) if durations else None
+
+
 def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(),
-                       models: dict[str, str] | None = None, at: str | None = None) -> dict:
-    """이번 실행·범위만으로 진행 문구를 계산한다. 이전 실행의 완료 티켓은 ETA 표본에서 뺀다."""
+                       models: dict[str, str] | None = None, at: str | None = None,
+                       history_median_s: float | None = None) -> dict:
+    """이번 실행 평균으로 ETA를 계산한다. 완료 표본이 없으면 이전 실행 중앙값을 쓴다."""
     at = st.finished_at or at or now()
     run_start = parse_time(st.started_at)
     terminal = (MERGED, FAILED, SKIPPED)
@@ -152,14 +178,19 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
         # 빈 id는 개별 티켓이 아닌 feature 전체의 보고서·PR·base 검증을 뜻한다.
         running = [{"id": "", "phase": "finish", "model": "claude"}]
     total = len(order)
-    eta = minutes(sum(durations) / len(durations) * (total - done) / max(1, max_workers)) * 60 if durations else None
+    historical = not durations and history_median_s is not None
+    average = sum(durations) / len(durations) if durations else history_median_s
+    eta = minutes(average * (total - done) / max(1, max_workers)) * 60 if average is not None else None
     elapsed = int(seconds_between(st.started_at, at))
     filled = 8 * done // total if total else 0
     parts = [f"{'▓' * filled}{'░' * (8 - filled)} {st.feature} {done}/{total}"]
     for p in running:
         label = PHASE_LABELS[p["phase"]]
         parts.append(f"{p['id'] + ' ' if p['id'] else ''}{label} 중({p['model']})")
-    parts += [f"{minutes(elapsed)}분", f"약 {eta // 60}분 남음" if eta is not None else "남은 시간 계산 중"]
+    eta_text = f"약 {eta // 60}분 남음" if eta is not None else "남은 시간 계산 중"
+    if historical:
+        eta_text += "(이전 실행 기준)"
+    parts += [f"{minutes(elapsed)}분", eta_text]
     return {"done": done, "total": total, "running": running, "elapsed_s": elapsed, "eta_s": eta,
             "line": " · ".join(parts)}
 
