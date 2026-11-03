@@ -1,38 +1,26 @@
 """spec과 티켓 그래프 검사. `gs check`와 `gs go`가 같이 쓴다."""
 from __future__ import annotations
 
-import re
 import shutil
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from . import feature as featmod
 from . import config, git, graph
 
 
-def is_github(url: str) -> bool:
-    if "://" in url:
-        try:
-            return urlsplit(url).hostname == "github.com"
-        except ValueError:
-            return False
-    # git@github.com:owner/repo.git (scp 문법). 로컬 경로 속 github.com은 호스트가 아니다.
-    return re.match(r"^(?:[^/@:]+@)?github\.com:", url, re.IGNORECASE) is not None
-
-
 def environment_problems(repo: Path, cfg: config.Config, feat: featmod.Feature,
                          scope: dict[str, list[str]]) -> list[featmod.Problem]:
-    required = {"git", "gh"}
+    required = {"git", "gh", "claude"}  # judge·보고서·실패 요약은 티켓 모델과 무관하게 claude를 쓴다
     for tid in scope:
         t = feat.tickets[tid]
         required.update((t.model, t.reviewer))
     problems = [featmod.Problem("오류", "", f"필요한 CLI `{name}`가 PATH에 없다")
                 for name in sorted(required) if shutil.which(name) is None]
     if shutil.which("git") is not None:
-        remote = git.run(repo, "remote", "get-url", cfg.git.remote, check=False)
-        url = remote.stdout.strip()
-        if remote.returncode == 0 and url and not is_github(url):
-            problems.append(featmod.Problem("경고", "", f"원격 {url}은 GitHub가 아니다. PR·병합은 gh로만 한다"))
+        try:
+            git.github_repo(repo, cfg.git.remote)
+        except git.GitError as e:
+            problems.append(featmod.Problem("오류", "", str(e)))
     return problems
 
 

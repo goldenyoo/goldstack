@@ -97,6 +97,7 @@ FAKE_GH = """\
 here="$(dirname "$0")"
 B="${GS_FAKE_BASE:-main}"; R="${GS_FAKE_REMOTE:-origin}"  # 시험 레포의 git.base·git.remote
 echo "$@" >> "$here/gh.log"
+[[ "${@: -2:1}" = --repo && -n "${@: -1}" ]] || { echo 'missing --repo' >&2; exit 2; }
 body() { while [ "$#" -gt 0 ]; do
   if [ "$1" = --body-file ]; then cp "$2" "$here/pr-body.md"; break; fi
   shift
@@ -230,7 +231,9 @@ class GoTest(unittest.TestCase):
             (fdir / "tickets" / f"{tid}-t.md").write_text(ticket(tid, deps))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", "init")
-        sh(self.repo, "git", "remote", "add", self.REMOTE, str(self.remote))
+        url = f"https://github.com/test/{self.REMOTE}.git"
+        sh(self.repo, "git", "remote", "add", self.REMOTE, url)
+        sh(self.repo, "git", "config", f"url.{self.remote}.insteadOf", url)
         sh(self.repo, "git", "push", "-q", "-u", self.REMOTE, self.BASE)
 
     def tearDown(self):

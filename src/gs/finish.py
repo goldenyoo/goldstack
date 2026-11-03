@@ -24,8 +24,9 @@ def _save(r, **fields) -> None:
 
 
 def _gh(r, *args: str) -> str:
+    repository = git.github_repo(r.repo, r.remote)
     try:
-        cp = subprocess.run([os.environ.get("GS_GH", "gh"), "pr", *args], cwd=r.repo,
+        cp = subprocess.run([os.environ.get("GS_GH", "gh"), "pr", *args, "--repo", repository], cwd=r.repo,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True)
     except OSError as e:
         raise git.GitError(f"gh pr {args[0]}: {e}") from e
