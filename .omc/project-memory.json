@@ -1,0 +1,53 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1793665181934,
+  "projectRoot": "/Users/goldenyoo/workspace/goldstack",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1793665181924,
+      "keyFiles": [
+        "ORIGINS.md"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": ".work/goldstack-v0/spec.md",
+      "accessCount": 1,
+      "lastAccessed": 1793665280671,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

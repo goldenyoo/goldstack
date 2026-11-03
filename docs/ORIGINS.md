@@ -41,3 +41,5 @@ D. 자잘한 것
 - pstack: router + playbook, author ≠ verifier, patch-id에 묶인 판정, 부작용으로 감독, fresh subagent, `/correct`의 규칙→강제수단 표.
 - mattpocock/skills: 라운드 grilling, 티켓 그래프(blocking edges), fresh implementer + merger + integration 브랜치, 2축 리뷰, `.out-of-scope/`.
 - cc-ops-kit에서 가져올 후보: `lib/herdrkit.py`, codex sandbox 실행기(`lib/codexrun.py` 등), `lib/usage_*.py`, `ops advise`의 읽기 전용 외부 모델 호출.
+
+상세 분석: [research/pstack.md](research/pstack.md), [research/mattpocock-skills.md](research/mattpocock-skills.md), [research/comparison.md](research/comparison.md).
