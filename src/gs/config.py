@@ -105,6 +105,10 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`가 없다"))
             elif type(raw[key]) is not kind:  # bool은 int의 하위형이지만 정수 설정으로 받지 않는다
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 {names[kind]}이어야 한다"))
+            elif section == "timeouts" and raw[key] <= 0:
+                problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0보다 커야 한다"))
+            elif section == "models" and key != "codex" and not raw[key].strip():
+                problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 비어 있으면 안 된다"))
             else:
                 values[key] = raw[key]
         if len(values) == len(fields):
