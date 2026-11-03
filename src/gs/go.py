@@ -263,7 +263,7 @@ def _loop(r: Run) -> None:
             say(f"[{tid}] 이미 병합됨")
         elif r.st.tickets[tid].status == state.MERGED:
             say(f"[{tid}] state는 병합이라는데 integration에 표시가 없다. 다시 한다")
-            _set(r, tid, status=state.PENDING)
+            _set(r, tid, status=state.PENDING, failures=0, failure_summary="")  # 지난 실행의 실패 횟수를 들고 가지 않는다
     r.ihead = git.sha(r.iwt, "HEAD")
     runner = worker.make_runner(r.repo, r.name)
     active: dict[str, Active] = {}
@@ -590,7 +590,8 @@ def _fail(r: Run, t: Ticket, reason: str) -> bool:
         paths.append(ts.worktree)
     failures = ts.failures + 1
     # 시작 준비 단계에서 실패했더라도 증거를 쓸 디렉터리는 확보한다.
-    directory = Path(ts.log).parent if ts.log else worker.attempt_dir(r.rundir / t.id)
+    # ts.log는 RUNNING일 때만 이번 시도의 것이다. 시작 전에 실패했으면 지난 시도 증거를 덮지 않게 새 디렉터리를 쓴다
+    directory = Path(ts.log).parent if ts.log and ts.status == state.RUNNING else worker.attempt_dir(r.rundir / t.id)
     directory.mkdir(parents=True, exist_ok=True)
     log = failure.record(directory, reason, [directory / "worker.log", directory / "verify.log", directory / "merge.log"])
     retry = failures < 2

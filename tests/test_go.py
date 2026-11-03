@@ -606,6 +606,42 @@ class GoTest(unittest.TestCase):
         self.assertEqual(st["09"].attempts, 0)
         self.assertEqual(self.merged(), ["11"])
 
+    def _fail_once_then_succeed(self):
+        (self.bin / "worker.sh").write_text(textwrap.dedent('''\
+            here="$(dirname "$0")"
+            if [ ! -f "$here/first" ]; then touch "$here/first"; exit 1; fi
+            echo done > file_01; git add -A; git commit -qm done
+        '''))
+
+    def test_repending_after_lost_integration_resets_failures(self):  # 07 리뷰(claude) 지적: 중간
+        # 지난 실행: 01이 한 번 실패한 뒤 병합됐다(state merged, failures=1). 그 PR·integration은 버려졌다.
+        self.rundir.mkdir(parents=True, exist_ok=True)
+        st = state.load(self.rundir, "demo")
+        ts = st.ticket("01")
+        ts.status, ts.failures, ts.failure_summary = "merged", 1, ""
+        state.save(self.rundir, st)
+        self._fail_once_then_succeed()
+        code, out, err = self.go("--only", "01")
+        self.assertIn("integration에 표시가 없다", out)
+        self.assertEqual(code, 0, out + err)  # 첫 실패에서 바로 failed가 되지 않고 재시도한다
+        self.assertIn("한 번 재시도", out)
+
+    def test_start_error_does_not_overwrite_previous_failure_evidence(self):  # 07 리뷰(claude) 지적: 낮음
+        (self.bin / "worker.sh").write_text("exit 1\n")
+        from gs import go as gomod
+        real, calls = gomod.git.branch_exists, []
+
+        def flaky(*a, **kw):
+            calls.append(a)
+            if any("retry" in str(x) for x in a):
+                raise OSError("boom at retry start")
+            return real(*a, **kw)
+        with mock.patch.object(gomod.git, "branch_exists", side_effect=flaky):
+            self.go("--only", "01")
+        first = self.rundir / "01" / "1" / "failure.log"
+        self.assertIn("종료 코드", first.read_text())
+        self.assertNotIn("boom at retry start", first.read_text())
+
     def test_verify_failure_retries_in_fresh_worktree(self):
         (self.bin / "worker.sh").write_text(textwrap.dedent('''\
             here="$(dirname "$0")"
