@@ -9,6 +9,13 @@ Claude Code로 프로젝트를 진행하는 개인 운영 kit. 처음에 grill�
 시작 배경과 요구사항은 [docs/ORIGINS.md](docs/ORIGINS.md), 참고한 kit 분석은 [docs/research/](docs/research/)(pstack, mattpocock/skills, 비교표).
 
 ## 설치와 사용
+사람이 쓰는 명령은 Claude Code의 `/grill <feature>`와 `/go <feature>` 둘이다(plugin skill, 아래 "plugin" 절로 설치).
+- `/grill <feature>`: 사실은 직접 찾고 결정만 번호 붙인 라운드로 묻는다(선택지마다 예시, 추천과 이유, "yes" = 추천 전부).
+  답은 라운드마다 `.work/<feature>/spec.md`에 적고, 마지막 라운드에서 티켓 분해를 확인받아 `tickets/`와 `.out-of-scope/`를
+  쓴 뒤 `gs check`가 통과할 때까지 고친다. 파일 형식은 `skills/grill/templates/`.
+- `/go <feature>`: `gs check` → herdr pane에서 `gs go` → 끝나면 report.md의 세 줄 요약과 PR 링크. 중간에 묻지 않는다.
+
+그 아래의 `gs` CLI:
 ```sh
 uv tool install --reinstall .   # 고정 복사로 설치. main을 받은 뒤 다시 실행한다
 gs check <feature>              # .work/<feature>/의 spec과 티켓 그래프 검사
