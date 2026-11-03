@@ -1,7 +1,7 @@
 """worker 하나 띄우기: brief와 실행 스크립트를 쓰고, herdr pane이나 subprocess에서 돌린다.
 
 끝은 실행 스크립트가 남기는 exit 파일로 안다(프로세스 종료 = 끝). 화면을 읽어 추측하지 않는다.
-worker 명령은 GS_WORKER_CMD로 바꿔 끼울 수 있다(시험 seam).
+실행 명령과 종료 코드 판정은 모델 어댑터(adapters.py)가 한다. GS_WORKER_CMD로 바꿔 끼울 수 있다(시험 seam).
 """
 from __future__ import annotations
 
@@ -14,14 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import herdr
+from .adapters import Adapter, WorkerInput
 from .feature import Spec, Ticket
 
-# claude 도구 차단으로 push와 gh를 막는다. 09의 plugin hook(`gs hook pretooluse`, GS_ROLE=worker일 때)과
-# 겹치는 이중 장치로 남겨 둔다: plugin이 설치되지 않았거나 hook이 따라가지 못한 형태도 여기서 한 번 더 막힌다.
-CLAUDE_CMD = (
-    'claude -p --output-format stream-json --verbose --permission-mode bypassPermissions '
-    '--disallowedTools "Bash(git push *)" "Bash(gh *)" < "$GS_BRIEF"'
-)
 POLL_SECONDS = 2.0
 
 
@@ -47,14 +42,9 @@ class Job:
     def exit_file(self) -> Path:
         return self.rundir / "exit"
 
-
-def worker_command(ticket: Ticket) -> str:
-    override = os.environ.get("GS_WORKER_CMD")
-    if override:
-        return override
-    if ticket.model != "claude":
-        raise ValueError(f"model `{ticket.model}` 어댑터는 아직 없다(05)")
-    return CLAUDE_CMD
+    @property
+    def input(self) -> WorkerInput:
+        return WorkerInput(brief=self.brief, worktree=self.worktree, log=self.log)
 
 
 def write_brief(job: Job, spec: Spec, feature: str, branch: str) -> None:
@@ -80,15 +70,11 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str) -> None:
 """, encoding="utf-8")
 
 
-def write_script(job: Job, command: str) -> None:
-    """worker를 돌리고 종료 코드를 exit 파일에 원자적으로 남기는 bash 스크립트."""
+def write_script(job: Job, adapter: Adapter) -> None:
+    """worker를 돌리고 종료 코드를 exit 파일에 원자적으로 남기는 bash 스크립트. 명령과 환경은 어댑터가 정한다."""
     q = shlex.quote
-    env = {
-        "GS_ROLE": "worker",
-        "GS_TICKET": job.ticket.id,
-        "GS_BRIEF": str(job.brief),
-        "GS_WORKTREE": str(job.worktree),
-    }
+    env = {**adapter.env(job.input), "GS_ROLE": "worker", "GS_TICKET": job.ticket.id}
+    command = adapter.command(job.input)
     exports = "\n".join(f"export {k}={q(v)}" for k, v in env.items())
     job.script.write_text(f"""#!/bin/bash
 # gs가 만든 worker 실행 스크립트. 티켓 값은 모두 shlex.quote로 넣는다(제목이 셸 코드로 실행되지 않게)
@@ -192,19 +178,30 @@ def poll_interval(runner) -> float:
 
 
 class Proc:
-    """띄운 worker 하나. poll()은 기다리지 않는다: 끝났으면 종료 코드, 실행기가 사라졌으면 -1, 아니면 None."""
+    """띄운 worker 하나. poll()은 기다리지 않는다: 끝났으면 종료 코드, 실행기가 사라졌으면 -1, 아니면 None.
 
-    def __init__(self, job: Job, runner, label: str):
+    끝난 종료 코드는 어댑터가 로그와 함께 다시 판정한다(agy는 종료 0이 성공이 아니다). 판정 메모는 note에 남는다.
+    """
+
+    def __init__(self, job: Job, runner, label: str, adapter: Adapter | None = None):
         job.rundir.mkdir(parents=True, exist_ok=True)
         job.exit_file.unlink(missing_ok=True)
         self.job = job
         self.runner = runner
+        self.adapter = adapter
+        self.note = ""
         self.handle, self.where = runner.start(job, label)
         self._gone_since: float | None = None
+        self._code: int | None = None
 
     def poll(self) -> int | None:
+        if self._code is not None:
+            return self._code
         code = read_exit(self.job)
         if code is not None:
+            if self.adapter is not None:
+                code, self.note = self.adapter.outcome(code, self.job.input)
+            self._code = code
             return code
         if self.runner.alive(self.handle):
             self._gone_since = None
