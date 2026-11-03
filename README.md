@@ -35,3 +35,23 @@ state에서 frontier를 다시 계산해 빈자리를 채운다. 병합·검증�
 
 바꿔 끼우는 곳(시험 seam): `GS_RUNNER=subprocess|herdr`(기본: herdr 안이면 herdr), `GS_WORKER_CMD`(worker 셸 명령),
 `GS_GH`(gh 경로).
+
+## Claude Code plugin과 worker 차단 hook(09)
+이 레포가 곧 plugin이자 로컬 marketplace다(`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`,
+`hooks/hooks.json`). 먼저 `gs`를 설치하고(위 `uv tool install`, hook은 별도 런타임 없이 PATH의 `gs`를 부른다), Claude Code에서:
+```
+/plugin marketplace add /path/to/goldstack   # 이 레포 디렉터리를 로컬 marketplace로 등록
+/plugin install goldstack@goldstack          # user scope로 설치: 모든 프로젝트의 worker에 적용
+```
+명령줄로는 `claude plugin marketplace add /path/to/goldstack && claude plugin install goldstack@goldstack`.
+레포를 바꾼 뒤에는 `/plugin marketplace update goldstack`. 설치 없이 한 세션만 쓰려면 `claude --plugin-dir /path/to/goldstack`.
+
+PreToolUse hook은 `gs hook pretooluse`다. `GS_ROLE=worker`일 때만 판정하고, 없으면 입력도 읽지 않고 통과한다(일반 세션에
+영향 없음). `gs go`는 worker 실행 스크립트에 `GS_ROLE=worker`, `GS_WORKTREE`를 넣는다. worker일 때 막는 것은 되돌릴 수 없는 일뿐이다:
+- `git push`(모든 형태: `-C`, `cd .. &&`, `bash -c`, `$(…)` 안), force 계열(`--force`, `--force-with-lease`, `push -f`)
+- `gh` 쓰기 명령(`pr create`·`merge`·`close`, `release …`, `repo …`, 쓰기 `gh api` 등). 읽기(`pr view`, `run view` …)는 통과
+- worktree 밖 쓰기(Write·Edit 도구, 셸 리다이렉션·`rm`·`mv`·`cp`·`tee`, 밖에서 하는 `git commit` 등). 임시 디렉터리와 `/dev`는 통과
+- 비밀 파일 읽기(`~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`·`.env.*`(`.env.example` 등 제외), `~/.netrc`, gh 인증 파일, `gh auth token`)
+
+막으면 이유와 "이 일은 `gs`가 한다"를 돌려준다. hook은 안전띠라 스크립트 파일 안까지 따라가지 않으므로 worker 명령의
+도구 차단 옵션(`--disallowedTools "Bash(git push *)" "Bash(gh *)"`)도 남겨 둔다(이중 장치). codex·agy는 sandbox로 막는다(11).

@@ -16,7 +16,8 @@ from pathlib import Path
 from . import herdr
 from .feature import Spec, Ticket
 
-# 09의 hook이 생기기 전까지의 임시 장치. claude 도구 차단으로 push와 gh를 막는다.
+# claude 도구 차단으로 push와 gh를 막는다. 09의 plugin hook(`gs hook pretooluse`, GS_ROLE=worker일 때)과
+# 겹치는 이중 장치로 남겨 둔다: plugin이 설치되지 않았거나 hook이 따라가지 못한 형태도 여기서 한 번 더 막힌다.
 CLAUDE_CMD = (
     'claude -p --output-format stream-json --verbose --permission-mode bypassPermissions '
     '--disallowedTools "Bash(git push *)" "Bash(gh *)" < "$GS_BRIEF"'
