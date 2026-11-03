@@ -295,6 +295,20 @@ class SquashTest(unittest.TestCase):
         self.assertEqual((self.squashes(), self.count("pr create "), self.calls()), (1, 1, ["01"]))
         self.assertEqual(self.under_report(), f2["merge_sha"])
 
+    def test_resume_merge_pending_squashed_then_base_moved(self):
+        """병합 확인 전에 squash된 뒤 base에 같은 파일을 바꾼 커밋이 올라와도 옛 base로 합치다 충돌하지 않는다."""
+        (self.bin / "gh.queue").touch()
+        self.assertEqual(self.go("--only", "01")[0], 1)
+        f = self.finish()
+        self.human_squash(f["merge_head"])
+        self.someone("echo updated > file_01", "git add file_01", "git commit -qm follow_up")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        f2 = self.finish()
+        self.assertEqual((f2["phase"], f2["url"], f2["merge_head"]), ("verified", f["url"], f["merge_head"]))
+        self.assertEqual((self.squashes(), self.count("pr create "), self.calls()), (1, 1, ["01"]))
+        self.assertEqual(sh(self.remote, "git", "show", "main:file_01"), "updated")
+
     def test_resume_merged(self):
         with mock.patch("gs.finish._postmerge", side_effect=RuntimeError("interrupted")):
             with self.assertRaisesRegex(RuntimeError, "interrupted"):

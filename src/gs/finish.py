@@ -99,7 +99,15 @@ def merge_base(r) -> None:
     base가 이 feature의 병합을 revert했으면 그냥 합칠 때 integration이 revert까지 따라가 feature 코드가 조용히
     사라진다(gs-ticket 트레일러는 남아 티켓은 merged로 보인다). 그래서 원격 base 위에 그 revert를 되돌린
     커밋(revert의 revert)을 만들어 합친다. 다음 PR이 feature 코드를 다시 들인다.
+
+    squash PR의 병합을 확인하기 전(merge_requested·merge_pending)에는 합치지 않는다. 그사이 PR이 squash로
+    병합됐으면 squash 커밋을 아직 몰라(merge_sha 없음) 옛 base를 merge-base로 합치다 충돌할 수 있다. 확인 뒤
+    run이 다시 부른다(그때는 _absorb_squash가 squash 커밋을 표시한다). 병합 대기 중인 PR head도 바꾸지 않는다.
     """
+    f = r.st.finish
+    if (f.get("merge_method") == "squash" and f.get("phase") in ("merge_requested", "merge_pending")
+            and not f.get("merge_sha")):
+        return
     _absorb_squash(r)
     reverts = _undone_reverts(r)
     if not reverts:
