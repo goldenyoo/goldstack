@@ -1,7 +1,7 @@
 ---
 name: retro
-description: "코딩 세션 하나를 되돌아보고, 다음 실행이 나아지도록 agent의 환경(검사, 포인터, 기준, 도구)을 고칠 후보를 심각한 순으로 제안한다. 고치지는 않는다. 사용: /retro [세션]"
-argument-hint: "[세션]"
+description: "코딩 세션 하나나 goldstack feature의 실행 기록을 되돌아보고, 다음 실행이 나아지도록 agent의 환경(검사, 포인터, 기준, 도구)을 고칠 후보를 심각한 순으로 제안한다. 고치지는 않는다. 사용: /retro [세션|feature]"
+argument-hint: "[세션|feature]"
 disable-model-invocation: true
 ---
 사람이 **회고**(retrospective)를 청했다. 너는 코드가 아니라 코딩 agent의 **환경**을 고칠 후보를 제안해 다음 실행을 낫게 한다. 제안만 한다. 사람이 후보를 고르기 전에는 아무 파일도 바꾸지 않는다.
@@ -10,7 +10,19 @@ disable-model-invocation: true
 
 1. 이 skill 폴더 옆의 `writing-for-agents/SKILL.md`를 읽는다(문서를 쓰는 기준). `writing-for-agents`는 사용자 호출 skill이라 Skill 도구로는 부를 수 없다.
 
-2. 사람이 가리킨 세션의 1차 자료를 읽는다(인자: `$ARGUMENTS`). 이 머신의 세션 로그를 찾아야 할 수도 있다. 세션을 가리키지 않았으면 지금 세션이다.
+2. 1차 자료를 읽는다(인자: `$ARGUMENTS`). 인자가 `.goldstack/work/` 아래 디렉터리 이름이면 **feature 실행**, 아니면 **세션**이다.
+
+   **세션**: 사람이 가리킨 세션의 1차 자료를 읽는다. 이 머신의 세션 로그를 찾아야 할 수도 있다. 세션을 가리키지 않았으면 지금 세션이다.
+
+   **feature 실행**: `.goldstack/work/$ARGUMENTS/`의 실행 기록을 읽는다.
+   - `report.md`: 결과, 티켓별 시도·리뷰, 마무리 상태.
+   - `run/state.json`: 티켓별 단계, 시도 수, 걸린 시간.
+   - `run/NN/<시도>/`의 `worker.log`, `review`, `fix`: 실패한 시도와 리뷰 지적부터. 큰 로그는 끝부분(`tail -n 200`)과 오류 줄(`grep -n -iE 'error|fail|traceback|오류|실패'`)부터 읽고, 필요한 곳만 넓힌다.
+   - `spec.md`의 "grill 기록": 정한 것과 실제 실행이 어긋난 곳.
+   - 다른 feature의 `.goldstack/work/*/report.md`: 같은 실패가 전에도 있었나(**반복**).
+   - `/insights` 보고서: `~/.claude/usage-data/report-*.html`이 있으면 가장 최근 것. 없으면 건너뛴다.
+
+   `run/`은 gitignore라 실행한 머신에만 있다. `run/`이 없으면(다른 머신에서 돌린 feature) report.md만으로 하고, 그 사실을 사람에게 말한다.
 
 3. 아래 범주에서 개선 후보를 찾는다.
 
@@ -20,9 +32,12 @@ disable-model-invocation: true
 - **전역 `CLAUDE.md`·`AGENTS.md`**: 리뷰 기준(이나 자동 검사)으로 옮겨야 할 지시가 있나? _쓸 때_: 그 파일이 특히 크다(레포에서든 사용자 전역에서든).
 - **도구 경제**: 줄일 수 있는 비싼 도구 호출이 있었나? 토큰을 특히 많이 먹는 자체 도구(CLI, MCP)가 있나? _쓸 때_: agent가 비싼 도구 호출을 했다.
 - **no-op**: 지시 파일에 agent의 행동을 바꾸지 않는 지시가 있나? _쓸 때_: 지시 파일이 크고 다루기 어렵다.
+- **goldstack 자체**(feature 실행에서): `gs`, skill, spec·티켓 형식이 실패를 불렀나? 빠진 `blocked_by`로 같은 파일 충돌, 흐린 완료 조건, 너무 큰 티켓, `gs` 버그. _쓸 때_: 티켓이 재시도·실패했거나 보고서·state가 실제와 다르다.
 - **정보 접근**: agent가 볼 수 있는 정보를 늘릴 기회. dev 서버 로그를 파일로도 남기기, 외부 서비스 읽기 전용 접근. _쓸 때_: 결정적인 정보 하나를 agent가 볼 수 없었다.
 
-4. 후보를 심각한 순으로 사람에게 보인다. 후보마다 세션에서 본 근거(무슨 일이 있었나)와 고칠 곳(파일·검사·포인터)을 붙인다. 사람이 고른 것만 고치거나, 사람이 원하면 `.goldstack/ideas/`에 적어 다음 `/grill`의 재료로 둔다.
+4. 후보를 심각한 순으로 번호 붙여 사람에게 보인다. 후보마다 1차 자료에서 본 근거(무슨 일이 있었나, 어느 파일·티켓)와 고칠 곳(파일·검사·포인터)을 붙인다. 다른 feature의 report.md에도 같은 실패가 있으면 후보 앞에 `[반복]`을 달고 그 feature 이름을 근거에 적는다.
+
+5. 사람이 고른 후보는 아이디어 함 `.goldstack/ideas/`에 `/idea` 형식으로 쓴다: 형제 폴더 `idea/SKILL.md`를 파일로 읽고 그 1–4단계를 후보마다 밟는다(`source`는 `/retro $ARGUMENTS`). 다음 `/grill`이 라운드 1에서 이것을 후보로 묻는다. 세션 회고에서 사람이 그 자리에서 고치라고 한 것은 고친다.
 
 ## 참고
 
