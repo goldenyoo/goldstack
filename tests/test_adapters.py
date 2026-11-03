@@ -433,7 +433,9 @@ class AgyGoAndCheckTest(Base):
         (tickets / "02-t.md").write_text(AGY_TICKET.format(tid="02", model="codex"))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", "init")
-        sh(self.repo, "git", "remote", "add", "origin", str(remote))
+        url = "https://github.com/test/origin.git"
+        sh(self.repo, "git", "remote", "add", "origin", url)
+        sh(self.repo, "git", "config", f"url.{remote}.insteadOf", url)
         sh(self.repo, "git", "push", "-q", "-u", "origin", "main")
 
     def cli(self, *args):

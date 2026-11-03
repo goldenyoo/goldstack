@@ -149,6 +149,9 @@ class ConfigTest(unittest.TestCase):
 
     @mock.patch("gs.check.shutil.which", return_value="/test/cli")
     def test_check_and_go_reject_invalid_config_and_check_reports_warnings(self, _which):
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        subprocess.run(["git", "remote", "add", "upstream", "https://github.com/owner/repo.git"],
+                       cwd=self.repo, check=True)
         root = self.repo / ".goldstack/work/demo"
         (root / "tickets").mkdir(parents=True)
         (root / "spec.md").write_text('---\nfeature: demo\nverify: "true"\n---\n')

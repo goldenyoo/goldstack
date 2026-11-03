@@ -29,6 +29,7 @@ class CheckTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         git.run(self.repo, "init", "-q")
+        git.run(self.repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
         self.bin = self.repo / "bin"
         self.bin.mkdir()
         (self.bin / "git").symlink_to(shutil.which("git"))
@@ -221,19 +222,18 @@ class CheckTest(unittest.TestCase):
         (self.bin / "agy").unlink()
         self.assert_error("CLI `agy`가 PATH에 없다")
 
-    def test_non_github_remote_warning_uses_configured_remote(self):
+    def test_non_github_remote_error_uses_configured_remote(self):
         self.write("01-a.md", ticket("01"))
         path = self.repo / config.CONFIG_PATH
         path.write_text(path.read_text().replace('remote = "origin"', 'remote = "upstream"'))
-        git.run(self.repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
         git.run(self.repo, "remote", "add", "upstream", "https://gitlab.com/owner/repo.git")
         for url in ("https://gitlab.com/owner/repo.git", "git@gitlab.com:owner/repo.git",
                     "https://github.com.example.org/owner/repo.git", "/tmp/github.com/repo.git"):
             with self.subTest(url=url):
                 git.run(self.repo, "remote", "set-url", "upstream", url)
                 code, out, err = self.run_check()
-                self.assertEqual(code, 0, out + err)
-                self.assertIn(f"경고: 원격 {url}은 GitHub가 아니다. PR·병합은 gh로만 한다", err)
+                self.assertEqual(code, 1, out + err)
+                self.assertIn(f"오류: 원격 `upstream`의 URL `{url}`은 GitHub 저장소 형식이 아니다", err)
         for url in ("https://github.com/owner/repo.git", "git@github.com:owner/repo.git",
                     "ssh://git@github.com/owner/repo.git"):
             with self.subTest(url=url):
@@ -251,6 +251,8 @@ class RealRepoTest(unittest.TestCase):
             shutil.copytree(src, repo / ".goldstack/work/goldstack-v0")
             (repo / ".goldstack").mkdir(exist_ok=True)
             (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+            git.run(repo, "init", "-q")
+            git.run(repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                     mock.patch("gs.check.shutil.which", return_value="/test/cli"):
                 code = cli.main(["--repo", str(repo), "check", "goldstack-v0"])

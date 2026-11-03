@@ -1,6 +1,7 @@
 """gs가 쓰는 git 연산. 실패는 GitError로 올린다."""
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,32 @@ def run(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProces
 
 def out(cwd: Path, *args: str) -> str:
     return run(cwd, *args).stdout.strip()
+
+
+def _github_repo_url(url: str) -> str | None:
+    match = re.fullmatch(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                         r"([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)", url, re.IGNORECASE)
+    if match is None:
+        return None
+    owner, name = match.groups()
+    name = name.removesuffix(".git")
+    if name in ("", ".", ".."):
+        return None
+    return f"{owner}/{name}"
+
+
+def github_repo(repo: Path, remote: str) -> str:
+    """설정된 원격의 GitHub owner/repo. 로컬 미러용 insteadOf도 허용한다."""
+    url = out(repo, "remote", "get-url", remote)
+    name = _github_repo_url(url)
+    if name is None:
+        # get-url은 insteadOf까지 적용한다. 전송 경로가 미러로 바뀌었으면
+        # 원격에 직접 설정된 GitHub URL에서 PR 저장소를 구한다.
+        original = run(repo, "config", "--get", f"remote.{remote}.url", check=False).stdout.strip()
+        name = _github_repo_url(original)
+    if name is None:
+        raise GitError(f"원격 `{remote}`의 URL `{url}`은 GitHub 저장소 형식이 아니다")
+    return name
 
 
 def branch_exists(repo: Path, branch: str) -> bool:

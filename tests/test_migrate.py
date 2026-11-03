@@ -29,6 +29,7 @@ class MigrateTest(unittest.TestCase):
         self.env.start()
         self.repo.mkdir()
         sh(self.repo, "git", "init", "-q", "-b", "main")
+        sh(self.repo, "git", "remote", "add", "origin", "https://github.com/owner/repo.git")
         work = self.repo / ".work/demo"
         (work / "tickets").mkdir(parents=True)
         (work / "spec.md").write_text(SPEC)
