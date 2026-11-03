@@ -195,10 +195,8 @@ def _prepare_integration(r: Run) -> None:
     if _reset_integration(r):
         say("■ integration worktree에 남은 병합·변경을 버렸다(지난 실행이 중간에 끝난 흔적)")
     # 앞 wave가 main에 병합된 뒤라면 origin/main을 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
-    res = git.run(r.iwt, "merge", "--no-edit", BASE, check=False)
-    if res.returncode:
-        git.run(r.iwt, "merge", "--abort", check=False)
-        raise git.GitError(f"{BASE}를 {branch}에 합치다 충돌했다: {res.stdout.strip()}")
+    # main이 이 feature의 병합을 revert했으면 그 revert를 되돌린 커밋까지 합친다(feature 코드를 잃지 않는다).
+    finish.merge_main(r)
     say(f"■ integration: {branch} @ {git.sha(r.iwt, 'HEAD')[:8]} ({r.iwt})")
 
 

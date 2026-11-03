@@ -101,12 +101,15 @@ body() { while [ "$#" -gt 0 ]; do
 done; }
 case "$1 $2" in
   "pr list") [ -f "$here/gh.open" ] && echo "https://example.test/pr/1"; exit 0 ;;
-  "pr create") body "$@"; touch "$here/gh.open"; rm -f "$here/gh.merged"; echo "https://example.test/pr/1" ;;
+  "pr create") body "$@"; touch "$here/gh.open"; rm -f "$here/gh.merged" "$here/gh.closed"
+    echo "https://example.test/pr/1" ;;
   "pr edit") body "$@" ;;
   "pr view")
-    if [ -f "$here/gh.merged" ]; then cat "$here/gh.merged"
+    if [ -f "$here/gh.closed" ]; then echo '{"state":"CLOSED","baseRefName":"main"}'
+    elif [ -f "$here/gh.merged" ]; then cat "$here/gh.merged"
     else echo '{"state":"OPEN"}'; fi ;;
   "pr merge")
+    [ -f "$here/gh.closed" ] && { echo 'Pull request is closed' >&2; exit 1; }
     [ -f "$here/gh.queue" ] && exit 0
     [ -f "$here/gh.reject" ] && { echo 'merge refused' >&2; exit 1; }
     set -e
@@ -284,7 +287,7 @@ class GoTest(unittest.TestCase):
         self.assertEqual(self.integration("show", "origin/main:file_01"), "01 worker")
         report = self.final_report()
         for text in ("## Summary", "## Evidence", "## Merge Danger", "| 01 | t01 | merged |",
-                     "main-verify.log", "종료 코드: 0", "git -C /tmp/gs-revert revert", f["merge_sha"]):
+                     "main-verify.log", "종료 코드: 0", 'git -C "$dir" revert', "mktemp -d", f["merge_sha"]):
             self.assertIn(text, report)
         self.assertEqual((self.bin / "pr-body.md").read_text().strip(), report)
         self.assertEqual(list(self.rundir.glob("gs-main-*")), [])
@@ -400,6 +403,147 @@ class GoTest(unittest.TestCase):
             self.assertEqual(code, 1, out + err)
         self.assertEqual(sum(x.startswith("pr create ") for x in self.lines("gh.log")), 1)
         self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
+
+    # --- 08 리뷰(claude) 반영 ---
+    def break_main(self, advance=False):
+        """main 검증(분리 HEAD)에서 file_01이 있으면 실패하는 verify. advance면 첫 main 검증 도중 다른 사람이 main에 push한다."""
+        (self.bin / "advance.sh").write_text(textwrap.dedent(f"""\
+            here="$(dirname "$0")"
+            [ -f "$here/advanced" ] && exit 0
+            touch "$here/advanced"
+            git clone -q {self.remote} "$here/other" && cd "$here/other" && echo other > other.txt \\
+              && git add other.txt && git commit -qm "someone else" && git push -q origin main
+            """))
+        (self.bin / "verify.sh").write_text(textwrap.dedent(f"""\
+            git symbolic-ref -q HEAD >/dev/null && exit 0  # integration(브랜치)은 통과
+            test -f file_01 || exit 0
+            {'bash "$(dirname "$0")/advance.sh"' if advance else ':'}
+            exit 1
+            """))
+        self.parallel(1, verify=f"bash {self.bin / 'verify.sh'}")
+
+    def someone(self, *script):
+        """다른 사람이 원격 main에서 한 일."""
+        other = self.bin / "human"
+        if not other.exists():
+            sh(self.bin, "git", "clone", "-q", str(self.remote), str(other))
+        sh(other, "git", "pull", "-q", "--ff-only", "origin", "main")
+        sh(other, "bash", "-c", "; ".join(script) + "; git push -q origin main")
+        return sh(other, "git", "rev-parse", "HEAD")
+
+    def remote_files(self):
+        return sh(self.remote, "git", "ls-tree", "--name-only", "main").split()
+
+    def test_finish_rebuilds_rejected_revert_on_latest_main(self):  # high: 거부된 revert push가 영구히 막힘
+        self.break_main(advance=True)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "main_failed")
+        stale, moved = f["revert_sha"], sh(self.remote, "git", "rev-parse", "main")
+        self.assertEqual(sh(self.remote, "git", "log", "-1", "--format=%s", "main"), "someone else")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "reverted", f)
+        self.assertNotEqual(f["revert_sha"], stale)
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["revert_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^"), moved)  # force 없이 최신 main 위에
+        self.assertNotIn("file_01", self.remote_files())
+        self.assertIn("other.txt", self.remote_files())
+        self.assertEqual(sum(x.startswith("pr merge ") for x in self.lines("gh.log")), 1)
+
+    def test_finish_records_revert_already_done_by_someone(self):
+        self.break_main(advance=True)
+        self.assertEqual(self.go("--only", "01")[0], 1)
+        f = state.load(self.rundir, "demo").finish
+        theirs = self.someone(f"git revert --no-edit -m 1 {f['merge_sha']}")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "reverted", f)
+        self.assertEqual(f["revert_sha"], theirs)
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), theirs)  # gs는 다시 revert하지 않는다
+        self.assertIn("이미", f["outcome"])
+
+    def test_finish_moves_on_when_someone_fixed_main(self):
+        self.break_main(advance=True)
+        self.assertEqual(self.go("--only", "01")[0], 1)
+        fixed = self.someone("git rm -q file_01", "git commit -qm 'fix main'")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "verified", f)
+        self.assertTrue(f["main_ok"])
+        self.assertNotIn("revert_sha", f)
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), fixed)
+
+    def test_finish_revert_keeps_feature_code_in_integration(self):  # medium: revert 뒤 integration에서 코드가 사라짐
+        self.parallel(1, verify='test "$(git log -1 --format=%s)" != "Merge feature"')
+        self.assertEqual(self.go("--only", "01")[0], 1)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "reverted")
+        self.assertNotIn("file_01", self.remote_files())
+        self.assertEqual(self.integration("show", "gs/demo/integration:file_01"), "01 worker")
+        [again] = f["reintroduced"]
+        self.assertEqual(again["revert"], f["revert_sha"])
+        self.assertIn(f"This reverts commit {f['revert_sha']}",
+                      self.integration("log", "-1", "--format=%B", again["commit"]))
+        self.assertIn(again["commit"], self.final_report())
+        self.assertEqual(self.go("--only", "01")[0], 1)  # 다시 돌아도 코드가 남고 revert의 revert를 또 만들지 않는다
+        self.assertEqual(self.integration("show", "gs/demo/integration:file_01"), "01 worker")
+        self.assertEqual(len(state.load(self.rundir, "demo").finish["reintroduced"]), 1)
+
+    def test_prepare_keeps_feature_code_after_main_reverted(self):  # medium: 일반 준비 경로도 같은 방식으로 잃지 않는다
+        self.assertEqual(self.go("--only", "01")[0], 0)
+        merge = state.load(self.rundir, "demo").finish["merge_sha"]
+        self.someone(f"git revert --no-edit -m 1 {merge}")
+        self.assertNotIn("file_01", self.remote_files())
+        self.add_ticket("09")
+        code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.integration("show", "gs/demo/integration:file_01"), "01 worker")
+        self.assertIn("file_01", self.remote_files())  # 다음 PR이 feature 코드를 다시 들였다
+        self.assertIn("file_09", self.remote_files())
+        self.assertIn("되돌렸", self.final_report())
+
+    def test_finish_closed_pr_is_recorded_and_next_go_opens_new_pr(self):  # medium: 닫힌 PR에 영구히 갇힘
+        (self.bin / "gh.queue").touch()
+        self.assertEqual(self.go("--only", "01")[0], 1)
+        self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "merge_pending")
+        (self.bin / "gh.queue").unlink()
+        (self.bin / "gh.open").unlink()
+        (self.bin / "gh.closed").touch()  # 사람이 PR을 닫았다
+        merges = sum(x.startswith("pr merge ") for x in self.lines("gh.log"))
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "closed", f)
+        self.assertEqual(sum(x.startswith("pr merge ") for x in self.lines("gh.log")), merges)
+        self.assertIn("닫혔다", self.final_report())
+        self.assertIn("닫혔다", out)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "verified")
+        self.assertEqual(sum(x.startswith("pr create ") for x in self.lines("gh.log")), 2)
+        self.assertIn("file_01", self.remote_files())
+        self.assertIn("닫혔다", self.final_report())  # 이전 PR이 닫혔다는 기록을 새 PR에도 남긴다
+        self.assertEqual(self.calls(), ["01"])
+
+    def test_report_body_stays_below_github_limit(self):  # medium: 본문 길이 초과로 마무리가 반복 실패
+        self.parallel(1, verify="head -c 100000 /dev/zero | tr '\\0' x; echo; echo LAST-LINE; test ! -f BROKEN")
+        old = self.rundir / "01" / "1" / "verify.log"
+        old.parent.mkdir(parents=True)
+        old.write_text("OLD-ATTEMPT\n" + "y" * 100000)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        body = (self.bin / "pr-body.md").read_text()
+        self.assertLess(len(body), 65536)
+        self.assertEqual(body.strip(), self.final_report())
+        self.assertNotIn("OLD-ATTEMPT", body)  # 지난 시도 로그는 붙이지 않는다
+        self.assertIn("LAST-LINE", body)  # 로그의 끝을 남긴다
+        self.assertIn(str((self.rundir / "finish" / "main-verify.log").resolve()), body)  # 전체 로그 경로
 
     # --- 다른 계열 리뷰와 수정 1회(06) ---
     def review_with(self, findings):
