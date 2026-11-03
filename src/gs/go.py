@@ -2,9 +2,12 @@
 
 병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 모델로 한 번 재시도한다(07).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
-한 번 띄운다(06, review.py). 티켓에 second_reviewer가 있으면 두 리뷰를 동시에 띄우고 지적을 합쳐 수정은 한 번이다.
-gs가 띄우는 agy 호출(worker·리뷰·수정·재시도)을 state에 세고 config `[agy] max_calls_per_run`에 닿으면 더 띄우지 않는다.
-재리뷰는 없고 verify만 돈다. 끝에는 보고서·PR·base 검증·revert를 한다(08).
+띄운다(06, review.py). 티켓에 second_reviewer가 있으면 두 리뷰를 동시에 띄우고 지적을 합쳐 수정 worker는 하나다.
+수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
+worker를 한 번 더 띄우고 다시 재리뷰한다. 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
+순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(마지막에 한 번) → 병합.
+gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 state에 세고 config `[agy] max_calls_per_run`에 닿으면 더 띄우지 않는다.
+끝에는 보고서·PR·base 검증·revert를 한다(08).
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
@@ -434,7 +437,7 @@ class Active:
     last_activity: float = field(default_factory=time.monotonic)
     last_log: tuple[int, int] | None = None
     last_head: str = ""
-    fix: bool = False  # 리뷰 지적을 고치는 수정 worker(06). 끝나면 리뷰 없이 병합·검증으로 간다
+    fix: int = 0  # 리뷰 지적을 고치는 수정 worker면 그 회차(1 | 2), 구현 worker면 0. 끝나면 재리뷰로 간다
 
     def idle(self, repo: Path) -> float:
         """로그 출력 또는 브랜치 커밋이 바뀌면 유휴 시계를 다시 시작한다."""
@@ -493,10 +496,10 @@ def _loop(r: Run) -> None:
             try:
                 nxt = _finish(r, a, code, others=sorted(t for t in active if t != tid), runner=runner, error=error)
                 active.pop(tid)
-                if nxt is not None:  # 수정 worker를 띄웠다. 끝나면 다시 _finish로 온다
+                if nxt is not None:  # (2차) 수정 worker를 띄웠다. 끝나면 다시 _finish로 온다
                     active[tid] = nxt
             except (git.GitError, OSError) as e:
-                # 병합·검증 실행 오류는 이 티켓의 실패로 한정한다. 리뷰 단계의 뜻밖의 오류는 _review가 막는다.
+                # 병합·검증 실행 오류는 이 티켓의 실패로 한정한다. 리뷰·재리뷰의 뜻밖의 오류는 _review·_rereview가 막는다.
                 a.proc.stop()
                 _reset_integration(r, r.ihead)
                 _fail(r, a.t, f"worker 결과 처리 중 오류: {_err(e)}")
@@ -623,8 +626,9 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
     """끝난 worker 하나를 확인하고, 리뷰한 뒤, 최신 integration을 티켓 브랜치에 합쳐 보고 integration에 병합·검증한다.
 
     others는 아직 돌고 있는 다른 worker다. integration이 바뀌었을 때 누구 짓인지 가리는 데 쓴다.
-    고칠 리뷰 지적이 있으면 수정 worker를 띄워 그 Active를 돌려준다(아니면 None). 수정 worker가 끝나면(a.fix)
-    리뷰 없이 병합·검증으로 간다. error는 수정 worker를 확인하다 난 오류(시간 초과 등)다.
+    고칠 리뷰 지적이 있으면 수정 worker를 띄워 그 Active를 돌려준다(아니면 None). 수정 worker가 끝나면(a.fix) 재리뷰하고,
+    1차 수정 뒤에 또 고칠 것이 있으면 2차 수정 worker를 띄운다. 그 밖에는 병합·검증으로 간다.
+    error는 수정 worker를 확인하다 난 오류(시간 초과 등)다.
     """
     t, wt, branch = a.t, a.wt, a.branch
     commits = git.count(r.repo, f"{a.base}..{branch}")
@@ -650,7 +654,12 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         say(f"[{t.id}] 경고: integration worktree가 바뀌어 되돌렸다. 함께 돌던 worker({', '.join([t.id, *others])}) 중 "
             "누구 짓인지 모른다")
     if a.fix:
-        _end_fix(r, a, code, commits, error)
+        todo = _end_fix(r, a, code, commits, error)
+        if todo:
+            a.proc.finish(True)  # 1차 수정 worker는 성공했다
+            nxt = _start_fix(r, a, todo, runner, a.fix + 1)
+            if nxt is not None:
+                return nxt
     else:
         if code != 0:
             why = f"worker 종료 코드 {code}" if code >= 0 else "worker 실행기가 사라졌다"
@@ -713,7 +722,7 @@ def _review(r: Run, a: Active) -> list[dict]:
     """다른 계열이 이 티켓 diff(최신 integration과의 merge-base 기준)를 리뷰한다. 고칠 지적을 돌려준다.
 
     병합·검증처럼 루프 안에서 하나씩 돈다(다른 worker는 그동안 각자 돈다). 오래 걸리는 수정은 worker로 따로 띄운다.
-    second_reviewer가 있으면 두 리뷰를 동시에 띄우고, 둘 다 끝나면 fix 지적을 합쳐 돌려준다(수정은 한 번).
+    second_reviewer가 있으면 두 리뷰를 동시에 띄우고, 둘 다 끝나면 fix 지적을 합쳐 돌려준다(수정 worker는 하나).
     그때는 한쪽이 거부·실패·시간 초과여도 다른 쪽으로 간다. 둘 다 거부면 하나일 때처럼 티켓 실패다.
     agy 리뷰는 이번 실행의 상한에 닿았으면 띄우지 않고 "건너뜀(한도)"으로 적는다.
     """
@@ -772,9 +781,7 @@ def _review(r: Run, a: Active) -> list[dict]:
     for rec in ordered:
         who = f"({rec['reviewer']})" if len(slots) > 1 else ""
         say(f"[{t.id}] 리뷰 끝{who}: {review.counts(rec)}" + (f" — {rec['note']}" if rec["note"] else ""))
-    if len(slots) == 1:
-        return review.fixes(ordered[0])
-    return review.labeled_fixes(ordered)
+    return _todo(r, t, 1)
 
 
 def _is_agy(model: str) -> bool:
@@ -790,91 +797,183 @@ def _agy_usage(r: Run) -> str:
 
 
 def _count_agy(r: Run, model: str) -> None:
-    """gs가 agy를 한 번 띄운다(worker·리뷰·수정 각각 1회). 띄우기 직전에 센다."""
+    """gs가 agy를 한 번 띄운다(worker·리뷰·수정·재리뷰 각각 1회). 띄우기 직전에 센다."""
     if _is_agy(model):
         r.st.agy_calls += 1
         r.save()
 
 
-def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
-    """같은 구현 모델로 수정 worker를 한 번 띄운다(같은 브랜치·worktree, 지적 첨부). 띄우지 못하면 None.
+def _todo(r: Run, t: Ticket, nth: int) -> list[dict]:
+    """nth번째 수정 worker가 고칠 지적. 리뷰가 둘이면 지적 번호에 계열 이름을 붙인다(수정 brief에 쓴다)."""
+    recs = state.reviews(r.st.ticket(t.id))
+    return review.fix_targets(recs[0], nth) if len(recs) == 1 else review.labeled_fixes(recs, nth)
 
-    띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 리뷰한 구현을 병합·검증한다.
+
+def _targets(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
+    """(리뷰 기록, 그 기록 안의 nth번째 수정 대상 지적). 대상이 없는 리뷰는 뺀다."""
+    pairs = [(rec, review.fix_targets(rec, nth)) for rec in state.reviews(r.st.ticket(t.id))]
+    return [(rec, found) for rec, found in pairs if found]
+
+
+def _attempt_dir(a: Active) -> Path:
+    """이 티켓 시도의 실행 디렉터리. 수정 worker는 그 아래 fix·fix2에서 돈다."""
+    return a.proc.job.rundir.parent if a.fix else a.proc.job.rundir
+
+
+def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Active | None:
+    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적 첨부). 띄우지 못하면 None.
+
+    띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 지금 브랜치의 구현을 병합·검증한다.
     """
     t = a.t
     if _is_agy(t.model) and state.agy_reached(r.st, _agy_limit(r)):
-        _note_fix(r, t, f"수정 worker {review.LIMIT}: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다. "
-                        "리뷰한 구현을 병합·검증한다. fix 지적은 남는다")
+        _skip_fix(r, t, nth, review.REASON_LIMIT,
+                  f"{_ordinal(nth)}수정 worker {review.LIMIT}: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다. "
+                  "지금 브랜치의 구현을 병합·검증한다. 고칠 지적은 남는다")
         return None
-    _phase(r, t.id, "fix", t.model)
-    job = worker.Job(ticket=t, worktree=a.wt.resolve(), rundir=a.proc.job.rundir / "fix")
+    step = "fix" if nth == 1 else f"fix{nth}"
+    _phase(r, t.id, step, t.model)
+    job = worker.Job(ticket=t, worktree=a.wt.resolve(), rundir=_attempt_dir(a) / step)
     proc = None
     try:
         job.rundir.mkdir(parents=True)
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
-            f.write(review.fix_brief(todo))
+            f.write(review.fix_brief(todo, nth))
         adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
         base = git.sha(r.repo, a.branch)
         _set(r, t.id, log=str(job.log), pane="")  # 재실행 때 살아 남은 수정 worker를 run.sh로 찾게
         _count_agy(r, t.model)
-        proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:fix", adapter)
+        proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:{step}", adapter)
         _set(r, t.id, pane=proc.where)
-    except Exception as e:  # noqa: BLE001 — 수정은 덤이다. 리뷰한 구현은 그대로 병합한다
+    except Exception as e:  # noqa: BLE001 — 수정은 덤이다. 지금 브랜치의 구현은 그대로 병합한다
         if proc is not None:
             proc.stop()
-        _note_fix(r, t, f"수정 worker를 띄우지 못했다: {_err(e)}")
+        _skip_fix(r, t, nth, f"띄우지 못함: {_err(e)}", f"{_ordinal(nth)}수정 worker를 띄우지 못했다: {_err(e)}")
         return None
-    say(f"[{t.id}] 수정 worker 시작: 지적 {len(todo)}개 ({adapter.name}, {proc.where}, 로그 {job.log})")
-    return Active(t, proc, a.branch, a.wt, base, fix=True)
+    say(f"[{t.id}] {_ordinal(nth)}수정 worker 시작: 지적 {len(todo)}개 ({adapter.name}, {proc.where}, 로그 {job.log})")
+    return Active(t, proc, a.branch, a.wt, base, fix=nth)
 
 
-def _note_fix(r: Run, t: Ticket, msg: str) -> None:
-    """수정 결과를 fix 지적을 낸 리뷰 기록마다 적는다(두 리뷰의 지적을 수정 한 번으로 고친다)."""
+def _ordinal(nth: int) -> str:
+    return "" if nth == 1 else f"{nth}차 "
+
+
+def _skip_fix(r: Run, t: Ticket, nth: int, reason: str, msg: str) -> None:
+    """수정 worker를 띄우지 못했다. 대상 지적에 이유를 남긴다. 1차 재리뷰의 unresolved는 그대로 미해결로 읽힌다."""
+    for _, found in _targets(r, t, nth):
+        for f in found:
+            f["fix_reason"] = reason
+    _note_fix(r, t, nth, msg)
+
+
+def _note_fix(r: Run, t: Ticket, nth: int, msg: str) -> None:
+    """수정 결과를 그 수정의 지적을 낸 리뷰 기록마다 덧붙인다(두 리뷰의 지적을 수정 worker 하나로 고친다)."""
     ts = r.st.ticket(t.id)
-    for rec in [rec for rec in state.reviews(ts) if review.fixes(rec)] or [ts.review]:
-        rec["fix"] = msg
+    for rec in [rec for rec, _ in _targets(r, t, nth)] or [ts.review]:
+        _append_fix(rec, msg)
     r.save()
     say(f"[{t.id}] {msg}")
 
 
-def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> None:
-    """수정 worker가 끝났다. 성공이면 fix 지적을 "수정 시도, 재리뷰 없음"으로 적는다.
+def _append_fix(rec: dict, msg: str) -> None:
+    rec["fix"] = f"{rec['fix']} / {msg}" if rec.get("fix") else msg
 
-    재리뷰가 없으니 커밋·종료 코드만으로 지적이 고쳐졌는지는 모른다(worker가 일부를 거절했을 수도 있다).
-    그래서 고쳐졌다고 치지 않고 남은 지적으로 보고서에 남긴다.
-    실패(종료 코드, 시간 초과, 커밋 없음, 리뷰한 커밋을 지움)면 수정 커밋을 버리고 리뷰한 구현으로 되돌린다.
-    어느 쪽이든 티켓은 병합·검증으로 간다. 돌고 있던 worker는 _finish가 이미 끝냈다.
+
+def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> list[dict]:
+    """수정 worker가 끝났다. 성공이면 재리뷰로 가고, 2차 수정이 고칠 지적을 돌려준다(없으면 빈 목록).
+
+    실패(종료 코드, 시간 초과, 커밋 없음, 이전 커밋을 지움)면 이번 수정 커밋만 버리고 수정 전 head로 되돌린다
+    (2차 수정 실패면 1차 수정 결과는 남는다). 재리뷰는 하지 않는다. 어느 쪽이든 티켓은 병합·검증으로 간다.
+    되돌리기 자체가 git 오류면 어느 트리를 병합할지 모르니 그 오류는 올린다(_loop가 티켓 실패로 처리해 다시 한다).
+    돌고 있던 worker는 _finish가 이미 끝냈다.
     """
-    t, wt, branch = a.t, a.wt, a.branch
+    t, wt, branch, nth = a.t, a.wt, a.branch, a.fix
     kept = git.run(r.repo, "merge-base", "--is-ancestor", a.base, branch, check=False).returncode == 0
-    why = error or ("" if code == 0 else f"종료 코드 {code}") or ("" if kept else "리뷰한 커밋을 지웠다") \
+    why = error or ("" if code == 0 else f"종료 코드 {code}") or ("" if kept else "이전 커밋을 지웠다") \
         or ("" if commits else "커밋 없음")
     if not why:
         if not git.is_clean(wt):
             say(f"[{t.id}] 경고: 수정 worker가 커밋 안 된 변경을 남겼다(병합에 들어가지 않는다)")
-        _mark_fixes(r, t, review.ATTEMPTED)
-        recs = state.reviews(r.st.ticket(t.id))
-        found = review.fixes(recs[0]) if len(recs) == 1 else review.labeled_fixes(recs)
-        ids = ", ".join(str(f["id"]) for f in found)
-        _note_fix(r, t, f"수정 커밋 {commits}개(재리뷰 없음, verify만 돈다). fix 지적 {ids}는 수정을 시도했지만 "
-                        "고쳐졌는지 확인하지 않았다(남은 지적에 둔다)")
-        return
+        _mark_fixes(r, t, nth, review.ATTEMPTED)
+        ids = ", ".join(str(f["id"]) for f in _todo(r, t, nth))
+        _note_fix(r, t, nth, f"{_ordinal(nth)}수정 커밋 {commits}개(fix 지적 {ids}): 재리뷰로 확인한다")
+        return _rereview(r, a)
     a.proc.finish(False)  # 들여다볼 수 있게 pane을 남긴다
     git.run(wt, "merge", "--abort", check=False)
     git.run(wt, "checkout", "-q", "-f", branch)
     git.run(wt, "reset", "-q", "--hard", a.base)
-    _mark_fixes(r, t, review.DISCARDED)
-    _note_fix(r, t, f"수정 worker 실패({why}): 수정을 버리고 리뷰한 구현을 병합·검증한다. fix 지적은 남는다")
+    _mark_fixes(r, t, nth, review.DISCARDED, f"수정 worker 실패: {why}")
+    _note_fix(r, t, nth, f"{_ordinal(nth)}수정 worker 실패({why}): 이 수정을 버리고 수정 전 구현을 병합·검증한다. 고칠 지적은 남는다")
+    return []
 
 
-def _mark_fixes(r: Run, t: Ticket, result: str) -> None:
-    for rec in state.reviews(r.st.ticket(t.id)):
-        for f in review.fixes(rec):
-            f["fix_attempt"] = result
+def _mark_fixes(r: Run, t: Ticket, nth: int, result: str, reason: str = "") -> None:
+    for _, found in _targets(r, t, nth):
+        for f in found:
+            f["fix_attempt"], f["fix_round"] = result, nth
+            if reason:
+                f["fix_reason"] = reason
     r.save()
+
+
+def _rereview(r: Run, a: Active) -> list[dict]:
+    """지적을 낸 리뷰어들에게 수정 커밋을 다시 보게 하고, 결과를 지적에 적는다. 2차 수정이 고칠 지적을 돌려준다.
+
+    병합·검증처럼 루프 안에서 돈다. 여기서 난 어떤 오류도 병합을 막지 않는다: 아직 결과가 없는 지적은 unchecked(재리뷰 실패)다.
+    """
+    t, nth = a.t, a.fix
+    targets = _targets(r, t, nth)
+    try:
+        head = git.sha(r.repo, a.branch)
+        if git.out(r.repo, "diff", "--no-ext-diff", "--name-only", f"{a.base}..{head}"):
+            _run_rereviews(r, a, targets, head)
+        else:  # 부를 것도 없다: 바뀐 것이 없으니 고쳐졌을 수 없다
+            for rec, found in targets:
+                review.mark_rereview(found, nth, review.UNRESOLVED, "", "수정 커밋의 diff가 비었다")
+                _append_fix(rec, f"재리뷰 {nth}차: 수정 커밋의 diff가 비어 부르지 않았다(unresolved)")
+    except Exception as e:  # noqa: BLE001 — verify가 병합 관문이다
+        say(f"[{t.id}] 재리뷰 {nth}차 실패: {_err(e)}")
+        for _, found in targets:
+            review.mark_rereview([f for f in found if f.get("rereview_round") != nth], nth, review.UNCHECKED,
+                                 review.REASON_FAILED, f"뜻밖의 오류 {_err(e)}")
+    r.save()
+    return _todo(r, t, nth + 1) if nth == 1 else []  # 수정은 티켓당 최대 2회다
+
+
+def _run_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]], head: str) -> None:
+    """리뷰어마다 재리뷰를 띄운다. 둘 다 냈으면 run_together로 동시에. agy는 상한에 닿았으면 띄우지 않고 unchecked(한도)다."""
+    t, nth = a.t, a.fix
+    launch = []
+    for rec, found in targets:
+        who = rec["reviewer"]
+        if _is_agy(who) and state.agy_reached(r.st, _agy_limit(r)):
+            detail = f"이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다"
+            review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_LIMIT, detail)
+            _append_fix(rec, f"재리뷰 {nth}차 {review.LIMIT}: {detail}")
+            say(f"[{t.id}] 재리뷰 {nth}차({who}) {review.LIMIT}: {detail}")
+            continue
+        _count_agy(r, who)
+        launch.append((rec, found))
+    if not launch:
+        return
+    names = "+".join(rec["reviewer"] for rec, _ in launch)
+    _phase(r, t.id, "rereview", names)
+    say(f"[{t.id}] 재리뷰 {nth}차: {names}")
+    jobs = [dict(repo=r.repo, worktree=a.wt.resolve(), rdir=_attempt_dir(a) / f"rereview{nth}-{rec['reviewer']}",
+                 base=a.base, head=head, found=found, ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(),
+                 reviewer=rec["reviewer"], cfg=r.cfg, nth=nth) for rec, found in launch]
+    for (rec, found), res in zip(launch, review.run_together(jobs, review.rereview)):
+        if isinstance(res, BaseException):
+            res = {"dir": "", "base": a.base, "head": head, "note": f"뜻밖의 오류 {_err(res)}",
+                   "failed": review.REASON_FAILED, "verdicts": {}, "findings": []}
+        review.apply_rereview(rec, found, res, nth)
+        msg = f"재리뷰 {nth}차: {review.rereview_counts(found, len(res['findings']))}" \
+            + (f" — {res['note']}" if res["note"] else "")
+        _append_fix(rec, msg)
+        say(f"[{t.id}] {msg} ({rec['reviewer']})")
 
 
 def _merge_state(r: Run) -> tuple[str, str, str, str]:

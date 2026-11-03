@@ -33,6 +33,7 @@ max_calls_per_run = 3
 
 [timeouts]
 review_minutes = 30
+rereview_minutes = 10
 judge_minutes = 10
 summary_seconds = 60
 checks_minutes = 60
@@ -78,6 +79,7 @@ class TimeoutsConfig:
     summary_seconds: int
     checks_minutes: int = 60
     setup_minutes: int = 15
+    rereview_minutes: int = 10
 
 
 @dataclass(frozen=True)

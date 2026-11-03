@@ -22,7 +22,7 @@ cat > "$here/review.prompt.$who"
 if [ -f "$here/review.barrier" ]; then  # 다른 reviewer가 시작할 때까지 기다린다(최대 5초): 동시 실행의 증거
   for i in $(seq 100); do [ "$(grep -c '^start' "$here/review.events")" -ge 2 ] && break; sleep 0.05; done
 fi
-if [ -f "$here/snap" ]; then  # 리뷰 중인 state.json을 gs status로 볼 수 있게 가짜 레포에 복사한다
+if [ -f "$here/snap" ] && [ ! -d "$here/snaprepo" ]; then  # 첫 리뷰 중인 state.json을 gs status로 볼 수 있게 가짜 레포에 복사한다
   mkdir -p "$here/snaprepo/.goldstack/work/demo/run"
   cp ../../state.json "$here/snaprepo/.goldstack/work/demo/run/state.json"
 fi
@@ -119,8 +119,8 @@ class SecondReviewTest(unittest.TestCase):
         # 두 reviewer가 함께 돌았다: 둘 다 시작한 뒤에야 하나가 끝난다
         events = self.lines("review.events")
         self.assertEqual(sorted(events[:2]), ["start agy", "start codex"], events)
-        self.assertEqual(sorted(self.lines("review.calls")), ["agy", "codex"])
-        # 두 리뷰의 fix 지적을 합쳐 수정 worker는 한 번
+        self.assertEqual(sorted(self.lines("review.calls")), ["agy", "agy", "codex", "codex"])  # 첫 리뷰와 재리뷰
+        # 두 리뷰의 fix 지적을 합쳐 수정 worker는 한 번(가짜 reviewer의 재리뷰 답은 형식이 틀려 2차 수정이 없다)
         self.assertEqual(self.calls(), ["01", "01"])
         self.assertEqual(self.lines("fix.log"), ["fix 01"])
         brief = (self.rundir / "01/1/fix/brief.md").read_text()
@@ -136,11 +136,10 @@ class SecondReviewTest(unittest.TestCase):
         self.assertEqual([(f["action"], f["fix_attempt"]) for f in ts.review["findings"]], [("fix", review.ATTEMPTED)])
         self.assertEqual([(f["action"], f["fix_attempt"]) for f in ts.second_review["findings"]],
                          [("fix", review.ATTEMPTED), ("report", "")])
-        self.assertIn("재리뷰 없음", ts.review["fix"])
         self.assertIn("codex-1, agy-1", ts.review["fix"])
         self.assertTrue((self.rundir / "01/1/review/review.txt").exists())
         self.assertTrue((self.rundir / "01/1/review-agy/review.txt").exists())
-        self.assertEqual(self.run_state().agy_calls, 1)
+        self.assertEqual(self.run_state().agy_calls, 2)  # 리뷰 1 + 재리뷰 1
         self.assertIn("남은 리뷰 지적 3", out)
 
         # 리뷰 중 진행 바와 gs status에 두 리뷰가 보인다
@@ -158,7 +157,7 @@ class SecondReviewTest(unittest.TestCase):
         self.assertIn("- 01 리뷰(agy) [medium] file_01: FIX B: 경계값 누락", report)
         self.assertIn("- 01 리뷰(agy) [low] file_01: 설명이 짧다", report)
         self.assertIn("- 01 리뷰(codex): 수정 커밋", report)
-        self.assertIn("agy 사용: 1/3\n\n## Merge Danger", report)
+        self.assertIn("agy 사용: 2/3\n\n## Merge Danger", report)
 
     def test_one_fails_other_drives_fix(self):
         self.tickets(**{"01": ("claude", "codex", "agy", "[]")})
@@ -210,7 +209,7 @@ class SecondReviewTest(unittest.TestCase):
         with mock.patch.object(review, "require_other_family", side_effect=refuse_agy):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.lines("review.calls"), ["codex"])
+        self.assertEqual(self.lines("review.calls"), ["codex", "codex"])  # 첫 리뷰와 재리뷰
         self.assertEqual(self.lines("fix.log"), ["fix 01"])
         self.assertIn("리뷰 거부", self.ts().second_review["note"])
         self.assertEqual(self.run_state().agy_calls, 0)  # 띄우지 않았다
@@ -310,6 +309,10 @@ class SecondReviewTest(unittest.TestCase):
         self.assertIn(review.LIMIT, rec["fix"])
         self.assertEqual(len(review.remaining(rec)), 1)
         self.assertEqual(self.run_state().agy_calls, 1)
+        # 보고서의 `수정 못 함(한도)`가 쓰는 state: 수정을 시도하지 않았고 이유가 한도다. 재리뷰도 없다
+        [f] = rec["findings"]
+        self.assertEqual((f["fix_attempt"], f["fix_round"], f["fix_reason"], f["rereview"]), ("", 0, review.REASON_LIMIT, ""))
+        self.assertEqual(self.lines("review.calls"), ["codex"])
 
     def test_count_resets_each_run(self):
         st = state.State(feature="demo", agy_calls=3)
