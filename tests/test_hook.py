@@ -79,6 +79,44 @@ class HookTest(unittest.TestCase):
         self.assertAllowed("git commit -F - <<'EOF'\nDon't git push here\ngh pr merge 3\nEOF")
         self.assertAllowed("git commit -m \"$(cat <<'EOF'\nwhy we never git push\nEOF\n)\"")
 
+    # ---- 리뷰 지적(codex, w1-09): 리뷰어가 낸 입력 그대로
+    def test_review_1_shell_c_cluster_and_quoted_heredoc_marker(self):
+        for cmd in ["bash -lc 'git push origin HEAD'", "sh -ec 'git push'", "zsh -xc \"gh pr merge 3\"",
+                    "bash -o pipefail -c 'git push'", "echo '<<EOF'\ngit push", "echo \"<<EOF\"\ngit push"]:
+            self.assertBlocked(cmd)
+        self.assertAllowed("bash -lc 'uv run python -m unittest'")
+        self.assertAllowed("cat <<EOF > notes.txt\ngit push\nEOF")
+
+    def test_review_2_in_place_edit_outside_worktree(self):
+        for cmd in ["sed -i.bak 's/a/b/' ../integration/src.py", "sed -i 's/a/b/' ../integration/src.py",
+                    "sed --in-place 's/a/b/' ../x.py", "sed --in-place=.bak -e 's/a/b/' ../x.py",
+                    "sed -i '' 's/a/b/' ../x.py", "sed -Ei 's/a/b/' ../x.py", "perl -i -pe 's/a/b/' ../x.py",
+                    "perl -pi -e 's/a/b/' ../x.py", "perl -i.bak -pe 's/a/b/' ../integration/src.py"]:
+            self.assertBlocked(cmd)
+        for cmd in ["sed -i 's/a/b/' src/gs/hook.py", "sed -i.bak -e 's/a/b/' README.md", "sed -i '' 's/a/b/' a.py",
+                    "perl -pi -e 's/a/b/' a.py", "sed 's/a/b/' ../integration/src.py", "sed -n '1,5p' ../x.py",
+                    "perl -ne 'print' ../x.py"]:
+            self.assertAllowed(cmd)
+
+    def test_review_3_git_work_tree_and_git_dir_outside(self):
+        for cmd in ["git --work-tree=../integration checkout -- README.md", "git --work-tree ../integration checkout -- a",
+                    "git --git-dir=../integration/.git commit -qm x", "git --git-dir ../integration/.git reset --hard"]:
+            self.assertBlocked(cmd)
+        self.assertAllowed(f"git --work-tree={self.wt} checkout -- README.md")
+        self.assertAllowed("git --work-tree=. status")
+
+    def test_review_5_gh_api_attached_short_flags(self):
+        for cmd in ["gh api repos/o/r/issues -ftitle=x", "gh api repos/o/r/issues -Ftitle=x", "gh api -XPOST repos/o/r"]:
+            self.assertBlocked(cmd)
+        self.assertAllowed("gh api repos/o/r/pulls -q .[0].title")
+
+    def test_review_6_single_quoted_substitution_is_not_run(self):
+        for cmd in ["git commit -m 'document $(git push)'", "git commit -m 'why `git push` is gs only'",
+                    "echo 'a \"$(git push)\" b'"]:
+            self.assertAllowed(cmd)
+        for cmd in ["git commit -m \"document $(git push)\"", "echo \"'$(git push)'\"", "echo '' $(git push)"]:
+            self.assertBlocked(cmd)
+
     # ---- gh
     def test_gh_writes(self):
         for cmd in ["gh pr create --title t --body b", "gh pr merge 3 --squash", "gh pr close 3",
@@ -156,7 +194,13 @@ class HookTest(unittest.TestCase):
         self.assertEqual(self.run_hook(self.payload("Bash", command="git commit -m x"), self.env), (0, ""))
         self.assertEqual(self.run_hook(self.payload("Bash", command="git push"), {}), (0, ""))
         self.assertEqual(self.run_hook("not json", {}), (0, ""))  # 역할 없으면 입력을 읽지도 않는다
-        self.assertEqual(self.run_hook("not json", self.env), (0, ""))
+
+    def test_review_7_malformed_input_fails_closed_for_worker(self):
+        for raw in ["not json", "[]", '{"tool_name":"Bash","tool_input":[]}']:
+            code, err = self.run_hook(raw, self.env)
+            self.assertEqual(code, 2, raw)
+            self.assertIn("hook 입력", err, raw)
+            self.assertEqual(self.run_hook(raw, {}), (0, ""), raw)  # 역할 없으면 아무것도 하지 않는다
 
     def test_cli_hook_needs_no_repo(self):
         old_cwd, old_env = os.getcwd(), dict(os.environ)
