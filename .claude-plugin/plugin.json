@@ -1,8 +1,9 @@
 {
   "name": "goldstack",
   "version": "0.0.1",
-  "description": "grill → go 한 번 → 자율 실행 → main 병합까지 가는 개인 운영 kit. skill `/grill`·`/go`, worker 차단 hook(GS_ROLE=worker일 때만)",
+  "description": "grill → go 한 번 → 자율 실행 → main 병합까지 가는 개인 운영 kit. skill `/grill`·`/go`, worker 차단 hook(GS_ROLE=worker일 때만), 진행 바 mod(`gs go` 실행 중 프롬프트 위에 progress.line)",
   "author": {
     "name": "Seungjae Yoo"
-  }
+  },
+  "types": "./types/index.d.ts"
 }
