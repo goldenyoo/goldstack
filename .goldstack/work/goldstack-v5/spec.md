@@ -18,6 +18,7 @@ max_workers: 3
 | 범위 | adopt 묶음: `gs doctor`(GitHub 설정 미리 읽기), 병합 방식 config, CI 대기, 보호된 main이면 revert·보고서를 PR로, worktree 준비 명령, `/adopt`→`.goldstack/profile.md`(grill이 먼저 읽음), verify가 없거나 느리거나 flaky한 프로젝트 | 아이디어 함(2026-11-03), goldstack-v4 grill 1-1 |
 | 대상 레포 | 실제 대상 없이 일반적으로, 가짜 레포로 시험 | goldstack-v4 grill 1-2 |
 | 실행 | v4가 verified로 끝나면 이 세션이 main pull → gs 재설치 → 이 spec 사실 재확인 → `gs go goldstack-v5` | goldstack-v4 grill 2-1 |
+| 사소한 어긋남 | 띄우기 전 대조에서 티켓 글의 경로·이름 등이 병합된 코드와 사소하게 어긋나면, grill 결정을 바꾸지 않는 범위에서 이 세션이 고치고 grill 기록에 남긴 뒤 이어 간다. 결정이 바뀌어야 하면 멈춘다 | 사용자 (2026-11-03, 자러 가기 전) |
 
 ## 3. 결정
 | # | 항목 | 결정 |
