@@ -45,6 +45,10 @@ main 검증 결과와 revert SHA도 보고서·PR 본문에 반영한다. 병합
 마무리 상태는 `run/state.json`에 남겨 중단 뒤 다시 실행해도 중복 병합·revert를 피한다.
 마지막 출력은 세 줄 요약(티켓 결과, 마무리 결과, 보고서·남은 지적)과 PR 링크다.
 실행 흔적은 `.work/<feature>/run/`(gitignore): `NN/<시도>/brief.md`, `run.sh`, `worker.log`, `verify.log`, `wt/`.
+티켓이 integration에 병합되면 성공한 시도의 worktree(`wt/NN` 또는 `wt/NN-retry-<번호>`)를 바로 지우고
+`[NN] worktree 정리: <경로>`를 출력한다. 로컬 티켓 브랜치는 끝이 integration에 포함될 때만
+(`merge-base --is-ancestor`) 지우며, 포함되지 않으면 경고하고 남긴다. `gs go`를 다시 시작할 때도 이미 병합된
+티켓의 남은 worktree·브랜치를 같은 규칙으로 정리한다. integration worktree와 로컬·원격 integration 브랜치는 보존한다.
 
 실패 처리(07): worker의 로그 출력도 새 커밋도 없이 spec의 `idle_minutes`(기본 20분)가 지나면 프로세스와
 pane을 끝낸다. verify 명령(티켓 병합 전, integration, integration-final, main·main-recheck 모두 `src/gs/verify.py`)은
@@ -57,6 +61,9 @@ SIGTERM, 5초 뒤 남았으면 SIGKILL을 보내 자손까지 끝낸다. 로그 
 두 번째 실패는 `failed`, 여기에 직접·간접으로 막힌 티켓은 `skipped`로 두고 나머지는 계속한다.
 실패 worktree는 삭제하지 않는다. state의 `failed_worktrees`에 경로를 보존하며, 시도별 `failure.log`,
 `failure-summary.md`, 검증·충돌 로그도 남긴다.
+같은 티켓의 재시도가 병합돼도 실패한 시도의 worktree·브랜치는 남는다. 병합된 worktree에 미커밋 변경이 있으면
+worktree·브랜치를 모두 남기고 티켓 상태의 `kept_worktrees`에 경로를 적는다. 보고서 티켓 결과에도
+`남긴 worktree: <경로> (미커밋 변경)`을 표시한다. 정리 중 오류는 경고만 하며 티켓의 merged 상태와 실행 결과를 바꾸지 않는다.
 
 리뷰(06): worker가 성공하면 병합 전에 티켓의 `reviewer`(구현 `model`과 다른 계열, 같으면 거부)가 그 티켓 diff
 (최신 integration과의 merge-base 기준)를 읽기 전용으로 리뷰한다. reviewer에게는 diff·티켓·spec 경로를 주고, 답은 고정된
