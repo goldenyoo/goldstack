@@ -72,6 +72,12 @@ class Run:
     def iwt(self) -> Path:
         return self.rundir / "wt" / "integration"
 
+    def save(self) -> None:
+        self.st.progress = state.calculate_progress(
+            self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
+            models={tid: self.feat.tickets[tid].model for tid in self.order})
+        state.save(self.rundir, self.st)
+
 
 def say(msg: str) -> None:
     print(msg, flush=True)
@@ -103,12 +109,12 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
             # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
             if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
                 r.ihead = git.sha(r.iwt, "HEAD")
-                url, finished = finish.run(r)
+                url, finished = _finish_run(r)
             else:
                 finished = True
             if finished:
                 _loop(r)
-                url, finished = finish.run(r)
+                url, finished = _finish_run(r)
         except git.GitError as e:
             print(f"gs go: git 오류: {e}", file=sys.stderr)
             finished = False
@@ -119,12 +125,25 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         finally:
             if r.st is not None:
                 r.st.finished_at = state.now()
-                state.save(r.rundir, r.st)
+                for ts in r.st.tickets.values():
+                    state.end_phase(ts, r.st.finished_at)
+                r.st.phase = ""
+                r.save()
     finally:
         lock.release()
     if r.st is not None:
         _summary(r, url)
     return 0 if finished and all(r.st.tickets[tid].status == state.MERGED for tid in r.order) else 1
+
+
+def _finish_run(r: Run) -> tuple[str | None, bool]:
+    r.st.phase = "finish"
+    r.save()
+    try:
+        return finish.run(r)
+    finally:
+        r.st.phase = ""
+        r.save()
 
 
 def _begin(r: Run) -> None:
@@ -133,6 +152,7 @@ def _begin(r: Run) -> None:
     r.g = _graph(r)
     r.order = graph.topo_order(r.g)
     for tid, ts in sorted(st.tickets.items()):
+        state.end_phase(ts, st.updated_at or state.now())
         if ts.status == state.RUNNING:
             say(f"[{tid}] 지난 실행이 중간에 끝나 running으로 남았다. 실패로 세지 않고 새로 시작한다")
             _stop_previous(tid, ts)
@@ -144,9 +164,9 @@ def _begin(r: Run) -> None:
             if ts.status in (state.FAILED, state.SKIPPED):
                 ts.failures, ts.failure_summary, ts.reason = 0, "", ""
             ts.status, ts.pane, ts.started_at, ts.ended_at = state.PENDING, "", "", ""
-    st.pid, st.only, st.started_at, st.finished_at = os.getpid(), r.only, state.now(), ""
+    st.pid, st.only, st.started_at, st.finished_at, st.phase = os.getpid(), r.only, state.now(), "", ""
     r.st = st
-    state.save(r.rundir, st)
+    r.save()
 
 
 def _stop_previous(tid: str, ts: state.TicketState) -> None:
@@ -179,7 +199,14 @@ def _set(r: Run, tid: str, **fields) -> None:
     ts = r.st.ticket(tid)
     for k, v in fields.items():
         setattr(ts, k, v)
-    state.save(r.rundir, r.st)
+    if ts.status != state.RUNNING:
+        state.end_phase(ts, ts.ended_at or state.now())
+    r.save()
+
+
+def _phase(r: Run, tid: str, phase: str, model: str, *, attempt: int | None = None) -> None:
+    state.begin_phase(r.st.ticket(tid), phase, model, attempt=attempt)
+    r.save()
 
 
 def _require_committed(r: Run) -> None:
@@ -241,6 +268,7 @@ def _resume_merged(r: Run) -> None:
         elif ts.status == state.MERGED and tid in r.order:
             say(f"[{tid}] state는 병합이라는데 integration에 표시가 없다. 다시 한다")
             _set(r, tid, status=state.PENDING, failures=0, failure_summary="")
+    r.save()
 
 
 def _cleanup_merged(r: Run, tid: str) -> None:
@@ -439,8 +467,10 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
                 break
         base = r.ihead
         job = worker.Job(ticket=t, worktree=wt.resolve(), rundir=rundir)
+        started = state.now()
+        state.begin_phase(ts, "worker", t.model, attempt=int(rundir.name), at=started)
         _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
-             worktree=str(job.worktree), log=str(job.log), started_at=state.now(), ended_at="", reason="",
+             worktree=str(job.worktree), log=str(job.log), started_at=started, ended_at="", reason="",
              review={})
         git.ensure_worktree(r.repo, wt, branch, start=base)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
@@ -513,6 +543,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
                 return nxt
 
     # 그 사이 다른 티켓이 병합됐을 수 있다. 최신 integration 끝을 티켓 브랜치에 먼저 합쳐 본다.
+    _phase(r, t.id, "verify", t.model)
     if not _catch_up(r, a):
         return fail(CONFLICT)
 
@@ -534,6 +565,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         _reset_integration(r, r.ihead)
         return fail("검증하는 동안 integration이 바뀌었다(되돌림): 검증한 것과 커밋할 것이 다르다")
     # 커밋은 검증한 트리로 직접 만들고, 브랜치는 r.ihead에 있을 때만 옮긴다(그 사이 바뀌어도 섞이지 않게)
+    _phase(r, t.id, "finish", t.model)
     msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
     new = git.out(r.iwt, "commit-tree", merged[3], "-p", r.ihead, "-p", merged[2], "-m", msg)
     moved = git.run(r.iwt, "update-ref", "-m", f"gs: merge {t.id}", merged[1], new, r.ihead, check=False)
@@ -556,6 +588,7 @@ def _review(r: Run, a: Active) -> list[dict]:
     병합·검증처럼 루프 안에서 하나씩 돈다(다른 worker는 그동안 각자 돈다). 오래 걸리는 수정은 worker로 따로 띄운다.
     """
     t = a.t
+    _phase(r, t.id, "review", t.reviewer)
     say(f"[{t.id}] 리뷰: {t.reviewer}")
     rdir = a.proc.job.rundir / "review"
     try:
@@ -578,6 +611,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
     띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 리뷰한 구현을 병합·검증한다.
     """
     t = a.t
+    _phase(r, t.id, "fix", t.model)
     job = worker.Job(ticket=t, worktree=a.wt.resolve(), rundir=a.proc.job.rundir / "fix")
     proc = None
     try:

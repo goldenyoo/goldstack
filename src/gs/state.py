@@ -54,6 +54,9 @@ class TicketState:
     # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
     # 지적마다 severity·location·claim·evidence·action(fix|report)·why·fix_attempt. 재리뷰가 없어 지적은 모두 남아 보고서(08)에 들어간다
     review: dict = field(default_factory=dict)
+    # 단계 전환마다 추가한다. attempt는 worker 실행 디렉터리 번호(중단 재개 때도 재사용하지 않음).
+    # 각 항목: attempt, phase, model, started_at, ended_at. 지난 시도도 보고서에 합산한다.
+    phases: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -66,9 +69,86 @@ class State:
     finished_at: str = ""
     tickets: dict[str, TicketState] = field(default_factory=dict)
     finish: dict = field(default_factory=dict)  # 08: PR·병합·main 검증·revert의 재개 지점
+    phase: str = ""  # feature 전체 마무리 중이면 finish
+    progress: dict = field(default_factory=dict)
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
+
+
+PHASE_LABELS = {"worker": "worker", "review": "리뷰", "fix": "수정", "verify": "검증", "finish": "마무리"}
+
+
+def end_phase(ts: TicketState, at: str | None = None) -> None:
+    if ts.phases and not ts.phases[-1]["ended_at"]:
+        ts.phases[-1]["ended_at"] = at or now()
+
+
+def begin_phase(ts: TicketState, phase: str, model: str, *, attempt: int | None = None,
+                at: str | None = None) -> None:
+    at = at or now()
+    end_phase(ts, at)
+    if attempt is None:
+        attempt = ts.phases[-1]["attempt"] if ts.phases else ts.attempts
+    ts.phases.append({"attempt": attempt, "phase": phase, "model": model, "started_at": at, "ended_at": ""})
+
+
+def seconds_between(start: str, end: str) -> float:
+    a, b = parse_time(start), parse_time(end)
+    return max(0, (b - a).total_seconds()) if a and b else 0
+
+
+def minutes(seconds: float) -> int:
+    """정수 분 반올림(정확히 30초도 올림)."""
+    return int(max(0, seconds) / 60 + 0.5)
+
+
+def phase_durations(ts: TicketState) -> dict[str, float]:
+    totals = {}
+    for p in ts.phases:
+        if p["ended_at"]:
+            phase = p["phase"]
+            totals[phase] = totals.get(phase, 0) + seconds_between(p["started_at"], p["ended_at"])
+    return totals
+
+
+def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(),
+                       models: dict[str, str] | None = None, at: str | None = None) -> dict:
+    """이번 실행·범위만으로 진행 문구를 계산한다. 이전 실행의 완료 티켓은 ETA 표본에서 뺀다."""
+    at = st.finished_at or at or now()
+    run_start = parse_time(st.started_at)
+    terminal = (MERGED, FAILED, SKIPPED)
+    done = sum(st.tickets[tid].status in terminal for tid in order)
+    running, durations = [], []
+    for tid in order:
+        ts = st.tickets[tid]
+        if ts.status == RUNNING and not st.finished_at:
+            p = ts.phases[-1] if ts.phases else {}
+            running.append({"id": tid, "phase": p.get("phase", "worker"),
+                            "model": p.get("model", (models or {}).get(tid, ""))})
+        if tid in prior or ts.status not in terminal or not ts.started_at or not ts.ended_at:
+            continue
+        # 시작 시각은 최신 worker의 것이라, 재시도를 포함한 첫 단계부터 잰다.
+        starts = [start for p in ts.phases
+                  if (start := parse_time(p["started_at"])) and run_start and start >= run_start]
+        start = min(starts) if starts else parse_time(ts.started_at)
+        end = parse_time(ts.ended_at)
+        if start and end and run_start and start >= run_start:
+            durations.append(max(0, (end - start).total_seconds()))
+    if st.phase == "finish" and not st.finished_at:
+        # 빈 id는 개별 티켓이 아닌 feature 전체의 보고서·PR·base 검증을 뜻한다.
+        running = [{"id": "", "phase": "finish", "model": "claude"}]
+    total = len(order)
+    eta = minutes(sum(durations) / len(durations) * (total - done) / max(1, max_workers)) * 60 if durations else None
+    elapsed = int(seconds_between(st.started_at, at))
+    filled = 8 * done // total if total else 0
+    parts = [f"{'▓' * filled}{'░' * (8 - filled)} {st.feature} {done}/{total}"]
+    for p in running:
+        label = PHASE_LABELS[p["phase"]]
+        parts.append(f"{p['id'] + ' ' if p['id'] else ''}{label} 중({p['model']})")
+    parts += [f"{minutes(elapsed)}분", f"약 {eta // 60}분 남음" if eta is not None else "남은 시간 계산 중"]
+    return {"done": done, "total": total, "running": running, "elapsed_s": elapsed, "eta_s": eta,
+            "line": " · ".join(parts)}
 
 
 def path(rundir: Path) -> Path:

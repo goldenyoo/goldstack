@@ -62,6 +62,8 @@ def _show(rundir: Path, name: str, out) -> None:
     for r in rows:
         cells = [_pad(c, w) for c, w in zip(r, widths)] + [r[-1]]
         print("  ".join(cells).rstrip(), file=out)
+    if st.progress.get("line"):
+        print(st.progress["line"], file=out)
 
 
 def _elapsed(ts: state.TicketState, live: bool, st: state.State, now: datetime) -> str:

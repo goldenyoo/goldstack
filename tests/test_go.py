@@ -286,6 +286,40 @@ class GoTest(unittest.TestCase):
     def final_report(self):
         return self.integration("show", "gs/demo/integration:.goldstack/work/demo/report.md")
 
+    def test_progress_is_saved_during_each_phase(self):
+        snapshots = []
+        save = state.save
+
+        def observe(rundir, st):
+            save(rundir, st)
+            # 메모리 객체가 아닌 실제 독자가 보는 중간 state.json을 읽는다.
+            snapshots.append(json.loads(state.path(rundir).read_text()))
+
+        with self.review_with([{"severity": "high", "location": "file_01", "claim": "FIX: 틀렸다",
+                                "evidence": "값이 틀림"}]), mock.patch.object(state, "save", side_effect=observe):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        phases = []
+        for snapshot in snapshots:
+            p = snapshot["progress"]
+            self.assertEqual(p["total"], 1)
+            self.assertIn(p["done"], (0, 1))
+            for active in p["running"]:
+                if not phases or phases[-1] != active["phase"]:
+                    phases.append(active["phase"])
+                if active["phase"] == "review":
+                    self.assertEqual((active["id"], active["model"]), ("01", "codex"))
+            if snapshot["phase"] == "finish":
+                self.assertEqual(p["running"], [{"id": "", "phase": "finish", "model": "claude"}])
+        self.assertEqual(phases, ["worker", "review", "fix", "verify", "finish"])
+        last = snapshots[-1]
+        self.assertTrue(last["finished_at"])
+        self.assertEqual((last["progress"]["done"], last["progress"]["running"]), (1, []))
+        self.assertEqual([p["phase"] for p in last["tickets"]["01"]["phases"]], phases)
+        self.assertTrue(all(p["started_at"] and p["ended_at"] for p in last["tickets"]["01"]["phases"]))
+        self.assertIn("단계별 소요:", self.final_report())
+        self.assertEqual(self.status("demo")[1].splitlines()[-1], last["progress"]["line"])
+
     # --- 병합한 티켓 worktree·브랜치 정리(v1 02) ---
     def assert_ticket_cleaned(self, tid, suffix=""):
         wt = self.rundir / "wt" / (tid + suffix)
@@ -1455,6 +1489,9 @@ fi
         self.assertEqual(t["02"]["reason"], "worker 종료 코드 1")
         self.assertEqual(t["03"]["reason"], "막힘: 02")
         self.assertEqual(t["03"]["attempts"], 0)
+        self.assertEqual([(p["attempt"], p["phase"]) for p in t["02"]["phases"]],
+                         [(1, "worker"), (2, "worker")])
+        self.assertTrue(all(p["ended_at"] for p in t["02"]["phases"]))
         one = t["01"]
         self.assertEqual((one["attempts"], one["branch"]), (1, "gs/demo/01"))
         self.assertTrue(one["pane"].startswith("pid "), one["pane"])
@@ -1518,6 +1555,11 @@ fi
         st = state.load(self.rundir, "demo")
         self.assertEqual({k: (v.status, v.attempts) for k, v in st.tickets.items()},
                          {"01": ("merged", 1), "04": ("merged", 1), "11": ("merged", 1)})  # 죽은 시도는 세지 않음
+        # 표시상 attempts가 다시 1이어도 중단된 시도와 새 시도의 단계 시각은 따로 보존한다.
+        phases = st.tickets["04"].phases
+        self.assertEqual([(p["attempt"], p["phase"]) for p in phases if p["phase"] == "worker"],
+                         [(1, "worker"), (2, "worker")])
+        self.assertTrue(all(p["started_at"] and p["ended_at"] for p in phases))
 
     def test_second_go_is_refused_while_locked(self):
         with state.Lock(self.rundir):
