@@ -3,6 +3,7 @@ import contextlib
 import io
 import shutil
 import unittest
+from pathlib import Path
 from unittest import mock
 
 import test_go
@@ -15,10 +16,10 @@ class CleanTest(unittest.TestCase):
     G = test_go.GoTest
     setUp, tearDown, go, rundir, parallel = G.setUp, G.tearDown, G.go, G.rundir, G.parallel
 
-    def clean(self, *args):
+    def clean(self, *args, repo=None):
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = cli.main(["--repo", str(self.repo), "clean", "demo", *args])
+            code = cli.main(["--repo", str(self.repo if repo is None else repo), "clean", "demo", *args])
         return code, out.getvalue(), err.getvalue()
 
     def prepare(self, phase="verified"):
@@ -76,6 +77,27 @@ class CleanTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn("--force", err)
                 self.assertEqual(out, "")
+
+    def test_clean_normalizes_relative_and_symlink_repo_paths(self):
+        alias = self.repo.with_name("repo-link")
+        alias.symlink_to(self.repo, target_is_directory=True)
+        for cwd, repo in ((self.repo, Path(".")), (self.repo.parent, Path("repo")),
+                          (self.repo.parent, alias)):
+            with self.subTest(cwd=cwd, repo=repo):
+                state.save(self.rundir, state.State(feature="demo", finish={"phase": "verified"}))
+                wt = self.rundir / "wt/01"
+                branch = "gs/demo/01"
+                git.ensure_worktree(self.repo, wt, branch, "HEAD")
+                (wt / "uncommitted.txt").write_text("discard\n")
+                sh(self.repo, "git", "push", "-q", self.REMOTE, branch)
+                with contextlib.chdir(cwd):
+                    code, out, err = self.clean(repo=repo)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(err, "")
+                self.assertIn("지움: worktree 1, 로컬 브랜치 1, 원격 브랜치 1 · 실행 기록은 남김", out)
+                self.assertEqual(out.splitlines().count(f"지움: worktree {wt} (미커밋 변경도 지움)"), 1)
+                self.assertFalse(wt.exists())
+                self.assertNotIn(wt, git.worktrees(self.repo))
 
     def test_force_removes_unfinished_but_never_bypasses_running_lock(self):
         self.prepare("main_failed")

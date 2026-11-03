@@ -101,9 +101,9 @@ def clean(repo: Path, name: str, force: bool, out: TextIO, err: TextIO) -> int:
             if phase not in ("verified", "reverted") and not force:
                 print(f"gs clean: 마무리가 verified·reverted가 아니다({phase or '없음'}). --force가 필요하다", file=err)
                 return 1
-            wt = rundir / "wt"
+            wt = (rundir / "wt").resolve()
             paths = set(wt.iterdir()) if wt.exists() else set()
-            paths.update(path for path in git.worktrees(repo) if path.parent == wt.resolve())
+            paths.update(path for path in git.worktrees(repo) if path.parent == wt)
             prefix = f"gs/{name}/"
             removed = _remove(repo, sorted(paths), _local_branches(repo, prefix), cfg.git.remote, prefix, out, err)
             print(f"지움: worktree {removed.worktrees}, 로컬 브랜치 {removed.local}, 원격 브랜치 {removed.remote}"
