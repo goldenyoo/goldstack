@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--only", help="쉼표로 나눈 티켓 id. 이 부분 집합 기준으로 순서·frontier를 계산한다")
 
     p = sub.add_parser("go", help="티켓 실행·보고·PR 병합·main 재검증(실패하면 revert)")
-    p.add_argument("feature", help=".goldstack/work/<feature>")
+    p.add_argument("feature", nargs="+", help=".goldstack/work/<feature>. 여러 개면 verified 뒤 차례로 실행")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다")
 
     p = sub.add_parser("status", help="실행 상태(state.json)를 표로 본다(읽기 전용)")
@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON)")
 
     args = parser.parse_args(argv)
+    if args.cmd == "go" and len(args.feature) > 1 and args.only is not None:
+        parser.error("여러 feature와 --only는 함께 쓸 수 없다")
     if args.cmd == "hook":  # 레포를 찾지 않는다. 일반 세션에서 아무 디렉터리에서나 불린다
         if args.event == "agy-pretooluse":
             from . import hook_agy
@@ -60,8 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "check":
         return cmd_check(repo, args.feature, _ids(args.only))
     if args.cmd == "go":
-        from .go import go
-        return go(repo, args.feature, _ids(args.only))
+        return cmd_go(repo, args.feature, _ids(args.only))
     if args.cmd == "status":
         from .status import status
         return status(repo, args.feature, sys.stdout)
@@ -75,6 +76,34 @@ def _ids(raw: str | None) -> list[str] | None:
     if raw is None:
         return None
     return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def cmd_go(repo: Path, names: list[str], only: list[str] | None) -> int:
+    from .go import go
+    from . import state
+
+    if len(names) == 1:
+        return go(repo, names[0], only)
+    # 뒤 feature의 오류 때문에 앞 feature만 실행되는 일을 막는다. 전부 검사한 뒤 시작한다.
+    checks = [cmd_check(repo, name, None) for name in names]
+    if any(checks):
+        return 1
+    for i, name in enumerate(names):
+        code = go(repo, name)
+        try:
+            phase = state.load(featmod.work_dir(repo, name) / "run", name).finish.get("phase") or "unknown"
+        except (OSError, ValueError) as e:
+            print(f"gs go: {name}의 state.json을 읽을 수 없다: {e}", file=sys.stderr)
+            phase = "unknown"
+            code = code or 1
+        remaining = names[i + 1:]
+        # 시작 전 오류라면 예전 실행의 verified가 남아 있어도 다음으로 넘어가지 않는다.
+        if code or phase != "verified":
+            print(f"■ {name}: {phase} → 여기서 멈춤(남은: {' '.join(remaining) or '없음'})", flush=True)
+            return code
+        if remaining:
+            print(f"■ {name}: verified → {remaining[0]} 시작", flush=True)
+    return 0
 
 
 def cmd_config(repo: Path, key: str) -> int:
