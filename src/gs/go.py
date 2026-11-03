@@ -119,7 +119,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 _prepare_integration(r)
                 _resume_merged(r)
                 # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
-                if r.st.finish.get("phase") in (*finish.CHECK_PHASES, "merge_requested", "merge_pending", "merged", "main_failed"):
+                if r.st.finish.get("phase") in finish.RESUME_PHASES:
                     r.ihead = git.sha(r.iwt, "HEAD")
                     # 회복 뒤 새 범위를 이어 돌릴 수 있어, 마지막 마무리까지 integration을 둔다.
                     url, finished = _finish_run(r, cleanup=False)
