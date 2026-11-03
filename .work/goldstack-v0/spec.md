@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack v0 — spec
 
-상태: 티켓 11장 완료(PR #1, #2), 완료 조건(v1 무인 완주) 남음 · grill 2026-11-03 · 근거 [docs/ORIGINS.md](../../docs/ORIGINS.md) · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../.out-of-scope/)
+상태: **완료**(티켓 11장 PR #1, #2 · 완료 조건: goldstack-v1 무인 완주 PR #3, 2026-11-03) · grill 2026-11-03 · 근거 [docs/ORIGINS.md](../../docs/ORIGINS.md) · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../.out-of-scope/)
 
 ## 1. 목표
 Claude Code로 프로젝트를 진행하는 개인 운영 kit. grill로 깊게 정렬 → `go` 한 번 → 자율 실행 → main 병합 → 최종 보고.
@@ -130,4 +130,4 @@ reviewer: codex      # model과 다른 계열
 - 관찰(v1 grill 입력): 같은 파일 티켓 직렬화를 사람 판단에만 맡기면 빠진다. codex worker 비용은 집계되지 않는다. verify에 시간 제한이 없다. 성공 worktree가 쌓인다.
 - plugin 설치 완료(goldstack@goldstack, user scope). cc-ops-kit plugin·marketplace·캐시는 Claude Code와 Codex에서 제거.
 - v1 주제(사용자 선택): **verify 시간 제한 + 성공 worktree 정리**(08 리뷰 nit, 07 리뷰 nit에서 관찰).
-- 남은 것: 새 세션에서 `/goldstack:grill goldstack-v1` → `/goldstack:go goldstack-v1` → 사람 개입 없이 main까지 = v0 완료.
+- **완료 조건 달성**: goldstack-v1을 `/grill` → `/go`(37분, 티켓 2장 첫 시도 병합, 리뷰 지적 low 3건 남음) → PR #3 자동 병합 → main 재검증 통과까지 사람 개입 없이 완주.
