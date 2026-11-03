@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack v0 — spec
 
-상태: grill 완료(라운드 4개) · 2026-11-03 · 근거 [docs/ORIGINS.md](../../docs/ORIGINS.md) · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../.out-of-scope/)
+상태: 티켓 11장 완료(PR #1, #2), 완료 조건(v1 무인 완주) 남음 · grill 2026-11-03 · 근거 [docs/ORIGINS.md](../../docs/ORIGINS.md) · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../.out-of-scope/)
 
 ## 1. 목표
 Claude Code로 프로젝트를 진행하는 개인 운영 kit. grill로 깊게 정렬 → `go` 한 번 → 자율 실행 → main 병합 → 최종 보고.
@@ -122,3 +122,10 @@ reviewer: codex      # model과 다른 계열
 ### 라운드 4 — 티켓 분해와 부트스트랩 (모두 추천대로)
 사용자 질문: "리뷰에서 손이라는 게 어떤 의미?" → 이 세션이 직접 리뷰를 돌린다는 뜻. 설명하다 wave 2 리뷰도 자동이 아니라는 표 오류를 발견해 고침(v0 리뷰는 전부 손).
 1. 티켓 11장 / 2. 손 → wave 1 → wave 2 → v1 / 3. 시험 seam 하나 / 4. 재시도는 같은 모델 / 5. 범위 밖 8개
+
+## 9. 진행 기록 (2026-11-03)
+- ① 01·02 손 구현, 각각 codex 리뷰·수정 1회 → main
+- ② wave 1(03 04 09 11 05): 5장 첫 시도 병합, $11.7·50분. 리뷰 지적 21 → fix 16 / report 5. 구조 장치 추가: worker 환경의 push URL 차단 + 무효 GH_TOKEN(실제 claude worker에서 `sh -c "git push"` 차단 확인). PR #1
+- ③ wave 2(06 07 08 10): 06이 07과 같은 파일 충돌로 한 번 버려짐(blocked_by 누락), 08은 무관한 경합 시험으로 gs 검증 실패 → 손 병합 + 시험 수정. 리뷰 지적 → fix 14 / report 7. PR #2
+- 관찰(v1 grill 입력): 같은 파일 티켓 직렬화를 사람 판단에만 맡기면 빠진다. codex worker 비용은 집계되지 않는다. verify에 시간 제한이 없다. 성공 worktree가 쌓인다.
+- 남은 것: plugin 설치 → `/grill <v1 feature>` → `/go` → 사람 개입 없이 main까지 = v0 완료.
