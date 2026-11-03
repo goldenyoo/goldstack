@@ -57,7 +57,7 @@ class Job:
         return WorkerInput(brief=self.brief, worktree=self.worktree, log=self.log)
 
 
-def write_brief(job: Job, spec: Spec, feature: str, branch: str) -> None:
+def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "") -> None:
     t = job.ticket
     spec_rel = f".work/{feature}/spec.md"
     ticket_rel = f".work/{feature}/tickets/{t.path.name}"
@@ -78,6 +78,9 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str) -> None:
 ---
 {t.body.strip()}
 """, encoding="utf-8")
+    if failure_summary:
+        with job.brief.open("a", encoding="utf-8") as f:
+            f.write("\n---\n## 지난 시도 실패 요약\n\n" + failure_summary.strip() + "\n")
 
 
 def attempt_dir(ticket_dir: Path) -> Path:
@@ -211,7 +214,11 @@ class SubprocessRunner:
         return proc.poll() is None
 
     def finish(self, proc: subprocess.Popen, ok: bool) -> None:
-        pass
+        # exit 파일은 셸의 마지막 출력 직전에 생긴다. 셸도 거둬 좀비를 남기지 않는다.
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
 
     def stop(self, proc: subprocess.Popen) -> None:
         """끝내고 거둔다(좀비를 남기지 않게). 거두기 전의 pid는 재사용되지 않는다."""
@@ -276,7 +283,8 @@ class HerdrRunner:
             self.panes.remove(pane)
 
     def stop(self, pane: str) -> None:
-        """프로세스는 Proc.stop이 끝낸다. pane은 실패한 worker처럼 들여다볼 수 있게 남긴다."""
+        """Proc.stop이 프로세스를 끝낸 뒤, 시간 초과·중단된 pane도 닫는다."""
+        self.finish(pane, True)
 
 
 def make_runner(cwd: Path, feature: str):

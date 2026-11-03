@@ -46,6 +46,10 @@ class TicketState:
     ended_at: str = ""
     log: str = ""  # worker 로그 경로
     reason: str = ""  # 실패·건너뜀 이유
+    worktree: str = ""
+    failures: int = 0  # 이번 실행의 실패 횟수. 중단 후 이어갈 때도 재시도 한도를 유지한다
+    failed_worktrees: list[str] = field(default_factory=list)  # 재시도·재실행 뒤에도 보존
+    failure_summary: str = ""  # 재시도 brief에 붙일 판단 모델 요약 파일
 
 
 @dataclass

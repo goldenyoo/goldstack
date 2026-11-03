@@ -22,9 +22,17 @@ uv run python -m unittest discover -s tests   # 검증 명령
 티켓 `model`의 headless CLI(아래 "모델 어댑터")를 herdr pane에서 돌리고, pane들은 feature마다 탭 하나(`gs:<feature>`)에 모인다.
 worker는 최신 integration 끝에서 만든 `gs/<feature>/NN` worktree에서 커밋하고 끝난다. 하나 끝날 때마다 gs가
 state에서 frontier를 다시 계산해 빈자리를 채운다. 병합·검증은 한 번에 하나씩: 먼저 최신 integration 끝을 티켓
-브랜치에 합쳐 보고(충돌하면 그 티켓은 실패, 이유 `conflict`), 검증을 다시 돌려 통과한 것만
+브랜치에 합쳐 보고(충돌 이유 `conflict`), 검증을 다시 돌려 통과한 것만
 `gs/<feature>/integration`에 병합한다. `max_workers: 1`이면 02와 같은 위상 순서로 하나씩 돈다. 끝나면 integration을 push하고 PR을 연다(병합은 08부터).
-실행 흔적은 `.work/<feature>/run/`(gitignore): `NN/brief.md`, `NN/run.sh`, `NN/worker.log`, `NN/verify.log`, `wt/`.
+실행 흔적은 `.work/<feature>/run/`(gitignore): `NN/<시도>/brief.md`, `run.sh`, `worker.log`, `verify.log`, `wt/`.
+
+실패 처리(07): worker의 로그 출력도 새 커밋도 없이 spec의 `idle_minutes`(기본 20분)가 지나면 프로세스와
+pane을 끝낸다. 종료 코드, 커밋 없음, 시간 초과, 검증 실패, 병합 충돌은 같은 모델로 한 번 재시도한다.
+매번 최신 integration에서 새 브랜치·worktree(`NN-retry-<번호>`)를 만들고, 새 `claude -p --model opus` 호출이
+요약한 실패 로그를 brief에 붙인다. 요약 호출이 실패하면 증거 파일 경로를 붙여 재시도한다.
+두 번째 실패는 `failed`, 여기에 직접·간접으로 막힌 티켓은 `skipped`로 두고 나머지는 계속한다.
+실패 worktree는 삭제하지 않는다. state의 `failed_worktrees`에 경로를 보존하며, 시도별 `failure.log`,
+`failure-summary.md`, 검증·충돌 로그도 남긴다.
 
 상태(03): `run/state.json`이 상태의 원천이다. 티켓별 상태(pending, running, merged, failed, skipped), 시도 횟수,
 브랜치, pane, 시작·끝 시각, 로그 경로, 실패 이유. 쓰기는 임시 파일 뒤 rename(원자적). `gs go`의 요약·PR 본문과
@@ -34,7 +42,7 @@ state에서 frontier를 다시 계산해 빈자리를 채운다. 병합·검증�
 잡고 pid를 적는다. 프로세스가 죽으면 커널이 잠금을 풀어 저절로 회수된다.
 
 바꿔 끼우는 곳(시험 seam): `GS_RUNNER=subprocess|herdr`(기본: herdr 안이면 herdr), `GS_WORKER_CMD`(worker 셸 명령,
-어댑터를 건너뛴다), `GS_GH`(gh 경로), `GS_AGY`(agy 경로).
+어댑터를 건너뛴다), `GS_GH`(gh 경로), `GS_AGY`(agy 경로), `GS_JUDGE`(실패 요약용 Claude CLI 경로).
 
 ## 모델 어댑터(05)
 `src/gs/adapters.py`. 어댑터마다 같은 입력(brief, worktree, 로그 경로)을 받아 준비(`prepare`), 환경(`env`, 모두
