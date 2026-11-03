@@ -6,7 +6,7 @@
 - command: worktree에서 돌릴 셸 명령. 실행 스크립트(worker.write_script)가 이것을 감싸 로그와 exit 파일을 남긴다.
 - outcome: 프로세스 종료 코드와 로그로 최종 종료 코드를 정한다. agy는 종료 0이 성공이 아니다(docs/research/agy.md §3.1).
 
-차단 장치(spec 3-1): claude는 plugin hook + 도구 차단 옵션, codex는 `workspace-write` sandbox,
+차단 장치(spec 3-1): claude는 plugin hook + 도구 차단 옵션(goldstack 밖 플러그인·skill·MCP는 끈다), codex는 `workspace-write` sandbox,
 agy는 deny 규칙 + `gs hook agy-pretooluse`(worktree의 `.agents/hooks.json`) 두 겹. agy hook이 걸리지 않으면 거부한다.
 """
 from __future__ import annotations
@@ -60,13 +60,79 @@ class Adapter:
 
 class Claude(Adapter):
     """도구 차단으로 push와 gh를 막는다. 09의 plugin hook(`gs hook pretooluse`, GS_ROLE=worker일 때)과
-    겹치는 이중 장치로 남겨 둔다: plugin이 설치되지 않았거나 hook이 따라가지 못한 형태도 여기서 한 번 더 막힌다."""
+    겹치는 이중 장치로 남겨 둔다: plugin이 설치되지 않았거나 hook이 따라가지 못한 형태도 여기서 한 번 더 막힌다.
+
+    플러그인 격리(docs/research/worker-plugin-isolation.md): goldstack 밖 플러그인은 `--settings`의
+    `enabledPlugins`로 이 세션에서만 끄고(goldstack 플러그인과 그 hook은 그대로), MCP 서버는 빈 strict 설정으로,
+    skill·명령은 `--disable-slash-commands`로 뺀다. 사용자 설정·CLAUDE.md는 그대로 읽힌다.
+    `--bare`(OAuth 로그인을 못 읽음)·`--safe-mode`(CLAUDE.md와 goldstack hook까지 꺼짐)·
+    `--setting-sources`(사용자 설정이 빠짐)는 쓰지 않는다.
+    """
     name = "claude"
     BASE = ('claude -p --output-format stream-json --verbose --permission-mode bypassPermissions '
             '--disallowedTools "Bash(git push *)" "Bash(gh *)"')
+    ISOLATION = "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --disable-slash-commands"
+
+    def __init__(self, models: config.ModelsConfig):
+        super().__init__(models)
+        self.note = ""
+
+    def isolation(self, inp: WorkerInput) -> str:
+        """격리 옵션. 플러그인 목록을 못 읽으면 플러그인 끄기만 빼고(나머지는 넣는다) outcome 메모로 알린다."""
+        try:
+            off = plugins_to_disable(claude_plugins(inp.worktree))
+        except AdapterError as e:
+            self.note = f"플러그인 격리 못 함(goldstack 밖 플러그인이 실린다): {e}"
+            off = []
+        settings = ""
+        if off:
+            value = json.dumps({"enabledPlugins": {p: False for p in off}}, separators=(",", ":"))
+            settings = f"--settings {q(value)} "
+        return settings + self.ISOLATION
 
     def command(self, inp: WorkerInput) -> str:
-        return f"{self.BASE} < {q(str(inp.brief))}"
+        return f"{self.BASE} {self.isolation(inp)} < {q(str(inp.brief))}"
+
+    def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
+        return code, self.note
+
+
+GOLDSTACK_PLUGIN = "goldstack"
+
+
+def claude_bin() -> str:
+    return os.environ.get("GS_CLAUDE", "claude")  # 시험 seam
+
+
+def claude_plugins(worktree: Path) -> list[dict]:
+    """`claude plugin list --json`(worktree에서: project scope 플러그인도 나온다). 못 읽으면 AdapterError."""
+    try:
+        cp = subprocess.run([claude_bin(), "plugin", "list", "--json"], cwd=worktree, capture_output=True,
+                            text=True, stdin=subprocess.DEVNULL, timeout=60)
+    except FileNotFoundError:
+        raise AdapterError(f"`{claude_bin()}`가 없다") from None
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise AdapterError(f"`claude plugin list --json`을 돌리지 못했다: {e}") from e
+    if cp.returncode != 0:
+        raise AdapterError(f"`claude plugin list --json` 종료 {cp.returncode}: {cp.stderr.strip()[:120]}")
+    try:
+        data = json.loads(cp.stdout)
+    except ValueError:
+        raise AdapterError("`claude plugin list --json` 출력이 JSON이 아니다") from None
+    if not isinstance(data, list):
+        raise AdapterError("`claude plugin list --json` 출력이 목록이 아니다")
+    return [p for p in data if isinstance(p, dict)]
+
+
+def plugins_to_disable(plugins: list[dict]) -> list[str]:
+    """goldstack 플러그인(이름이 `goldstack`, 마켓은 상관없음)을 뺀 모든 플러그인 id. 켜졌는지는 보지 않는다
+    (scope마다 켜짐이 다를 수 있고, 꺼진 것을 한 번 더 끄는 것은 해가 없다)."""
+    ids = []
+    for p in plugins:
+        pid = p.get("id")
+        if isinstance(pid, str) and pid and pid.split("@", 1)[0] != GOLDSTACK_PLUGIN:
+            ids.append(pid)
+    return sorted(dict.fromkeys(ids))
 
 
 # ---------------------------------------------------------------- codex
