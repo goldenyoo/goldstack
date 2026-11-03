@@ -2,7 +2,7 @@
 
 병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 모델로 한 번 재시도한다(07).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
-한 번 띄운다(06, review.py). 재리뷰는 없고 verify만 돈다. PR 병합(08)은 뒤 티켓.
+한 번 띄운다(06, review.py). 재리뷰는 없고 verify만 돈다. 끝에는 보고서·PR·main 검증·revert를 한다(08).
 진행 상태는 `.work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, failure, git, graph, herdr, review, state, worker
+from . import adapters, failure, finish, git, graph, herdr, review, state, worker
 from .check import check
 from .feature import Feature, Ticket
 
@@ -80,16 +80,25 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         print(f"gs go: {e}. 같은 feature에 gs go는 하나만 돈다. 아무것도 띄우지 않았다.", file=sys.stderr)
         return 1
     try:
+        url, finished = None, False
         try:
             git.run(repo, "fetch", "-q", "origin", MAIN)
             _require_committed(repo, name)
             _begin(r)
             _prepare_integration(r)
-            _loop(r)
-            url = _publish(r)
+            # 병합 확인·main 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
+            if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
+                r.ihead = git.sha(r.iwt, "HEAD")
+                url, finished = finish.run(r)
+            else:
+                finished = True
+            if finished:
+                _loop(r)
+                url, finished = finish.run(r)
         except git.GitError as e:
             print(f"gs go: git 오류: {e}", file=sys.stderr)
-            return 1
+            finished = False
+            url = r.st.finish.get("url") if r.st else None
         except herdr.HerdrError as e:
             print(f"gs go: herdr 오류: {e}", file=sys.stderr)
             return 1
@@ -99,8 +108,9 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 state.save(r.rundir, r.st)
     finally:
         lock.release()
-    _summary(r, url)
-    return 0 if all(r.st.tickets[tid].status == state.MERGED for tid in r.order) else 1
+    if r.st is not None:
+        _summary(r, url)
+    return 0 if finished and all(r.st.tickets[tid].status == state.MERGED for tid in r.order) else 1
 
 
 def _begin(r: Run) -> None:
@@ -160,7 +170,9 @@ def _set(r: Run, tid: str, **fields) -> None:
 
 def _require_committed(repo: Path, name: str) -> None:
     rel = f".work/{name}"
-    if git.out(repo, "status", "--porcelain", "--", rel) or git.run(repo, "diff", "--quiet", BASE, "--", rel,
+    # report.md는 gs가 integration에서 쓴다. 호출 worktree의 보고서가 뒤처져도 티켓 재개를 막지 않는다.
+    inputs = [f"{rel}/spec.md", f"{rel}/tickets"]
+    if git.out(repo, "status", "--porcelain", "--", *inputs) or git.run(repo, "diff", "--quiet", BASE, "--", *inputs,
                                                                      check=False).returncode:
         raise git.GitError(f"{rel}가 {BASE}와 다르다. worker는 {BASE} 기준으로 일하므로 먼저 커밋하고 push하라")
 
@@ -604,34 +616,6 @@ def _verify(r: Run, t: Ticket) -> tuple[bool, Path]:
     return code == 0, log
 
 
-def _gh() -> str:
-    return os.environ.get("GS_GH", "gh")
-
-
-def _publish(r: Run) -> str | None:
-    branch = integration_branch(r.name)
-    if git.count(r.repo, f"{BASE}..{branch}") == 0:
-        say("■ main보다 앞선 커밋이 없어 push·PR을 건너뛴다")
-        return None
-    git.run(r.repo, "push", "-u", "origin", branch)  # force 아님
-    body = _pr_body(r)
-    found = subprocess.run([_gh(), "pr", "list", "--head", branch, "--base", MAIN, "--state", "open",
-                            "--json", "url", "--jq", ".[0].url"], cwd=r.repo, capture_output=True, text=True)
-    if found.returncode:
-        raise git.GitError(f"gh pr list 실패: {found.stderr.strip()}")
-    url = found.stdout.strip()
-    if url:
-        cp = subprocess.run([_gh(), "pr", "edit", url, "--body", body], cwd=r.repo, capture_output=True, text=True)
-    else:
-        cp = subprocess.run([_gh(), "pr", "create", "--base", MAIN, "--head", branch,
-                             "--title", f"{r.name}: gs go", "--body", body], cwd=r.repo, capture_output=True,
-                            text=True)
-        url = cp.stdout.strip().splitlines()[-1] if cp.stdout.strip() else ""
-    if cp.returncode:
-        raise git.GitError(f"gh 실패: {cp.stderr.strip()}")
-    return url
-
-
 LABEL = {"merged": "병합", "already": "이미 병합", "failed": "실패", "skipped": "건너뜀", "pending": "대기",
          "running": "실행 중"}
 
@@ -641,22 +625,12 @@ def _label(r: Run, tid: str) -> str:
     return "already" if status == state.MERGED and tid in r.prior else status
 
 
-def _pr_body(r: Run) -> str:
-    rows = "\n".join(f"| {tid} | {r.feat.tickets[tid].title} | {LABEL[_label(r, tid)]} | {r.st.tickets[tid].reason} |"
-                     for tid in r.order)
-    return (f"`gs go {r.name}`" + (f" --only {','.join(r.only)}" if r.only else "") + " 결과.\n\n"
-            "| 티켓 | 제목 | 결과 | 이유 |\n|---|---|---|---|\n" + rows + "\n\n"
-            "08 전까지 gs는 PR을 병합하지 않는다. 리뷰 후 사람이 병합한다.\n")
-
-
 def _summary(r: Run, url: str | None) -> None:
     labels = {tid: _label(r, tid) for tid in r.order}
     counts = {k: sum(v == k for v in labels.values()) for k in LABEL}
     say("■ 요약: " + ", ".join(f"{LABEL[k]} {n}" for k, n in counts.items() if n))
-    for tid in r.order:
-        ts = r.st.tickets[tid]
-        left = len(review.remaining(ts.review))
-        say(f"  {tid} {LABEL[labels[tid]]}" + (f" — {ts.reason}" if ts.reason else "")
-            + (f" · 남은 리뷰 지적 {left}" if left else ""))
-    if url:
-        say(f"■ PR: {url}")
+    f = r.st.finish
+    say(f"■ 마무리: {f.get('outcome', f.get('phase', '미완료'))}")
+    left = sum(len(review.remaining(r.st.tickets[tid].review)) for tid in r.order)
+    say(f"■ 보고서: .work/{r.name}/report.md · 남은 리뷰 지적 {left}")
+    say(f"■ PR: {url or '없음'}")
