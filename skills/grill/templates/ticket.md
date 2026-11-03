@@ -2,6 +2,7 @@
 id: "<NN>"
 title: "<한 줄 제목>"
 blocked_by: []
+touches: []
 model: claude
 reviewer: codex
 ---

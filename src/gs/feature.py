@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from . import frontmatter
 
@@ -14,6 +14,7 @@ FAMILIES = ("claude", "codex", "agy")
 SPEC_REQUIRED = ("feature", "verify")
 SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20}
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
+TICKET_OPTIONAL = ("touches",)
 WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
 
 
@@ -56,6 +57,7 @@ class Ticket:
     reviewer: str
     path: Path
     body: str = ""
+    touches: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -179,7 +181,7 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
             err(f"`{key}`는 문자열이어야 한다")
     if "blocked_by" in data and not isinstance(data["blocked_by"], list):
         err("`blocked_by`는 목록이어야 한다(없으면 [])")
-    for key in data.keys() - set(TICKET_KEYS):
+    for key in data.keys() - set(TICKET_KEYS) - set(TICKET_OPTIONAL):
         problems.append(Problem("경고", where, f"알 수 없는 키 `{key}`"))
     if any(p.level == "오류" for p in problems[n:]):
         return None  # 형태가 틀리면 그래프에 넣을 수 없다
@@ -195,6 +197,18 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
     deps = data["blocked_by"]
     if len(set(deps)) != len(deps):
         err("`blocked_by`에 같은 id가 두 번 있다")
+    touches = data.get("touches", [])
+    if not isinstance(touches, list):
+        err("`touches`는 문자열 목록이어야 한다(없으면 [])")
+        touches = []
+    valid_touches = []
+    for value in touches:
+        if (not isinstance(value, str) or not value.strip()
+                or PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
+                or ".." in value.replace("\\", "/").split("/")):
+            err(f"`touches`는 비어 있지 않은 레포 루트 기준 경로여야 한다(절대 경로·.. 금지): {value!r}")
+        else:
+            valid_touches.append(value)
     # 값 오류가 있어도 그래프에는 넣는다. 빼면 이 티켓을 참조하는 티켓마다 "없는 id" 오류가 덧붙는다.
     return Ticket(id=tid, title=data["title"], blocked_by=list(deps), model=data["model"],
-                  reviewer=data["reviewer"], path=path, body=body)
+                  reviewer=data["reviewer"], path=path, body=body, touches=valid_touches)
