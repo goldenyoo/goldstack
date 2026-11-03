@@ -28,6 +28,7 @@ from .feature import Spec, Ticket, work_rel
 POLL_SECONDS = 2.0
 PUSH_BLOCKED = "/dev/null/gs-worker-push-blocked/"  # 만들 수 없는 경로: push가 여기로 바뀌면 반드시 실패한다
 GH_BLOCKED = "gs-worker-no-gh"  # gh는 GH_TOKEN을 keyring보다 먼저 쓴다. 틀린 토큰이라 쓰기도 읽기도 못 한다
+PROFILE_REL = ".goldstack/profile.md"  # /adopt가 쓰는 레포 요약. brief에는 포인터 한 줄만(내용은 넣지 않는다)
 
 
 @dataclass
@@ -61,6 +62,9 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     t = job.ticket
     spec_rel = f"{work_rel(feature)}/spec.md"
     ticket_rel = f"{work_rel(feature)}/tickets/{t.path.name}"
+    # worktree는 base(integration) 위에 새로 만든 것이라, 여기 있으면 base에 커밋된 profile이다
+    profile = f"\n먼저 `{PROFILE_REL}`를 읽어라(레포 요약: 구조, 빌드·시험 명령, 관례, 주의점).\n" \
+        if (job.worktree / PROFILE_REL).is_file() else ""
     job.brief.write_text(f"""# 티켓 {t.id}: {t.title}
 
 너는 goldstack worker다. 이 worktree(`{job.worktree}`, 브랜치 `{branch}`)에서 아래 티켓 하나를 구현한다.
@@ -74,7 +78,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 - 완료 조건이 이 티켓의 명세다. 범위 밖은 건드리지 않는다.
 
 참고: feature spec `{spec_rel}`, 티켓 파일 `{ticket_rel}` (둘 다 이 worktree 안에 있다)
-
+{profile}
 ---
 {t.body.strip()}
 """, encoding="utf-8")
