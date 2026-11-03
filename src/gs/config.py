@@ -22,6 +22,9 @@ claude_review = "opus"
 agy = "gemini-4-argon-high"
 codex = ""
 
+[agy]
+max_calls_per_run = 3
+
 [timeouts]
 review_minutes = 30
 judge_minutes = 10
@@ -65,11 +68,17 @@ class NotifyConfig:
 
 
 @dataclass(frozen=True)
+class AgyConfig:
+    max_calls_per_run: int = 3
+
+
+@dataclass(frozen=True)
 class Config:
     git: GitConfig
     models: ModelsConfig
     timeouts: TimeoutsConfig
     notify: NotifyConfig
+    agy: AgyConfig = AgyConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -89,13 +98,15 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
     sections = {}
     names = {str: "문자열", int: "정수", bool: "불리언"}
     for section, cls in schema.items():
-        if section not in data:
+        if section not in data and section != "agy":
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
             continue
-        raw = data[section]
+        raw = data.get(section, {})
         if not isinstance(raw, dict):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`는 테이블이어야 한다"))
             continue
+        if section == "agy":
+            raw = {"max_calls_per_run": AgyConfig().max_calls_per_run, **raw}
         fields = get_type_hints(cls)
         for key in raw.keys() - fields.keys():
             problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `{section}.{key}`"))
@@ -107,6 +118,8 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 {names[kind]}이어야 한다"))
             elif section == "timeouts" and raw[key] <= 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0보다 커야 한다"))
+            elif section == "agy" and raw[key] < 0:
+                problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0 이상이어야 한다"))
             elif section == "models" and key != "codex" and not raw[key].strip():
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 비어 있으면 안 된다"))
             else:
