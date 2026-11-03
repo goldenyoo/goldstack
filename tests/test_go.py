@@ -13,15 +13,30 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import cli, state, worker
+from gs import adapters, cli, herdr, state, worker
 
 
 def git_clean(wt):
     return subprocess.run(["git", "status", "--porcelain"], cwd=wt, capture_output=True, text=True).stdout == ""
 
+
+def alive(pid):
+    """좀비는 죽은 것으로 본다."""
+    stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+    return bool(stat) and not stat.startswith("Z")
+
+
+def kill_quietly(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 FAKE_WORKER = """\
 here="$(dirname "$0")"
 echo "$GS_TICKET" >> "$here/calls.log"
+echo $$ > "$here/pid_$GS_TICKET"
 echo "start $GS_TICKET" >> "$here/events.log"
 trap 'echo "end $GS_TICKET" >> "$here/events.log"' EXIT
 if [ -f "$here/barrier" ]; then  # 시작한 worker가 barrier개가 될 때까지 기다린다(최대 10초): 동시 실행의 증거
@@ -38,6 +53,18 @@ case "$GS_TICKET" in
       git -C "$GS_WORKTREE/../integration" commit -qm evil ;;
   08) touch "$GS_WORKTREE/../integration/BROKEN"; echo 8 > file_08; git add -A; git commit -qm t08 ;;
   2[12]) echo "$GS_TICKET" > shared.txt; git add -A; git commit -qm "t$GS_TICKET" ;;  # 같은 파일을 다르게
+  14) if [ ! -f "$here/a14" ]; then touch "$here/a14"  # 첫 시도: release14가 생길 때까지 붙잡혀 있다가 실패로 끝난다
+        for i in $(seq 400); do [ -f "$here/release14" ] && break; sleep 0.05; done; exit 1
+      fi
+      touch "$here/release14"; sleep 1  # 새 시도: 옛 시도를 풀어 준 뒤 천천히 끝낸다
+      echo 14 > file_14; git add -A; git commit -qm t14 ;;
+  15) for i in $(seq 200); do [ -f "$here/verifying" ] && break; sleep 0.05; done  # 다른 티켓의 검증 도중에
+      touch "$GS_WORKTREE/../integration/BROKEN"; git -C "$GS_WORKTREE/../integration" add BROKEN
+      echo 15 > file_15; git add -A; git commit -qm t15 ;;
+  16) git fetch -q origin && echo ok > "$here/fetch_16"
+      if git push -q origin HEAD:refs/heads/leak 2>"$here/push_16"; then echo pushed >> "$here/push_16"; fi
+      echo "$GH_TOKEN" > "$here/gh_16"
+      echo 16 > file_16; git add -A; git commit -qm t16 ;;
   *)  echo "$GS_TICKET $GS_ROLE" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET" ;;
 esac
 """
@@ -266,6 +293,118 @@ class GoTest(unittest.TestCase):
         self.assertEqual(closed, sorted(panes[t] for t in ("01", "11", "12")))  # 성공한 pane만 닫는다
         self.assertEqual(self.merged(), ["01", "11", "12"])
 
+    # --- codex 리뷰(03·04·05) 지적 재현 ---
+    def test_rerun_stops_worker_left_by_killed_gs(self):  # 03 ①
+        self.add_ticket("14")
+        log = Path(self.tmp.name) / "first.log"
+        with log.open("w") as f:
+            proc = subprocess.Popen([sys.executable, "-m", "gs.cli", "--repo", str(self.repo), "go", "demo",
+                                     "--only", "14"], stdout=f, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, start_new_session=True)
+        old = None
+        try:
+            deadline = time.monotonic() + 30
+            while not ((self.bin / "a14").exists() and (self.bin / "pid_14").exists()):
+                self.assertIsNone(proc.poll(), log.read_text())
+                self.assertLess(time.monotonic(), deadline, log.read_text())
+                time.sleep(0.05)
+            old = int((self.bin / "pid_14").read_text())
+            first_log = state.load(self.rundir, "demo").tickets["14"].log
+            os.kill(proc.pid, signal.SIGKILL)  # gs만 죽는다. worker는 살아 남는다
+            proc.wait()
+            self.assertTrue(alive(old))
+            code, out, err = self.go("--only", "14")
+            self.assertEqual(code, 0, out + err)  # 옛 시도의 종료 코드 1을 새 시도의 결과로 읽지 않는다
+            self.assertIn("[14] 지난 실행의 worker가 아직 돌고 있어 끝냈다", out)
+            self.assertFalse(alive(old))
+            ts = state.load(self.rundir, "demo").tickets["14"]
+            self.assertEqual((ts.status, ts.attempts), ("merged", 1))
+            self.assertNotEqual(Path(ts.log).parent, Path(first_log).parent)  # 시도마다 실행 디렉터리가 따로다
+        finally:
+            if old:
+                kill_quietly(old)
+
+    def test_integration_change_during_verify_is_not_committed(self):  # 04 #1
+        self.add_ticket("15")
+        self.parallel(3, verify=f"touch {self.bin / 'verifying'}; test ! -f BROKEN && sleep 1")
+        code, out, err = self.go("--only", "01,15")
+        self.assertEqual(code, 1, out + err)
+        st = state.load(self.rundir, "demo").tickets
+        self.assertEqual(st["01"].status, "failed", out)
+        self.assertIn("검증하는 동안 integration이 바뀌었다", st["01"].reason)
+        self.assertEqual(st["15"].status, "merged", out)
+        self.assertNotIn("BROKEN", self.integration("ls-tree", "-r", "--name-only", "gs/demo/integration").split())
+
+    def test_one_worker_error_fails_only_that_ticket(self):  # 04 #2, 05 #2
+        for tid in ("11", "12", "13"):
+            self.add_ticket(tid)
+        self.parallel(4)
+        real_start = worker.SubprocessRunner.start
+
+        def start(runner, job, label):
+            if job.ticket.id == "12":
+                raise herdr.HerdrError("timeout", "pane run 시간 초과")
+            return real_start(runner, job, label)
+
+        def prepare(adapter, inp):
+            if "/13/" in str(inp.brief):
+                raise FileExistsError(17, "File exists", ".agents")
+
+        def outcome(adapter, code, inp):
+            if "/11/" in str(inp.log):
+                raise TypeError("'int' object is not iterable")
+            return code, ""
+
+        with mock.patch.object(worker.SubprocessRunner, "start", start), \
+                mock.patch.object(adapters.Custom, "prepare", prepare, create=True), \
+                mock.patch.object(adapters.Custom, "outcome", outcome, create=True):
+            code, out, err = self.go("--only", "01,11,12,13")
+        self.assertEqual(code, 1, out + err)
+        st = state.load(self.rundir, "demo").tickets
+        self.assertEqual({k: v.status for k, v in st.items()},
+                         {"01": "merged", "11": "failed", "12": "failed", "13": "failed"}, out + err)
+        self.assertIn("TypeError", st["11"].reason)
+        self.assertIn("pane run 시간 초과", st["12"].reason)
+        self.assertIn("FileExistsError", st["13"].reason)
+        self.assertEqual(self.merged(), ["01"])
+
+    def test_unexpected_error_stops_started_workers(self):  # 04 #2: 코디네이터가 죽어도 worker를 남기지 않는다
+        self.add_ticket("11")
+        self.parallel(3)
+        (self.bin / "hang_11").touch()
+        (self.bin / "barrier").write_text("2")  # 11이 시작한 뒤에 01이 끝난다
+        try:
+            with mock.patch("gs.go._verify", side_effect=RuntimeError("boom")):
+                with self.assertRaises(RuntimeError):
+                    self.go("--only", "01,11")
+            pid = int((self.bin / "pid_11").read_text())
+            self.assertFalse(alive(pid))
+        finally:
+            if (self.bin / "pid_11").exists():
+                kill_quietly(int((self.bin / "pid_11").read_text()))
+
+    def push_blocked(self, remotes):
+        code, out, err = self.go("--only", "16")
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue((self.bin / "fetch_16").exists(), out)  # fetch는 된다
+        self.assertNotIn("pushed", (self.bin / "push_16").read_text())
+        for remote in remotes:
+            self.assertNotIn("leak", sh(remote, "git", "branch", "--list", "leak"))
+        self.assertEqual((self.bin / "gh_16").read_text().strip(), worker.GH_BLOCKED)  # gh는 사용자 인증을 못 쓴다
+
+    def test_worker_cannot_push(self):  # 구조적 push·gh 차단(hook·도구 차단과 별개)
+        self.add_ticket("16")
+        self.push_blocked([self.remote])
+        self.assertIn("gs/demo/integration", sh(self.remote, "git", "branch", "--list", "gs/demo/integration"))  # gs push는 된다
+
+    def test_worker_cannot_push_with_pushurl(self):  # pushurl이 있으면 pushInsteadOf가 듣지 않는다
+        self.add_ticket("16")
+        mirror = Path(self.tmp.name) / "mirror.git"
+        sh(Path(self.tmp.name), "git", "clone", "-q", "--bare", str(self.remote), str(mirror))
+        sh(self.repo, "git", "config", "remote.origin.pushurl", str(mirror))
+        self.push_blocked([self.remote, mirror])
+        self.assertIn("gs/demo/integration", sh(mirror, "git", "branch", "--list", "gs/demo/integration"))
+
     # --- codex 리뷰(02) 지적 재현 ---
     def test_worker_commit_to_integration_is_undone_and_not_pushed(self):  # 지적 2
         self.add_ticket("07")
@@ -361,7 +500,7 @@ class GoTest(unittest.TestCase):
         one = t["01"]
         self.assertEqual((one["attempts"], one["branch"]), (1, "gs/demo/01"))
         self.assertTrue(one["pane"].startswith("pid "), one["pane"])
-        self.assertTrue(one["log"].endswith("run/01/worker.log") and Path(one["log"]).exists())
+        self.assertTrue(one["log"].endswith("run/01/1/worker.log") and Path(one["log"]).exists())
         self.assertTrue(one["started_at"] and one["ended_at"])
         self.assertTrue(raw["finished_at"])
         self.assertEqual(list(self.rundir.glob(".state.*")), [])  # 임시 파일이 남지 않는다

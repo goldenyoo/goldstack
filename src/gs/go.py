@@ -110,6 +110,7 @@ def _begin(r: Run) -> None:
     for tid, ts in sorted(st.tickets.items()):
         if ts.status == state.RUNNING:
             say(f"[{tid}] 지난 실행이 중간에 끝나 running으로 남았다. 실패로 세지 않고 새로 시작한다")
+            _stop_previous(tid, ts)
             ts.attempts = max(0, ts.attempts - 1)
             ts.status = state.PENDING
     for tid in r.order:
@@ -119,6 +120,31 @@ def _begin(r: Run) -> None:
     st.pid, st.only, st.started_at, st.finished_at = os.getpid(), r.only, state.now(), ""
     r.st = st
     state.save(r.rundir, st)
+
+
+def _stop_previous(tid: str, ts: state.TicketState) -> None:
+    """gs만 죽고 worker는 살아 남았을 수 있다. 그 시도의 worker를 끝내야 새 시도가 worktree를 지우고 다시 만들 수 있다.
+
+    worker는 명령줄의 run.sh 경로(시도마다 다르다)로 찾는다. 찾아서 끝냈고 herdr pane에서 돌았으면 그 pane도 닫는다.
+    """
+    if not ts.log:
+        return
+    try:
+        if not worker.kill_script(Path(ts.log).parent / "run.sh"):
+            return
+    except Exception as e:  # noqa: BLE001 — 최선. 새 시도는 실행 디렉터리가 따로라 결과가 섞이지는 않는다
+        say(f"[{tid}] 경고: 지난 실행의 worker를 끝내지 못했다: {_err(e)}")
+        return
+    say(f"[{tid}] 지난 실행의 worker가 아직 돌고 있어 끝냈다")
+    if ts.pane.startswith("pane ") and herdr.available():
+        try:
+            herdr.pane_close(herdr.session(), ts.pane.split(" ", 1)[1])
+        except herdr.HerdrError:
+            pass
+
+
+def _err(e: BaseException) -> str:
+    return f"{type(e).__name__}: {e}"
 
 
 def _set(r: Run, tid: str, **fields) -> None:
@@ -204,22 +230,33 @@ def _loop(r: Run) -> None:
     r.ihead = git.sha(r.iwt, "HEAD")
     runner = worker.make_runner(r.repo, r.name)
     active: dict[str, Active] = {}
-    while True:
-        _skip_blocked(r)
-        while len(active) < cap:
-            ready = [tid for tid in _frontier(r) if tid not in active]
-            if not ready:
-                break
-            a = _start(r, r.feat.tickets[ready[0]], runner)
-            if a is None:  # 띄우기 전에 실패했다. 막힌 티켓을 다시 고른다
-                _skip_blocked(r)
-            else:
-                active[a.t.id] = a
-        if not active:
-            return
-        tid, code = _wait_any(r, active, runner)
-        a = active.pop(tid)
-        _finish(r, a, code, others=sorted(active))
+    try:
+        while True:
+            _skip_blocked(r)
+            while len(active) < cap:
+                ready = [tid for tid in _frontier(r) if tid not in active]
+                if not ready:
+                    break
+                a = _start(r, r.feat.tickets[ready[0]], runner)
+                if a is None:  # 띄우지 못했다(그 티켓만 실패). 막힌 티켓을 다시 고른다
+                    _skip_blocked(r)
+                else:
+                    active[a.t.id] = a
+            if not active:
+                return
+            tid, code, error = _wait_any(r, active, runner)
+            a = active.pop(tid)
+            if error:  # 이 worker를 확인하다 오류가 났다. 이 티켓만 실패시킨다
+                a.proc.stop()
+                a.proc.finish(False)
+                _fail(r, a.t, error)
+                continue
+            _finish(r, a, code, others=sorted(active))
+    finally:
+        # 예상 못 한 오류로 루프를 떠나도 띄운 worker를 남기지 않는다(남으면 재실행이 그 worktree를 지운다)
+        for a in active.values():
+            say(f"[{a.t.id}] gs가 멈춰 worker를 끝낸다")
+            a.proc.stop()
 
 
 def _frontier(r: Run) -> list[str]:
@@ -242,39 +279,54 @@ def _skip_blocked(r: Run) -> None:
             say(f"[{tid}] 건너뜀: {', '.join(blockers)} 실패")
 
 
-def _wait_any(r: Run, active: dict[str, Active], runner) -> tuple[str, int]:
-    """돌고 있는 worker 중 하나가 끝날 때까지 기다린다. 동시에 끝났으면 r.order 앞쪽부터."""
+def _wait_any(r: Run, active: dict[str, Active], runner) -> tuple[str, int | None, str]:
+    """돌고 있는 worker 중 하나가 끝날 때까지 기다린다. 동시에 끝났으면 r.order 앞쪽부터.
+
+    (티켓, 종료 코드, 오류). 확인 중 오류(실행기·어댑터 판정의 예외)는 그 티켓의 오류로 돌려준다.
+    """
     while True:
         for tid in r.order:
             if tid in active:
-                code = active[tid].proc.poll()
+                try:
+                    code = active[tid].proc.poll()
+                except Exception as e:  # noqa: BLE001 — 한 worker의 오류로 코디네이터가 멈추지 않게
+                    return tid, None, f"worker 확인 중 오류: {_err(e)}"
                 if code is not None:
-                    return tid, code
+                    return tid, code, ""
         time.sleep(worker.poll_interval(runner))
 
 
 def _start(r: Run, t: Ticket, runner) -> Active | None:
-    """최신 integration 끝에서 티켓 브랜치를 새로 만들고 worker를 띄운다. 띄우지 못하면 실패로 적고 None."""
-    branch = ticket_branch(r.name, t.id)
-    wt = r.rundir / "wt" / t.id
-    base = r.ihead
-    git.remove_worktree(r.repo, wt, branch)  # 이어가기는 없다: 지난 시도는 버리고 새로
-    git.ensure_worktree(r.repo, wt, branch, start=base)
-    job = worker.Job(ticket=t, worktree=wt.resolve(), rundir=(r.rundir / t.id).resolve())
-    job.rundir.mkdir(parents=True, exist_ok=True)
-    job.log.unlink(missing_ok=True)
-    _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
-         log=str(job.log), started_at=state.now(), ended_at="", reason="")
-    worker.write_brief(job, r.feat.spec, r.name, branch)
+    """최신 integration 끝에서 티켓 브랜치를 새로 만들고 worker를 띄운다. 띄우지 못하면 실패로 적고 None.
+
+    어떤 오류든(git, herdr, 파일, 어댑터 준비) 이 티켓만 실패시킨다. 이미 띄운 worker가 있으면 끝낸다.
+    """
+    proc = None
     try:
+        branch = ticket_branch(r.name, t.id)
+        wt = r.rundir / "wt" / t.id
+        base = r.ihead
+        git.remove_worktree(r.repo, wt, branch)  # 이어가기는 없다: 지난 시도는 버리고 새로
+        git.ensure_worktree(r.repo, wt, branch, start=base)
+        rundir = worker.attempt_dir((r.rundir / t.id).resolve())  # 시도마다 새 실행 디렉터리
+        job = worker.Job(ticket=t, worktree=wt.resolve(), rundir=rundir)
+        job.rundir.mkdir(parents=True)
+        _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
+             log=str(job.log), started_at=state.now(), ended_at="", reason="")
+        worker.write_brief(job, r.feat.spec, r.name, branch)
         adapter = adapters.for_model(t.model)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
+        proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
+        _set(r, t.id, pane=proc.where)
     except adapters.AdapterError as e:
         _fail(r, t, str(e))
         return None
-    proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
-    _set(r, t.id, pane=proc.where)
+    except Exception as e:  # noqa: BLE001 — 한 티켓의 오류로 코디네이터가 멈추지 않게
+        if proc is not None:
+            proc.stop()
+        _fail(r, t, f"worker를 띄우지 못했다: {_err(e)}")
+        return None
     say(f"[{t.id}] 시작: {t.title} ({adapter.name}, {proc.where}, 로그 {job.log})")
     return Active(t, proc, branch, wt, base)
 
@@ -318,18 +370,39 @@ def _finish(r: Run, a: Active, code: int, others: list[str] = ()) -> bool:
     if res.returncode:
         _reset_integration(r, r.ihead)
         return fail("integration 병합 충돌")
+    merged = _merge_state(r)  # 검증할 것: 병합 결과 트리
     ok, log = _verify(r, t)
     if not ok:
         _reset_integration(r, r.ihead)
         return fail(f"검증 실패(로그 {log})")
+    # 검증하는 동안 다른 worker가 integration(index, HEAD, 병합 상태)을 바꿨으면 검증한 것과 커밋할 것이 다르다
+    expected = (r.ihead, f"refs/heads/{integration_branch(r.name)}")
+    if _merge_state(r) != merged or merged[:2] != expected or not all(merged):
+        _reset_integration(r, r.ihead)
+        return fail("검증하는 동안 integration이 바뀌었다(되돌림): 검증한 것과 커밋할 것이 다르다")
+    # 커밋은 검증한 트리로 직접 만들고, 브랜치는 r.ihead에 있을 때만 옮긴다(그 사이 바뀌어도 섞이지 않게)
     msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
-    git.run(r.iwt, "commit", "-q", "--no-verify", "-m", msg)  # index만 커밋한다
-    _reset_integration(r)  # 검증이 남긴 파일은 버린다
-    r.ihead = git.sha(r.iwt, "HEAD")
+    new = git.out(r.iwt, "commit-tree", merged[3], "-p", r.ihead, "-p", merged[2], "-m", msg)
+    moved = git.run(r.iwt, "update-ref", "-m", f"gs: merge {t.id}", merged[1], new, r.ihead, check=False)
+    if moved.returncode:
+        _reset_integration(r, r.ihead)
+        return fail("검증하는 동안 integration이 바뀌었다(되돌림): 브랜치가 움직였다")
+    git.run(r.iwt, "reset", "-q", "--hard", new)  # 병합 상태와 검증이 남긴 파일은 버린다
+    git.run(r.iwt, "clean", "-q", "-fd")
+    r.ihead = new
     a.proc.finish(True)
     _set(r, t.id, status=state.MERGED, ended_at=state.now())
     say(f"[{t.id}] 검증 통과 → integration 병합")
     return True
+
+
+def _merge_state(r: Run) -> tuple[str, str, str, str]:
+    """(HEAD, HEAD가 가리키는 브랜치, MERGE_HEAD, index 트리). 읽지 못한 값은 빈 문자열(그러면 비교에서 다르다)."""
+    def get(*args: str) -> str:
+        cp = git.run(r.iwt, *args, check=False)
+        return cp.stdout.strip() if cp.returncode == 0 else ""
+    return (get("rev-parse", "-q", "--verify", "HEAD"), get("symbolic-ref", "-q", "HEAD"),
+            get("rev-parse", "-q", "--verify", "MERGE_HEAD"), get("write-tree"))
 
 
 def _catch_up(r: Run, a: Active) -> bool:

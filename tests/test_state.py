@@ -57,6 +57,13 @@ class StateTest(unittest.TestCase):
         with state.Lock(self.rundir):  # 다시 잡을 수 있다
             pass
 
+    def test_running_pid_needs_held_lock(self):  # 03 ③: 죽은 gs의 pid가 다른 프로세스에 재사용된 경우
+        self.rundir.mkdir()
+        state.lock_path(self.rundir).write_text(f"{os.getpid()}\n")  # 살아 있는 pid지만 잠금은 아무도 안 잡았다
+        self.assertIsNone(state.running_pid(self.rundir))
+        with state.Lock(self.rundir):  # 잠금을 잡을 수 있다(status가 잠깐 들여다본 뒤에도)
+            self.assertEqual(state.running_pid(self.rundir), os.getpid())
+
     def test_duration(self):
         self.assertEqual(duration(5), "5s")
         self.assertEqual(duration(125), "2m05s")
