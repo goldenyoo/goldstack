@@ -155,8 +155,12 @@ class Agy(Adapter):
             raise AdapterError(f"agy 차단 장치가 없다: {problem}. agy는 구현 worker로 띄우지 않는다(리뷰 전용)")
 
     def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
-        """성공 = 종료 0 + 마지막 `result` 이벤트의 status SUCCESS + finished_reason 없음(11 §6 끝 판정)."""
-        result, warnings, errors = None, [], 0
+        """성공 = 종료 0 + 마지막 이벤트가 형식이 맞는 `result`이고 status SUCCESS + finished_reason 없음(11 §6 끝 판정).
+
+        이벤트 줄은 `{`로 시작하는 줄이다. 그 뒤의 stderr 텍스트(`warning:` 등)는 판정에 쓰지 않는다.
+        마지막 이벤트가 깨졌거나 result가 아니면(앞에 SUCCESS가 있어도) 실패다. 형식이 틀려도 예외 없이 실패로 낸다.
+        """
+        warnings, errors, last, seen_result = [], 0, None, False
         try:
             lines = inp.log.read_text(encoding="utf-8", errors="replace").splitlines()
         except FileNotFoundError:
@@ -164,44 +168,78 @@ class Agy(Adapter):
         for line in lines:
             if line.startswith("warning:"):
                 warnings.append(line.strip())
+            if not line.lstrip().startswith("{"):
+                continue
             try:
                 ev = json.loads(line)
             except ValueError:
-                continue
-            if not isinstance(ev, dict):
-                continue
-            if ev.get("event") == "result" and isinstance(ev.get("result"), dict):
-                result = ev["result"]
-            su = ev.get("step_update")
-            if ev.get("event") == "step_update" and isinstance(su, dict) and su.get("state") == "ERROR":
+                ev = None
+            last = ev if isinstance(ev, dict) else None
+            seen_result = seen_result or bool(last and last.get("event") == "result")
+            su = last.get("step_update") if last else None
+            if last and last.get("event") == "step_update" and isinstance(su, dict) and su.get("state") == "ERROR":
                 errors += 1
         notes = list(dict.fromkeys(warnings))
         if errors:
             notes.append(f"ERROR 단계 {errors}개(막힌 도구 호출 포함)")
-        if result is not None and result.get("denied_actions"):
-            acts = ", ".join(str(d.get("action")) for d in result["denied_actions"] if isinstance(d, dict))
-            notes.append(f"자동 거부: {acts}")
-        if code == 0:
-            if result is None:
-                code, why = 1, "agy: result 이벤트가 없다"
-            elif result.get("status") != "SUCCESS":
-                code, why = 1, f"agy: result status {result.get('status')}"
-            elif result.get("finished_reason"):
-                code, why = 1, f"agy: finished_reason {result.get('finished_reason')}"
+        why = ""
+        result = last.get("result") if last else None
+        if not seen_result:
+            why = "agy: result 이벤트가 없다"
+        elif last is None:
+            why = "agy: 마지막 이벤트가 깨졌다"
+        elif last.get("event") != "result":
+            why = f"agy: 마지막 이벤트가 result가 아니다({str(last.get('event'))[:40]})"
+        elif not isinstance(result, dict):
+            why = "agy: 마지막 result 이벤트의 result가 객체가 아니다"
+        else:
+            denied = result.get("denied_actions")
+            denied = [] if denied is None else denied
+            if not (isinstance(denied, list) and all(isinstance(d, dict) for d in denied)):
+                why = "agy: result의 denied_actions 형식이 틀렸다(객체 목록이 아니다)"
             else:
-                why = ""
-            if why:
-                notes.insert(0, why)
+                if denied:
+                    notes.append("자동 거부: " + ", ".join(str(d.get("action")) for d in denied))
+                if result.get("status") != "SUCCESS":
+                    why = f"agy: result status {str(result.get('status'))[:40]}"
+                elif result.get("finished_reason"):
+                    why = f"agy: finished_reason {str(result.get('finished_reason'))[:40]}"
+        if why:
+            notes.insert(0, why)
+            if code == 0:
+                code = 1
         return code, "; ".join(notes)
 
 
 def install_agy_hook(worktree: Path) -> None:
-    """worktree에 `.agents/hooks.json`을 쓰고 git exclude에 넣는다. 레포가 그 파일을 추적하면 거부한다."""
+    """worktree에 `.agents/hooks.json`을 쓰고 git exclude에 넣는다.
+
+    레포가 그 파일을 추적하거나, `.agents`나 hooks 파일이 심볼릭 링크이거나, `.agents`가 디렉터리가 아니면 거부한다.
+    링크를 따라 worktree 밖의 파일을 덮어쓰지 않는다(새 파일로 만들고 O_EXCL|O_NOFOLLOW).
+    """
     if git.run(worktree, "ls-files", "--error-unmatch", str(AGY_HOOK_FILE), check=False).returncode == 0:
         raise AdapterError(f"agy: 레포가 {AGY_HOOK_FILE}를 추적한다. gs hook을 넣을 수 없다")
+    d = worktree / AGY_HOOK_FILE.parent
     path = worktree / AGY_HOOK_FILE
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(agy_hooks_json(), encoding="utf-8")
+    try:
+        if d.is_symlink():
+            raise AdapterError(f"agy: {AGY_HOOK_FILE.parent}가 심볼릭 링크다. worktree 밖에 쓸 수 있어 gs hook을 넣지 않는다")
+        if not d.exists():
+            d.mkdir()
+        if d.is_symlink() or not d.is_dir():
+            raise AdapterError(f"agy: {AGY_HOOK_FILE.parent}가 디렉터리가 아니다. gs hook을 넣을 수 없다")
+        if os.path.realpath(d) != os.path.join(os.path.realpath(worktree), str(AGY_HOOK_FILE.parent)):
+            raise AdapterError(f"agy: {AGY_HOOK_FILE.parent}가 worktree 밖을 가리킨다. gs hook을 넣지 않는다")
+        if path.is_symlink():
+            raise AdapterError(f"agy: {AGY_HOOK_FILE}가 심볼릭 링크다. worktree 밖에 쓸 수 있어 gs hook을 넣지 않는다")
+        if path.exists() and not path.is_file():
+            raise AdapterError(f"agy: {AGY_HOOK_FILE}가 일반 파일이 아니다. gs hook을 넣을 수 없다")
+        path.unlink(missing_ok=True)  # 기존 파일(하드 링크일 수도)은 내용을 덮지 않고 이름만 지운 뒤 새로 만든다
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(agy_hooks_json())
+    except OSError as e:
+        raise AdapterError(f"agy: {AGY_HOOK_FILE}를 쓰지 못했다: {e}") from e
     exclude = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"))
     text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
     if Agy.EXCLUDE not in text.splitlines():

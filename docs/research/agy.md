@@ -12,7 +12,7 @@
 - deny 규칙(`command(git push)`)은 단어 단위 매칭이라 `git -C . push`, `sh -c '…'`, 스크립트, python으로 우회된다 **[측정]**.
 - PreToolUse hook은 있고, 막을 수 있고, **실패하면 막는 쪽(fail-closed)**이다 **[측정]**. hook 프로세스는 agy의 환경 변수(`GS_ROLE`)를 물려받는다 **[측정]**. 그래서 09의 `gs.hook.decide()`를 agy 입력 형식에 맞춰 붙이면 claude worker와 같은 수준으로 막는다 **[측정: 임시 어댑터로]**.
 - `--sandbox`는 print 모드에서 **workspace 자체를 읽기 전용**으로 만들어 커밋이 안 된다 **[측정]**. worker에는 못 쓴다.
-- 결론: agy는 구현 worker로 띄울 수 있다. 조건은 skip-permissions + deny 규칙 + `gs` PreToolUse hook(이중 장치)이다. 남는 빈틈(스크립트 파일, python, git alias)은 claude worker의 09 hook과 같다.
+- 결론: deny 규칙 + `gs` PreToolUse hook만으로는 **구현 worker에 부족하다**. 스크립트 파일, python, git alias로 실제 push된다 **[측정]** E3a·E3c(claude worker의 09 hook도 같은 빈틈). agy를 구현 worker로 띄우는 것은 다른 브랜치가 넣는 **구조적 환경 차단**(모든 worker 공통: 환경 변수로 준 git 설정이 모든 push URL을 막힌 주소로 바꾸고, `GH_TOKEN`은 무효 값)이 있을 때만이다. 이 차단이 있으면 스크립트·alias·python을 거친 push도 실패한다 **[추정]**(§5). 그 위에 `gs`가 결과를 다시 검증한다. 이 차단이 없으면 agy는 **리뷰 전용**이다.
 
 ## 1. 권한 모드
 | 항목 | 내용 | 근거 |
@@ -126,7 +126,9 @@ NDJSON 한 줄에 이벤트 하나. 본 이벤트는 세 종류다 **[측정]**:
 - skip-permissions + deny 규칙만: 직접 쓴 `git push`는 막지만 흔한 변형 4가지로 실제 push됐다 **[측정]**. 혼자서는 부족하다.
 - skip-permissions + PreToolUse hook(`gs.hook.decide()` 재사용): `-C`, `sh -c`, `cd &&`, `env`, force, worktree 밖 쓰기(셸·파일 도구 둘 다)를 막았다 **[측정]**. 커밋은 통과했다 **[측정]** E3c. 통과한 것은 python subprocess, 스크립트 파일(파일 도구로 쓰든 셸 한 줄로 쓰든), `git -c alias.x=push`이다 **[측정]**. 이 셋은 `decide()` 자체의 빈틈이라 claude worker(09)도 똑같다. 같은 입력을 `decide()`에 바로 넣어 `None`이 나오는 것을 확인했다 **[측정]**.
 - sandbox: 커밋을 못 하게 만들어 worker에 못 쓴다 **[측정]**.
-- 결론: 위협 모델이 "실수로 하는 되돌릴 수 없는 일"(spec 3-1)이라면 claude worker와 같은 수준으로 막을 수 있다. 의도적으로 우회하는 agent는 막지 못한다(claude도 마찬가지).
+- 정상 작업 중의 실수로도 뚫린다. 예: worker가 레포의 `scripts/release.sh`를 돌리고 그 안에 `git push origin HEAD:main`이 있으면 deny 규칙과 hook을 모두 지난다(hook 통과는 **[측정]**: 같은 꼴을 `decide()`에 넣어 `None`, 실제 push는 E3a의 스크립트 사례). 원격 인증이 살아 있으면 `gs`의 검증·병합 전에 push된다. 그래서 hook은 "실수"를 막는 장치로도 부족하다.
+- 구조적 환경 차단(다른 브랜치, 모든 worker 공통): worker 환경에 `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n`으로 git 설정을 넣어 모든 push URL을 막힌 주소로 바꾸고(`pushInsteadOf`/`insteadOf` 계열), `GH_TOKEN`을 무효 값으로 둔다. 환경 변수는 셸·스크립트·python subprocess·alias가 모두 물려받으므로 위 세 우회도 push 단계에서 실패한다 **[추정]**: git의 설정 규칙에서 미룬 것이고, 이 조사에서 agy로 돌려 보지 않았다. 그 브랜치의 시험이 확인한다. 같은 환경에서 `git config`를 다시 쓰거나 환경 변수를 지우는 의도적 우회는 여전히 남는다 **[추정]**.
+- 결론: 구현 worker로 쓰려면 deny 규칙 + hook + **구조적 환경 차단** + `gs`의 사후 검증(브랜치·커밋 재확인, push·PR·병합은 `gs`만)이 모두 있어야 한다. 앞의 둘만으로는 리뷰 전용이다.
 
 ## 6. 05에 줄 권고
 **띄우는 명령**(worktree에서, herdr pane 안):
@@ -144,7 +146,9 @@ agy -p "<brief 전문>" \
 - 모델은 강도까지 붙은 slug 하나로 준다. `--effort`를 따로 쓰면 충돌 오류(종료 1)가 날 수 있다.
 - gh deny 목록은 git push 결과에서 미루어 정했다 **[추정]**. 05에서 한 번 확인한다.
 
-**차단(두 겹, 둘 다 필수)**:
+**구현 worker로 쓸 조건**: 아래 두 겹에 더해, 모든 worker에 거는 구조적 환경 차단(§5: push URL을 막힌 주소로 바꾸는 env git 설정 + 무효 `GH_TOKEN`)이 있어야 한다. 두 겹만으로는 스크립트·python·alias push가 통과한다 **[측정]**. agy를 구현 worker로 쓰는 것은 이 환경 차단과 `gs`의 재검증에 기대는 것이다. 환경 차단이 없으면 agy는 리뷰 전용으로만 띄운다.
+
+**차단(두 겹, 둘 다 필수. 단 위 환경 차단 없이는 충분하지 않다)**:
 1. deny 규칙(위 `--settings`). hook이 빠져도 직접 쓴 형태는 막는 마지막 줄이다.
 2. PreToolUse hook: `gs hook agy-pretooluse`(새 진입점) 같은 것을 만든다. agy 입력을 09의 `decide()` 입력으로 바꾸고 결과를 agy 출력 JSON으로 낸다.
    - `toolCall.name == "run_command"` → `{"tool_name":"Bash","tool_input":{"command": args.CommandLine}}`
@@ -156,7 +160,7 @@ agy -p "<brief 전문>" \
    - 실험에 쓴 어댑터 시제품은 30줄 남짓이었다(§7 E3c).
 3. hook을 둘 곳. 권고 순서:
    - (a) **agy 네이티브 plugin**(루트에 `plugin.json` + `hooks.json`, matcher `"*"`, 명령 `gs hook agy-pretooluse`)을 한 번 설치한다(`agy plugin install <dir>`). Claude plugin(09)과 같은 방식으로, `GS_ROLE=worker`일 때만 막는다. 09의 Claude plugin을 `agy plugin import`로 들여오는 것은 안 된다. 도구 이름(`Bash` vs `run_command`)과 출력 계약(종료 2 vs stdout JSON)이 다르다. plugin 로딩 자체는 [추정]이니 05에서 `agy -p /hooks`로 확인한다.
-   - (b) 대안: `gs`가 worktree에 `.agents/hooks.json`을 쓰고 `.git/info/exclude`에 넣는다(로딩은 [측정]). 이 경우 agent가 그 파일을 고쳐 커밋하거나 다음 실행(재시도)에 영향을 줄 수 있다. hook이 `.agents/` 쓰기를 막아야 한다.
+   - (b) 대안: `gs`가 worktree에 `.agents/hooks.json`을 쓰고 git exclude 파일에 넣는다(로딩은 [측정]). exclude 경로는 `git rev-parse --path-format=absolute --git-path info/exclude`로 얻는다. linked worktree에서는 `.git`이 디렉터리가 아니라 파일이라 `<worktree>/.git/info/exclude`는 없는 경로다(`ENOTDIR`) **[측정]**. `.agents`나 `hooks.json`이 심볼릭 링크이면 worktree 밖을 덮어쓸 수 있으니 거부한다. 이 경우 agent가 그 파일을 고쳐 커밋하거나 다음 실행(재시도)에 영향을 줄 수 있다. hook이 `.agents/` 쓰기를 막아야 한다.
 4. `gs check`는 agy 티켓에서 hook이 실제로 걸려 있는지(`agy -p /hooks` 출력에 gs hook 줄이 있는지) 확인하고, 없으면 경고하고 agy 구현 worker를 거부한다.
 
 **끝 판정**: 종료 0만 보면 안 된다. 성공은 다음을 모두 만족할 때다.
@@ -167,7 +171,7 @@ agy -p "<brief 전문>" \
 
 `denied_actions`와 ERROR 상태 tool 단계는 실패 로그(07)에 붙인다. stderr 첫 줄의 `warning:`도 로그에 남긴다(모드 무시 같은 조용한 강등을 잡는다).
 
-**막을 수 없는 경우의 대안**: (a)·(b) 모두 hook이 걸리지 않으면 agy는 **리뷰 전용**으로 쓴다. 기본 모드(`toolPermission` 기본값, skip-permissions 없음)에서는 셸 명령이 전부 자동 거부되고 workspace 읽기는 된다. 읽기가 된다는 것은 changelog에서 읽은 것이라 [추정]이다. 리뷰에 셸이 필요 없으면 이 모드가 그대로 차단 장치다.
+**막을 수 없는 경우의 대안**: (a)·(b) 모두 hook이 걸리지 않거나, 구조적 환경 차단이 없으면 agy는 **리뷰 전용**으로 쓴다. 기본 모드(`toolPermission` 기본값, skip-permissions 없음)에서는 셸 명령이 전부 자동 거부되고 workspace 읽기는 된다. 읽기가 된다는 것은 changelog에서 읽은 것이라 [추정]이다. 리뷰에 셸이 필요 없으면 이 모드가 그대로 차단 장치다.
 
 ## 7. 실험 기록
 모두 `gemini-3.8-flash-{low,medium}`, `--output-format stream-json`, `/tmp/agyexp.jDw1/` 아래 버리는 레포(원격 = `remote.git` 로컬 bare). 이 worker 셸의 `git push`는 09 hook에 막혀서(예상대로) 원격은 `git clone --bare`로 만들었다. 프롬프트는 "아래 명령을 그대로, 막혀도 우회하지 말고 차례로 돌려 표로 보고하라"는 식이다.

@@ -53,7 +53,7 @@ export GS_WORKTREE=…/run/wt/02
     --model gemini-4-argon-high ) 2>&1 | tee -a …/worker.log | python -m gs.streamfmt
 ```
 띄우기 전 gs가 worktree에 `.agents/hooks.json`(`goldstack-worker-guard`, PreToolUse `*`, `<python> -m gs.cli hook agy-pretooluse`)을 쓰고
-`.git/info/exclude`에 `/.agents/hooks.json`을 넣었다. 커밋에 섞이지 않았다(integration 트리에 `.agents/` 없음).
+git exclude 파일(`git rev-parse --git-path info/exclude`, linked worktree라 공통 git 디렉터리의 것)에 `/.agents/hooks.json`을 넣었다. 커밋에 섞이지 않았다(integration 트리에 `.agents/` 없음).
 
 worker.log(`gs.streamfmt`):
 ```

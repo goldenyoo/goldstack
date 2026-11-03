@@ -204,6 +204,35 @@ class AgyOutcomeTest(Base):
                                {"event": "result", "result": {"status": "SUCCESS"}})
         self.assertEqual(code, 0)
 
+    def test_malformed_last_result_does_not_reuse_earlier_success(self):  # 리뷰 05 #3
+        code, note = self.outcome(0, {"event": "result", "result": {"status": "SUCCESS"}},
+                                  {"event": "result", "result": []})
+        self.assertEqual(code, 1)
+        self.assertIn("result", note)
+
+    def test_error_step_after_success_fails(self):  # 리뷰 05 #3
+        code, note = self.outcome(0, {"event": "result", "result": {"status": "SUCCESS"}},
+                                  {"event": "step_update", "step_update": {"state": "ERROR", "step_type": "tool"}})
+        self.assertEqual(code, 1)
+        self.assertIn("마지막 이벤트", note)
+
+    def test_truncated_last_event_fails(self):
+        code, _ = self.outcome(0, {"event": "result", "result": {"status": "SUCCESS"}}, '{"event":"res')
+        self.assertEqual(code, 1)
+
+    def test_trailing_stderr_text_after_result_is_ignored(self):
+        code, note = self.outcome(0, {"event": "result", "result": {"status": "SUCCESS"}},
+                                  "terminating 1 background task(s) on exit")
+        self.assertEqual((code, note), (0, ""))
+
+    def test_malformed_denied_actions_is_failure_not_exception(self):  # 리뷰 05 #4
+        code, note = self.outcome(0, {"event": "result", "result": {"status": "SUCCESS", "denied_actions": 1}})
+        self.assertEqual(code, 1)
+        self.assertIn("denied_actions", note)
+        code, note = self.outcome(0, {"event": "result", "result": {"status": "SUCCESS", "denied_actions": [1]}})
+        self.assertEqual(code, 1)
+        self.assertIn("denied_actions", note)
+
 
 class AgyGuardTest(Base):
     """차단 장치: worktree에 gs hook을 걸고, agy가 실제로 거는지 확인한다. 안 걸리면 거부한다."""
@@ -250,6 +279,37 @@ class AgyGuardTest(Base):
         sh(self.wt, "git", "commit", "-qm", "own hooks")
         with self.assertRaisesRegex(AdapterError, "추적"):
             adapters.Agy().prepare(self.inp)
+
+    def test_refused_when_agents_is_tracked_symlink(self):  # 리뷰 05 #1: 링크를 따라 밖의 파일을 덮어쓰지 않는다
+        self.fake_agy("ok")
+        shared = self.root / "shared" / "agents"
+        shared.mkdir(parents=True)
+        (shared / "hooks.json").write_text("original\n")
+        (self.wt / ".agents").symlink_to(shared)
+        sh(self.wt, "git", "add", "-A")
+        sh(self.wt, "git", "commit", "-qm", "agents link")
+        with self.assertRaisesRegex(AdapterError, "심볼릭 링크"):
+            adapters.Agy().prepare(self.inp)
+        self.assertEqual((shared / "hooks.json").read_text(), "original\n")
+
+    def test_refused_when_hooks_file_is_symlink(self):
+        self.fake_agy("ok")
+        outside = self.root / "outside.json"
+        outside.write_text("original\n")
+        (self.wt / ".agents").mkdir()
+        (self.wt / ".agents" / "hooks.json").symlink_to(outside)
+        with self.assertRaisesRegex(AdapterError, "심볼릭 링크"):
+            adapters.Agy().prepare(self.inp)
+        self.assertEqual(outside.read_text(), "original\n")
+
+    def test_refused_when_agents_is_a_file(self):
+        self.fake_agy("ok")
+        (self.wt / ".agents").write_text("x\n")
+        sh(self.wt, "git", "add", "-A")
+        sh(self.wt, "git", "commit", "-qm", "agents file")
+        with self.assertRaisesRegex(AdapterError, "디렉터리가 아니다"):
+            adapters.Agy().prepare(self.inp)
+        self.assertEqual((self.wt / ".agents").read_text(), "x\n")
 
 
 class AgyHookTest(unittest.TestCase):
