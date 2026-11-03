@@ -293,7 +293,7 @@ def _loop(r: Run) -> None:
                 if nxt is not None:  # 수정 worker를 띄웠다. 끝나면 다시 _finish로 온다
                     active[tid] = nxt
             except (git.GitError, OSError) as e:
-                # 브랜치 삭제·검증 실행 오류도 이 티켓의 실패로 한정한다.
+                # 브랜치 삭제·검증 실행 오류도 이 티켓의 실패로 한정한다. 리뷰 단계의 뜻밖의 오류는 _review가 막는다.
                 a.proc.stop()
                 _reset_integration(r, r.ihead)
                 _fail(r, a.t, f"worker 결과 처리 중 오류: {_err(e)}")
@@ -415,6 +415,11 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         a.proc.finish(False)
         _fail(r, t, reason)
 
+    # 시간 초과·확인 오류면 worker가 아직 돌고 있다. 무엇을 판정하기 전에 먼저 끝낸다: 어느 경로로 돌아가든
+    # (integration 변경 실패 포함) 살아 남아 재시도 worker와 함께 integration·브랜치를 바꾸지 못하게.
+    if error or code is None:
+        a.proc.stop()
+
     # worker가 integration을 건드렸으면(커밋, 미커밋 변경, 브랜치 이동) 되돌린다. 돌던 worker가 이것 하나뿐이면
     # 이 worker 짓이라 실패로 친다. 여럿이 돌았으면 누구 짓인지 모르니 되돌리기만 하고 경고한다.
     if _reset_integration(r, r.ihead):
@@ -486,9 +491,16 @@ def _review(r: Run, a: Active) -> list[dict]:
     """
     t = a.t
     say(f"[{t.id}] 리뷰: {t.reviewer}")
-    rec = review.run(repo=r.repo, worktree=a.wt.resolve(), rdir=a.proc.job.rundir / "review", base=r.ihead,
-                     branch=a.branch, ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model,
-                     reviewer=t.reviewer)
+    rdir = a.proc.job.rundir / "review"
+    try:
+        rec = review.run(repo=r.repo, worktree=a.wt.resolve(), rdir=rdir, base=r.ihead, branch=a.branch,
+                         ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model,
+                         reviewer=t.reviewer)
+    except (review.Refused, git.GitError):
+        raise  # 같은 계열은 거부, git 오류는 이 티켓의 실패(_finish·_loop가 처리)
+    except Exception as e:  # noqa: BLE001 — 리뷰는 병합을 막지 않는다(spec 2-1). 뜻밖의 오류도 리뷰 실패로 적는다
+        rec = {"reviewer": t.reviewer, "dir": str(rdir), "merge_base": "", "fix": "", "findings": [],
+               "note": f"리뷰 실패(리뷰 없음, verify만으로 병합한다): 뜻밖의 오류 {_err(e)}"}
     _set(r, t.id, review=rec)
     say(f"[{t.id}] 리뷰 끝: {review.counts(rec)}" + (f" — {rec['note']}" if rec["note"] else ""))
     return review.fixes(rec)
@@ -531,30 +543,38 @@ def _note_fix(r: Run, t: Ticket, msg: str) -> None:
 
 
 def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> None:
-    """수정 worker가 끝났다. 성공이면 지적을 고친 것으로 적는다(재리뷰 없음).
+    """수정 worker가 끝났다. 성공이면 fix 지적을 "수정 시도, 재리뷰 없음"으로 적는다.
 
+    재리뷰가 없으니 커밋·종료 코드만으로 지적이 고쳐졌는지는 모른다(worker가 일부를 거절했을 수도 있다).
+    그래서 고쳐졌다고 치지 않고 남은 지적으로 보고서에 남긴다.
     실패(종료 코드, 시간 초과, 커밋 없음, 리뷰한 커밋을 지움)면 수정 커밋을 버리고 리뷰한 구현으로 되돌린다.
-    어느 쪽이든 티켓은 병합·검증으로 간다.
+    어느 쪽이든 티켓은 병합·검증으로 간다. 돌고 있던 worker는 _finish가 이미 끝냈다.
     """
     t, wt, branch = a.t, a.wt, a.branch
     kept = git.run(r.repo, "merge-base", "--is-ancestor", a.base, branch, check=False).returncode == 0
     why = error or ("" if code == 0 else f"종료 코드 {code}") or ("" if kept else "리뷰한 커밋을 지웠다") \
         or ("" if commits else "커밋 없음")
-    if error:
-        a.proc.stop()
     if not why:
         if not git.is_clean(wt):
             say(f"[{t.id}] 경고: 수정 worker가 커밋 안 된 변경을 남겼다(병합에 들어가지 않는다)")
-        rec = r.st.ticket(t.id).review
-        for f in review.fixes(rec):
-            f["fixed"] = True
-        _note_fix(r, t, f"수정 커밋 {commits}개(재리뷰 없음, verify만 돈다)")
+        _mark_fixes(r, t, review.ATTEMPTED)
+        ids = ", ".join(str(f["id"]) for f in review.fixes(r.st.ticket(t.id).review))
+        _note_fix(r, t, f"수정 커밋 {commits}개(재리뷰 없음, verify만 돈다). fix 지적 {ids}는 수정을 시도했지만 "
+                        "고쳐졌는지 확인하지 않았다(남은 지적에 둔다)")
         return
     a.proc.finish(False)  # 들여다볼 수 있게 pane을 남긴다
     git.run(wt, "merge", "--abort", check=False)
     git.run(wt, "checkout", "-q", "-f", branch)
     git.run(wt, "reset", "-q", "--hard", a.base)
+    _mark_fixes(r, t, review.DISCARDED)
     _note_fix(r, t, f"수정 worker 실패({why}): 수정을 버리고 리뷰한 구현을 병합·검증한다. fix 지적은 남는다")
+
+
+def _mark_fixes(r: Run, t: Ticket, result: str) -> None:
+    rec = r.st.ticket(t.id).review
+    for f in review.fixes(rec):
+        f["fix_attempt"] = result
+    _set(r, t.id, review=rec)
 
 
 def _merge_state(r: Run) -> tuple[str, str, str, str]:

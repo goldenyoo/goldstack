@@ -31,6 +31,20 @@ class ParseTest(unittest.TestCase):
         with self.assertRaises(review.ReviewError):
             review.apply_decisions('{"decisions": 1}', fs)
 
+    def test_malformed_decisions_are_review_errors(self):
+        # 리뷰 #3: 판단 모델의 잘못된 JSON이 TypeError로 코디네이터를 죽이지 않고 ReviewError가 된다
+        bad = ['{"decisions": [{"id": [], "action": "fix"}]}', '{"decisions": [1]}',
+               '{"decisions": [{"id": "1", "action": "fix"}]}', '{"decisions": [{"id": true, "action": "fix"}]}',
+               '{"decisions": [{"id": 1, "action": ["fix"]}]}', '{"decisions": [{"id": 1}]}',
+               '{"decisions": [{"id": 1, "action": "fix", "why": {}}]}',
+               '{"decisions": [{"id": 1, "action": "fix"}, {"id": 1, "action": "report"}]}',
+               "[" * 100000]
+        for text in bad:
+            fs = [review.Finding(1, "high", "a", "c", "e")]
+            with self.subTest(text=text[:60]), self.assertRaises(review.ReviewError):
+                review.apply_decisions(text, fs)
+            self.assertEqual((fs[0].action, fs[0].why), ("report", ""))  # 형식이 틀리면 아무것도 적용하지 않는다
+
     def test_family(self):
         review.require_other_family("claude", "codex")
         with self.assertRaises(review.Refused):
@@ -38,10 +52,11 @@ class ParseTest(unittest.TestCase):
 
     def test_remaining_and_fix_brief(self):
         rec = {"findings": [{"id": 1, "severity": "high", "location": "a", "claim": "c1", "evidence": "e",
-                             "action": "fix", "fixed": True},
+                             "action": "fix", "fix_attempt": review.ATTEMPTED},
                             {"id": 2, "severity": "low", "location": "b", "claim": "c2", "evidence": "",
-                             "action": "report", "fixed": False}]}
-        self.assertEqual([f["id"] for f in review.remaining(rec)], [2])
+                             "action": "report", "fix_attempt": ""}]}
+        # 리뷰 #2: 재리뷰가 없으니 수정을 시도한 fix 지적도 남은 지적이다
+        self.assertEqual([f["id"] for f in review.remaining(rec)], [1, 2])
         self.assertEqual([f["id"] for f in review.fixes(rec)], [1])
         brief = review.fix_brief(review.fixes(rec))
         self.assertIn("## 리뷰 지적(고칠 것)", brief)

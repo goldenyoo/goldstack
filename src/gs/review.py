@@ -8,9 +8,12 @@
    근거(evidence)가 빈 지적은 판단 모델이 뭐라 하든 report다(코드 규칙: 취향은 고치지 않는다).
 3. fix가 있으면 gs(go.py)가 같은 구현 모델로 새 worker를 한 번 띄운다. 재리뷰는 없고 verify만 돈다.
    리뷰를 깨끗해질 때까지 돌리지 않는다. 그러면 끝나지 않는다(ORIGINS 실패 6).
+   재리뷰가 없으니 수정 worker가 커밋해도 지적이 고쳐졌는지는 모른다. fix 지적은 "수정 시도, 재리뷰 없음"으로
+   남은 지적에 그대로 두어 보고서에 나오게 한다.
 
-reviewer·판단 모델 호출이 실패해도 티켓을 실패시키지 않는다. 병합 관문은 언제나 verify다(spec 2-1).
-실패는 state의 리뷰 기록(note)에 남아 보고서(08)에 나온다. 판단 모델이 실패하면 모든 지적이 report다.
+reviewer·판단 모델 호출이 실패해도(답의 형식이 틀려도) 티켓을 실패시키지 않는다. 병합 관문은 언제나 verify다
+(spec 2-1). 실패는 state의 리뷰 기록(note: "리뷰 실패…")에 남아 보고서(08)에 나온다. 판단 모델이 실패하면
+모든 지적이 report다.
 
 시험 seam: `GS_REVIEWER_CMD`(reviewer 셸 명령, stdin = 프롬프트, stdout = 답), `GS_JUDGE`(판단 모델 실행 파일).
 """
@@ -28,6 +31,8 @@ from . import adapters, git, worker
 SEVERITIES = ("high", "medium", "low")
 FIX, REPORT = "fix", "report"
 FIELDS = ("severity", "location", "claim", "evidence")
+ATTEMPTED = "attempted"  # 수정 worker가 받아 커밋했다. 재리뷰가 없어 고쳐졌는지는 모른다
+DISCARDED = "discarded"  # 수정 worker가 실패해 수정을 버렸다
 REVIEW_TIMEOUT = 30 * 60
 JUDGE_TIMEOUT = 10 * 60
 
@@ -49,7 +54,7 @@ class Finding:
     evidence: str
     action: str = REPORT  # fix | report. 판단 모델이 정한다
     why: str = ""  # 그렇게 정한 이유
-    fixed: bool = False  # 수정 worker가 이 지적을 받아 커밋했다(재리뷰는 없다: 고쳐졌는지는 확인하지 않은 것)
+    fix_attempt: str = ""  # fix 지적의 수정 결과: "" | ATTEMPTED | DISCARDED. 어느 쪽이든 지적은 남는다
 
 
 def family(model: str) -> str:
@@ -73,7 +78,7 @@ def extract_json(text: str) -> dict:
     for c in candidates:
         try:
             value = json.loads(c)
-        except ValueError:
+        except (ValueError, RecursionError):  # 너무 깊이 중첩된 답도 형식 오류다
             continue
         if isinstance(value, dict):
             return value
@@ -103,16 +108,32 @@ def parse_findings(text: str) -> list[Finding]:
 
 
 def apply_decisions(text: str, findings: list[Finding]) -> None:
-    """판단 모델 답을 지적에 적용한다. 답이 없는 지적·모르는 action은 report. 근거가 빈 지적은 늘 report."""
+    """판단 모델 답을 지적에 적용한다. 답이 없는 지적·모르는 action은 report. 근거가 빈 지적은 늘 report.
+
+    형식이 틀리면(결정 하나라도) 아무것도 적용하지 않고 ReviewError. 판단 모델 답은 신뢰할 수 없는 데이터다.
+    """
     decisions = extract_json(text).get("decisions")
     if not isinstance(decisions, list):
         raise ReviewError("`decisions`가 목록이 아니다")
-    by_id = {d.get("id"): d for d in decisions if isinstance(d, dict)}
+    by_id: dict[int, dict] = {}
+    for n, d in enumerate(decisions, 1):
+        if not isinstance(d, dict):
+            raise ReviewError(f"결정 {n}이 객체가 아니다")
+        i = d.get("id")
+        if not isinstance(i, int) or isinstance(i, bool):
+            raise ReviewError(f"결정 {n}의 `id`가 정수가 아니다")
+        if not isinstance(d.get("action"), str):
+            raise ReviewError(f"결정 {n}의 `action`이 없거나 문자열이 아니다")
+        if not isinstance(d.get("why", ""), str):
+            raise ReviewError(f"결정 {n}의 `why`가 문자열이 아니다")
+        if i in by_id:
+            raise ReviewError(f"결정 {n}의 id {i}가 겹친다")
+        by_id[i] = d
     for f in findings:
         d = by_id.get(f.id, {})
         action = d.get("action")
         f.action = action if action in (FIX, REPORT) else REPORT
-        f.why = str(d.get("why", "")).strip() if d else "판단 모델 답에 없다"
+        f.why = d.get("why", "").strip() if d else "판단 모델 답에 없다"
         if not f.evidence:
             f.action, f.why = REPORT, "근거 없음: 취향으로 보고 고치지 않는다(코드 규칙)"
 
@@ -222,7 +243,7 @@ def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket:
         text = _call(argv, prompt=prompt, cwd=cwd, env=_env(cwd), log=rdir / "judge.log", timeout=JUDGE_TIMEOUT)
         (rdir / "judge.txt").write_text(text, encoding="utf-8")
         apply_decisions(text, findings)
-    except ReviewError as e:
+    except (ReviewError, OSError) as e:
         for f in findings:
             f.action, f.why = REPORT, "판단 모델 호출 불가"
         return f"판단 모델 호출 불가: {e}. 모든 지적을 report로 둔다"
@@ -256,7 +277,7 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
             out.write_text(text, encoding="utf-8")
         findings = parse_findings(text)
     except (ReviewError, OSError) as e:
-        rec["note"] = f"리뷰 없음: {e}"
+        rec["note"] = f"리뷰 실패(리뷰 없음, verify만으로 병합한다): {e}"
         return rec
     if findings:
         rec["note"] = classify(rdir, worktree, findings, diff, ticket, spec)
@@ -271,8 +292,11 @@ def fixes(rec: dict) -> list[dict]:
 
 
 def remaining(rec: dict) -> list[dict]:
-    """보고서에 남길 지적: report로 간 것과, fix였지만 수정 worker가 고치지 못한 것."""
-    return [f for f in rec.get("findings", []) if not f.get("fixed")]
+    """보고서에 남길 지적: 전부다. 재리뷰가 없으니 수정을 시도한 fix 지적도 고쳐졌다고 확인된 것이 아니다.
+
+    fix 지적의 수정 결과는 `fix_attempt`에, 수정 worker 결과 요약은 기록의 `fix`에 있다.
+    """
+    return list(rec.get("findings", []))
 
 
 def counts(rec: dict) -> str:

@@ -446,15 +446,89 @@ class GoTest(unittest.TestCase):
         self.assertNotIn("값이 틀렸다", (self.bin / "judge.input").read_text())
 
         rec = self.review_state("04")
-        self.assertEqual([(f["action"], f["fixed"]) for f in rec["findings"]],
-                         [("fix", True), ("report", False), ("report", False)])  # 근거 없는 지적은 report
+        self.assertEqual([(f["action"], f["fix_attempt"]) for f in rec["findings"]],
+                         [("fix", review.ATTEMPTED), ("report", ""), ("report", "")])  # 근거 없는 지적은 report
         self.assertIn("근거 없음", rec["findings"][1]["why"])
-        self.assertEqual([f["claim"] for f in review.remaining(rec)], ["FIX 이름이 마음에 안 든다", "설명 문서가 없다"])
+        # 재리뷰가 없으니 수정을 시도한 fix 지적도 고쳐졌다고 치지 않고 남긴다
+        self.assertEqual([f["claim"] for f in review.remaining(rec)],
+                         ["FIX: 값이 틀렸다", "FIX 이름이 마음에 안 든다", "설명 문서가 없다"])
         self.assertIn("재리뷰 없음", rec["fix"])
         brief = (self.rundir / "04/1/fix/brief.md").read_text()
         self.assertIn("FIX: 값이 틀렸다", brief)
         self.assertNotIn("마음에 안 든다", brief)
+        self.assertIn("남은 리뷰 지적 3", out)
+
+    def test_fix_findings_stay_in_report_without_rereview(self):
+        # 리뷰 #2: 수정 worker가 지적 A만 고치고 B는 거절해도 커밋·종료 코드만으로는 알 수 없다.
+        # 재리뷰가 없으니 둘 다 "수정 시도, 재리뷰 없음"으로 남은 지적에 들어가 보고서에 나와야 한다.
+        with self.review_with([
+            {"severity": "high", "location": "file_01", "claim": "FIX A: 값이 틀렸다", "evidence": "e1"},
+            {"severity": "medium", "location": "file_01", "claim": "FIX B: 경계값 누락", "evidence": "e2"},
+        ]):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("fix.log"), ["fix 01"])
+        rec = self.review_state()
+        self.assertEqual([f["claim"] for f in review.remaining(rec)], ["FIX A: 값이 틀렸다", "FIX B: 경계값 누락"])
+        self.assertIn("재리뷰 없음", rec["fix"])
+        report = self.final_report()
+        self.assertIn("FIX A: 값이 틀렸다", report)
+        self.assertIn("FIX B: 경계값 누락", report)
         self.assertIn("남은 리뷰 지적 2", out)
+        self.assertEqual([f["fix_attempt"] for f in rec["findings"]], [review.ATTEMPTED, review.ATTEMPTED])
+
+    def test_malformed_judge_output_is_isolated_to_ticket(self):
+        # 리뷰 #3: 판단 모델이 형식이 틀린 JSON을 내도 코디네이터가 죽지 않는다. 리뷰 실패처럼 모두 report로 두고 병합한다
+        (self.bin / "findings.json").write_text(json.dumps({"findings": [
+            {"severity": "high", "location": "file_01", "claim": "FIX: 틀렸다", "evidence": "e"}]}))
+        (self.bin / "judge").write_text('#!/bin/bash\ncat > /dev/null\necho \'{"decisions":[{"id":[],"action":"fix"}]}\'\n')
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.merged(), ["01"])
+        self.assertEqual(self.lines("fix.log"), [])
+        rec = self.review_state()
+        self.assertIn("판단 모델 호출 불가", rec["note"])
+        self.assertEqual([f["action"] for f in rec["findings"]], ["report"])
+
+    def test_unexpected_review_error_is_isolated_to_ticket(self):
+        # 리뷰 #3: 리뷰 단계의 예상 못 한 예외도 코디네이터를 죽이지 않는다. 리뷰 실패로 적고 verify로 병합한다
+        with mock.patch.object(review, "run", side_effect=RuntimeError("뜻밖의 오류")):
+            code, out, err = self.go("--only", "01,04")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.merged(), ["01", "04"])
+        rec = self.review_state()
+        self.assertIn("리뷰 실패", rec["note"])
+        self.assertIn("뜻밖의 오류", rec["note"])
+        self.assertIn("뜻밖의 오류", self.final_report())
+
+    def test_timed_out_fix_worker_that_touched_integration_is_stopped(self):
+        # 리뷰 #4: 수정 worker가 integration을 바꾼 뒤 멈춰 시간 초과되면, 실패 처리 전에 그 worker를 끝내야 한다.
+        # 끝내지 않으면 재시도 worker와 함께 살아 남아 계속 바꿀 수 있다.
+        (self.bin / "worker.sh").write_text(textwrap.dedent('''\
+            here="$(dirname "$0")"
+            echo "$GS_TICKET" >> "$here/calls.log"
+            if grep -q '^## 리뷰 지적(고칠 것)' "$GS_BRIEF"; then
+              echo "fix $GS_TICKET" >> "$here/fix.log"
+              if [ ! -f "$here/fix.first" ]; then
+                touch "$here/fix.first"
+                echo $$ > "$here/fix.pid"
+                echo x > "$GS_WORKTREE/../integration/evil"
+                sleep 30
+                exit 1
+              fi
+              echo fixed > "fixed_$GS_TICKET"; git add -A; git commit -qm "fix $GS_TICKET"; exit 0
+            fi
+            echo "$GS_TICKET" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
+        '''))
+        with self.review_with([{"severity": "high", "location": "file_01", "claim": "FIX: 틀렸다", "evidence": "e"}]), \
+                mock.patch("gs.go._idle_seconds", return_value=0.4), mock.patch.object(worker, "POLL_SECONDS", 0.05):
+            code, out, err = self.go("--only", "01")
+        pid = int((self.bin / "fix.pid").read_text())
+        self.addCleanup(kill_quietly, pid)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("integration worktree를 바꿨다", out)
+        self.assertEqual(self.lines("fix.log"), ["fix 01", "fix 01"])
+        self.assertFalse(alive(pid), "시간 초과된 수정 worker가 살아 있다")
 
     def test_review_report_only_merges_directly(self):
         with self.review_with([{"severity": "low", "location": "file_01", "claim": "변수 이름이 짧다",
@@ -506,6 +580,8 @@ class GoTest(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.calls(), ["01"])
         self.assertIn("리뷰 없음", self.review_state()["note"])
+        self.assertIn("리뷰 실패", self.review_state()["note"])
+        self.assertIn("리뷰 실패", self.final_report())  # 리뷰 없이 병합했다는 사실이 보고서에 나온다
 
     # --- 실패·멈춤과 재시도(07) ---
     def timeout_retry(self, runner):

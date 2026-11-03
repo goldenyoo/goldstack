@@ -51,7 +51,7 @@ class TicketState:
     failed_worktrees: list[str] = field(default_factory=list)  # 재시도·재실행 뒤에도 보존
     failure_summary: str = ""  # 재시도 brief에 붙일 판단 모델 요약 파일
     # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
-    # 지적마다 severity·location·claim·evidence·action(fix|report)·why·fixed. 남은 지적은 보고서(08)에 들어간다
+    # 지적마다 severity·location·claim·evidence·action(fix|report)·why·fix_attempt. 재리뷰가 없어 지적은 모두 남아 보고서(08)에 들어간다
     review: dict = field(default_factory=dict)
 
 
