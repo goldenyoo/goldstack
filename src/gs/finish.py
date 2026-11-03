@@ -287,7 +287,21 @@ def _verify(r, wt: Path, label: str) -> bool:
         stream.write(f"\n종료 코드: {res.code}\n")
         if changed:
             stream.write("검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
+        elif res.ok:
+            verify.flaky(res, label, stream)
     return res.ok and not changed
+
+
+def _verify_final(r, verified_head: str) -> bool:
+    """통과한 integration과 보고서만 다르면 최종 검증 결과를 재사용한다."""
+    changed = git.run(r.iwt, "diff", "--no-renames", "--name-only", "-z", verified_head, "HEAD").stdout
+    report_path = f"{WORK}/{r.name}/report.md"
+    if set(changed.split("\0")) - {""} <= {report_path} and setup.is_clean(r.iwt):
+        message = "integration-final: 보고서만 바뀜, 건너뜀"
+        (r.rundir / "finish" / "integration-final-verify.log").write_text(message + "\n", encoding="utf-8")
+        print(f"■ {message}", flush=True)
+        return True
+    return _verify(r, r.iwt, "integration-final")
 
 
 def _restore_integration(r, head: str) -> None:
@@ -691,6 +705,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
             f["closed_pr"] = prev.get("url", "")
         _save(r, phase="preparing", outcome="integration 검증 중")
         ok = _verify(r, r.iwt, "integration")
+        verified_head = git.sha(r.iwt, "HEAD") if ok else ""
         _save(r, integration_ok=ok)
         # verify가 남긴 변경은 보고서 커밋에 섞이지 않게 한다(gs 전용 worktree).
         if not ok:
@@ -699,9 +714,9 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         path = _commit_report(r, summary)
         _push(r)
         _publish(r, path)
-        # report.md까지 포함한 실제 PR head를 검증한다.
+        # 통과한 integration에서 보고서 외의 파일도 바뀌었으면 실제 PR head를 다시 검증한다.
         candidate = git.sha(r.iwt, "HEAD")
-        final_ok = _verify(r, r.iwt, "integration-final") if ok else False
+        final_ok = _verify_final(r, verified_head) if ok else False
         if not final_ok:
             _restore_integration(r, candidate)
         _save(r, integration_ok=final_ok)

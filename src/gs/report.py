@@ -91,7 +91,14 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             + "\n\n### 남은 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
             + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n"
             + f"티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `{r.rundir.resolve()}/<티켓>/`\n\n")
+    if (ticket_command := getattr(r.feat.spec, "verify_ticket", None)) is not None:
+        text += f"티켓 검증 명령: `{ticket_command}`\n\n"
     for log in logs:
+        # 본문 상한 때문에 원본 로그를 줄여도 재시도 성공·건너뜀은 남긴다.
+        outcomes = [line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if line.startswith(("flaky: ", "integration-final: 보고서만 바뀜, 건너뜀"))]
+        if outcomes:
+            text += "\n".join(outcomes) + "\n\n"
         text += _log(r, log, tail)
     return text + f"\n{agy_usage(r)}\n"
 

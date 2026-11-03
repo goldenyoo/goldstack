@@ -215,7 +215,7 @@ class CleanTest(unittest.TestCase):
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "reverted")
 
     def test_failed_finish_is_not_automatically_cleaned(self):
-        self.parallel(1, verify="test ! -f .goldstack/work/demo/report.md")
+        self.parallel(1, verify="git rev-parse -q --verify MERGE_HEAD >/dev/null")
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "not_merged")
