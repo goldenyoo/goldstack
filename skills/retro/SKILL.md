@@ -37,7 +37,13 @@ disable-model-invocation: true
 
 4. 후보를 심각한 순으로 번호 붙여 사람에게 보인다. 후보마다 1차 자료에서 본 근거(무슨 일이 있었나, 어느 파일·티켓)와 고칠 곳(파일·검사·포인터)을 붙인다. 다른 feature의 report.md에도 같은 실패가 있으면 후보 앞에 `[반복]`을 달고 그 feature 이름을 근거에 적는다.
 
-5. 사람이 고른 후보는 아이디어 함 `.goldstack/ideas/`에 `/idea` 형식으로 쓴다: 형제 폴더 `idea/SKILL.md`를 파일로 읽고 그 1–4단계를 후보마다 밟는다(`source`는 `/retro $ARGUMENTS`). 다음 `/grill`이 라운드 1에서 이것을 후보로 묻는다. 세션 회고에서 사람이 그 자리에서 고치라고 한 것은 고친다.
+5. 고른 후보를 다룬다.
+
+   **feature 실행**: 사람이 고른 후보는 아이디어 함 `.goldstack/ideas/`에 `/idea` 형식으로 쓴다.
+
+   **세션**: 사람이 고른 것만 고친다. 사람이 아이디어 함에 적기를 원하는 후보만 `.goldstack/ideas/`에 `/idea` 형식으로 쓴다.
+
+   `/idea` 형식으로 쓸 때는 형제 폴더 `idea/SKILL.md`를 파일로 읽고 그 1–4단계를 후보마다 밟는다(`source`는 `/retro $ARGUMENTS`). 다음 `/grill`이 라운드 1에서 이것을 후보로 묻는다.
 
 ## 참고
 
