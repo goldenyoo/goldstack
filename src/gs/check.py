@@ -4,12 +4,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import feature as featmod
-from . import graph
+from . import config, graph
 
 
 def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod.Feature, list[str]]:
     """feature를 읽고 그래프까지 검사한다. (feature, 출력할 요약 줄) — 문제는 feature.problems에 쌓인다."""
+    cfg, problems = config.load(repo)
+    if cfg is None:
+        return featmod.Feature(name=name, root=repo / ".work" / name, spec=None, problems=problems), []
     feat = featmod.load(repo, name)
+    feat.problems[:0] = problems
     g = {t.id: t.blocked_by for t in feat.tickets.values()}
 
     def err(tid: str, msg: str) -> None:

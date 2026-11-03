@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import adapters, cli, hook_agy, streamfmt, worker
+from gs import adapters, cli, config, hook_agy, streamfmt, worker
 from gs.adapters import AdapterError, WorkerInput
 from gs.feature import Ticket
 
@@ -415,6 +415,8 @@ class AgyGoAndCheckTest(Base):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         sh(self.repo, "git", "init", "-q", "-b", "main")
+        (self.repo / ".goldstack").mkdir()
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
         (self.repo / ".gitignore").write_text(".work/*/run/\n")
         tickets = self.repo / ".work" / "demo" / "tickets"
         tickets.mkdir(parents=True)

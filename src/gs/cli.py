@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import feature as featmod
+from . import config
 from .check import check
 
 
@@ -13,6 +14,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gs", description="goldstack: grill → go → main")
     parser.add_argument("--repo", type=Path, help="레포 루트(기본: 현재 디렉터리에서 위로 .git을 찾는다)")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("init", help=".goldstack 설정 파일과 비밀 파일 예제를 만든다")
+    p = sub.add_parser("config", help="설정 값을 한 줄로 출력한다")
+    p.add_argument("key", help="섹션.키(예: git.base)")
 
     p = sub.add_parser("check", help="spec과 티켓 그래프를 검사한다")
     p.add_argument("feature", help=".work/<feature>")
@@ -40,6 +45,11 @@ def main(argv: list[str] | None = None) -> int:
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
         return 2
+    if args.cmd == "init":
+        config.init(repo, sys.stdout)
+        return 0
+    if args.cmd == "config":
+        return cmd_config(repo, args.key)
     if args.cmd == "check":
         return cmd_check(repo, args.feature, _ids(args.only))
     if args.cmd == "go":
@@ -55,6 +65,21 @@ def _ids(raw: str | None) -> list[str] | None:
     if raw is None:
         return None
     return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def cmd_config(repo: Path, key: str) -> int:
+    cfg, problems = config.load(repo)
+    for p in problems:
+        print(p, file=sys.stderr)
+    if cfg is None:
+        return 1
+    section, sep, name = key.partition(".")
+    if not sep or section not in vars(cfg) or name not in vars(getattr(cfg, section)):
+        print(f"오류: 없는 설정 키 `{key}`", file=sys.stderr)
+        return 1
+    value = getattr(getattr(cfg, section), name)
+    print(str(value).lower() if isinstance(value, bool) else value)
+    return 0
 
 
 def cmd_check(repo: Path, name: str, only: list[str] | None) -> int:

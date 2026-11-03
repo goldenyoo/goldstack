@@ -23,7 +23,8 @@ class Problem:
     message: str
 
     def __str__(self) -> str:
-        return f"{self.level}: {self.where}: {self.message}"
+        where = f"{self.where}: " if self.where else ""
+        return f"{self.level}: {where}{self.message}"
 
 
 @dataclass
