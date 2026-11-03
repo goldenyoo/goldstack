@@ -28,7 +28,7 @@ def _github_repo_url(url: str) -> str | None:
     if match is None:
         return None
     owner, name = match.groups()
-    name = name.removesuffix(".git")
+    name = re.sub(r"\.git$", "", name, flags=re.IGNORECASE)
     if name in ("", ".", ".."):
         return None
     return f"{owner}/{name}"

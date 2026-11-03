@@ -95,7 +95,7 @@ class PrRepoTest(unittest.TestCase):
             run = SimpleNamespace(repo=repo, remote="upstream")
             with mock.patch.dict(os.environ, {"GS_GH": str(fake)}):
                 for prefix in ("https://github.com/", "git@github.com:", "ssh://git@github.com/"):
-                    for suffix in ("", ".git"):
+                    for suffix in ("", ".git", ".GIT", ".GiT"):
                         url = prefix + "owner/repo" + suffix
                         git.run(repo, "remote", "set-url", "upstream", url)
                         for command in ("view", "list", "create", "edit", "merge"):
