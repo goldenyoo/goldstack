@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack-v5 — spec
 
-상태: grill 완료(라운드 3개) · 경고 예외: 티켓의 `touches`·`second_reviewer`는 v4 키라 v4 병합 전 gs에서 경고. 띄우기 전 v4 재설치 gs로 경고 0 확인 · 2026-11-03 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 3개) · 경고 예외는 v4 재설치 뒤 해소(경고 0 확인) · 2026-11-03 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 ## 1. 목표
 이미 진행 중인 다른 레포(병합 방식·main 보호·CI·의존성·느린 시험이 제각각)에 goldstack을 들여 쓸 수 있게 한다(adopt).
@@ -77,7 +77,7 @@ base 보호  main 직접 push 금지      → git.direct_push = false
 01이 config 키를 모두 정의해 뒤 티켓은 `config.py`를 건드리지 않는다. 02→03→04→05→06은 모두 `finish.py`라 한 줄. 07은 skill·`worker.py`만이라 02와 나란히. agy 두 번째 리뷰는 병합·revert를 바꾸는 02·04(agy 2회 ≤ 기본 상한 3). touches는 티켓 frontmatter에.
 
 ## 6. 환경 사실 (2026-11-03 확인)
-- **v3 실행 중, v4 grill 완료(미실행)**. 이 spec은 v3·v4 병합 전 코드를 보고 쓴다. v3는 `finish.py`(`gh pr --repo`, 병합·main 검증 뒤 최종 보고서를 base에 직접 push, 마무리 상태 줄), `check.py`(GitHub 원격 필수)를, v4는 `finish.py`(verified 뒤 integration 정리), `cli.py`(`gs go a b`, `gs clean`), 티켓 `touches`·`second_reviewer`, `[agy]` config를 바꾼다. 실행 전에 병합된 코드로 이 절을 다시 확인한다.
+- **v3·v4 병합됨**(PR #5·#6, 둘 다 verified, 2026-11-04 새벽 확인). 아래 v3·v4 전제는 띄우기 전 병합된 코드와 대조했다(grill 기록 '띄우기 전 대조'). 당시 문장: 이 spec은 v3·v4 병합 전 코드를 보고 쓴다. v3는 `finish.py`(`gh pr --repo`, 병합·main 검증 뒤 최종 보고서를 base에 직접 push, 마무리 상태 줄), `check.py`(GitHub 원격 필수)를, v4는 `finish.py`(verified 뒤 integration 정리), `cli.py`(`gs go a b`, `gs clean`), 티켓 `touches`·`second_reviewer`, `[agy]` config를 바꾼다. 실행 전에 병합된 코드로 이 절을 다시 확인한다.
 - 지금 설치된 gs는 v3 이전 판이다. 티켓 frontmatter의 모르는 키(`touches` 등)는 경고. v5 티켓의 `touches`는 v4 병합·재설치 뒤 파일에 넣고 `gs check`로 다시 확인한다.
 - 병합(`finish.run`): `gh pr merge <url> --merge --match-head-commit <merge_head>` 고정. 병합 확인(`_confirm`)은 PR `mergeCommit`·`headRefOid == merge_head`, `_postmerge`는 `merge_head`가 병합 커밋의 조상인지(`merge-base --is-ancestor`)를 본다. revert는 병합 커밋을 `git revert -m 1`(부모가 둘일 때)로 만들어 `<remote> <base>`에 직접 push. `merge_base`·재개 판단도 병합 커밋 부모와 조상 관계, 커밋 메시지의 `gs-ticket: <f>/NN` trailer에 기댄다. → squash·rebase 병합에서는 조상 관계와 trailer가 성립하지 않는다.
 - CI: gs는 PR의 status check를 기다리지 않는다. `gh pr merge`가 보호 규칙(필수 검사·승인)에 막히면 오류 → phase `merge_pending`(다음 `gs go`가 PR을 다시 읽어 이어 감).
@@ -111,3 +111,6 @@ base 보호  main 직접 push 금지      → git.direct_push = false
 
 ### 라운드 3 — 티켓 분해 (추천대로)
 사람 답: "yes". 표는 §5. `touches`·`second_reviewer`는 지금 티켓 파일에 쓰고 grill 경고 0 규칙의 예외로 둔다(A). 범위 밖: `gitlab-support` 유지, `ci-fix-tickets` 새로.
+
+### 띄우기 전 대조 (2026-11-04 새벽, 사람 없이 — §2 '사소한 어긋남' 허락으로)
+v4 verified(PR #6, 병합 뒤 base 보고서 push 8b64617까지 동작) 뒤 main pull·gs 재설치. `gs check goldstack-v5` 오류 0·경고 0(`touches`·`second_reviewer`가 이제 정상 키 → 상태 줄의 경고 예외 해소). 확인: `finish.py`는 여전히 `--merge` 고정·`integration-final`·`gs-main-*` 임시 base worktree, `cli.py`에 `clean`·여러 feature `go`, claude worker는 goldstack 밖 플러그인을 끈 채 시작(v4 08), codex 기본 sandbox(v4 09는 조사 문서만). 티켓 글은 고칠 것 없음.
