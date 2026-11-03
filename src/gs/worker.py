@@ -111,53 +111,72 @@ def read_exit(job: Job) -> int | None:
 
 
 class SubprocessRunner:
-    """pane 없이 바로 실행. 시험과 herdr 밖에서 쓴다."""
+    """pane 없이 바로 실행. 시험과 herdr 밖에서 쓴다. 손잡이는 Popen."""
     name = "subprocess"
 
-    def start(self, job: Job, label: str) -> str:
-        self._proc = subprocess.Popen(["bash", str(job.script)], stdin=subprocess.DEVNULL,
-                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return f"pid {self._proc.pid}"
+    def start(self, job: Job, label: str) -> tuple[subprocess.Popen, str]:
+        proc = subprocess.Popen(["bash", str(job.script)], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return proc, f"pid {proc.pid}"
 
-    def alive(self) -> bool:
-        return self._proc.poll() is None
+    def alive(self, proc: subprocess.Popen) -> bool:
+        return proc.poll() is None
 
-    def finish(self, ok: bool) -> None:
+    def finish(self, proc: subprocess.Popen, ok: bool) -> None:
         pass
 
 
 class HerdrRunner:
-    """worker마다 새 탭(새 셸)에서 실행한다. 남은 입력이 다음 실행을 깨는 일이 없게(ORIGINS 실패 15).
+    """feature마다 탭 하나(`gs:<feature>`)에 worker pane을 모은다. 손잡이는 pane id.
 
-    성공하면 탭을 닫고, 실패하면 들여다볼 수 있게 남긴다.
+    worker마다 새 pane(새 셸)을 연다. 남은 입력이 다음 실행을 깨는 일이 없게(ORIGINS 실패 15).
+    첫 worker는 탭을 만들어 그 root pane을, 다음 worker는 탭에 열린 pane을 나눠 쓴다.
+    성공하면 pane을 닫고, 실패하면 들여다볼 수 있게 남긴다. 탭의 pane이 모두 닫혀 탭이 사라지면 다음에 새로 만든다.
     """
     name = "herdr"
 
     def __init__(self, cwd: Path, feature: str):
         self.sess = herdr.session()
+        self.feature = feature
         ws = os.environ.get("HERDR_WORKSPACE_ID")
         self.workspace = ws or herdr.workspace_create(self.sess, cwd, f"gs:{feature}")["workspace"]["workspace_id"]
+        self.tab: str | None = None
+        self.panes: list[str] = []  # 이 탭에 열려 있는 gs pane. 끝이 가장 최근
 
-    def start(self, job: Job, label: str) -> str:
-        res = herdr.tab_create(self.sess, self.workspace, job.worktree, label)
+    def _open_pane(self, job: Job) -> str:
+        while self.panes:
+            target = self.panes[-1]
+            direction = "right" if len(self.panes) % 2 else "down"  # 한 방향으로만 나누면 너무 좁아진다
+            try:
+                return herdr.pane_split(self.sess, target, job.worktree, direction)["pane"]["pane_id"]
+            except herdr.HerdrError:
+                self.panes.pop()  # 사람이 닫았거나 탭이 사라졌다
+        res = herdr.tab_create(self.sess, self.workspace, job.worktree, f"gs:{self.feature}")
         self.tab = res["tab"]["tab_id"]
-        self.pane = res["root_pane"]["pane_id"]
-        herdr.pane_run(self.sess, self.pane, f"bash {shlex.quote(str(job.script))}")
-        return f"pane {self.pane}"
+        return res["root_pane"]["pane_id"]
 
-    def alive(self) -> bool:
+    def start(self, job: Job, label: str) -> tuple[str, str]:
+        pane = self._open_pane(job)
+        self.panes.append(pane)
+        herdr.pane_run(self.sess, pane, f"bash {shlex.quote(str(job.script))}")
+        return pane, f"pane {pane}"
+
+    def alive(self, pane: str) -> bool:
         try:
-            herdr.pane_get(self.sess, self.pane)
+            herdr.pane_get(self.sess, pane)
             return True
         except herdr.HerdrError:
             return False
 
-    def finish(self, ok: bool) -> None:
-        if ok:
-            try:
-                herdr.tab_close(self.sess, self.tab)
-            except herdr.HerdrError:
-                pass
+    def finish(self, pane: str, ok: bool) -> None:
+        if not ok:
+            return
+        try:
+            herdr.pane_close(self.sess, pane)
+        except herdr.HerdrError:
+            pass
+        if pane in self.panes:
+            self.panes.remove(pane)
 
 
 def make_runner(cwd: Path, feature: str):
@@ -167,23 +186,33 @@ def make_runner(cwd: Path, feature: str):
     return HerdrRunner(cwd, feature)
 
 
-def run(job: Job, runner, label: str, on_start=None) -> int:
-    """worker를 띄우고 끝날 때까지 기다려 종료 코드를 돌려준다. 실행기가 사라지면 -1."""
-    job.rundir.mkdir(parents=True, exist_ok=True)
-    job.exit_file.unlink(missing_ok=True)
-    where = runner.start(job, label)
-    if on_start:
-        on_start(where)
-    gone_since = None
-    while True:
-        code = read_exit(job)
+def poll_interval(runner) -> float:
+    return POLL_SECONDS if runner.name == "herdr" else 0.05
+
+
+class Proc:
+    """띄운 worker 하나. poll()은 기다리지 않는다: 끝났으면 종료 코드, 실행기가 사라졌으면 -1, 아니면 None."""
+
+    def __init__(self, job: Job, runner, label: str):
+        job.rundir.mkdir(parents=True, exist_ok=True)
+        job.exit_file.unlink(missing_ok=True)
+        self.job = job
+        self.runner = runner
+        self.handle, self.where = runner.start(job, label)
+        self._gone_since: float | None = None
+
+    def poll(self) -> int | None:
+        code = read_exit(self.job)
         if code is not None:
             return code
-        if runner.alive():
-            gone_since = None
-        else:
-            # 실행기가 끝난 직후 exit 파일이 늦게 보일 수 있어 한 번 더 기다린다
-            gone_since = gone_since or time.monotonic()
-            if time.monotonic() - gone_since > 2 * POLL_SECONDS:
-                return -1
-        time.sleep(POLL_SECONDS if runner.name == "herdr" else 0.05)
+        if self.runner.alive(self.handle):
+            self._gone_since = None
+            return None
+        # 실행기가 끝난 직후 exit 파일이 늦게 보일 수 있어 조금 더 기다린다
+        self._gone_since = self._gone_since or time.monotonic()
+        if time.monotonic() - self._gone_since > 2 * POLL_SECONDS:
+            return -1
+        return None
+
+    def finish(self, ok: bool) -> None:
+        self.runner.finish(self.handle, ok)

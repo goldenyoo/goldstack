@@ -13,10 +13,20 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import cli, state
+from gs import cli, state, worker
+
+
+def git_clean(wt):
+    return subprocess.run(["git", "status", "--porcelain"], cwd=wt, capture_output=True, text=True).stdout == ""
 
 FAKE_WORKER = """\
-echo "$GS_TICKET" >> "$(dirname "$0")/calls.log"
+here="$(dirname "$0")"
+echo "$GS_TICKET" >> "$here/calls.log"
+echo "start $GS_TICKET" >> "$here/events.log"
+trap 'echo "end $GS_TICKET" >> "$here/events.log"' EXIT
+if [ -f "$here/barrier" ]; then  # 시작한 worker가 barrier개가 될 때까지 기다린다(최대 10초): 동시 실행의 증거
+  for i in $(seq 200); do [ "$(grep -c '^start' "$here/events.log")" -ge "$(cat "$here/barrier")" ] && break; sleep 0.05; done
+fi
 if [ -f "$(dirname "$0")/hang_$GS_TICKET" ]; then  # gs가 죽을 때까지 붙잡아 둔다(최대 20초)
   for i in $(seq 400); do sleep 0.05; done; exit 1
 fi
@@ -27,7 +37,26 @@ case "$GS_TICKET" in
   07) echo x > "$GS_WORKTREE/../integration/evil"; git -C "$GS_WORKTREE/../integration" add evil
       git -C "$GS_WORKTREE/../integration" commit -qm evil ;;
   08) touch "$GS_WORKTREE/../integration/BROKEN"; echo 8 > file_08; git add -A; git commit -qm t08 ;;
+  2[12]) echo "$GS_TICKET" > shared.txt; git add -A; git commit -qm "t$GS_TICKET" ;;  # 같은 파일을 다르게
   *)  echo "$GS_TICKET $GS_ROLE" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET" ;;
+esac
+"""
+
+FAKE_HERDR = """\
+# 가짜 herdr: 부른 명령을 적고, pane run은 백그라운드로 실제 실행한다. 상태는 이 스크립트 옆 파일에.
+here="$(dirname "$0")"
+shift 2  # --session <name>
+echo "$@" >> "$here/herdr.log"
+next() { n=$(( $(cat "$here/herdr.n" 2>/dev/null || echo 0) + 1 )); echo $n > "$here/herdr.n"; echo "w1:p$n"; }
+case "$1 $2" in
+  "tab create") p=$(next); echo '{"result":{"tab":{"tab_id":"w1:t1"},"root_pane":{"pane_id":"'$p'"}}}' ;;
+  "pane split") [ -f "$here/closed_$3" ] && { echo '{"error":{"code":"not_found","message":"no pane"}}' >&2; exit 1; }
+                p=$(next); echo '{"result":{"pane":{"pane_id":"'$p'"}}}' ;;
+  "pane run") nohup bash -c "$4" >/dev/null 2>&1 & ;;
+  "pane get") [ -f "$here/closed_$3" ] && { echo '{"error":{"code":"not_found","message":"no pane"}}' >&2; exit 1; }
+              echo '{"result":{"pane":{"pane_id":"'$3'"}}}' ;;
+  "pane close") touch "$here/closed_$3" ;;
+  *) echo '{"error":{"code":"unknown","message":"fake herdr"}}' >&2; exit 1 ;;
 esac
 """
 
@@ -43,8 +72,9 @@ esac
 SPEC = """---
 feature: demo
 verify: test ! -f BROKEN
+max_workers: 1
 ---
-"""
+"""  # 02부터의 시험은 순차(max_workers 1)로 돈다. 병렬 시험은 ParallelTest
 
 
 def ticket(tid, deps="[]", title=None):
@@ -128,6 +158,114 @@ class GoTest(unittest.TestCase):
         log = self.integration("log", "--format=%B", "gs/demo/integration")
         return sorted(line.split("/")[-1] for line in log.splitlines() if line.startswith("gs-ticket:"))
 
+    def parallel(self, n=3, verify="test ! -f BROKEN"):
+        """spec을 max_workers n으로 바꿔 커밋·push한다."""
+        (self.repo / ".work" / "demo" / "spec.md").write_text(
+            f"---\nfeature: demo\nverify: {verify}\nmax_workers: {n}\n---\n")
+        sh(self.repo, "git", "add", "-A")
+        sh(self.repo, "git", "commit", "-qm", f"max_workers {n}")
+        sh(self.repo, "git", "push", "-q", "origin", "main")
+
+    def events(self):
+        return (self.bin / "events.log").read_text().split("\n")[:-1]
+
+    # --- 병렬(04) ---
+    def test_parallel_overlaps_and_respects_dependencies(self):
+        for tid in ("11", "12", "13"):
+            self.add_ticket(tid)
+        vlog = self.bin / "verify.log"
+        self.parallel(3, verify=f"echo s >> {vlog}; sleep 0.2; echo e >> {vlog}; test ! -f BROKEN")
+        (self.bin / "barrier").write_text("3")
+        code, out, err = self.go("--only", "01,04,11,12,13")  # 04는 01에 막혀 있다
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.merged(), ["01", "04", "11", "12", "13"])
+        ev = self.events()
+
+        # 동시 실행: 첫 세 worker가 모두 시작한 뒤에야 누군가 끝난다(시작 시각이 겹친다)
+        self.assertEqual(sorted(ev[:3]), ["start 01", "start 11", "start 12"], ev)
+        running, peak = 0, 0
+        for e in ev:
+            running += 1 if e.startswith("start") else -1
+            peak = max(peak, running)
+        self.assertEqual(peak, 3, ev)  # max_workers를 넘지 않는다
+        # 의존 순서: 04는 01이 끝난(병합된) 뒤에 시작하고, 01이 병합된 integration 위에서 일한다
+        self.assertLess(ev.index("end 01"), ev.index("start 04"), ev)
+        t04 = self.integration("log", "--format=%H", "--grep=^t04$", "gs/demo/04")
+        self.assertIn("file_01", self.integration("ls-tree", "--name-only", f"{t04}^").split())
+        # 병합·검증은 한 번에 하나씩
+        self.assertEqual(vlog.read_text().split(), ["s", "e"] * 5)
+
+    def test_parallel_conflict_fails_ticket(self):
+        for tid in ("21", "22", "23"):
+            self.add_ticket(tid)
+        (self.repo / ".work/demo/tickets/23-t.md").write_text(ticket("23", '["22"]'))
+        sh(self.repo, "git", "commit", "-qam", "23 needs 22")
+        self.parallel(3)
+        (self.bin / "barrier").write_text("2")  # 21과 22가 같은 integration 끝에서 시작한다
+        code, out, err = self.go("--only", "21,22,23")
+        self.assertEqual(code, 1, out + err)
+        st = state.load(self.rundir, "demo").tickets
+        first, second = sorted(("21", "22"), key=lambda tid: st[tid].status != "merged")
+        self.assertEqual((st[first].status, st[second].status), ("merged", "failed"), out)
+        self.assertEqual(st[second].reason, "conflict")
+        self.assertIn(f"[{second}] 최신 integration(", out)
+        self.assertIn("shared.txt", out)
+        self.assertEqual(self.integration("show", "gs/demo/integration:shared.txt"), first)
+        if second == "22":  # 충돌로 실패한 티켓에 막힌 티켓은 건너뛴다
+            self.assertEqual((st["23"].status, st["23"].reason), ("skipped", "막힘: 22"))
+            self.assertEqual(self.merged(), ["21"])
+        else:
+            self.assertEqual(self.merged(), ["22", "23"])
+        wt = self.rundir / "wt" / second
+        self.assertTrue(git_clean(wt))  # 합쳐 보다 만 병합은 취소했다
+        self.assertNotEqual(subprocess.run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd=wt,
+                                           capture_output=True).returncode, 0)
+
+    def test_parallel_catches_up_with_integration(self):
+        for tid in ("11", "12"):
+            self.add_ticket(tid)
+        self.parallel(3)
+        (self.bin / "barrier").write_text("2")
+        code, out, err = self.go("--only", "11,12")
+        self.assertEqual(code, 0, out + err)
+        files = self.integration("ls-tree", "--name-only", "gs/demo/integration").split()
+        self.assertIn("file_11", files)
+        self.assertIn("file_12", files)
+
+    def test_parallel_integration_tamper_is_undone(self):
+        self.add_ticket("07")
+        self.parallel(3)
+        (self.bin / "barrier").write_text("2")
+        code, out, err = self.go("--only", "01,07")
+        self.assertEqual(code, 1, out + err)
+        st = state.load(self.rundir, "demo").tickets
+        self.assertEqual(st["01"].status, "merged", out)
+        self.assertEqual(st["07"].status, "failed", out)
+        self.assertNotIn("evil", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+        self.assertNotIn("evil", sh(self.remote, "git", "ls-tree", "--name-only", "gs/demo/integration").split())
+
+    def test_herdr_panes_share_one_tab_per_feature(self):
+        for tid in ("11", "12"):
+            self.add_ticket(tid)
+        self.parallel(3)
+        (self.bin / "barrier").write_text("3")
+        herdr_bin = self.bin / "herdr"
+        herdr_bin.write_text("#!/bin/bash\n" + FAKE_HERDR)
+        herdr_bin.chmod(0o755)
+        env = {"GS_RUNNER": "herdr", "HERDR_BIN_PATH": str(herdr_bin), "HERDR_SESSION": "t",
+               "HERDR_WORKSPACE_ID": "w1"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(worker, "POLL_SECONDS", 0.05):
+            code, out, err = self.go("--only", "01,11,12,02")
+        self.assertEqual(code, 1, out + err)  # 02는 가짜 worker가 실패시킨다
+        cmds = (self.bin / "herdr.log").read_text().splitlines()
+        self.assertEqual(sum(c.startswith("tab create") for c in cmds), 1, cmds)  # feature마다 탭 하나
+        self.assertIn("--label gs:demo", next(c for c in cmds if c.startswith("tab create")))
+        self.assertEqual(sum(c.startswith("pane split") for c in cmds), 3, cmds)  # 나머지는 그 탭의 pane
+        closed = sorted(c.split()[2] for c in cmds if c.startswith("pane close"))
+        panes = {tid: state.load(self.rundir, "demo").tickets[tid].pane.split()[-1] for tid in ("01", "02", "11", "12")}
+        self.assertEqual(closed, sorted(panes[t] for t in ("01", "11", "12")))  # 성공한 pane만 닫는다
+        self.assertEqual(self.merged(), ["01", "11", "12"])
+
     # --- codex 리뷰(02) 지적 재현 ---
     def test_worker_commit_to_integration_is_undone_and_not_pushed(self):  # 지적 2
         self.add_ticket("07")
@@ -194,6 +332,7 @@ class GoTest(unittest.TestCase):
         self.assertIn("[05] 실패: 검증 실패", out)
         self.assertIn("[06] 실패: 커밋 없음", out)
         self.assertIn("■ PR: https://example.test/pr/1", out)
+        self.assertEqual(self.calls(), ["01", "02", "04", "05", "06"])  # max_workers 1: 02와 같은 순서
 
         log = self.integration("log", "--format=%B", "gs/demo/integration")
         merged = sorted(line.split("/")[-1] for line in log.splitlines() if line.startswith("gs-ticket:"))
