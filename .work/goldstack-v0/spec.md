@@ -28,7 +28,7 @@ Claude Code로 프로젝트를 진행하는 개인 운영 kit. grill로 깊게 �
 |---|---|---|
 | 1-1 | 코디네이터 | 결정적 스크립트 루프 `gs go`가 frontier·spawn·병합·검증·revert. 판단이 필요한 곳만 모델 호출. 규칙(횟수 상한 등)은 코드 |
 | 1-2 | worker 실행 | herdr pane에서 headless(`claude -p`, `codex exec`, `agy -p`). 끝 = 프로세스 종료 + 종료 코드 + 브랜치 커밋 + 결과 파일. 프롬프트 주입 없음 |
-| 1-3 | 언어·배포 | Python 3.12(uv), 표준 라이브러리만. CLI `gs` + Claude Code plugin(skill + hook) 같은 레포 |
+| 1-3 | 언어·배포 | Python 3.12(uv), 표준 라이브러리만. CLI `gs` + Claude Code plugin(skill + hook) 같은 레포. 설치는 고정 복사 `uv tool install --reinstall .`(editable `-e`는 작업 트리를 따라 바뀌므로 1-6과 어긋난다. 01 구현 중 발견) |
 | 1-4 | cc-ops-kit 재사용 | herdrkit에서 필요한 함수만 복사해 줄임. codexrun·usage는 v0 밖 |
 | 1-5 | 사용자 명령 | `/grill <feature>`, `/go <feature>` + 읽기 전용 `gs status` |
 | 1-6 | 부트스트랩 | 01·02를 손으로 만들고 나머지는 goldstack `go`로(§6). 실행은 작업 worktree가 아니라 설치된 고정 버전 |
