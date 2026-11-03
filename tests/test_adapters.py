@@ -457,9 +457,9 @@ class AgyGoAndCheckTest(Base):
         args = (self.bin / "agy.args").read_text()
         self.assertIn("--dangerously-skip-permissions", args)
         self.assertIn("# 티켓 01", args)  # brief 전문이 프롬프트로 들어갔다
-        log = sh(self.repo, "git", "show", "gs/demo/integration:file_01")
+        log = sh(self.repo, "git", "show", "origin/main:file_01")
         self.assertEqual(log, "01 worker")  # worker 환경에 GS_ROLE=worker
-        self.assertNotIn(".agents/hooks.json", sh(self.repo, "git", "ls-tree", "-r", "--name-only", "gs/demo/integration"))
+        self.assertNotIn(".agents/hooks.json", sh(self.repo, "git", "ls-tree", "-r", "--name-only", "origin/main"))
 
     def test_go_fails_agy_on_error_result_despite_exit_zero(self):
         self.fake_agy("error")

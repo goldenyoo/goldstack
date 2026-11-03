@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import git, report, state, verify
+from . import clean, git, report, state, verify
 from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
@@ -304,12 +304,16 @@ def _report_to_base(r) -> None:
     print(f"■ 경고: 최종 보고서를 {r.base}에 push하지 못했다(두 번 시도). 실행 결과는 그대로다: {error}", flush=True)
 
 
-def run(r) -> tuple[str | None, bool]:
+def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
     directory = r.rundir / "finish"
     directory.mkdir(parents=True, exist_ok=True)
     f = r.st.finish
     # 외부 병합 후 재개. 최종 보고서 갱신 전이면 merge_head가 integration의 끝이다.
     anchor = f.get("head") or f.get("merge_head")
+    # 정리 후 integration은 base에서 다시 만들 수 있다. 최종 integration 보고서 커밋은
+    # base에 직접 들어가지 않지만, 병합된 PR head는 base의 조상이라 재개 기준으로 쓸 수 있다.
+    if f.get("phase") in BASE_REPORT_PHASES and anchor and not _ancestor(r.iwt, anchor, "HEAD"):
+        anchor = f.get("merge_head")
     resume = bool(anchor and git.run(r.iwt, "merge-base", "--is-ancestor", anchor, "HEAD", check=False).returncode == 0
                   and not git.out(r.iwt, "log", f"{anchor}..HEAD", "--format=%H", f"--grep=^gs-ticket: {r.name}/"))
     if resume and f.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed", "verified", "reverted"):
@@ -374,4 +378,6 @@ def run(r) -> tuple[str | None, bool]:
     # 지난 실행이 이미 시도했으면 다시 하지 않는다(실패했어도 재시도 없음, spec 2-6). 새 마무리는 finish를 비운다.
     if f["phase"] in BASE_REPORT_PHASES and not f.get("base_report_tried"):
         _report_to_base(r)
+    if cleanup:
+        clean.integration(r)
     return f.get("url"), ok
