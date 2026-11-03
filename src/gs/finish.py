@@ -20,7 +20,7 @@ from . import git, report, state, verify
 
 def _save(r, **fields) -> None:
     r.st.finish.update(fields)
-    state.save(r.rundir, r.st)
+    r.save()
 
 
 def _gh(r, *args: str) -> str:

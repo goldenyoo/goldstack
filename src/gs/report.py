@@ -10,7 +10,7 @@ import os
 import shlex
 from pathlib import Path
 
-from . import git, review
+from . import git, review, state
 from .feature import WORK
 
 LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
@@ -41,11 +41,16 @@ def _log(r, path: Path, tail: int) -> str:
 
 def evidence(r, tail: int = LOG_TAIL) -> str:
     """티켓마다 가장 최근 verify 로그 하나와 마무리 검증 로그만, 끝부분 tail자씩 붙인다."""
-    rows, notes = [], []
+    rows, notes, timings = [], [], []
     logs = []
     for tid in r.order:
         ts = r.st.tickets[tid]
         reason = ts.reason or ("integration에 병합·검증됨" if ts.status == "merged" else "")
+        durations = state.phase_durations(ts)
+        if durations:
+            timings.append(f"- {tid} 단계별 소요: " + " · ".join(
+                f"{label} {state.minutes(durations[phase])}분" for phase, label in state.PHASE_LABELS.items()
+                if phase in durations))
         for path in ts.kept_worktrees:
             reason += f"\n남긴 worktree: {path} (미커밋 변경)"
         rows.append("| " + " | ".join(cell(s) for s in (tid, r.feat.tickets[tid].title, ts.status, reason)) + " |")
@@ -62,7 +67,8 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             logs.append(max(found, key=lambda p: p.stat().st_mtime))
     logs.extend(sorted((r.rundir / "finish").glob("*verify.log")))
     text = ("### 티켓별 결과\n\n| 티켓 | 제목 | 결과 | 이유 |\n|---|---|---|---|\n"
-            + "\n".join(rows) + "\n\n### 남은 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
+            + "\n".join(rows) + ("\n\n" + "\n".join(timings) if timings else "")
+            + "\n\n### 남은 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
             + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n"
             + f"티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `{r.rundir.resolve()}/<티켓>/`\n\n")
     for log in logs:
