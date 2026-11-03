@@ -7,7 +7,7 @@
     {
       "name": "goldstack",
       "source": "./",
-      "description": "goldstack plugin: worker 차단 hook(GS_ROLE=worker일 때만). `gs` CLI가 PATH에 있어야 한다"
+      "description": "goldstack plugin: skill `/grill`·`/go`, worker 차단 hook(GS_ROLE=worker일 때만). `gs` CLI가 PATH에 있어야 한다"
     }
   ]
 }

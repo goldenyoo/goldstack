@@ -46,6 +46,13 @@ class TicketState:
     ended_at: str = ""
     log: str = ""  # worker 로그 경로
     reason: str = ""  # 실패·건너뜀 이유
+    worktree: str = ""
+    failures: int = 0  # 이번 실행의 실패 횟수. 중단 후 이어갈 때도 재시도 한도를 유지한다
+    failed_worktrees: list[str] = field(default_factory=list)  # 재시도·재실행 뒤에도 보존
+    failure_summary: str = ""  # 재시도 brief에 붙일 판단 모델 요약 파일
+    # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
+    # 지적마다 severity·location·claim·evidence·action(fix|report)·why·fix_attempt. 재리뷰가 없어 지적은 모두 남아 보고서(08)에 들어간다
+    review: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -57,6 +64,7 @@ class State:
     updated_at: str = ""
     finished_at: str = ""
     tickets: dict[str, TicketState] = field(default_factory=dict)
+    finish: dict = field(default_factory=dict)  # 08: PR·병합·main 검증·revert의 재개 지점
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
