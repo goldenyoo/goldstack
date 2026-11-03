@@ -5,8 +5,11 @@
 
 - [다른 레포에 처음 들이기](#다른-레포에-처음-들이기)
 - [새 feature](#새-feature)
+- [티켓 선택 키와 agy 한도(`touches`, `second_reviewer`, `[agy] max_calls_per_run`)](#티켓-선택-키와-agy-한도)
 - [실행 중 보기](#실행-중-보기)
 - [실패했을 때](#실패했을-때)
+- [여러 feature 이어 돌리기(`gs go a b`)](#여러-feature-이어-돌리기gs-go-a-b)
+- [끝난 feature 치우기(`gs clean`)](#끝난-feature-치우기gs-clean)
 - [아이디어 흐름(`/retro` → `/idea` → `gs backlog` → `/grill`)](#아이디어-흐름)
 - [기존 레포 옮기기(`gs migrate`)](#기존-레포-옮기기gs-migrate)
 - [skill 사용 장면](#skill-사용-장면)
@@ -26,7 +29,7 @@ $ gs init
 없는 파일만 만들고, 있는 파일은 `그대로 둠: …`으로 알린다. 두 번 돌려도 같다. 커밋은 하지 않는다.
 `config.toml`이 없으면 `gs check`·`gs go`·`gs config`는 `.goldstack/config.toml이 없다. gs init을 먼저 실행하라` 오류로 멈춘다.
 
-**2. config 채우기** — `gs init`이 모든 키를 기본값으로 쓴다. 빠진 키, 0 이하인 `timeouts.*`, 빈 모델 이름(`models.codex`만 빈 값 허용)은 오류, 모르는 키는 경고다.
+**2. config 채우기** — `gs init`이 모든 키를 기본값으로 쓴다. 빠진 키, 0 이하인 `timeouts.*`, 음수인 `agy.max_calls_per_run`, 빈 모델 이름(`models.codex`만 빈 값 허용)은 오류, 모르는 키는 경고다. `[agy]` 섹션만은 없어도 된다(v4 전에 만든 config는 상한 3으로 읽는다).
 ```toml
 [git]
 remote = "origin"             # PR·병합·push 대상 원격. GitHub URL이어야 한다(PR 저장소 owner/repo를 여기서 푼다)
@@ -37,6 +40,9 @@ judge = "opus"                # 실패 요약·리뷰 분류·보고서용 claud
 claude_review = "opus"        # reviewer가 claude일 때 --model
 agy = "gemini-4-argon-high"   # agy worker·reviewer --model
 codex = ""                    # 비우면 codex 기본 모델
+
+[agy]
+max_calls_per_run = 3         # gs go 한 번에 gs가 띄우는 agy 호출 상한. 0이면 agy를 띄우지 않는다
 
 [timeouts]
 review_minutes = 30           # reviewer 호출 한 번
@@ -89,7 +95,7 @@ base 브랜치에서 Claude Code를 연다. 순서는 `/grill` → `/go`이고, 
 2. 사람이 정할 결정을 라운드마다 한 메시지에 번호 붙여 묻는다. 질문마다 선택지와 그 선택지의 구체 예시(실제로 보일 명령·파일·출력), 추천과 이유가 붙고, 끝에 `yes = 추천 전부 수락. 바꿀 것만 번호로`. 열린 아이디어가 있으면 라운드 1의 첫 질문은 "이번 feature에 넣을 후보"다(아래 [아이디어 흐름](#아이디어-흐름)).
 3. 답하는 법: `yes`(추천 전부), `2. B`(2번만 B), `3. 왜 B가 아니야?`(되묻기: 답을 듣고 같은 라운드를 다시 확정한다). 짧은 답이면 Claude가 "이렇게 읽었다"를 답마다 한 줄로 보이니, 어긋나면 그때 고친다.
 4. 답은 바로 `.goldstack/work/csv-export/spec.md`의 "결정" 표와 "grill 기록"에 적힌다. `verify` 같은 frontmatter 값이면 frontmatter도 고친다(gs는 표가 아니라 frontmatter를 읽는다).
-5. 마지막 라운드는 티켓 분해다: 티켓 표(blocked_by, wave, 구현 모델, 리뷰 계열 — 서로 다른 계열이어야 한다)와 범위 밖 목록.
+5. 마지막 라운드는 티켓 분해다: 티켓 표(blocked_by, wave, 구현 모델, 리뷰 계열 — 서로 다른 계열이어야 한다, 건드릴 파일 `touches`)와 범위 밖 목록. 확정되면 `touches`가 티켓 frontmatter에 들어간다(아래 [티켓 선택 키](#티켓-선택-키와-agy-한도)).
 6. 확정되면 `tickets/NN-slug.md`, `.goldstack/out-of-scope/<slug>.md`를 쓰고 `gs check csv-export`가 오류·경고 없이 통과할 때까지 고친다. 라운드 1에서 고른 아이디어 파일은 `status: "taken"`, `feature: "csv-export"`로 바꾼다. 그 뒤 `.goldstack/work/csv-export`, `.goldstack/out-of-scope`, `.goldstack/ideas`만 커밋한다(없는 디렉터리는 뺀다). push는 하지 않는다.
 
 ```console
@@ -108,6 +114,76 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 
 일부 티켓만 돌릴 때(wave를 나눌 때)는 터미널에서 `gs check csv-export --only 01,02`로 범위를 보고 `gs go csv-export --only 01,02`. 범위 밖 의존은 끝났다고 본다.
 
+## 티켓 선택 키와 agy 한도
+
+티켓 frontmatter의 필수 키는 `id`, `title`, `blocked_by`, `model`, `reviewer`다([템플릿](../skills/grill/templates/ticket.md)). v4부터 두 선택 키가 있다. 둘 다 없어도 옛 티켓은 그대로 통과한다.
+
+### `touches` — 같은 파일을 건드리는 티켓 찾기
+grill의 티켓 분해 라운드 표에 `touches` 열이 보이고, 확정되면 grill이 티켓마다 적는다. 사람이 직접 쓸 일은 대개 없고, 표에서 틀린 경로만 고쳐 답한다.
+```yaml
+---
+id: "02"
+title: "CSV 헤더 줄"
+blocked_by: []
+touches: ["src/tally/cli.py", "tests/test_csv*.py"]
+model: codex
+reviewer: claude
+---
+```
+- 값: 레포 루트 기준 경로 목록. glob을 쓸 수 있다(`*`·`?`·`[…]`는 경로 한 부분, `**`는 0개 이상의 부분). 절대 경로와 `..`는 오류다.
+- 겹침: 두 티켓에 같은 경로가 있거나 glob이 서로 맞는 경로가 있으면(`src/**`와 `src/tally/cli.py`) 겹친다.
+- 순서: `blocked_by`를 따라가 한쪽이 다른 쪽에 닿으면(직접이든 간접이든) 순서가 있다.
+
+겹치는데 순서가 없으면 `gs check`가 티켓 쌍마다 경로 하나를 들어 경고한다:
+```console
+$ gs check csv-export
+경고: 01·02가 src/tally/cli.py를 함께 건드리는데 순서가 없다
+csv-export: 티켓 3장, 오류 0, 경고 1
+순서: 01 02 03
+지금 시작 가능: 01 02
+```
+뜻: 01과 02가 동시에 돌 수 있고, 나중에 병합되는 쪽이 같은 줄을 고쳤으면 `conflict`로 실패해 재시도를 쓴다. 경고라서 `gs go`를 막지는 않는다. 고치는 법은 둘 중 하나다: 한쪽에 순서를 준다(02에 `blocked_by: ["01"]`), 또는 실제로는 다른 곳이면 `touches`를 좁힌다. grill은 경고가 없어질 때까지 고친 뒤 커밋한다. `touches`가 없거나 `[]`인 티켓은 이 검사에서 빠진다.
+
+### `second_reviewer` — 위험한 티켓에 Gemini 한 번 더
+`reviewer`는 그대로 두고, 필요한 티켓에만 한 줄 더한다(템플릿에는 없는 키라 grill이 그 티켓에만 적는다). 값은 `claude|codex|agy` 중 `model`·`reviewer`와 모두 다른 계열이라, 남는 계열 하나다. claude 구현·codex 리뷰 티켓이면 `agy`(Gemini)가 된다. 같은 계열이면 `gs check` 오류:
+```
+오류: .goldstack/work/csv-export/tickets/04-cleanup.md: 리뷰는 다른 계열이어야 한다: reviewer과 second_reviewer가 둘 다 `codex`
+```
+언제 붙이나: 틀리면 비싼 티켓. 파일·브랜치를 지우는 코드, 병합·revert, 차단 hook, 비밀 처리, 데이터 마이그레이션처럼 리뷰 하나가 놓친 것이 바로 사고가 되는 곳이다. 문서, 출력 문구, 시험으로 다 확인되는 작은 변경에는 붙이지 않는다(agy 한도를 쓰고 지적만 늘어난다).
+```yaml
+---
+id: "04"
+title: "옛 출력 파일 지우기"
+blocked_by: ["02"]
+touches: ["src/tally/cleanup.py", "tests/test_cleanup.py"]
+model: claude
+reviewer: codex
+second_reviewer: agy
+---
+```
+두 리뷰는 동시에 돌고, 지적을 합쳐 수정 worker를 한 번만 띄운다(재리뷰 없음). 한쪽이 실패·시간 초과여도 다른 쪽 결과로 간다. `gs go` 출력:
+```
+[04] 리뷰: codex+agy
+[04] 리뷰 끝(codex): 지적 2개(fix 1, report 1)
+[04] 리뷰 끝(agy): 지적 1개(fix 1, report 0)
+```
+보고서 "남은 리뷰 지적"에는 리뷰마다 계열이 붙는다: `- 04 리뷰(codex) [medium] src/tally/cleanup.py:12: …`, `- 04 리뷰(agy) [high] …`. 원본은 `run/04/<시도>/review/`(첫 리뷰)와 `run/04/<시도>/review-agy/`(두 번째 리뷰).
+
+### `[agy] max_calls_per_run` — Gemini 호출 상한
+```toml
+[agy]
+max_calls_per_run = 3
+```
+`gs go` 한 번(feature 하나)에서 gs가 띄우는 agy 호출 수의 상한이다. 1회는 agy worker 한 번(재시도·수정 worker도 각각 1회) 또는 agy 리뷰 한 번이다. 실행마다 0부터 센다(`gs go a b`면 feature마다 따로). 섹션이 없으면 3, `0`이면 agy를 띄우지 않는다. `/retro`의 agy 요약과 `gs check`의 agy 차단 장치 확인(`agy -p /hooks`, 모델 호출 없음)은 세지 않는다.
+- **`gs check`**: 범위 안 티켓의 `model`·`reviewer`·`second_reviewer` 중 agy인 것을 센다(티켓마다 첫 호출만. 재시도·수정은 미리 세지 않는다). 상한을 넘으면 경고:
+  ```
+  경고: 범위 안 agy 배정 4회가 상한 agy.max_calls_per_run=3회를 넘는다
+  ```
+- **실행 중 상한에 닿으면** 멈추지 않고 이어 간다. agy 리뷰는 띄우지 않고 `건너뜀(한도)`으로 적는다(`[04] 리뷰 끝(agy): 지적 0개(fix 0, report 0) — 건너뜀(한도): 이번 실행의 agy 호출이 상한 3/3에 닿았다`. 리뷰가 하나뿐이면 `(agy)` 없이 `[04] 리뷰 끝: …`). 다른 리뷰가 있으면 그것으로, 없으면 verify만으로 병합한다. agy 구현 티켓은 worker를 띄우지 않고 재시도 없이 실패한다(이유 `agy 한도: …`, 아래 [자주 보는 이유](#실패했을-때)). agy 수정 worker는 띄우지 않고 리뷰한 구현을 병합·검증한다.
+- **보고서**: Evidence 끝에 `agy 사용: 2/3`(이번 실행 호출 수/상한).
+
+언제 바꾸나: `second_reviewer: agy` 티켓이 상한보다 많은 feature면 그 수만큼 올린다(경고가 사라진다). Gemini 사용량이 빠듯한 날은 낮추거나 `0`으로 둔다. `0`인데 agy 배정이 있으면 `gs check`가 같은 경고를 낸다.
+
 ## 실행 중 보기
 
 **진행 바** — 같은 레포에서 연 Claude Code 세션이면 어느 세션이든(레포 하위 디렉터리에서 연 세션도) 프롬프트 위에 한 줄이 뜬다(1초마다 갱신).
@@ -116,7 +192,12 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 ```
 - `1/3`: 끝난 티켓(병합·실패·건너뜀)/전체. 막대 8칸이 그 비율이다.
 - `02 리뷰 중(codex)`: 돌고 있는 티켓마다 단계(worker, 리뷰, 수정, 검증, 마무리)와 그 단계의 모델. feature 전체 마무리(보고서·PR·main 검증) 중이면 `마무리 중(claude)`.
-- `12분`: 이번 실행의 경과. `약 18분 남음`: 이번 실행에서 끝난 티켓의 평균 소요 × 남은 티켓 ÷ `max_workers`. 끝난 티켓이 없으면 `남은 시간 계산 중`.
+- `12분`: 이번 실행의 경과. `약 18분 남음`: 이번 실행에서 끝난 티켓의 평균 소요 × 남은 티켓 ÷ `max_workers`.
+- 이번 실행에서 끝난 티켓이 아직 없으면 이 레포의 **다른 feature** 실행 기록(`.goldstack/work/*/run/state.json`)에서 병합된 티켓의 소요 중앙값으로 처음부터 예측하고, 그 사실을 꼬리표로 단다:
+  ```
+  ░░░░░░░░ csv-import 0/4 · 01 worker 중(codex) · 02 worker 중(claude) · 3분 · 약 26분 남음(이전 실행 기준)
+  ```
+  `(이전 실행 기준)` = "이번 feature의 티켓은 아직 하나도 안 끝났고, 지난 feature들의 티켓 크기로 어림했다"는 뜻이다. 티켓 크기가 feature마다 다르니 거친 값으로 본다. 이번 실행에서 티켓 하나가 끝나면(병합·실패) 꼬리표가 빠지고 이번 실행 평균으로 바뀐다. `run/`은 gitignore라 기록은 실행한 머신에만 있다. 다른 feature 기록도 없으면(이 레포의 첫 feature, 새 머신) `남은 시간 계산 중`.
 - `gs go`는 worker를 기다리는 동안 상태가 그대로여도 60초마다 state.json을 다시 써서(heartbeat) worker가 오래 돌아도 바가 남는다. 실행이 끝나거나 state.json이 10분 넘게 안 바뀌면 사라진다. 리뷰·검증·병합·마무리는 `gs go`가 직접 기다리느라 그동안 heartbeat가 멈추므로, 10분 넘는 리뷰(기본 제한 30분)나 검증(기본 20분) 중에는 정상 실행이어도 바가 사라졌다가 그 단계가 끝나면 돌아온다. 죽었는지는 `gs status <feature>`의 `실행 중(pid …)`/`중단됨`으로 본다. 안 보이면 [README](../README.md#설치) 5.
 
 **`gs status`** — 읽기 전용. 파일을 만들거나 잠그지 않으니 실행 중에 언제든 친다.
@@ -143,7 +224,8 @@ herdr 밖이면 화면 없이 돌고, 로그는 `.goldstack/work/csv-export/run/
 | Summary | 판단 모델이 쓴 짧은 요약: 변경의 의미, 남은 위험. 판단이지 증거가 아니다. 병합 여부는 쓰지 않는다 |
 | 마무리 상태 줄(Summary 바로 아래) | gs가 state에서 쓴 한 줄. 예 `마무리: verified · PR https://github.com/you/tally/pull/7 병합 · main 검증 통과`, `마무리: reverted · main 검증 실패 → revert 1a2b3c4d`, `마무리: not_merged · integration 검증 실패` |
 | Evidence → 티켓별 결과 | 티켓마다 결과(`merged`, `failed`, `skipped`)와 이유. 단계별 소요(`worker 9분 · 리뷰 4분 · 수정 2분 · 검증 3분`, 0분인 단계는 빼고 모두 1분 미만이면 `모두 1분 미만`). 미커밋 변경 때문에 남긴 worktree(`--only` 범위 밖 티켓 것도) |
-| Evidence → 남은 리뷰 지적 | 다른 계열 reviewer의 지적 전부(재리뷰가 없어 수정을 시도한 것도 남는다). 리뷰 자체가 실패했으면 그 메모 |
+| Evidence → 남은 리뷰 지적 | 다른 계열 reviewer의 지적 전부(재리뷰가 없어 수정을 시도한 것도 남는다). `second_reviewer`가 있으면 리뷰마다 `04 리뷰(codex)`, `04 리뷰(agy)`로 나뉜다. 리뷰 자체가 실패했거나 `건너뜀(한도)`이면 그 메모 |
+| Evidence 끝 `agy 사용: N/상한` | 이번 실행에서 gs가 띄운 agy 호출 수 |
 | Evidence → verify 출력 | 티켓마다 가장 최근 verify 로그와 integration·main 검증 로그의 끝부분(원본 그대로) |
 | Merge Danger | 마무리 결과, PR, integration·main verify 결과, 병합·revert 커밋, 되돌리는 법(명령) |
 
@@ -158,8 +240,9 @@ herdr 밖이면 화면 없이 돌고, 로그는 `.goldstack/work/csv-export/run/
 | `conflict`, `integration 병합 충돌` | 먼저 병합된 티켓과 같은 곳을 고쳤다 | `merge.log`. 같은 파일을 건드리는 티켓은 `blocked_by`로 줄 세운다 |
 | `막힘: 02` | 02가 실패해 이 티켓은 건너뛰었다(`skipped`) | 02를 고치면 같이 다시 돈다 |
 | `agy 차단 장치가 없다: …` | agy가 gs hook을 걸지 못해 worker로 띄우지 않았다 | 그 티켓의 `model`을 바꾸거나 agy를 고친다 |
+| `agy 한도: 이번 실행의 agy 호출이 상한 3/3에 닿아 worker를 띄우지 않았다(config agy.max_calls_per_run)` | 이번 실행의 agy 호출이 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿았다. 재시도하지 않는다 | 상한을 올리거나 그 티켓의 `model`을 바꿔 다시 `gs go` |
 
-실패한 티켓은 같은 모델로 한 번 자동 재시도한 뒤에도 실패한 것이다. 시도마다 증거가 `.goldstack/work/csv-export/run/<티켓>/<시도>/`에 남는다: `brief.md`, `worker.log`, `verify.log`, `merge.log`, `failure.log`, `failure-summary.md`(판단 모델의 요약), `review/`(diff·reviewer 답), `fix/`(수정 worker). 실패한 worktree(`run/wt/03`, `run/wt/03-retry-1`)도 지우지 않고 남긴다.
+실패한 티켓은 같은 모델로 한 번 자동 재시도한 뒤에도 실패한 것이다. 시도마다 증거가 `.goldstack/work/csv-export/run/<티켓>/<시도>/`에 남는다: `brief.md`, `worker.log`, `verify.log`, `merge.log`, `failure.log`, `failure-summary.md`(판단 모델의 요약), `review/`(diff·reviewer 답), `fix/`(수정 worker). 실패한 worktree(`run/wt/03`, `run/wt/03-retry-1`)도 지우지 않고 남긴다. 다 봤으면 [`gs clean`](#끝난-feature-치우기gs-clean)으로 지운다.
 
 **마무리 결과**(보고서 Merge Danger, `■ 마무리:` 줄)
 
@@ -176,6 +259,62 @@ herdr 밖이면 화면 없이 돌고, 로그는 `.goldstack/work/csv-export/run/
 - `gs go`가 죽어 `running`으로 남은 티켓은 실패로 세지 않고 새로 시작한다. 살아 남은 worker가 있으면 먼저 끝낸다.
 - spec·티켓을 고치고 커밋·push하지 않았으면 `gs go`가 시작 전에 거부한다(`.goldstack/work/csv-export가 origin/main와 다르다. … 먼저 커밋하고 push하라`). `/go`가 커밋·push를 대신 해 준다.
 - 같은 feature에 `gs go`는 하나만 돈다. `이미 다른 gs go가 돌고 있다(pid …)`면 그 프로세스가 끝나길 기다린다.
+
+## 여러 feature 이어 돌리기(`gs go a b`)
+
+grill이 끝난 feature가 여럿이면(밤새 돌려 둘 때) 한 번에 줄 세운다. Claude Code에서 `/go csv-export csv-import`, 터미널에서 `gs go csv-export csv-import`. `/go`는 feature마다 `gs check`와 커밋·push를 한 뒤 `gs go csv-export csv-import`를 한 번 띄우고, 끝나면 실행된 feature마다 세 줄 요약과 PR을 보인다.
+1. 시작 전에 모든 feature를 `gs check`한다. 하나라도 오류면 아무것도 시작하지 않는다(종료 1). 뒤 feature의 오류 때문에 앞 것만 돌고 끝나는 일이 없다.
+2. 앞 feature를 평소처럼 main 검증까지 끝낸다.
+3. 종료 코드가 0이고 마무리가 `verified`면 다음으로 간다:
+   ```
+   ■ 요약: 병합 3
+   ■ 마무리: integration·main 검증 통과, PR 병합 완료
+   ■ 보고서: .goldstack/work/csv-export/report.md · 남은 리뷰 지적 1
+   ■ PR: https://github.com/you/tally/pull/7
+   ■ csv-export: verified → csv-import 시작
+   ```
+4. 아니면 거기서 멈추고 남은 feature를 보인다. 종료 코드는 멈춘 feature의 것이다:
+   ```
+   ■ csv-export: reverted → 여기서 멈춤(남은: csv-import)
+   ```
+
+**멈추는 조건** — 앞 feature의 종료 코드가 0이 아니거나 마무리가 `verified`가 아니면 멈춘다. 그러니 다음도 멈춘다:
+- 티켓 하나라도 실패·건너뜀(병합된 티켓은 main에 들어가 마무리가 `verified`여도): `■ csv-export: verified → 여기서 멈춤(남은: csv-import)`.
+- `not_merged`(integration 검증 실패, merged 티켓 없음), `merge_pending`(병합 큐 대기), `closed`, `reverted`(main 검증 실패로 revert).
+- `gs go`가 시작 전에 거부(미커밋 spec, 다른 `gs go`가 잠금): 종료 코드가 1이라 state에 지난 실행의 `verified`가 남아 있어도 멈춘다. state.json을 못 읽으면 `■ csv-export: unknown → 여기서 멈춤(남은: csv-import)`.
+
+멈췄으면 앞 feature를 [실패했을 때](#실패했을-때)대로 고친 뒤 같은 줄을 다시 친다. 모두 병합돼 정리된 앞 feature는 `■ 이미 끝남: csv-export (verified)`로 바로 넘어간다. `--only`는 여러 feature와 함께 못 쓴다(`gs: error: 여러 feature와 --only는 함께 쓸 수 없다`).
+
+**gs 재설치 한계** — gs는 `uv tool install`로 복사 설치되어 있고 `gs go a b`는 한 프로세스로 끝까지 돈다. 그래서 앞 feature가 gs 자체(goldstack 레포의 `src/gs/`, worker 차단 hook이 부르는 `gs hook`)를 고쳐 main에 병합해도 **다음 feature는 시작할 때의 옛 gs로 돈다.** 다음 feature가 앞 feature의 gs 변경에 기대면 이어 돌리지 말고 나눈다:
+```sh
+gs go goldstack-v4
+git pull && uv tool install --reinstall .   # 새 gs로 바꾼다
+gs go goldstack-v5
+```
+goldstack 밖의 레포(gs를 고치지 않는 feature)에는 해당하지 않는다.
+
+## 끝난 feature 치우기(`gs clean`)
+
+실행이 끝나도 흔적이 남는다: 실패한 티켓의 worktree(`run/wt/03`, `run/wt/03-retry-1`)와 브랜치(`gs/csv-export/03`, `gs/csv-export/03-retry-1`), 미커밋 변경 때문에 남긴 worktree, `reverted`로 끝난 feature의 integration worktree와 로컬·원격 `gs/csv-export/integration`. 다 봤으면 지운다.
+```console
+$ gs clean csv-export
+지움: worktree /home/you/tally/.goldstack/work/csv-export/run/wt/03 (미커밋 변경도 지움)
+지움: worktree /home/you/tally/.goldstack/work/csv-export/run/wt/integration (미커밋 변경도 지움)
+지움: worktree 2, 로컬 브랜치 3, 원격 브랜치 1 · 실행 기록은 남김
+```
+
+| 지우는 것 | 남기는 것 |
+|---|---|
+| `run/wt/` 아래 전부(티켓·재시도·integration worktree, **미커밋 변경 포함**, git 등록이 풀린 잔여 디렉터리도) | `run/state.json`, `run/<NN>/<시도>/`(brief, `worker.log`, `review/`, `verify.log` …), `run/finish/` |
+| 로컬 브랜치 `gs/csv-export/*` | spec·티켓·`report.md`(커밋된 것), main의 병합 커밋 |
+| `git.remote`의 원격 브랜치 `gs/csv-export/*` | 열린·닫힌 PR(GitHub에 그대로) |
+
+- 실행 중이면 거부한다(`--force`로도): `gs clean: 이미 다른 gs go가 돌고 있다(pid 48211)`. 검사와 삭제를 `gs go`와 같은 잠금 안에서 한다.
+- 마무리가 `verified`·`reverted`가 아니면 거부한다: `gs clean: 마무리가 verified·reverted가 아니다(not_merged). --force가 필요하다`(실행 기록이 없으면 `(없음)`). 버릴 feature면 남긴 worktree의 미커밋 변경을 확인하고 `gs clean csv-export --force`. 그 뒤 다시 `gs go`하면 main에 들어가지 않은 integration이 사라졌으므로 티켓이 처음부터 다시 돈다.
+- 하나를 지우다 실패하면 `경고: 정리 실패: …`를 쓰고 나머지를 계속한 뒤 종료 1.
+- 정리한 뒤 같은 feature로 `gs go`를 쳐도 다시 만들지 않는다: 모든 티켓이 병합된 끝난 실행이면 `■ 이미 끝남: csv-export (verified)`. 실패 티켓이 남았거나 새 티켓을 더했으면 평소처럼 이어 가고, 병합된 티켓은 건너뛴다.
+
+**자동 정리** — 마무리가 `verified`로 끝나면 `gs go`가 main에 최종 보고서 push를 시도한 뒤 그 feature의 integration worktree(`run/wt/integration`)와 로컬·원격 `gs/csv-export/integration`을 스스로 지운다. 출력은 `지움: worktree …/run/wt/integration (미커밋 변경도 지움)` 한 줄이고 실패해도 `경고: 정리 실패: …`만 남는다(결과·종료 코드는 그대로). 원격 삭제만 실패했으면 다음 `gs go csv-export`가 `■ 이미 끝남` 뒤 다시 시도한다. 실패한 티켓의 worktree·브랜치는 자동으로 지우지 않는다(`gs clean`). `reverted`·`not_merged`·`merge_pending`으로 끝난 feature는 원인을 볼 수 있게 integration을 남긴다.
 
 ## 아이디어 흐름
 
@@ -273,6 +412,16 @@ Claude가 놓친 맥락부터 짧게 깔고, 짧은 문장으로, 약어와 자�
 /retro csv-export
 ```
 인자가 `.goldstack/work/` 아래 feature 이름이면 **feature 실행**을 읽는다: `report.md`, `run/state.json`, `run/<NN>/<시도>/`의 `worker.log`·`review/`·`fix/`, spec의 grill 기록, 다른 feature의 `report.md`(같은 실패가 전에도 있었나), `~/.claude/usage-data/report-*.html`(`/insights` 보고서, 있으면). `run/`은 실행한 머신에만 있으니 다른 머신에서 돌린 feature면 report.md만 읽고 그렇다고 말한다. 인자가 없으면 지금 세션, feature가 아닌 인자면 그 세션의 기록을 읽는다.
+
+**큰 로그는 Gemini가 요약한다** — `worker.log` 합계(`cat .goldstack/work/csv-export/run/*/*/worker.log | wc -c`)가 200KB(204800바이트) 이상이면 Claude가 로그를 다 읽지 않고 긴 문맥에 강한 Gemini(agy)에게 요약을 맡긴다. 부르기 전에 한 줄로 알린다:
+```
+agy로 로그 7개 요약(한도 1회, gs 상한에는 안 셈)
+```
+그리고 레포 루트에서 한 번만 부른다(`--sandbox`라 읽기 전용, 모델은 `gs config models.agy`):
+```
+agy -p "<프롬프트>" --sandbox --dangerously-skip-permissions --disable-slash-commands --model "$model"
+```
+프롬프트에는 `worker.log` 전부, 리뷰 답 `review.txt` 전부, `run/state.json`의 경로가 들어가고, 티켓·시도별 실패 이유, 재시도 횟수, 반복된 리뷰 지적, 오래 걸린 단계를 로그 경로·줄 번호와 함께 요약하게 한다. Claude는 그 요약과 `report.md`·`state.json`으로 후보를 정하고, 근거로 인용할 곳만 로그를 직접 연다. agy가 없거나 실패하면(종료 코드, 빈 답) 다시 부르지 않고 그렇다고 한 줄 말한 뒤 로그마다 끝부분과 오류 줄을 직접 읽는다. 200KB 미만이면 agy를 부르지 않는다. 이 호출은 gs가 아니라 skill이 부르므로 [`[agy] max_calls_per_run`](#agy-max_calls_per_run--gemini-호출-상한)에 세지 않는다.
 길 찾기, 자동 검사, 리뷰 기준, `CLAUDE.md`·`AGENTS.md`, 도구 비용, 효과 없는 지시, goldstack 자체(`gs`, skill, spec·티켓 형식), 정보 접근 범주로 고칠 후보를 심각한 순으로 보인다. 후보마다 본 근거와 고칠 곳이 붙고, 다른 feature에도 있던 실패면 `[반복]`이 붙는다. **사람이 고르기 전에는 아무 파일도 바꾸지 않는다.** feature 회고면 고른 후보를 `/idea` 형식으로 `.goldstack/ideas/`에 쓰고(`source: /retro csv-export`), 세션 회고면 고른 것만 고치고 사람이 원하는 후보만 아이디어 함에 적는다.
 
 ### `/writing-for-agents` — agent가 읽는 문서를 쓸 때(사용자 호출)
