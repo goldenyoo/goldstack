@@ -3,7 +3,9 @@
 상황별로 무엇을 치고 무엇이 보이는지 적는다. 설치는 [README](../README.md#설치), 엔진이 안에서 하는 일은 [internals.md](internals.md).
 예시의 feature 이름은 `csv-export`, base 브랜치는 `main`, 원격은 `origin`이다. 실제 값은 `gs config git.base`, `gs config git.remote`가 알려 준다.
 
-- [다른 레포에 처음 들이기](#다른-레포에-처음-들이기)
+- [기존 레포에 들이기(`/adopt`, `gs doctor`, `[worktree] setup`)](#기존-레포에-들이기)
+  - [예시: squash만 허용](#예시-squash만-허용) · [보호된 main + 필수 승인](#예시-보호된-main--필수-승인) · [느린 시험](#예시-느린-시험verify_ticket-verify_retries)
+  - [config 키](#config-키) · [spec frontmatter 키](#spec-frontmatter-키) · [한계](#한계)
 - [새 feature](#새-feature)
 - [티켓 선택 키와 agy 한도(`touches`, `second_reviewer`, `[agy] max_calls_per_run`)](#티켓-선택-키와-agy-한도)
 - [실행 중 보기](#실행-중-보기)
@@ -14,48 +16,270 @@
 - [기존 레포 옮기기(`gs migrate`)](#기존-레포-옮기기gs-migrate)
 - [skill 사용 장면](#skill-사용-장면)
 
-## 다른 레포에 처음 들이기
+## 기존 레포에 들이기
 
-`gs` CLI와 plugin은 머신에 한 번 설치한다(README "설치" 1–2). 그 뒤 레포마다 아래를 한 번 한다.
+이미 진행 중인 레포(병합 방식, main 보호, CI, 의존성 설치, 느린 시험이 제각각)에 goldstack을 처음 들이는 순서다. 아래 출력은 가짜 `gh`로 `gs`를 돌려 얻은 실제 형식이다. PR 주소·이름을 예시로 바꾸고 앞뒤 줄은 줄였다.
 
-**1. `gs init`** — 레포 루트(또는 그 안 어디서든. 위로 `.git`을 찾는다)에서:
+**1. 설치** — `gs` CLI와 plugin을 머신에 한 번 설치한다(README ["설치"](../README.md#설치) 1–2). 대상 레포의 원격은 GitHub여야 한다([한계](#한계)).
+
+**2. `/adopt`** — 대상 레포에서 Claude Code를 열고 `/adopt`. 레포를 훑고, `.goldstack/config.toml`이 없으면 `gs init`을 돌리고, `gs doctor`를 보이고, 레포 요약 `.goldstack/profile.md`(구조, 빌드·시험 명령과 잰 시간, 관례, 주의점, CI)를 쓴다. 사람에게 묻는 것은 "제안대로 config에 쓸까"뿐이다. 다시 부르면 profile을 갱신하고 바뀐 점을 보인다. 커밋은 하지 않는다. `/grill`이 profile을 가장 먼저 읽고, worker brief가 "먼저 읽어라"로 가리킨다.
+
+`gs doctor`는 터미널에서 직접 쳐도 된다. 저장소 설정을 읽어 표와 맞는 config 줄을 보인다(읽기 전용):
+```console
+$ gs doctor
+gs doctor: you/tally (원격 origin)
+병합 방식  squash만 허용(gs 지원 방식 중) → git.merge_method = "squash"
+base 보호  main 직접 push 금지 → git.direct_push = false
+필수 승인  1명 → gs는 PR을 열고 승인을 기다린다(병합 대기)
+필수 검사  build, test → git.wait_checks = true
+검증       spec verify 없음 → 경고: 검증 없음, 리뷰만으로 병합
+```
+- **병합 방식**: merge 커밋을 허용하면 `merge`를 제안한다(squash도 함께 허용해도). merge가 꺼져 있고 squash가 허용이면 `squash`. 둘 다 꺼져 있으면(rebase만) `경고: gs가 지원하지 않는 병합 방식`이고 제안이 없다.
+- **`모름(<이유>)`**: 읽지 못한 항목이다. 제안도 쓰기도 하지 않으니, 아는 값이면 config를 손으로 고친다. 보호 규칙을 읽는 classic API는 관리자 권한이 필요해 권한이 없으면 rulesets API로 넘어가는데, 거기에도 규칙이 없으면 세 줄이 모두 `모름`이다. 보호가 전혀 없는 브랜치도 classic API가 404라서 같다:
+  ```
+  base 보호  모름(gh: Must have admin rights to Repository. (HTTP 403))
+  ```
+- **검증**: `.goldstack/work/*/spec.md`마다 한 줄(`검증       csv-export verify = npm test`). spec이 없거나 `verify`가 `true`·`:`면 `spec verify 없음 → 경고: 검증 없음, 리뷰만으로 병합`이다. 시험이 정말 없는 레포는 spec에 `verify: "true"`로 그 사실을 적는다(이 값은 늘 통과하므로 리뷰만으로 병합한다).
+- 원격이 GitHub가 아니면 첫 줄이 `gs doctor: GitHub 원격 아님 (원격 origin): …`이고 네 줄이 `모름`이다. `gs check`·`gs go`는 이 원격에서 오류로 멈춘다.
+
+**3. `gs doctor --write` 확인·커밋** — 제안을 config에 쓰게 했으면 표 아래에 바뀐 키마다 한 줄이 더 나온다:
+```console
+$ gs doctor --write
+…(위와 같은 표)
+git.merge_method: "merge" → "squash" (squash만 허용(gs 지원 방식 중))
+git.direct_push: true → false (main 직접 push 금지)
+git.wait_checks: false → true (build, test)
+```
+쓰는 규칙: `git.merge_method`·`git.direct_push`·`git.wait_checks` 중 **제안이 있는 키만**, 값이 다를 때만 고친다. 다른 줄과 주석은 그대로 둔다. `모름`과 "제안 없음"(직접 push 제한 없음, 필수 검사 없음)은 쓰지 않으니 이미 있는 값을 되돌리지 않는다. 다만 merge가 허용된 저장소에서 config를 손으로 `squash`로 바꿔 두면 `--write`가 `merge`로 되돌린다. 이때는 `--write` 없이 `gs doctor`만 쓴다.
+
+`git diff .goldstack/config.toml`로 확인하고 커밋한다(보호된 main이면 이 커밋은 첫 feature의 grill PR에 함께 올린다. [아래](#예시-보호된-main--필수-승인)):
+```sh
+git add .goldstack/config.toml .goldstack/local.env.example .gitignore
+git commit -m "goldstack init"
+```
+`.goldstack/profile.md`는 여기 넣지 않아도 된다. 다음 `/grill`·`/go`의 커밋 경로에 들어 있다.
+
+**4. `[worktree] setup` 채우기** — gs가 만드는 worktree에는 커밋된 파일만 있다. `node_modules`, 가상환경, `.env`처럼 커밋하지 않는 것이 있어야 시험이 돌면 준비 명령을 한 줄 적는다.
+```toml
+[worktree]
+setup = "npm ci"
+
+[timeouts]
+setup_minutes = 15            # 준비 명령 한 번의 상한(기본 15)
+```
+- 티켓, integration, 병합 뒤 base 검증 worktree마다 worker·verify 전에 `bash -c`로 돈다. 그 worktree가 현재 디렉터리이고, gs가 직접 돌리므로 worker 차단 hook 밖이다. 비어 있으면 돌지 않는다.
+- 복사 목록 키는 없다. 복사도 이 한 줄로 한다. 주 레포의 `.env`를 복사하는 예(TOML 작은따옴표는 안쪽 `"`를 그대로 둔다):
+  ```toml
+  setup = 'npm ci && cp "$(git rev-parse --git-common-dir)/../.env" .env'
+  ```
+- 산출물(`node_modules`, `.env`)은 `.gitignore`에 있어야 한다. 없으면 worker의 `git add -A`에 섞여 들어간다.
+- 시간이 worktree 수만큼 든다(티켓 수 + 재시도 + 2). 캐시를 쓰는 설치 명령이 좋다.
+- 돌 때 출력은 `■ integration 준비 중`, `[01] 준비 중`, `■ main 준비 중`이다. 실패는 위치마다 다르다: 티켓이면 `[01] 실패: 준비 실패`(재시도 없음), integration이면 `■ 마무리: 준비 실패 → 병합 안 함`, 병합 뒤 base면 `■ 마무리: base 미검증(준비 실패)`(revert하지 않고 다음 `gs go`가 base 검증부터 다시 한다). 자세히는 [internals](internals.md#준비-실패-위치별-처리).
+
+고쳤으면 커밋한다(`git commit -am "goldstack: worktree 준비 명령"`).
+
+**5. 첫 `/grill`** — 이제 평소처럼 `/grill <feature>` → `/go <feature>`다([새 feature](#새-feature)). spec에 `verify`를 정할 때 `.goldstack/profile.md`의 시험 시간을 보고, 느리면 [느린 시험 예시](#예시-느린-시험verify_ticket-verify_retries)대로 한다. 레포의 조건에 맞는 예시를 아래에서 고른다.
+
+### 예시: squash만 허용
+
+저장소가 squash 병합만 허용한다. config:
+```toml
+[git]
+merge_method = "squash"
+```
+`gs go`는 PR을 `gh pr merge <url> --squash --match-head-commit <검증한 head>`로 병합한다. 출력은 merge 때와 같고, main에는 커밋이 하나 들어간다. 티켓별 `gs-ticket` 줄은 다음 실행이 병합된 티켓을 알아보는 표시다.
+```console
+$ git log -2 --format='%h %s%n%b' origin/main
+5677e8e gs: csv-export 최종 보고서(병합 후)
+
+ce0c5fd csv-export: gs go (#7)
+01 CSV 헤더 줄
+02 CSV 행 출력
+
+gs-ticket: csv-export/01
+gs-ticket: csv-export/02
+```
+병합 뒤 gs는 squash 커밋의 tree가 검증한 integration의 tree와 같은지 본다. main 검증이 실패하면 그 커밋 하나를 revert한다:
+```
+■ main 검증: npm test
+■ 최종 보고서를 main에 push했다(de7c5c0a)
+■ 요약: 병합 2
+■ 마무리: main 검증 실패 → revert 56e0ce620d98867f7f3cfbad4cada7a262fd750b를 main에 push함
+```
+
+**실행 중에 main이 움직이면 멈춘다** — integration은 실행을 시작할 때 main을 합친다. PR 병합 전에 다른 사람의 커밋이 main에 들어가면 squash 커밋 tree에 검증하지 않은 내용이 섞이므로, gs는 main 검증도 revert도 하지 않고 멈춘다. 다시 `gs go`해도 같은 오류다:
+```
+■ 마무리: 마무리 실패: squash 커밋 bc58fbbe…의 tree가 검증한 integration d059e174…의 tree와 다르다(PR 병합 사이에 main가 움직였을 수 있다). 검증하지 않은 내용이 main에 들어갔으니 사람이 main를 확인하라
+gs go: git 오류: squash 커밋 bc58fbbe…
+```
+feature는 이미 main에 들어가 있다. main을 직접 확인한 뒤 빠져나오는 법은 `gs clean csv-export --force` → `gs go csv-export`다. 병합된 티켓은 main의 `gs-ticket` 줄로 알아보고 건너뛰며, 최신 main을 다시 검증하고 보고서를 새 PR로 올린다. 이때 main 검증이 실패해도 gs가 되돌리는 것은 그 보고서 병합뿐이다. feature의 squash 커밋은 사람이 revert한다. 커밋이 잦은 레포에서 merge 커밋을 허용할 수 있으면 `merge_method = "merge"`가 낫다(이 검사가 없고, 병합 뒤 main을 다시 검증한다).
+
+### 예시: 보호된 main + 필수 승인
+
+main에 직접 push가 막혀 있고 PR에 승인 1명, 필수 검사 `build`·`test`가 있다. config:
+```toml
+[git]
+direct_push = false
+wait_checks = true
+
+[timeouts]
+checks_minutes = 60           # CI 대기 한 번의 상한(기본 60)
+```
+
+**spec·티켓은 먼저 사람이 PR로 올린다** — `gs go`는 spec·티켓이 원격 main에 있어야 시작한다. `/go`의 `git push origin main`은 보호에 막히고, `direct_push = false`는 이 push를 바꾸지 않는다. 그래서 `/grill`이 커밋한 뒤 그 커밋(들여올 때의 config·`.gitignore` 커밋 포함)을 브랜치로 올려 사람이 병합한다:
+```sh
+git switch -c grill/csv-export       # 로컬 main의 커밋을 브랜치로
+git push -u origin grill/csv-export
+gh pr create --fill --base main      # 승인·병합은 사람이 한다
+# 병합된 뒤 로컬 main을 원격에 맞춘다(squash면 안 그러면 갈라져 /go가 멈춘다)
+git switch main && git fetch origin && git reset --keep origin/main
+```
+그 뒤 `/go csv-export`. 로컬 main이 원격과 같으니 push할 것이 없다.
+
+**feature PR** — 티켓이 끝나면 PR을 열고 CI를 기다린다. 필수 검사가 끝나면 병합을 시도하고, 승인이 없어 막히면 PR을 열어 둔 채 끝난다(종료 1, 알림):
+```
+■ integration-final: 보고서만 바뀜, 건너뜀
+■ PR #7: CI 검사 대기 중(build ✓, test …)
+■ PR #7: CI 검사 대기 중(build ✓, test ✓)
+■ 요약: 병합 3
+■ 마무리: 사람 승인 필요: https://github.com/you/tally/pull/7. main 검증은 미실행
+■ 보고서: .goldstack/work/csv-export/report.md · 남은 리뷰 지적 1
+■ PR: https://github.com/you/tally/pull/7
+```
+```
+❌ csv-export · 사람 승인 필요: https://github.com/you/tally/pull/7. main 검증은 미실행 · 티켓 3/3 · 보고서 .goldstack/work/csv-export/report.md
+```
+CI 대기 중에는 진행 바가 `▓▓▓▓▓▓▓▓ csv-export 3/3 · CI 대기 중 · 31분 · 약 0분 남음`이다. 검사가 실패하거나 시간을 넘기면 병합하지 않고 `■ 마무리: CI 실패: build, test` 또는 `■ 마무리: CI 대기 시간 초과`로 끝난다. 고치는 커밋을 PR 브랜치에 넣거나 CI를 다시 돌린 뒤 `gs go`하면 검사를 다시 읽어 이어 간다(head가 바뀌었으면 그 head를 먼저 `verify`한다).
+
+**승인 뒤** — GitHub에서 승인하고(병합까지 해도 된다) 터미널에서 `gs go csv-export`를 다시 친다. worker는 다시 돌지 않는다. `/go`로 치려면 먼저 `git pull --ff-only`다. PR이 병합되면 로컬 main이 원격보다 뒤처져 `/go`가 멈춘다. main을 검증하고 최종 보고서를 `gs/csv-export/report` PR로 올리는데, 이 PR에도 승인이 필요하면 또 멈춘다:
+```
+[01] 이미 병합됨
+■ main 검증: npm test
+■ main에 직접 push하지 않는다: report PR https://github.com/you/tally/pull/8
+■ 요약: 이미 병합 3
+■ 마무리: 사람 승인 필요: https://github.com/you/tally/pull/8
+```
+PR #8을 승인하고 한 번 더 치면 끝난다(종료 0):
+```
+■ 최종 보고서를 PR https://github.com/you/tally/pull/8로 main에 병합했다(f3dcd7e1)
+■ 요약: 이미 병합 3
+■ 마무리: integration·main 검증 통과, PR 병합 완료
+```
+보고서 PR을 기다리는 동안(phase `report_pending`) 코드는 이미 main에 있고 검증도 끝났다. 그래도 종료 1이라 `gs go a b`는 `■ csv-export: report_pending → 여기서 멈춤(남은: csv-import)`으로 멈춘다. 보고서를 main에 남길 필요가 없으면 PR을 그대로 둬도 코드에는 영향이 없다.
+
+**main 검증이 실패하면** — revert도 PR(`gs/csv-export/revert`)이다. 승인이 필요하면 **되돌리기 전에 멈추므로 깨진 코드가 main에 남아 있다.** 알림을 보면 바로 승인한다:
+```
+■ main 검증: npm test
+■ main에 직접 push하지 않는다: revert PR https://github.com/you/tally/pull/8
+■ 마무리: 사람 승인 필요: https://github.com/you/tally/pull/8
+```
+승인 뒤 `gs go`는 revert를 병합하고 마무리를 `main 검증 실패 → revert <sha>를 PR https://github.com/you/tally/pull/8로 main에 병합함`으로 적은 뒤 보고서 PR로 간다. 그러니 feature 하나에 사람 승인은 보통 2번(feature, 보고서), revert가 있으면 3번이다.
+
+**승인·CI를 기다릴 때 report.md** — 기다리는 PR의 head를 바꾸지 않으려고 feature PR 대기 중에는 보고서를 다시 쓰지 않는다. 그래서 report.md·PR 본문의 마무리 줄은 `마무리: preparing · 병합 전`이다. 지금 상태는 `■ 마무리:` 줄, 알림, `jq .finish .goldstack/work/csv-export/run/state.json`으로 본다.
+
+### 예시: 느린 시험(`verify_ticket`, `verify_retries`)
+
+전체 시험이 40분이고 가끔 flaky하다. 티켓마다 40분을 쓰지 않고 빠른 검사만 돌리고, 전체는 integration과 main에서만 돌린다. spec frontmatter:
+```yaml
+---
+feature: csv-export
+verify: npm test
+verify_ticket: npm run test:unit
+verify_minutes: 60
+verify_retries: 1
+idle_minutes: 30
+---
+```
+- `verify_ticket`: 티켓마다 worker가 커밋 전에 돌리고(brief에 이 명령이 들어간다), gs가 티켓 worktree에서 다시 돌린다.
+- `verify`: integration, 보고서 커밋 뒤 integration-final, 병합 뒤 main에서 돌린다. 바뀐 것이 `report.md`뿐이면 integration-final은 건너뛴다.
+- `verify_retries`: 실패하면(시간 초과 포함) 그만큼 다시 돌린다. 한 번의 상한은 `verify_minutes`라 최악은 (1 + `verify_retries`) × `verify_minutes`다. 모든 검증 지점에 같이 적용된다.
+- `idle_minutes`: worker가 출력 없이 시험을 돌리는 시간보다 길게 둔다.
+
+```
+[01] 검증: npm run test:unit
+[01] 검증 통과 → integration 병합
+■ integration 검증: npm test
+■ integration-final: 보고서만 바뀜, 건너뜀
+■ main 검증: npm test
+```
+재시도로 통과하면 실패가 아니지만 보고서 Evidence에 남는다(`report.md`의 verify 출력). 라벨은 `ticket-01`, `integration`, `integration-final`, `main` 등이다:
+```
+티켓 검증 명령: `npm run test:unit`
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+flaky: main 재시도 1번 만에 통과
+```
+주의: 빠른 검사가 놓친 실패는 integration의 전체 `verify`에서 잡히는데, 이때는 티켓을 고르지 못해 재시도 없이 feature 전체가 `integration 검증 실패 → 병합 안 함`으로 끝난다. `finish/integration-verify.log`를 읽고 `/grill`로 고칠 티켓을 더해 다시 돌린다. 그래서 `verify_ticket`은 자주 깨지는 쪽을 덮는 검사로 고른다.
+
+### config 키
+
+`.goldstack/config.toml`. `gs init`이 전부 기본값으로 쓴다. 값 하나는 `gs config <섹션.키>`(`gs config git.merge_method` → `squash`). `/go` skill은 이것으로 `git.base`·`git.remote`를 읽는다. `gs go`는 시작할 때 한 번 읽는다.
+
+| 키 | 기본 | 누가 쓰나 |
+|---|---|---|
+| `git.remote` | `"origin"` | `gs go`(fetch, push, PR 저장소 owner/repo), `gs doctor`(읽을 저장소), `/go`. GitHub URL이어야 한다 |
+| `git.base` | `origin/HEAD`의 브랜치, 못 찾으면 `"main"`(`gs init`이 적는다) | `gs go`(PR 대상, worker·integration 출발점, 재검증), `gs doctor`(보호 규칙을 읽을 브랜치), `/go` |
+| `git.merge_method` | `"merge"` | `gs go` 마무리: PR 병합·확인·revert. `merge` 또는 `squash`. `gs doctor --write`가 고친다 |
+| `git.direct_push` | `true` | `gs go` 마무리: `false`면 revert·최종 보고서를 PR로. `gs doctor --write`가 고친다 |
+| `git.wait_checks` | `false` | `gs go` 마무리: `true`면 CI를 기다린 뒤 병합. `gs doctor --write`가 고친다 |
+| `worktree.setup` | `""` | `gs go`: worktree마다 worker·verify 전에 돌린다. 비면 안 돈다. 사람이 채운다 |
+| `models.judge` | `"opus"` | 판단 모델 `claude -p --model`: 실패 요약, 리뷰 분류, 보고서 요약 |
+| `models.claude_review` | `"opus"` | reviewer가 claude일 때 `--model` |
+| `models.agy` | `"gemini-4-argon-high"` | agy worker·reviewer `--model`, `/retro`의 로그 요약 |
+| `models.codex` | `""` | codex worker·reviewer `--model`. 비우면 codex 기본 모델 |
+| `agy.max_calls_per_run` | `3` | `gs go`(호출 세기), `gs check`(경고). `0`이면 agy를 띄우지 않는다 |
+| `timeouts.review_minutes` | `30` | reviewer 호출 한 번 |
+| `timeouts.judge_minutes` | `10` | 리뷰 분류·보고서 요약 호출 한 번 |
+| `timeouts.summary_seconds` | `60` | 재시도 brief용 실패 요약 호출 한 번 |
+| `timeouts.checks_minutes` | `60` | PR 하나의 CI 대기 한 번(`gs go`마다 새로 잰다). `git.wait_checks`일 때만 |
+| `timeouts.setup_minutes` | `15` | `worktree.setup` 한 번 |
+| `notify.telegram` | `false` | `gs go`가 끝날 때 한 통, `gs check`(값이 비면 경고) |
+
+검사: 형이 틀린 값, 0 이하인 `timeouts.*`, 음수인 `agy.max_calls_per_run`, 빈 모델 이름(`models.codex`만 빈 값 허용), `merge`·`squash` 밖의 `git.merge_method`는 오류, 모르는 키는 경고다. 빠진 키도 오류지만 v5 전 config를 위해 `git.merge_method`·`direct_push`·`wait_checks`, `timeouts.checks_minutes`·`setup_minutes`, `[worktree]`, `[agy]`는 없으면 기본값으로 읽는다.
+
+### spec frontmatter 키
+
+feature마다 다른 값은 config가 아니라 `.goldstack/work/<feature>/spec.md` frontmatter에 둔다. `/grill`이 적고 `gs check`·`gs go`가 읽는다. `: `나 ` # `가 든 값은 따옴표로 감싼다.
+
+| 키 | 기본 | 누가 쓰나 |
+|---|---|---|
+| `feature` | 필수 | `gs check`: 디렉터리 이름과 같아야 한다 |
+| `verify` | 필수 | `gs go`: integration, integration-final, 병합 뒤 base 검증. `verify_ticket`이 없으면 티켓 검증(병합 중인 integration에서)과 worker brief도. 비어 있지 않은 셸 한 줄 |
+| `verify_ticket` | 없음 | 있으면 `gs go`의 티켓 검증(티켓 worktree에서)과 worker brief가 `verify` 대신 이것을 쓴다. 비어 있지 않은 셸 한 줄 |
+| `verify_retries` | `0` | 모든 검증 지점에서 실패 시 다시 돌리는 횟수. 0 이상 정수 |
+| `verify_minutes` | `20` | 검증 명령 한 번의 상한(`verify`, `verify_ticket` 모두). 1 이상 정수 |
+| `idle_minutes` | `20` | 로그 출력·새 커밋 없는 worker를 끝내는 시간. 1 이상 정수 |
+| `max_workers` | `3` | 동시 worker 수. 1 이상 정수 |
+
+그 밖의 키는 경고다. 티켓 frontmatter 키는 [아래](#티켓-선택-키와-agy-한도).
+
+### 한계
+
+- **GitHub만.** PR·병합을 `gh`로 한다. GitHub 밖 원격은 `gs check`·`gs go`가 오류로 멈추고 `gs doctor`가 `GitHub 원격 아님`으로 알린다(범위 밖 `gitlab-support`).
+- **rebase 병합 미지원.** `git.merge_method`는 `merge`·`squash`뿐이다. `rebase`는 config 오류이고, rebase만 허용하는 저장소는 `gs doctor`가 경고만 하며 PR 병합이 거부된다. 병합 커밋을 확인·revert하는 기준이 rebase에서는 성립하지 않는다.
+- **승인은 사람.** gs는 PR을 승인하지 않는다. 승인에 막히면 `사람 승인 필요: <PR>`로 멈추고 알린 뒤, 승인 뒤의 `gs go`가 이어 간다. 기다려 주는 프로세스가 없으니 사람이 다시 친다.
+- **CI 실패를 고치지 않는다.** 병합하지 않고 PR을 열어 둔 채 멈춘다(범위 밖 `ci-fix-tickets`).
+- **보호된 main의 grill 커밋은 사람 몫이다.** `direct_push = false`는 `gs go`의 revert·보고서에만 적용된다. spec·티켓은 [PR로 먼저 올린다](#예시-보호된-main--필수-승인).
+- **squash는 실행 중 main이 움직이면 멈춘다**([위](#예시-squash만-허용)).
+- **아직 보고되지 않은 CI는 기다리지 않는다.** `gh pr checks`가 검사 없음을 돌려주면 `CI 검사 대기 중(검사 없음)`을 쓰고 바로 병합을 시도한다. 필수 검사면 GitHub가 병합을 거부해 `merge_pending`으로 멈추고, 필수가 아닌 검사는 기다리지 않을 수 있다.
+
+### `gs init`이 만드는 것
+
+`/adopt`가 대신 부르지만 직접 쳐도 된다. 레포 루트(또는 그 안 어디서든. 위로 `.git`을 찾는다)에서:
 ```console
 $ gs init
 만듦: .goldstack/config.toml
 만듦: .goldstack/local.env.example
 추가: .gitignore (.goldstack/local.env, .goldstack/work/*/run/)
 .goldstack/config.toml을 확인하고, local.env.example을 local.env로 복사해 값을 채워라
+gs doctor: you/tally (원격 origin)
+…(gs doctor 표. 읽기만 한다)
 ```
-없는 파일만 만들고, 있는 파일은 `그대로 둠: …`으로 알린다. 두 번 돌려도 같다. 커밋은 하지 않는다.
-`config.toml`이 없으면 `gs check`·`gs go`·`gs config`는 `.goldstack/config.toml이 없다. gs init을 먼저 실행하라` 오류로 멈춘다.
+없는 파일만 만들고, 있는 파일은 `그대로 둠: …`으로 알린다. 두 번 돌려도 같다. 커밋은 하지 않는다. 끝에 `gs doctor`가 한 번 돈다(`--write` 없이).
+`config.toml`이 없으면 `gs check`·`gs go`·`gs config`·`gs doctor`는 `.goldstack/config.toml이 없다. gs init을 먼저 실행하라` 오류로 멈춘다.
 
-**2. config 채우기** — `gs init`이 모든 키를 기본값으로 쓴다. 빠진 키, 0 이하인 `timeouts.*`, 음수인 `agy.max_calls_per_run`, 빈 모델 이름(`models.codex`만 빈 값 허용)은 오류, 모르는 키는 경고다. `[agy]` 섹션만은 없어도 된다(v4 전에 만든 config는 상한 3으로 읽는다).
-```toml
-[git]
-remote = "origin"             # PR·병합·push 대상 원격. GitHub URL이어야 한다(PR 저장소 owner/repo를 여기서 푼다)
-base = "main"                 # PR 대상 브랜치. gs init이 refs/remotes/origin/HEAD에서 찾는다(못 찾으면 main)
-
-[models]
-judge = "opus"                # 실패 요약·리뷰 분류·보고서용 claude -p --model
-claude_review = "opus"        # reviewer가 claude일 때 --model
-agy = "gemini-4-argon-high"   # agy worker·reviewer --model
-codex = ""                    # 비우면 codex 기본 모델
-
-[agy]
-max_calls_per_run = 3         # gs go 한 번에 gs가 띄우는 agy 호출 상한. 0이면 agy를 띄우지 않는다
-
-[timeouts]
-review_minutes = 30           # reviewer 호출 한 번
-judge_minutes = 10            # 리뷰 분류·보고서 요약 호출 한 번
-summary_seconds = 60          # 재시도 brief용 실패 요약 호출 한 번
-
-[notify]
-telegram = false              # true면 gs go가 끝날 때 한 통
-```
-값 하나를 확인할 때는 `gs config git.base`(→ `main`), `gs config notify.telegram`(→ `false`). `/go` skill도 이것으로 base를 읽는다.
-feature마다 다른 값(`verify`, `max_workers`, `idle_minutes`, `verify_minutes`)은 config가 아니라 각 feature의 spec frontmatter에 둔다.
-
-**3. `.gitignore`** — `gs init`이 아래 두 패턴 줄을 덧붙인다(주석 줄은 설명용이고 gs init은 쓰지 않는다). 이미 있는 줄은 건드리지 않는다.
+**`.gitignore`** — `gs init`이 아래 두 패턴 줄을 덧붙인다(주석 줄은 설명용이고 gs init은 쓰지 않는다). 이미 있는 줄은 건드리지 않는다.
 ```
 # 텔레그램 토큰 같은 비밀
 .goldstack/local.env
@@ -65,7 +289,7 @@ feature마다 다른 값(`verify`, `max_workers`, `idle_minutes`, `verify_minute
 `.gitignore`의 `#`은 줄 맨 앞에서만 주석이다. 패턴 뒤에 붙이면 패턴의 일부가 되어 그 줄이 아무것도 무시하지 않는다.
 `run/` 아래에는 worker worktree(`run/wt/NN`)가 생긴다. 이 줄이 없으면 `git add -A`에 worktree가 섞인다.
 
-**4. 텔레그램(선택)** — `cp .goldstack/local.env.example .goldstack/local.env` 뒤 값을 채운다(따옴표 없이 `KEY=value`).
+**텔레그램(선택)** — `cp .goldstack/local.env.example .goldstack/local.env` 뒤 값을 채운다(따옴표 없이 `KEY=value`).
 ```
 # BotFather에서 받은 봇 토큰
 TG_TOKEN=123456:ABC...
@@ -76,27 +300,22 @@ TG_CHAT_ID=987654321
 채팅 ID를 모르면 봇에게 아무 메시지나 보낸 뒤 `https://api.telegram.org/bot<TG_TOKEN>/getUpdates`의 `chat.id`를 본다. 그리고 config에서 `telegram = true`.
 gs는 이 파일만 읽는다(환경 변수는 보지 않는다). worker는 이 파일을 읽을 수 없다(차단 hook).
 
-**5. 확인하고 커밋** — `gs check <feature>`는 spec·티켓과 함께 환경도 본다. feature가 아직 없어도 `gs check x`를 돌리면("feature 디렉터리가 없다" 오류는 무시) `git`·`gh`·원격·텔레그램 문제가 먼저 보인다. 나오는 줄:
+**환경 확인** — `gs check <feature>`는 spec·티켓과 함께 환경도 본다. feature가 아직 없어도 `gs check x`를 돌리면("feature 디렉터리가 없다" 오류는 무시) `git`·`gh`·원격·텔레그램 문제가 먼저 보인다. 나오는 줄:
 - ``필요한 CLI `codex`가 PATH에 없다``(오류): `git`, `gh`, `claude`(판단 모델: 실패 요약·리뷰 분류·보고서)와 범위 안 티켓의 `model`·`reviewer`가 쓰는 CLI가 있어야 한다.
 - ``원격 `origin`의 URL `…`은 GitHub 저장소 형식이 아니다``(오류): gs는 `git.remote`의 URL에서 owner/repo를 풀어 모든 `gh pr` 명령에 `--repo`로 넘긴다. GitHub 밖 원격에서는 `gs go`도 시작하지 않는다.
 - `notify.telegram이 켜져 있지만 .goldstack/local.env에 TG_TOKEN이 없다`(경고).
-
-```sh
-git add .goldstack/config.toml .goldstack/local.env.example .gitignore
-git commit -m "goldstack init"
-```
 
 ## 새 feature
 
 base 브랜치에서 Claude Code를 연다. 순서는 `/grill` → `/go`이고, 둘 다 사용자가 부르는 skill이다.
 
 **`/grill csv-export`**
-1. Claude가 레포·문서·도구 버전과 `gs backlog`(열린 아이디어, 범위 밖의 다시 볼 조건)를 직접 읽고 돌려 본 것을 spec "환경 사실"에 날짜와 함께 적는다. 찾을 수 있는 것은 묻지 않는다.
+1. Claude가 `.goldstack/profile.md`(있으면 가장 먼저, 없고 처음 쓰는 레포면 `/adopt`를 권한다), 레포·문서·도구 버전과 `gs backlog`(열린 아이디어, 범위 밖의 다시 볼 조건)를 직접 읽고 돌려 본 것을 spec "환경 사실"에 날짜와 함께 적는다. 찾을 수 있는 것은 묻지 않는다.
 2. 사람이 정할 결정을 라운드마다 한 메시지에 번호 붙여 묻는다. 질문마다 선택지와 그 선택지의 구체 예시(실제로 보일 명령·파일·출력), 추천과 이유가 붙고, 끝에 `yes = 추천 전부 수락. 바꿀 것만 번호로`. 열린 아이디어가 있으면 라운드 1의 첫 질문은 "이번 feature에 넣을 후보"다(아래 [아이디어 흐름](#아이디어-흐름)).
 3. 답하는 법: `yes`(추천 전부), `2. B`(2번만 B), `3. 왜 B가 아니야?`(되묻기: 답을 듣고 같은 라운드를 다시 확정한다). 짧은 답이면 Claude가 "이렇게 읽었다"를 답마다 한 줄로 보이니, 어긋나면 그때 고친다.
 4. 답은 바로 `.goldstack/work/csv-export/spec.md`의 "결정" 표와 "grill 기록"에 적힌다. `verify` 같은 frontmatter 값이면 frontmatter도 고친다(gs는 표가 아니라 frontmatter를 읽는다).
 5. 마지막 라운드는 티켓 분해다: 티켓 표(blocked_by, wave, 구현 모델, 리뷰 계열 — 서로 다른 계열이어야 한다, 건드릴 파일 `touches`)와 범위 밖 목록. 확정되면 `touches`가 티켓 frontmatter에 들어간다(아래 [티켓 선택 키](#티켓-선택-키와-agy-한도)).
-6. 확정되면 `tickets/NN-slug.md`, `.goldstack/out-of-scope/<slug>.md`를 쓰고 `gs check csv-export`가 오류·경고 없이 통과할 때까지 고친다. 라운드 1에서 고른 아이디어 파일은 `status: "taken"`, `feature: "csv-export"`로 바꾼다. 그 뒤 `.goldstack/work/csv-export`, `.goldstack/out-of-scope`, `.goldstack/ideas`만 커밋한다(없는 디렉터리는 뺀다). push는 하지 않는다.
+6. 확정되면 `tickets/NN-slug.md`, `.goldstack/out-of-scope/<slug>.md`를 쓰고 `gs check csv-export`가 오류·경고 없이 통과할 때까지 고친다. 라운드 1에서 고른 아이디어 파일은 `status: "taken"`, `feature: "csv-export"`로 바꾼다. 그 뒤 `.goldstack/work/csv-export`, `.goldstack/out-of-scope`, `.goldstack/ideas`, `.goldstack/profile.md`만 커밋한다(없는 디렉터리는 뺀다). push는 하지 않는다.
 
 ```console
 $ gs check csv-export
@@ -108,7 +327,7 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 
 **`/go csv-export`**
 1. `gs check` — 오류가 있으면 보이고 "`/grill csv-export`로 고친다"며 끝낸다.
-2. 현재 브랜치가 base인지 보고, grill 결과(`.goldstack/work/csv-export`, `.goldstack/out-of-scope`, `.goldstack/ideas`)가 아직 커밋 안 됐으면 그 경로만 커밋하고, base가 원격보다 앞서기만 하면 `git push origin main`(force 아님). 뒤처졌거나 갈라졌으면 말하고 끝낸다. worker는 `origin/main` 위에서 일하므로 spec·티켓이 거기 있어야 한다.
+2. 현재 브랜치가 base인지 보고, grill 결과(`.goldstack/work/csv-export`, `.goldstack/out-of-scope`, `.goldstack/ideas`, `.goldstack/profile.md`)가 아직 커밋 안 됐으면 그 경로만 커밋하고, base가 원격보다 앞서기만 하면 `git push origin main`(force 아님). 뒤처졌거나 갈라졌으면 말하고 끝낸다. worker는 `origin/main` 위에서 일하므로 spec·티켓이 거기 있어야 한다. 보호된 main이면 이 push가 막히니 [먼저 PR로 올린다](#예시-보호된-main--필수-승인).
 3. `gs go csv-export`를 백그라운드로 돌리고 끝날 때까지 기다린다. 사람에게 묻지 않는다.
 4. 결과: `report.md`의 세 줄 요약과 PR 링크(README "5분 따라 하기" 3). 끝나면 `/retro csv-export`로 실행을 돌아볼 수 있다([아이디어 흐름](#아이디어-흐름)).
 
@@ -191,7 +410,7 @@ max_calls_per_run = 3
 ▓▓▓░░░░░ csv-export 1/3 · 02 리뷰 중(codex) · 03 worker 중(claude) · 12분 · 약 18분 남음
 ```
 - `1/3`: 끝난 티켓(병합·실패·건너뜀)/전체. 막대 8칸이 그 비율이다.
-- `02 리뷰 중(codex)`: 돌고 있는 티켓마다 단계(worker, 리뷰, 수정, 검증, 마무리)와 그 단계의 모델. feature 전체 마무리(보고서·PR·main 검증) 중이면 `마무리 중(claude)`.
+- `02 리뷰 중(codex)`: 돌고 있는 티켓마다 단계(준비, worker, 리뷰, 수정, 검증, 마무리)와 그 단계의 모델. feature 전체 마무리(보고서·PR·main 검증) 중이면 `마무리 중(claude)`, CI를 기다리면 `CI 대기 중`, integration이나 base worktree를 준비하면 `준비 중`.
 - `12분`: 이번 실행의 경과. `약 18분 남음`: 이번 실행에서 끝난 티켓의 평균 소요 × 남은 티켓 ÷ `max_workers`.
 - 이번 실행에서 끝난 티켓이 아직 없으면 이 레포의 **다른 feature** 실행 기록(`.goldstack/work/*/run/state.json`)에서 병합된 티켓의 소요 중앙값으로 처음부터 예측하고, 그 사실을 꼬리표로 단다:
   ```
@@ -217,7 +436,7 @@ herdr 밖이면 화면 없이 돌고, 로그는 `.goldstack/work/csv-export/run/
 
 ## 실패했을 때
 
-**보고서 읽기** — `.goldstack/work/csv-export/report.md`. gs가 integration 브랜치에 커밋하고 PR 본문으로도 쓴다. 마무리가 `verified`(main 검증 통과)나 `reverted`(main 검증 실패로 revert)로 끝나면 main 검증 결과까지 담긴 최종판을 커밋 `gs: csv-export 최종 보고서(병합 후)` 하나로 main에도 push한다. 그러니 `git pull` 뒤 작업 트리의 report.md가 최종판이다. 그 push가 두 번 거부되면 `■ 경고: 최종 보고서를 main에 push하지 못했다…`만 남고(결과·종료 코드는 그대로), main에는 병합 직전 판이 남는다. 최종판은 PR 본문에 있고(gs가 같은 내용으로 갱신한다), 로컬에서는 state에 남은 커밋으로 본다. `verified`면 [자동 정리](#끝난-feature-치우기gs-clean)가 integration 브랜치를 이미 지웠으므로 브랜치 이름으로는 못 찾는다:
+**보고서 읽기** — `.goldstack/work/csv-export/report.md`. gs가 integration 브랜치에 커밋하고 PR 본문으로도 쓴다. 마무리가 `verified`(main 검증 통과)나 `reverted`(main 검증 실패로 revert)로 끝나면 main 검증 결과까지 담긴 최종판을 커밋 `gs: csv-export 최종 보고서(병합 후)` 하나로 main에도 push한다(`git.direct_push = false`면 [PR로 올린다](#예시-보호된-main--필수-승인)). 그러니 `git pull` 뒤 작업 트리의 report.md가 최종판이다. 그 push가 두 번 거부되면 `■ 경고: 최종 보고서를 main에 push하지 못했다…`만 남고(결과·종료 코드는 그대로), main에는 병합 직전 판이 남는다. 최종판은 PR 본문에 있고(gs가 같은 내용으로 갱신한다), 로컬에서는 state에 남은 커밋으로 본다. `verified`면 [자동 정리](#끝난-feature-치우기gs-clean)가 integration 브랜치를 이미 지웠으므로 브랜치 이름으로는 못 찾는다:
 ```console
 $ head=$(jq -r .finish.head .goldstack/work/csv-export/run/state.json)
 $ git show "$head:.goldstack/work/csv-export/report.md"
@@ -244,10 +463,11 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `커밋 없음`, `worker 종료 코드 <N>` | worker가 커밋 없이 끝났거나 실패로 끝났다 | `worker.log`, worker의 마지막 메시지(막힌 이유) |
 | `conflict`, `integration 병합 충돌` | 먼저 병합된 티켓과 같은 곳을 고쳤다 | `merge.log`. 같은 파일을 건드리는 티켓은 `blocked_by`로 줄 세운다 |
 | `막힘: 02` | 02가 실패해 이 티켓은 건너뛰었다(`skipped`) | 02를 고치면 같이 다시 돈다 |
+| `준비 실패` | `worktree.setup`이 실패했거나 `timeouts.setup_minutes`를 넘겼다. 재시도하지 않는다 | `run/<티켓>/<시도>/setup.log`(보고서 Evidence에 끝부분). 명령·설치를 고쳐 다시 `gs go` |
 | `agy 차단 장치가 없다: …` | agy가 gs hook을 걸지 못해 worker로 띄우지 않았다 | 그 티켓의 `model`을 바꾸거나 agy를 고친다 |
 | `agy 한도: 이번 실행의 agy 호출이 상한 3/3에 닿아 worker를 띄우지 않았다(config agy.max_calls_per_run)` | 이번 실행의 agy 호출이 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿았다. 재시도하지 않는다 | 상한을 올리거나 그 티켓의 `model`을 바꿔 다시 `gs go` |
 
-실패한 티켓은 같은 모델로 한 번 자동 재시도한 뒤에도 실패한 것이다. 시도마다 증거가 `.goldstack/work/csv-export/run/<티켓>/<시도>/`에 남는다: `brief.md`, `worker.log`, `verify.log`, `merge.log`, `failure.log`, `failure-summary.md`(판단 모델의 요약), `review/`(diff·reviewer 답), `fix/`(수정 worker). 실패한 worktree(`run/wt/03`, `run/wt/03-retry-1`)도 지우지 않고 남긴다. 다 봤으면 [`gs clean`](#끝난-feature-치우기gs-clean)으로 지운다.
+실패한 티켓은 같은 모델로 한 번 자동 재시도한 뒤에도 실패한 것이다(`준비 실패`와 `agy 한도`는 재시도하지 않는다). 시도마다 증거가 `.goldstack/work/csv-export/run/<티켓>/<시도>/`에 남는다: `brief.md`, `setup.log`, `worker.log`, `verify.log`, `merge.log`, `failure.log`, `failure-summary.md`(판단 모델의 요약), `review/`(diff·reviewer 답), `fix/`(수정 worker). 실패한 worktree(`run/wt/03`, `run/wt/03-retry-1`)도 지우지 않고 남긴다. 다 봤으면 [`gs clean`](#끝난-feature-치우기gs-clean)으로 지운다.
 
 **마무리 결과**(보고서 Merge Danger, `■ 마무리:` 줄)
 
@@ -256,6 +476,12 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `integration·main 검증 통과, PR 병합 완료` | 끝. 실패한 티켓이 있어도 병합된 티켓은 main에 들어갔다 |
 | `merged 티켓 없음 → 병합 안 함`, `integration 검증 실패 → 병합 안 함` | PR은 열렸거나 갱신됐지만 병합하지 않았다 |
 | `병합 명령 뒤 PR이 아직 MERGED가 아니다. main 검증은 미실행` | 병합 큐·보호 규칙 대기. 병합된 뒤 `gs go`를 다시 돌리면 main 검증부터 이어 간다 |
+| `사람 승인 필요: <PR>. main 검증은 미실행` | feature PR이 승인에 막혔다(`merge_pending`). 승인 뒤 `gs go` |
+| `사람 승인 필요: <PR>` | `gs/<f>/revert` 또는 `gs/<f>/report` PR이 승인에 막혔다(`revert_pending`, `report_pending`). 승인 뒤 `gs go`. revert면 깨진 코드가 아직 main에 있다 |
+| `CI 실패: <이름>`, `CI 대기 시간 초과` | `git.wait_checks`의 검사가 실패했거나 `timeouts.checks_minutes`를 넘겼다(`checks_failed`, `checks_timeout`). PR은 열려 있다. 고치거나 CI를 다시 돌리고 `gs go` |
+| `준비 실패 → 병합 안 함` | integration worktree의 `worktree.setup`이 실패했다(`setup_failed`). worker를 띄우지 않았고 PR도 없다. `run/integration/<시도>/setup.log`를 읽고 고쳐 `gs go` |
+| `base 미검증(준비 실패)` | 병합 뒤 base worktree의 `worktree.setup`이 실패했다(`base_unverified`). 병합은 됐고 revert하지 않았다. `run/finish/setup.log`를 읽고 고쳐 `gs go`하면 base 검증부터 다시 한다 |
+| `마무리 실패: squash 커밋 …의 tree가 검증한 integration …의 tree와 다르다…` | 실행 중 main이 움직였다. [squash 예시](#예시-squash만-허용)대로 main을 확인하고 빠져나온다 |
 | `PR …이 병합되지 않고 닫혔다 → 병합 안 함. 다음 gs go가 새 PR을 연다` | 사람이 PR을 닫았다 |
 | `main 검증 실패 → revert <sha>를 main에 push함` | 병합 뒤 main 검증이 실패해 병합 커밋을 되돌렸다(force push 없음). 다음 `gs go`가 그 revert를 integration에서 다시 되돌려 feature 코드를 되살린다 |
 
@@ -285,7 +511,7 @@ grill이 끝난 feature가 여럿이면(밤새 돌려 둘 때) 한 번에 줄 �
 
 **멈추는 조건** — 앞 feature의 종료 코드가 0이 아니거나 마무리가 `verified`가 아니면 멈춘다. 그러니 다음도 멈춘다:
 - 티켓 하나라도 실패·건너뜀(병합된 티켓은 main에 들어가 마무리가 `verified`여도): `■ csv-export: verified → 여기서 멈춤(남은: csv-import)`.
-- `not_merged`(integration 검증 실패, merged 티켓 없음), `merge_pending`(병합 큐 대기), `closed`, `reverted`(main 검증 실패로 revert).
+- `not_merged`(integration 검증 실패, merged 티켓 없음), `merge_pending`(병합 큐·승인 대기), `checks_failed`·`checks_timeout`(CI), `revert_pending`·`report_pending`(gs PR의 승인 대기), `setup_failed`·`base_unverified`(준비 실패), `closed`, `reverted`(main 검증 실패로 revert).
 - `gs go`가 시작 전에 거부(미커밋 spec, 다른 `gs go`가 잠금): 종료 코드가 1이라 state에 지난 실행의 `verified`가 남아 있어도 멈춘다. state.json을 못 읽으면 `■ csv-export: unknown → 여기서 멈춤(남은: csv-import)`.
 
 멈췄으면 앞 feature를 [실패했을 때](#실패했을-때)대로 고친 뒤 같은 줄을 다시 친다. 모두 병합돼 정리된 앞 feature는 `■ 이미 끝남: csv-export (verified)`로 바로 넘어간다. `--only`는 여러 feature와 함께 못 쓴다(`gs: error: 여러 feature와 --only는 함께 쓸 수 없다`).
@@ -319,7 +545,7 @@ $ gs clean csv-export
 - 하나를 지우다 실패하면 `경고: 정리 실패: …`를 쓰고 나머지를 계속한 뒤 종료 1.
 - 정리한 뒤 같은 feature로 `gs go`를 쳐도 다시 만들지 않는다: 모든 티켓이 병합된 끝난 실행이면 `■ 이미 끝남: csv-export (verified)`. 실패 티켓이 남았거나 새 티켓을 더했으면 평소처럼 이어 가고, 병합된 티켓은 건너뛴다.
 
-**자동 정리** — 마무리가 `verified`로 끝나면 `gs go`가 main에 최종 보고서 push를 시도한 뒤 그 feature의 integration worktree(`run/wt/integration`)와 로컬·원격 `gs/csv-export/integration`을 스스로 지운다. 출력은 `지움: worktree …/run/wt/integration (미커밋 변경도 지움)` 한 줄이고 실패해도 `경고: 정리 실패: …`만 남는다(결과·종료 코드는 그대로). 원격 삭제만 실패했으면 다음 `gs go csv-export`가 `■ 이미 끝남` 뒤 다시 시도한다. 실패한 티켓의 worktree·브랜치는 자동으로 지우지 않는다(`gs clean`). `reverted`·`not_merged`·`merge_pending`으로 끝난 feature는 원인을 볼 수 있게 integration을 남긴다.
+**자동 정리** — 마무리가 `verified`로 끝나면 `gs go`가 main에 최종 보고서 push를 시도한 뒤 그 feature의 integration worktree(`run/wt/integration`)와 로컬·원격 `gs/csv-export/integration`을 스스로 지운다. 출력은 `지움: worktree …/run/wt/integration (미커밋 변경도 지움)` 한 줄이고 실패해도 `경고: 정리 실패: …`만 남는다(결과·종료 코드는 그대로). 원격 삭제만 실패했으면 다음 `gs go csv-export`가 `■ 이미 끝남` 뒤 다시 시도한다. 실패한 티켓의 worktree·브랜치는 자동으로 지우지 않는다(`gs clean`). `verified`가 아닌 마무리(`reverted`, `not_merged`, `merge_pending`, `report_pending` 등)는 원인을 보고 이어 갈 수 있게 integration을 남긴다. 보호된 base에서 쓴 원격 `gs/csv-export/report`·`revert` 브랜치는 자동으로 지우지 않는다(`gs clean`).
 
 ## 아이디어 흐름
 
@@ -388,7 +614,7 @@ $ gs migrate
 
 ## skill 사용 장면
 
-`/grill`, `/go`, `/idea` 밖의 다섯 skill은 [mattpocock/skills](https://github.com/mattpocock/skills)를 옮긴 것이다. 각 `SKILL.md` 끝에 원본 링크가 있다. `/idea`·`gs backlog`와 `/retro <feature>`는 [아이디어 흐름](#아이디어-흐름).
+`/grill`, `/go`, `/adopt`, `/idea` 밖의 다섯 skill은 [mattpocock/skills](https://github.com/mattpocock/skills)를 옮긴 것이다. 각 `SKILL.md` 끝에 원본 링크가 있다. `/idea`·`gs backlog`와 `/retro <feature>`는 [아이디어 흐름](#아이디어-흐름).
 
 ### `/wait-what` — 설명을 못 따라갔을 때(사용자 호출)
 grill 라운드 3번 질문이 "frontier 재계산 시 blocked_by 전이 폐포를…"처럼 읽혀 뜻을 모르겠다.

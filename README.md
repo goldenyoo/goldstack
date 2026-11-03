@@ -8,7 +8,7 @@ Claude Code로 feature 하나를 끝까지 보내는 개인 운영 kit.
 
 ## 설치
 
-필요한 것: Python 3.12+와 [uv](https://docs.astral.sh/uv/), `git`, 로그인한 `gh`(GitHub), `claude`(Claude Code). 대상 레포의 원격(`git.remote`, 기본 `origin`)은 GitHub 저장소여야 한다(PR·병합을 `gh pr … --repo <owner/repo>`로 한다). 티켓이 쓰는 모델이 있으면 `codex`, `agy`. `herdr`(터미널 멀티플렉서)는 선택이다. `gs go`를 herdr 안에서 돌리면 worker마다 pane이 보이고, 아니면 worker가 화면 없는 프로세스로 돈다.
+필요한 것: Python 3.12+와 [uv](https://docs.astral.sh/uv/), `git`, 로그인한 `gh`(GitHub), `claude`(Claude Code). 대상 레포의 원격(`git.remote`, 기본 `origin`)은 GitHub 저장소여야 한다(PR·병합을 `gh pr … --repo <owner/repo>`로 한다). 한계(GitHub만, rebase 병합 미지원, 승인은 사람)는 [docs/guide.md](docs/guide.md#한계). 티켓이 쓰는 모델이 있으면 `codex`, `agy`. `herdr`(터미널 멀티플렉서)는 선택이다. `gs go`를 herdr 안에서 돌리면 worker마다 pane이 보이고, 아니면 worker가 화면 없는 프로세스로 돈다.
 
 **1. `gs` CLI** — 이 레포를 받아 설치한다. main을 새로 받을 때마다 다시 실행한다(고정 복사로 설치된다).
 ```sh
@@ -24,16 +24,23 @@ gs --help
 ```
 명령줄로는 `claude plugin marketplace add /path/to/goldstack && claude plugin install goldstack@goldstack`. 레포를 새로 받은 뒤에는 `/plugin marketplace update goldstack`.
 
-**3. 대상 레포에서 `gs init`** — goldstack을 쓸 레포 루트에서 한 번 돌린다. 이미 있는 파일은 그대로 둔다.
+**3. 대상 레포에서 `/adopt`** — goldstack을 쓸 레포에서 Claude Code를 열고 `/adopt`. 레포를 훑어 요약 `.goldstack/profile.md`를 쓰고, 그 사이 `gs init`과 `gs doctor`(GitHub 병합 방식·base 보호·필수 승인·필수 검사를 읽어 맞는 config 줄을 보인다)를 거친다. 커밋은 하지 않는다. skill 없이 터미널에서 해도 된다. 이미 있는 파일은 그대로 둔다.
 ```console
 $ gs init
 만듦: .goldstack/config.toml
 만듦: .goldstack/local.env.example
 추가: .gitignore (.goldstack/local.env, .goldstack/work/*/run/)
 .goldstack/config.toml을 확인하고, local.env.example을 local.env로 복사해 값을 채워라
+gs doctor: you/tally (원격 origin)
+병합 방식  merge 허용 → git.merge_method = "merge"
+base 보호  main 직접 push 제한 없음
+필수 승인  0명
+필수 검사  없음
+검증       spec verify 없음 → 경고: 검증 없음, 리뷰만으로 병합
 ```
-`config.toml`의 `git.base`는 `origin/HEAD`에서 찾아 적는다(못 찾으면 `main`). 값이 맞는지 보고, 세 파일을 커밋한다:
+`config.toml`의 `git.base`는 `origin/HEAD`에서 찾아 적는다(못 찾으면 `main`). 제안을 쓰려면 `gs doctor --write`. 값이 맞는지 보고, 세 파일을 커밋한다:
 `git add .goldstack/config.toml .goldstack/local.env.example .gitignore && git commit -m "goldstack init"`.
+squash만 허용하는 레포, 보호된 main, 의존성 설치(`[worktree] setup`), 느린 시험은 [docs/guide.md](docs/guide.md#기존-레포에-들이기)대로 한다.
 
 **4. `local.env` 채우기(텔레그램 알림을 받을 때만)** — 비밀은 커밋하지 않는 이 파일에만 둔다. gs는 환경 변수를 보지 않는다.
 ```sh
@@ -64,7 +71,7 @@ yes = 추천 전부 수락. 바꿀 것만 번호로
 
 **2. `/go csv-export`** — `gs check` → base push → `gs go`를 백그라운드로 돌리고 끝날 때까지 기다린다. 중간에 아무것도 묻지 않는다. 기다리는 동안 프롬프트 위의 진행 바나 `gs status csv-export`를 본다.
 
-**3. 결과** — 끝나면 `gs go`의 마지막 줄과 `report.md`를 읽어 세 줄 요약과 PR 링크를 보인다. main 검증까지 끝나면 gs가 최종 report.md를 main에도 push하므로 `git pull`로 받으면 된다:
+**3. 결과** — 끝나면 `gs go`의 마지막 줄과 `report.md`를 읽어 세 줄 요약과 PR 링크를 보인다. main 검증까지 끝나면 gs가 최종 report.md를 main에도 push하므로(보호된 main이면 PR로) `git pull`로 받으면 된다:
 ```
 ■ 요약: 병합 3
 ■ 마무리: integration·main 검증 통과, PR 병합 완료
@@ -89,6 +96,7 @@ PR https://github.com/you/tally/pull/7
 |---|---|---|---|---|
 | `/grill` | 라운드 질문으로 결정을 모두 받아 spec·티켓·범위 밖을 쓰고 `gs check`를 통과시킨다. 열린 아이디어가 있으면 라운드 1 첫 질문이 "이번 feature에 넣을 후보"이고, 고른 것은 `taken`이 된다 | 새 feature를 시작할 때, 이어서 정할 것이 남았을 때 | `/grill csv-export` → 첫 질문 `1. 이번 feature에 넣을 후보: 1) codex-worker-hook 2) status-review-count` 에 `1. 2`로 답 | 사용자 |
 | `/go` | `gs go`로 티켓 실행부터 main 병합·재검증까지 돌리고 세 줄 요약과 PR을 보인다. feature를 여러 개 주면 앞 것이 `verified`일 때만 다음을 돌린다 | grill이 끝나 커밋된 feature를 실행할 때, 밤새 둘 이상을 이어 돌릴 때 | `/go csv-export`, `/go csv-export csv-import` | 사용자 |
+| `/adopt` | 처음 들이는 레포를 훑어 `gs init`·`gs doctor`를 거치고 레포 요약 `.goldstack/profile.md`를 쓴다(있으면 갱신하고 바뀐 점을 보인다). `/grill`과 worker가 이것을 먼저 읽는다. 커밋 안 함 | 레포에 goldstack을 처음 들일 때, 레포 구조·시험 명령이 바뀌었을 때 | `/adopt` → `gs doctor` 표를 보고 "제안대로 config에 쓸까"에 답 | 사용자 |
 | `/idea` | 생각 하나를 `.goldstack/ideas/<slug>.md` 아이디어 파일로 쓴다. 비슷한 열린 아이디어가 있으면 거기 덧붙일지 묻는다. 커밋 안 함 | 실행·대화 중 다음에 할 일이 떠올랐을 때 | `/idea gs status가 끝난 티켓의 리뷰 지적 수를 보이면 좋겠다` | 사용자 |
 | `/wait-what` | 방금 설명을 맥락부터, 쉬운 말로, 선택지마다 예시를 붙여 다시 하게 한다 | Claude의 말을 못 따라갔을 때(grill 질문 포함) | `/wait-what` | 사용자 |
 | `/handoff` | 지금 대화를 다른 agent가 이어받을 인계 문서로 줄여 임시 디렉터리에 쓴다 | 세션을 바꾸거나 곁가지 일을 떼어 줄 때 | `/handoff 03 실패 원인을 이어서 찾는다` | 사용자 |
@@ -104,7 +112,8 @@ PR https://github.com/you/tally/pull/7
 
 | 명령 | 무엇 | 언제 쓰나 |
 |---|---|---|
-| `gs init` | `.goldstack/config.toml`, `local.env.example`, `.gitignore` 줄을 만든다(있는 파일은 그대로) | 레포마다 한 번 |
+| `gs init` | `.goldstack/config.toml`, `local.env.example`, `.gitignore` 줄을 만들고(있는 파일은 그대로) 끝에 `gs doctor`를 한 번 돌린다 | 레포마다 한 번 |
+| `gs doctor [--write]` | GitHub의 병합 방식, base 보호, 필수 승인, 필수 검사를 읽어 표와 맞는 config 줄을 보인다. 못 읽으면 `모름`. `--write`는 제안한 `git.merge_method`·`direct_push`·`wait_checks`만 config에 쓴다(`gs init` 끝에는 `--write` 없이 돈다) | 레포에 들일 때, 저장소 설정이 바뀌었을 때 |
 | `gs config <섹션.키>` | 설정 값 한 줄(`gs config git.base` → `main`) | 값 확인, skill이 base를 읽을 때 |
 | `gs check <f> [--only 01,02]` | spec·티켓 그래프·config·CLI 검사. `touches` 겹침, agy 배정이 상한을 넘으면 경고 | grill 끝, `gs go` 전 |
 | `gs go <f> [--only 01,02]` | 티켓 실행 → 리뷰 → integration 병합·검증 → PR 병합 → main 재검증(실패하면 revert) | `/go`가 부른다 |
@@ -143,7 +152,7 @@ gitlab-support  GitHub 밖 레포에 goldstack을 쓰려 할 때.
 
 ## 추천 흐름
 
-1. 레포마다 한 번: `gs init` → config 확인 → 커밋(텔레그램을 쓰면 `local.env`).
+1. 레포마다 한 번: `/adopt`(`gs init`, `gs doctor`, profile) → `gs doctor --write` 확인 → 커밋 → 필요하면 `[worktree] setup`(텔레그램을 쓰면 `local.env`).
 2. feature마다: `gs backlog`로 후보를 본다 → `/grill <f>`(첫 질문에서 넣을 아이디어를 고른다) → `/go <f>`(여럿이면 `/go <a> <b>`) → 진행 바나 `gs status <f>`로 지켜본다 → 세 줄 요약·PR·텔레그램 → `/retro <f>`로 돌아보고 고른 후보를 아이디어 함에.
 3. 끝난 feature에 실패 worktree나 옛 브랜치가 남았으면 `gs clean <f>`(verified면 integration 흔적은 이미 지워져 있다).
 4. 실패하면 `report.md`를 읽고, 고칠 것이 있으면 `/grill <f>`로 spec·티켓을 고친 뒤 다시 `/go <f>`(병합된 티켓은 건너뛴다).
@@ -153,8 +162,8 @@ gitlab-support  GitHub 밖 레포에 goldstack을 쓰려 할 때.
 
 | 문서 | 내용 |
 |---|---|
-| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 새 feature, 티켓 선택 키(`touches`, `second_reviewer`)와 agy 한도, 다른 레포에 들이기, 실행 중 보기, 실패했을 때, 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
-| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, 상태, 병렬, 실패 처리, 리뷰(두 리뷰 합치기, agy 횟수), 마무리와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
+| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 기존 레포에 들이기(`/adopt`, `gs doctor`, squash만 허용·보호된 main·느린 시험 예시, config·spec 키 표, 한계), 새 feature, 티켓 선택 키(`touches`, `second_reviewer`)와 agy 한도, 실행 중 보기, 실패했을 때, 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
+| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, `gs doctor`, 상태, 병렬, 실패 처리, 리뷰(두 리뷰 합치기, agy 횟수), 마무리(squash 확인·revert, CI 대기, 보호된 base, 준비 실패, integration-final 건너뛰기)와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
 | [.goldstack/ideas/README.md](.goldstack/ideas/README.md) | 아이디어 파일 형식 |
 | [skills/grill/templates/](skills/grill/templates/) | spec·티켓·범위 밖 파일 형식 |
 | [docs/ORIGINS.md](docs/ORIGINS.md) | 시작 배경과 요구사항, 지난 실패 목록 |
