@@ -71,6 +71,28 @@ class CheckTest(unittest.TestCase):
         self.assertIn("순서: 01 02", out)
         self.assertIn("지금 시작 가능: 01", out)
 
+    def test_telegram_without_secrets_warns(self):
+        self.write("01-a.md", ticket("01"))
+        path = self.repo / config.CONFIG_PATH
+        path.write_text(path.read_text().replace("telegram = false", "telegram = true"))
+        warn = "경고: notify.telegram이 켜져 있지만 .goldstack/local.env에 {}(예시: .goldstack/local.env.example)"
+        code, out, err = self.run_check()
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(warn.format("TG_TOKEN이 없다"), err.splitlines())
+        self.assertIn(warn.format("TG_CHAT_ID가 없다"), err.splitlines())
+        self.assertIn("경고 2", out)
+
+        (self.repo / ".goldstack/local.env").write_text("TG_TOKEN=\nTG_CHAT_ID=42\n")  # 빈 값도 없는 것
+        code, out, err = self.run_check()
+        self.assertEqual(err.splitlines(), [warn.format("TG_TOKEN이 없다")])
+
+        (self.repo / ".goldstack/local.env").write_text("TG_TOKEN=1:abc\nTG_CHAT_ID=42\n")
+        self.assertEqual(self.run_check()[2], "")
+
+    def test_telegram_off_does_not_need_secrets(self):
+        self.write("01-a.md", ticket("01"))
+        self.assertEqual(self.run_check()[2], "")
+
     def test_missing_field(self):
         self.write("01-a.md", '---\nid: "01"\ntitle: t\nblocked_by: []\nmodel: claude\n---\n')
         self.assert_error("`reviewer`가 없다")

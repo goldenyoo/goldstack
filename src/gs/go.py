@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, config, failure, finish, git, graph, herdr, review, state, verify, worker
+from . import adapters, config, failure, finish, git, graph, herdr, notify, review, state, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -131,9 +131,12 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 r.save()
     finally:
         lock.release()
+    ok = finished and all(r.st.tickets[tid].status == state.MERGED for tid in r.order)
     if r.st is not None:
         _summary(r, url)
-    return 0 if finished and all(r.st.tickets[tid].status == state.MERGED for tid in r.order) else 1
+        if cfg.notify.telegram:
+            _notify(r, url, ok)
+    return 0 if ok else 1
 
 
 def _finish_run(r: Run) -> tuple[str | None, bool]:
@@ -755,3 +758,40 @@ def _summary(r: Run, url: str | None) -> None:
     left = sum(len(review.remaining(r.st.tickets[tid].review)) for tid in r.order)
     say(f"■ 보고서: {work_rel(r.name)}/report.md · 남은 리뷰 지적 {left}")
     say(f"■ PR: {url or '없음'}")
+
+
+def _message(r: Run, url: str | None, ok: bool) -> str:
+    """spec §4 "텔레그램" 형식. 성공은 세 줄, 실패는 한 줄."""
+    merged = sum(r.st.tickets[tid].status == state.MERGED for tid in r.order)
+    tickets = f"티켓 {merged}/{len(r.order)}"
+    if ok:
+        took = state.minutes(state.seconds_between(r.st.started_at, r.st.finished_at))
+        left = sum(len(review.remaining(r.st.tickets[tid].review)) for tid in r.order)
+        return (f"✅ {r.name} · {r.base} 병합\n{tickets} 병합 · {took}분 · 남은 지적 {left}\n"
+                f"PR {url or '없음'}")
+    f = r.st.finish
+    outcome = f.get("outcome", f.get("phase", "미완료"))
+    failed = [f"{tid} 실패: {(r.st.tickets[tid].reason.splitlines() or [''])[0]}"
+              for tid in r.order if r.st.tickets[tid].status == state.FAILED]
+    if failed:
+        tickets += f" ({', '.join(failed)})"
+    return f"❌ {r.name} · {outcome} · {tickets} · 보고서 {work_rel(r.name)}/report.md"
+
+
+def _notify(r: Run, url: str | None, ok: bool) -> None:
+    """실패해도 경고 한 줄만. 종료 코드·보고서는 바꾸지 않는다."""
+    token = ""
+    try:
+        env = config.read_local_env(r.repo)
+        token = env.get("TG_TOKEN", "")
+        missing = [key for key in ("TG_TOKEN", "TG_CHAT_ID") if not env.get(key)]
+        if missing:
+            error = f"알림을 보내지 않았다: .goldstack/local.env에 {', '.join(missing)} 값이 없다"
+        else:
+            sent, error = notify.send(token, env["TG_CHAT_ID"], _message(r, url, ok))
+            if sent:
+                return
+            error = f"알림 전송 실패: {error}"
+    except Exception as e:  # noqa: BLE001 — local.env를 못 읽어도 실행 결과는 그대로다
+        error = f"알림 실패: {notify.mask(f'{type(e).__name__}: {e}', token)}"
+    print(f"경고: 텔레그램 {error}", file=sys.stderr)

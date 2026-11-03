@@ -36,13 +36,26 @@ def environment_problems(repo: Path, cfg: config.Config, feat: featmod.Feature,
     return problems
 
 
+def notify_problems(repo: Path, cfg: config.Config) -> list[featmod.Problem]:
+    """알림을 켰는데 local.env에 비밀이 없으면 경고. gs go는 끝에 경고만 하고 결과는 그대로다."""
+    if not cfg.notify.telegram:
+        return []
+    try:
+        env = config.read_local_env(repo)
+    except (OSError, ValueError) as e:  # 디렉터리·권한·인코딩. 내용(토큰)은 메시지에 넣지 않는다
+        return [featmod.Problem("경고", ".goldstack/local.env", f"읽을 수 없다({type(e).__name__}). 텔레그램 알림을 보내지 못한다")]
+    return [featmod.Problem("경고", "", f"notify.telegram이 켜져 있지만 .goldstack/local.env에 {key}{josa} 없다"
+                                        "(예시: .goldstack/local.env.example)")
+            for key, josa in (("TG_TOKEN", "이"), ("TG_CHAT_ID", "가")) if not env.get(key)]
+
+
 def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod.Feature, list[str]]:
     """feature를 읽고 그래프까지 검사한다. (feature, 출력할 요약 줄) — 문제는 feature.problems에 쌓인다."""
     cfg, problems = config.load(repo)
     if cfg is None:
         return featmod.Feature(name=name, root=featmod.work_dir(repo, name), spec=None, problems=problems), []
     feat = featmod.load(repo, name)
-    feat.problems[:0] = problems
+    feat.problems[:0] = problems + notify_problems(repo, cfg)
     g = {t.id: t.blocked_by for t in feat.tickets.values()}
 
     def err(tid: str, msg: str) -> None:
