@@ -16,6 +16,9 @@ case "$GS_TICKET" in
   02) echo "boom"; exit 1 ;;
   05) touch BROKEN; git add BROKEN; git commit -qm "t05 breaks verify" ;;
   06) echo "did nothing" ;;
+  07) echo x > "$GS_WORKTREE/../integration/evil"; git -C "$GS_WORKTREE/../integration" add evil
+      git -C "$GS_WORKTREE/../integration" commit -qm evil ;;
+  08) touch "$GS_WORKTREE/../integration/BROKEN"; echo 8 > file_08; git add -A; git commit -qm t08 ;;
   *)  echo "$GS_TICKET $GS_ROLE" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET" ;;
 esac
 """
@@ -36,8 +39,9 @@ verify: test ! -f BROKEN
 """
 
 
-def ticket(tid, deps="[]"):
-    return f'---\nid: "{tid}"\ntitle: t{tid}\nblocked_by: {deps}\nmodel: claude\nreviewer: codex\n---\n## 목표\n{tid}\n'
+def ticket(tid, deps="[]", title=None):
+    title = title or f"t{tid}"
+    return f'---\nid: "{tid}"\ntitle: {title}\nblocked_by: {deps}\nmodel: claude\nreviewer: codex\n---\n## 목표\n{tid}\n'
 
 
 def sh(cwd, *args):
@@ -91,6 +95,75 @@ class GoTest(unittest.TestCase):
     def integration(self, *args):
         return sh(self.repo, "git", *args)
 
+    def add_ticket(self, tid, title=None, push=True):
+        (self.repo / ".work" / "demo" / "tickets" / f"{tid}-t.md").write_text(ticket(tid, title=title))
+        sh(self.repo, "git", "add", "-A")
+        sh(self.repo, "git", "commit", "-qm", f"ticket {tid}")
+        if push:
+            sh(self.repo, "git", "push", "-q", "origin", "main")
+
+    def merged(self):
+        log = self.integration("log", "--format=%B", "gs/demo/integration")
+        return sorted(line.split("/")[-1] for line in log.splitlines() if line.startswith("gs-ticket:"))
+
+    # --- codex 리뷰(02) 지적 재현 ---
+    def test_worker_commit_to_integration_is_undone_and_not_pushed(self):  # 지적 2
+        self.add_ticket("07")
+        code, out, _ = self.go("--only", "01,07")
+        self.assertEqual(code, 1)
+        self.assertIn("[07] 실패: worker가 integration worktree를 바꿨다", out)
+        self.assertNotIn("evil", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+        self.assertNotIn("evil", sh(self.remote, "git", "ls-tree", "--name-only", "gs/demo/integration").split())
+
+    def test_dirty_integration_is_cleaned_and_ticket_fails(self):  # 지적 3
+        self.add_ticket("08")
+        code, out, _ = self.go("--only", "08,01")
+        self.assertIn("[08] 실패: worker가 integration worktree를 바꿨다", out)
+        self.assertIn("[01] 검증 통과", out)  # BROKEN이 지워져 01 검증은 깨끗한 트리에서 돈다
+        self.assertFalse((self.repo / ".work/demo/run/wt/integration/BROKEN").exists())
+
+    def test_title_is_not_executed(self):  # 지적 4
+        self.add_ticket("09", title='"`touch PWNED1` \\"q\\" $(touch PWNED2)"')
+        code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 0, out + err)
+        hits = list(Path(self.tmp.name).rglob("PWNED*"))
+        self.assertEqual(hits, [])
+
+    def test_interrupted_merge_is_discarded_and_ticket_rerun(self):  # 지적 1
+        self.assertEqual(self.go("--only", "01")[0], 0)
+        iwt = self.repo / ".work/demo/run/wt/integration"
+        sh(self.repo, "git", "branch", "gs/demo/04", "gs/demo/integration")
+        (iwt / "half").write_text("x")
+        sh(iwt, "git", "switch", "-q", "gs/demo/04")
+        sh(iwt, "git", "add", "half")
+        sh(iwt, "git", "commit", "-qm", "half")
+        sh(iwt, "git", "switch", "-q", "gs/demo/integration")
+        sh(iwt, "git", "merge", "--no-ff", "--no-commit", "gs/demo/04")  # 검증 도중 죽은 상태
+        code, out, _ = self.go("--only", "01,04")
+        self.assertEqual(code, 0, out)
+        self.assertIn("남은 병합·변경을 버렸다", out)
+        self.assertIn("[04] 검증 통과", out)  # 이미 병합으로 보지 않고 다시 했다
+        self.assertEqual(self.merged(), ["01", "04"])
+        self.assertNotIn("half", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+
+    def test_integration_starts_from_origin_main(self):  # 지적 5
+        other = Path(self.tmp.name) / "other"
+        sh(Path(self.tmp.name), "git", "clone", "-q", str(self.remote), str(other))
+        (other / "upstream.txt").write_text("u")
+        sh(other, "git", "add", "-A")
+        sh(other, "git", "commit", "-qm", "upstream")
+        sh(other, "git", "push", "-q", "origin", "main")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("upstream.txt", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+
+    def test_unpushed_ticket_change_stops_before_launch(self):  # 지적 5
+        self.add_ticket("10", push=False)
+        code, out, err = self.go("--only", "10")
+        self.assertEqual(code, 1)
+        self.assertIn("origin/main와 다르다", err)
+        self.assertNotIn("시작:", out)
+
     def test_scenario(self):
         code, out, err = self.go()
         self.assertEqual(code, 1, out + err)
@@ -128,7 +201,7 @@ class GoTest(unittest.TestCase):
         (self.repo / ".work" / "demo" / "tickets" / "01-t.md").write_text(ticket("01") + "more\n")
         code, out, err = self.go()
         self.assertEqual(code, 1)
-        self.assertIn("커밋된 것과 다르다", err)
+        self.assertIn("origin/main와 다르다", err)
         self.assertNotIn("시작:", out)
 
     def test_check_error_stops_before_launch(self):

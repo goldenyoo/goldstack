@@ -90,16 +90,16 @@ def write_script(job: Job, command: str) -> None:
     }
     exports = "\n".join(f"export {k}={q(v)}" for k, v in env.items())
     job.script.write_text(f"""#!/bin/bash
-# gs가 만든 worker 실행 스크립트. 티켓 {job.ticket.id}
+# gs가 만든 worker 실행 스크립트. 티켓 값은 모두 shlex.quote로 넣는다(제목이 셸 코드로 실행되지 않게)
 set -o pipefail
 unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT
 {exports}
 cd {q(str(job.worktree))} || {{ echo 127 > {q(str(job.exit_file))}; exit 127; }}
-echo "■ gs worker {job.ticket.id}: {job.ticket.title}"
+echo {q(f"■ gs worker {job.ticket.id}: {job.ticket.title}")}
 ( {command} ) 2>&1 | tee -a {q(str(job.log))} | {q(sys.executable)} -m gs.streamfmt
 code=${{PIPESTATUS[0]}}
 echo "$code" > {q(str(job.exit_file))}.tmp && mv {q(str(job.exit_file))}.tmp {q(str(job.exit_file))}
-echo "■ gs worker {job.ticket.id} 끝: 종료 코드 $code"
+echo {q(f"■ gs worker {job.ticket.id} 끝: 종료 코드")} "$code"
 """, encoding="utf-8")
 
 

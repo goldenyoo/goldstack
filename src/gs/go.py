@@ -15,6 +15,7 @@ from .check import check
 from .feature import Feature, Ticket
 
 MAIN = "main"
+BASE = "origin/main"  # PR 대상. 로컬 main은 뒤처지거나 앞설 수 있어 쓰지 않는다
 
 
 def integration_branch(feature: str) -> str:
@@ -69,6 +70,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         print(f"gs go: 검사 오류 {len(feat.errors)}개. 아무것도 띄우지 않았다.", file=sys.stderr)
         return 1
     try:
+        git.run(repo, "fetch", "-q", "origin", MAIN)
         _require_committed(repo, name)
         r = Run(repo, feat, only)
         _prepare_integration(r)
@@ -86,21 +88,33 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
 
 def _require_committed(repo: Path, name: str) -> None:
     rel = f".work/{name}"
-    if git.out(repo, "status", "--porcelain", "--", rel) or git.run(repo, "diff", "--quiet", MAIN, "--", rel,
+    if git.out(repo, "status", "--porcelain", "--", rel) or git.run(repo, "diff", "--quiet", BASE, "--", rel,
                                                                      check=False).returncode:
-        raise git.GitError(f"{rel}가 {MAIN}에 커밋된 것과 다르다. worker는 {MAIN} 기준으로 일하므로 먼저 커밋해 {MAIN}에 넣어라")
+        raise git.GitError(f"{rel}가 {BASE}와 다르다. worker는 {BASE} 기준으로 일하므로 먼저 커밋하고 push하라")
+
+
+def _reset_integration(r: Run, to: str = "HEAD") -> bool:
+    """integration worktree는 gs만 쓴다. 남은 병합·변경을 버리고 to로 되돌린다. 무언가 버렸으면 True."""
+    dirty = not git.is_clean(r.iwt)
+    if git.run(r.iwt, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
+        git.run(r.iwt, "merge", "--abort", check=False)
+        dirty = True
+    moved = git.sha(r.iwt, "HEAD") != git.sha(r.iwt, to)
+    git.run(r.iwt, "reset", "-q", "--hard", to)
+    git.run(r.iwt, "clean", "-q", "-fd")
+    return dirty or moved
 
 
 def _prepare_integration(r: Run) -> None:
     branch = integration_branch(r.name)
-    git.ensure_worktree(r.repo, r.iwt, branch, start=MAIN)
-    if not git.is_clean(r.iwt):
-        raise git.GitError(f"integration worktree {r.iwt}에 커밋되지 않은 변경이 있다")
-    # 앞 wave가 main에 병합된 뒤라면 main을 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
-    res = git.run(r.iwt, "merge", "--no-edit", MAIN, check=False)
+    git.ensure_worktree(r.repo, r.iwt, branch, start=BASE)
+    if _reset_integration(r):
+        say("■ integration worktree에 남은 병합·변경을 버렸다(지난 실행이 중간에 끝난 흔적)")
+    # 앞 wave가 main에 병합된 뒤라면 origin/main을 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
+    res = git.run(r.iwt, "merge", "--no-edit", BASE, check=False)
     if res.returncode:
         git.run(r.iwt, "merge", "--abort", check=False)
-        raise git.GitError(f"{MAIN}을 {branch}에 합치다 충돌했다: {res.stdout.strip()}")
+        raise git.GitError(f"{BASE}를 {branch}에 합치다 충돌했다: {res.stdout.strip()}")
     say(f"■ integration: {branch} @ {git.sha(r.iwt, 'HEAD')[:8]} ({r.iwt})")
 
 
@@ -159,6 +173,10 @@ def _one(r: Run, t: Ticket, runner) -> Outcome:
                       on_start=lambda where: say(f"[{t.id}] 시작: {t.title} ({where}, 로그 {job.log})"))
     commits = git.count(r.repo, f"{base}..{branch}")
     say(f"[{t.id}] worker 끝: 종료 코드 {code}, 새 커밋 {commits}")
+    # worker가 integration을 건드렸으면(커밋, 미커밋 변경, 브랜치 이동) 되돌리고 실패로 친다
+    if _reset_integration(r, base):
+        runner.finish(False)
+        return _fail(t, "worker가 integration worktree를 바꿨다(되돌림)")
     if code != 0:
         runner.finish(False)
         return _fail(t, f"worker 종료 코드 {code}" if code >= 0 else "worker 실행기가 사라졌다")
@@ -168,17 +186,21 @@ def _one(r: Run, t: Ticket, runner) -> Outcome:
     if not git.is_clean(wt):
         say(f"[{t.id}] 경고: worktree에 커밋 안 된 변경이 남았다(병합에 들어가지 않는다)")
 
-    msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
-    res = git.run(r.iwt, "merge", "--no-ff", "-m", msg, branch, check=False)
+    # 병합은 커밋하지 않고 두고 검증한다. 통과해야만 gs-ticket 표시를 붙여 커밋한다.
+    # 중간에 죽으면 표시 없는 미완 병합만 남고, 다음 실행이 그것을 버리고 티켓을 다시 한다.
+    res = git.run(r.iwt, "merge", "--no-ff", "--no-commit", branch, check=False)
     if res.returncode:
-        git.run(r.iwt, "merge", "--abort", check=False)
+        _reset_integration(r, base)
         runner.finish(False)
         return _fail(t, "integration 병합 충돌")
     ok, log = _verify(r, t)
     if not ok:
-        git.run(r.iwt, "reset", "--hard", base)
+        _reset_integration(r, base)
         runner.finish(False)
         return _fail(t, f"검증 실패(로그 {log})")
+    msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
+    git.run(r.iwt, "commit", "-q", "--no-verify", "-m", msg)  # index만 커밋한다
+    _reset_integration(r)  # 검증이 남긴 파일은 버린다
     runner.finish(True)
     say(f"[{t.id}] 검증 통과 → integration 병합")
     return Outcome(t.id, "merged")
@@ -205,7 +227,7 @@ def _gh() -> str:
 
 def _publish(r: Run) -> str | None:
     branch = integration_branch(r.name)
-    if git.count(r.repo, f"{MAIN}..{branch}") == 0:
+    if git.count(r.repo, f"{BASE}..{branch}") == 0:
         say("■ main보다 앞선 커밋이 없어 push·PR을 건너뛴다")
         return None
     git.run(r.repo, "push", "-u", "origin", branch)  # force 아님
