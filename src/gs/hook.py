@@ -401,8 +401,14 @@ def search_roots(name: str, args: list[str]) -> list[str]:
     """알려진 재귀 검색 명령의 시작점. 검색식·옵션 값은 경로로 보지 않는다."""
     if name == "find":
         roots = []
-        for a in args:
-            if not roots and a in ("-H", "-L", "-P"):
+        i = 0
+        while i < len(args):
+            a = args[i]
+            i += 1
+            if not roots and (a in ("-H", "-L", "-P") or re.fullmatch(r"-O\d+", a)):
+                continue
+            if not roots and a == "-D":
+                i += 1  # 디버그 옵션 값은 검색 시작점이 아니다.
                 continue
             if a.startswith("-") or a in ("!", "("):
                 break

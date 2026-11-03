@@ -127,6 +127,21 @@ class SecretBlockTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNotNone(self.reason("Bash", command=command))
 
+    def test_find_global_options_preserve_search_roots(self):
+        self.write(self.home / ".config/gh/hosts.yml")
+        for options in ("-O3", "-D search", "-H -D tree,search -O2 -P"):
+            for root in (self.repo / ".goldstack", self.home / ".config/gh"):
+                command = f"find {options} {root} -name '*.env' -exec cat {{}} \\;"
+                with self.subTest(command=command):
+                    self.assertIsNotNone(self.reason("Bash", command=command))
+            for root in (".", "src", ""):
+                command = f"find {options} {root} -name '*.py'"
+                with self.subTest(command=command):
+                    self.assertIsNone(self.reason("Bash", command=command))
+            with self.subTest(options=options, cwd=self.repo):
+                self.assertIsNotNone(self.reason("Bash", command=f"find {options} -name '*.env'",
+                                                 cwd=self.repo))
+
     def test_non_workers_are_unaffected(self):
         for role in (None, "", "reviewer"):
             env = {**self.env, "GS_ROLE": role}
