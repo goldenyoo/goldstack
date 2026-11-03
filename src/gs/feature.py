@@ -14,7 +14,7 @@ FAMILIES = ("claude", "codex", "agy")
 SPEC_REQUIRED = ("feature", "verify")
 SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20}
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
-TICKET_OPTIONAL = ("touches",)
+TICKET_OPTIONAL = ("touches", "second_reviewer")
 WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
 
 
@@ -58,6 +58,7 @@ class Ticket:
     path: Path
     body: str = ""
     touches: list[str] = field(default_factory=list)
+    second_reviewer: str | None = None
 
 
 @dataclass
@@ -176,7 +177,7 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
     for key in TICKET_KEYS:
         if key not in data:
             err(f"`{key}`가 없다")
-    for key in ("id", "title", "model", "reviewer"):
+    for key in ("id", "title", "model", "reviewer", "second_reviewer"):
         if key in data and not isinstance(data[key], str):
             err(f"`{key}`는 문자열이어야 한다")
     if "blocked_by" in data and not isinstance(data["blocked_by"], list):
@@ -189,11 +190,15 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
     tid = data["id"]
     if not path.name.startswith(f"{tid}-"):
         err(f"파일 이름이 `{tid}-`로 시작해야 한다(id와 파일 이름 불일치)")
-    for key in ("model", "reviewer"):
-        if data[key] not in FAMILIES:
+    for key in ("model", "reviewer", "second_reviewer"):
+        if key in data and data[key] not in FAMILIES:
             err(f"`{key}` 값 `{data[key]}`는 {'|'.join(FAMILIES)} 중 하나여야 한다")
     if data["model"] == data["reviewer"]:
         err(f"리뷰는 다른 계열이어야 한다: model과 reviewer가 둘 다 `{data['model']}`")
+    second_reviewer = data.get("second_reviewer")
+    for key in ("model", "reviewer"):
+        if second_reviewer is not None and second_reviewer == data[key]:
+            err(f"리뷰는 다른 계열이어야 한다: {key}과 second_reviewer가 둘 다 `{second_reviewer}`")
     deps = data["blocked_by"]
     if len(set(deps)) != len(deps):
         err("`blocked_by`에 같은 id가 두 번 있다")
@@ -211,4 +216,5 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
             valid_touches.append(value)
     # 값 오류가 있어도 그래프에는 넣는다. 빼면 이 티켓을 참조하는 티켓마다 "없는 id" 오류가 덧붙는다.
     return Ticket(id=tid, title=data["title"], blocked_by=list(deps), model=data["model"],
-                  reviewer=data["reviewer"], path=path, body=body, touches=valid_touches)
+                  reviewer=data["reviewer"], path=path, body=body, touches=valid_touches,
+                  second_reviewer=second_reviewer)
