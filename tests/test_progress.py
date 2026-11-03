@@ -79,6 +79,31 @@ class ProgressTest(unittest.TestCase):
         self.assertEqual([p["attempt"] for p in ts.phases], [1, 2, 2])
         self.assertEqual(state.phase_durations(ts), {"worker": 180, "verify": 60})
 
+    def test_eta_compares_actual_times_across_offset_changes(self):
+        before = "2026-11-01T01:30:00-07:00"
+        earlier = "2026-11-01T01:50:00-07:00"
+        after = "2026-11-01T01:10:00-08:00"
+        later = "2026-11-01T01:20:00-08:00"
+        end = "2026-11-01T01:30:00-08:00"
+        cases = [
+            ("current phase", before, [after], after, later, 600),
+            ("previous phase", after, ["2026-11-01T01:15:00-07:00", later], later, end, 600),
+            ("earliest attempt", "2026-11-01T00:30:00-07:00", [earlier, after], after, later, 1800),
+            ("legacy current ticket", before, [], after, later, 600),
+            ("legacy previous ticket", after, [], earlier, after, None),
+        ]
+        for name, run_start, phases, start, ended_at, eta in cases:
+            with self.subTest(name=name):
+                st = state.State(feature="f", started_at=run_start)
+                ts = st.ticket("01")
+                for attempt, phase_start in enumerate(phases, 1):
+                    state.begin_phase(ts, "worker", "codex", attempt=attempt, at=phase_start)
+                state.end_phase(ts, ended_at)
+                ts.status, ts.started_at, ts.ended_at = state.MERGED, start, ended_at
+                st.ticket("02")
+                p = state.calculate_progress(st, ["01", "02"], 1, at=ended_at)
+                self.assertEqual(p["eta_s"], eta)
+
     def test_finish_and_finished_elapsed(self):
         st = state.State(feature="f", started_at=clock(0), phase="finish")
         st.ticket("01").status = state.MERGED

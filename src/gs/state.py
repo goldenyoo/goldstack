@@ -116,6 +116,7 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
                        models: dict[str, str] | None = None, at: str | None = None) -> dict:
     """이번 실행·범위만으로 진행 문구를 계산한다. 이전 실행의 완료 티켓은 ETA 표본에서 뺀다."""
     at = st.finished_at or at or now()
+    run_start = parse_time(st.started_at)
     terminal = (MERGED, FAILED, SKIPPED)
     done = sum(st.tickets[tid].status in terminal for tid in order)
     running, durations = [], []
@@ -128,10 +129,12 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
         if tid in prior or ts.status not in terminal or not ts.started_at or not ts.ended_at:
             continue
         # 시작 시각은 최신 worker의 것이라, 재시도를 포함한 첫 단계부터 잰다.
-        starts = [p["started_at"] for p in ts.phases if p["started_at"] >= st.started_at]
-        start = min(starts) if starts else ts.started_at
-        if start >= st.started_at:
-            durations.append(seconds_between(start, ts.ended_at))
+        starts = [start for p in ts.phases
+                  if (start := parse_time(p["started_at"])) and run_start and start >= run_start]
+        start = min(starts) if starts else parse_time(ts.started_at)
+        end = parse_time(ts.ended_at)
+        if start and end and run_start and start >= run_start:
+            durations.append(max(0, (end - start).total_seconds()))
     if st.phase == "finish" and not st.finished_at:
         # 빈 id는 개별 티켓이 아닌 feature 전체의 보고서·PR·base 검증을 뜻한다.
         running = [{"id": "", "phase": "finish", "model": "claude"}]
