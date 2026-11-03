@@ -217,7 +217,12 @@ herdr 밖이면 화면 없이 돌고, 로그는 `.goldstack/work/csv-export/run/
 
 ## 실패했을 때
 
-**보고서 읽기** — `.goldstack/work/csv-export/report.md`. gs가 integration 브랜치에 커밋하고 PR 본문으로도 쓴다. 마무리가 `verified`(main 검증 통과)나 `reverted`(main 검증 실패로 revert)로 끝나면 main 검증 결과까지 담긴 최종판을 커밋 `gs: csv-export 최종 보고서(병합 후)` 하나로 main에도 push한다. 그러니 `git pull` 뒤 작업 트리의 report.md가 최종판이다. 그 push가 두 번 거부되면 `■ 경고: 최종 보고서를 main에 push하지 못했다…`만 남고(결과·종료 코드는 그대로), main에는 병합 직전 판이 남는다. 그때는 `git show gs/csv-export/integration:.goldstack/work/csv-export/report.md`가 최종판이다.
+**보고서 읽기** — `.goldstack/work/csv-export/report.md`. gs가 integration 브랜치에 커밋하고 PR 본문으로도 쓴다. 마무리가 `verified`(main 검증 통과)나 `reverted`(main 검증 실패로 revert)로 끝나면 main 검증 결과까지 담긴 최종판을 커밋 `gs: csv-export 최종 보고서(병합 후)` 하나로 main에도 push한다. 그러니 `git pull` 뒤 작업 트리의 report.md가 최종판이다. 그 push가 두 번 거부되면 `■ 경고: 최종 보고서를 main에 push하지 못했다…`만 남고(결과·종료 코드는 그대로), main에는 병합 직전 판이 남는다. 최종판은 PR 본문에 있고(gs가 같은 내용으로 갱신한다), 로컬에서는 state에 남은 커밋으로 본다. `verified`면 [자동 정리](#끝난-feature-치우기gs-clean)가 integration 브랜치를 이미 지웠으므로 브랜치 이름으로는 못 찾는다:
+```console
+$ head=$(jq -r .finish.head .goldstack/work/csv-export/run/state.json)
+$ git show "$head:.goldstack/work/csv-export/report.md"
+```
+`finish.head`는 최종 보고서를 커밋한 integration의 끝이다. 브랜치가 지워진 뒤에는 어디에도 닿지 않는 커밋이라 `git gc`가 지우기(기본 2주) 전까지만 보인다. `reverted`면 integration이 남아 있으니 `git show gs/csv-export/integration:.goldstack/work/csv-export/report.md`도 된다.
 
 | 절 | 볼 것 |
 |---|---|
