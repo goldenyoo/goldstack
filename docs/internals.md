@@ -197,7 +197,11 @@ PreToolUse hook 명령은 `GS_ROLE`이 `worker`가 아니면 바로 `exit 0`이�
 - worktree 밖 쓰기(Write·Edit 도구, 셸 리다이렉션·`rm`·`mv`·`cp`·`tee`, 밖에서 하는 `git commit` 등). 임시 디렉터리(`/tmp`, `/var/folders`, `$TMPDIR`)와 `/dev`는 통과
 - 비밀 파일 읽기: `~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`·`.env.*`(`.env.example`·`.sample`·`.template`·`.dist` 제외), `.netrc`, `.git-credentials`, `.pypirc`, 개인 키(`id_rsa` 등), `.goldstack/local.env`, gh `hosts.yml`, `.kube/config`, `.docker/config.json`, `gh auth token`
 
-막으면 이유와 "이 일은 `gs`가 한다"를 돌려준다. worker에서 hook 입력을 해석하지 못하면 막는다(fail closed). hook은 안전띠라 스크립트 파일 안까지 따라가지 않고, glob·재귀 탐색이 펼쳐 읽는 파일도 모른다. 그래서 claude worker 명령의 도구 차단 옵션과 push·gh 차단 환경을 함께 둔다(여러 겹). codex는 sandbox, agy는 deny 규칙과 `gs hook agy-pretooluse`로 막는다.
+비밀 읽기 검사는 직접 지정한 경로 외에 파일 이름 glob(`cat .goldstack/local.e*`, `cat .goldstack/*.env`, `head .goldstack/local.?nv`)과 알려진 재귀 검색(`grep -r`·`grep -R`·`rg`·`find`)의 시작점도 본다. 시작점 아래에 비밀 파일이 있으면 검색을 막는다(내용은 읽지 않고 경로를 검사한다). Grep·Glob 도구도 `path` 아래에 비밀이 있으면 막으며, 시작점을 생략하면 현재 디렉터리를 검사한다. 이 규칙은 `gh/hosts.yml` 등 다른 비밀 경로에도 같다. 검색 필터가 비밀 파일을 제외해도 시작점이 비밀을 품으면 막는다.
+
+worker worktree는 주 레포의 `.goldstack/work/<f>/run/wt/` 아래에 있지만, 조상에 `.goldstack`이 있다는 이유로 막지는 않는다. 검색 시작점의 자손만 검사하므로 worktree 안에 비밀이 없으면 `rg foo`, `grep -r foo src`, Grep·Glob 검색은 통과하고, `.goldstack/work/<f>/spec.md`도 읽을 수 있다. 반대로 주 레포나 주 레포의 `.goldstack`에서 시작한 재귀 검색은 그 아래 `local.env`가 있으면 막는다.
+
+막으면 이유와 "이 일은 `gs`가 한다"를 돌려준다. worker에서 hook 입력을 해석하지 못하면 막는다(fail closed). **hook은 안전띠이며 비밀을 격리하는 보안 경계가 아니다.** `python -c "open(...)"`처럼 코드 안에서 파일을 여는 일, 다른 인터프리터·스크립트 본문의 읽기, 셸에서 동적으로 만든 경로는 모두 해석하지 못한다. 심볼릭 링크 대상도 비밀 읽기 판정에서 보장하지 않으며, 디렉터리 재귀 검사에서는 링크를 따라가지 않는다. 검사 후 파일이 바뀌는 경우도 막지 못한다. 따라서 **값어치 낮은 비밀만 `local.env`에 둔다.** claude worker 명령의 도구 차단 옵션과 push·gh 차단 환경을 함께 두고(여러 겹), codex는 sandbox, agy는 deny 규칙과 `gs hook agy-pretooluse`를 쓴다. codex의 비밀 읽기를 이 hook으로 막는 것은 범위 밖이다.
 
 skill은 `skills/<이름>/SKILL.md`다. `diagnosing-bugs`만 모델 호출이고 나머지는 `disable-model-invocation: true`(사용자 호출)라 description이 늘 문맥에 실리지 않는다. 옮겨 온 다섯 skill의 출처는 [skills/NOTICE-mattpocock.md](../skills/NOTICE-mattpocock.md).
 

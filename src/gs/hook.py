@@ -12,10 +12,11 @@
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
 worker 역할에서 hook 입력을 해석하지 못하면(JSON 아님, 객체 아님) 막는다(fail closed).
-알려진 한계: 비밀 파일 판정은 인자 글자만 본다. glob(`cat .en[v]`)이나 재귀 탐색(`grep -R KEY .`)이 펼쳐 읽는 파일은 모른다.
+알려진 경로·glob·재귀 검색 시작점을 검사한다. 인터프리터 코드·스크립트 본문·심볼릭 링크까지 추적하는 보안 경계는 아니다.
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import shlex
 import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 
 FOOTER = "이 일은 `gs`가 한다(push·PR·병합·인증). worker는 worktree 안에서 커밋까지만 한다."
 
@@ -141,8 +143,10 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
             path = str(inp.get(key) or "")
             if key == "pattern" and tool == "Grep":
                 continue  # Grep의 pattern은 정규식이다
-            if path and is_secret(path, ctx):
+            if path and secret_read(path, ctx, recursive=tool in ("Grep", "Glob")):
                 return f"비밀 파일 `{path}`을 읽는다"
+        if tool in ("Grep", "Glob") and not inp.get("path") and secret_read(".", ctx, recursive=True):
+            return f"검색 시작점 `{ctx.cwd}`이 비밀 파일을 품는다"
     return None
 
 
@@ -370,8 +374,11 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     if name not in NO_FILE_READ:
         for a in args + [t for op, t in redirects if "<" in op]:
             for cand in (a, a.split("=", 1)[1] if a.startswith("-") and "=" in a else ""):
-                if cand and not any(ch.isspace() for ch in cand) and is_secret(cand, seg):
+                if cand and not any(ch.isspace() for ch in cand) and secret_read(cand, seg):
                     return f"비밀 파일 `{cand}`을 읽는다"
+    for root in search_roots(name, args):
+        if secret_read(root, seg, recursive=True):
+            return f"검색 시작점 `{root}`이 비밀 파일을 품는다"
 
     # worktree 밖 쓰기
     targets = [t for op, t in redirects if ">" in op and not re.match(r"^(\d+|-)$", t)]
@@ -388,6 +395,71 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
         if t and outside(t, seg):
             return f"worktree 밖 `{t}`에 쓴다(worker는 `{ctx.worktree}` 안만 바꾼다)"
     return None
+
+
+def search_roots(name: str, args: list[str]) -> list[str]:
+    """알려진 재귀 검색 명령의 시작점. 검색식·옵션 값은 경로로 보지 않는다."""
+    if name == "find":
+        roots = []
+        for a in args:
+            if not roots and a in ("-H", "-L", "-P"):
+                continue
+            if a.startswith("-") or a in ("!", "("):
+                break
+            roots.append(a)
+        return roots or ["."]
+    if name not in ("grep", "rg"):
+        return []
+
+    recursive = name == "rg"
+    has_pattern = name == "rg" and "--files" in args
+    roots = []
+    # 옵션 값(검색식, 파일 이름, 문맥 줄 수 등)을 검색 시작점과 구별한다.
+    short_values = "efmABC" + ("gtrj" if name == "rg" else "dD")
+    long_values = {
+        "--regexp", "--file", "--max-count", "--after-context", "--before-context", "--context",
+        "--directories", "--devices", "--include", "--exclude", "--exclude-dir", "--exclude-from",
+        "--glob", "--iglob", "--type", "--type-not", "--type-add", "--type-clear", "--threads",
+        "--max-depth", "--max-filesize", "--encoding", "--engine", "--replace", "--sort", "--sortr",
+    }
+    end_options = False
+    i = 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if not end_options and a == "--":
+            end_options = True
+            continue
+        if not end_options and a.startswith("--"):
+            option, _, value = a.partition("=")
+            if option in long_values and "=" not in a and i < len(args):
+                value = args[i]
+                i += 1
+            if option in ("--regexp", "--file"):
+                has_pattern = True
+            if option == "--recursive" or (option == "--directories" and value == "recurse"):
+                recursive = True
+            continue
+        if not end_options and a.startswith("-") and a != "-":
+            for k, letter in enumerate(a[1:], start=1):
+                if name == "grep" and letter in "rR":
+                    recursive = True
+                if letter in short_values:
+                    value = a[k + 1:]
+                    if not value and i < len(args):
+                        value = args[i]
+                        i += 1
+                    if letter in "ef":
+                        has_pattern = True
+                    if name == "grep" and letter == "d" and value == "recurse":
+                        recursive = True
+                    break
+            continue
+        if not has_pattern:
+            has_pattern = True
+        else:
+            roots.append(a)
+    return (roots or ["."]) if recursive else []
 
 
 def shell_c_script(args: list[str]) -> str | None:
@@ -562,4 +634,30 @@ def is_secret(path: str, ctx: Ctx) -> bool:
         return True
     if base == ".env" or (base.startswith(".env.") and not base.endswith(ENV_SAFE_SUFFIXES)):
         return True
+    return False
+
+
+def secret_read(path: str, ctx: Ctx, *, recursive: bool = False) -> bool:
+    """비밀 파일 또는 비밀을 품는 검색 시작점인가. 내용은 읽지 않고 경로만 검사한다.
+
+    조상에 `.goldstack`이 있다는 이유로 막지 않는다. worker worktree도 그 아래에 있다.
+    재귀 탐색은 시작점의 자손만 보고 심볼릭 링크 디렉터리는 따라가지 않는다.
+    """
+    if is_secret(path, ctx):
+        return True
+    expanded = os.path.normpath(os.path.join(ctx.cwd, expand(path, ctx.env)))
+    if "$" in expanded or "`" in expanded:
+        return False
+    parent, base = os.path.split(expanded)
+    if glob.has_magic(base) and any(os.path.basename(parent) == directory and fnmatchcase(filename, base)
+                                    for directory, filename in SECRET_SUFFIX_PATHS):
+        return True
+    paths = glob.iglob(expanded, recursive=True, include_hidden=True) if glob.has_magic(expanded) else (expanded,)
+    for candidate in paths:
+        if is_secret(candidate, ctx):
+            return True
+        if recursive:
+            for root, dirs, files in os.walk(candidate, followlinks=False):
+                if any(is_secret(os.path.join(root, item), ctx) for item in dirs + files):
+                    return True
     return False
