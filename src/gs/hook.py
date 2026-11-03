@@ -11,6 +11,8 @@
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
+worker 역할에서 hook 입력을 해석하지 못하면(JSON 아님, 객체 아님) 막는다(fail closed).
+알려진 한계: 비밀 파일 판정은 인자 글자만 본다. glob(`cat .en[v]`)이나 재귀 탐색(`grep -R KEY .`)이 펼쳐 읽는 파일은 모른다.
 """
 from __future__ import annotations
 
@@ -85,8 +87,14 @@ def main(argv: list[str], stdin=None, env: Mapping[str, str] | None = None) -> i
         return 0
     try:
         payload = json.load(stdin or sys.stdin)
-    except (json.JSONDecodeError, ValueError):
-        return 0  # 입력을 모르면 막지 않는다. 도구 차단 옵션이 뒤에 있다
+    except ValueError as e:  # JSONDecodeError, UnicodeDecodeError
+        print(f"gs가 막음: hook 입력을 JSON으로 읽지 못했다({e}). worker에서는 판정할 수 없는 호출을 막는다.",
+              file=sys.stderr)
+        return 2
+    reason = malformed(payload)
+    if reason:
+        print(f"gs가 막음: hook 입력이 {reason}. worker에서는 판정할 수 없는 호출을 막는다.", file=sys.stderr)
+        return 2
     reason = decide(payload, env)
     if reason is None:
         return 0
@@ -96,6 +104,15 @@ def main(argv: list[str], stdin=None, env: Mapping[str, str] | None = None) -> i
 
 def message(reason: str) -> str:
     return f"gs가 막음: {reason}. {FOOTER}"
+
+
+def malformed(payload) -> str | None:
+    """Claude Code PreToolUse 입력 모양이 아니면 그 이유."""
+    if not isinstance(payload, Mapping):
+        return f"JSON 객체가 아니다({type(payload).__name__})"
+    if "tool_input" in payload and not isinstance(payload["tool_input"], Mapping):
+        return f"`tool_input`이 객체가 아니다({type(payload['tool_input']).__name__})"
+    return None
 
 
 def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
@@ -134,8 +151,8 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
 def check_bash(command: str, ctx: Ctx, depth: int = 0) -> str | None:
     if depth > 3:
         return None
-    text = strip_comments(strip_heredocs(command.replace("\\\n", " ")))
-    for inner in substitutions(text):  # $(...)와 `...`도 명령이다(따옴표 안이어도 돈다)
+    text, subs = scan(command.replace("\\\n", " "))
+    for inner in subs:  # $(...)와 `...`도 명령이다(큰따옴표 안이어도 돈다. 작은따옴표 안은 글자일 뿐)
         reason = check_bash(inner, ctx, depth + 1)
         if reason:
             return reason
@@ -147,56 +164,101 @@ def check_bash(command: str, ctx: Ctx, depth: int = 0) -> str | None:
     return None
 
 
-def strip_heredocs(text: str) -> str:
-    """heredoc 본문(커밋 메시지 등)은 명령이 아니다. 여는 줄만 남긴다."""
-    out, waiting = [], []
-    for line in text.split("\n"):
-        if waiting:
-            if line.strip() == waiting[0]:
-                waiting.pop(0)
-            continue
-        out.append(line)
-        for m in re.finditer(r"(?<!<)<<-?(?!<)\s*(['\"]?)([A-Za-z_][\w.-]*)\1", line):
-            waiting.append(m.group(2))
-    return "\n".join(out)
+CODE = ("top", "(", "$(", "`")  # 셸이 명령으로 읽는 자리(따옴표 밖)
 
 
-def strip_comments(text: str) -> str:
-    """따옴표 밖, 단어 처음의 `#`부터 줄 끝까지 지운다(주석 속 따옴표가 해석을 깨지 않게)."""
-    out, i, n = [], 0, len(text)
-    quote = None
+def scan(text: str) -> tuple[str, list[str]]:
+    """따옴표를 따라가며 한 번 훑는다. (heredoc 본문과 주석을 지운 글, 실제로 도는 가장 바깥 명령 치환들)를 돌려준다.
+
+    - heredoc 본문(커밋 메시지 등)은 명령이 아니다. 여는 줄만 남긴다. 따옴표 속 `<<EOF`는 heredoc이 아니다.
+    - 따옴표 밖, 단어 처음의 `#`부터 줄 끝까지 지운다(주석 속 따옴표가 해석을 깨지 않게).
+    - `$(...)`와 `` `...` ``는 따옴표 밖이나 큰따옴표 안에서만 치환이다. 작은따옴표 안은 글자다.
+    """
+    out: list[str] = []
+    subs: list[str] = []
+    stack = ["top"]
+    pending: list[str] = []  # 이 줄에서 열린 heredoc 끝말
+    sub_start = 0
+    i, n = 0, len(text)
+
+    def open_sub(kind: str):
+        nonlocal sub_start
+        if not any(k in ("$(", "`") for k in stack):
+            sub_start = len(out)
+        stack.append(kind)
+
+    def close_sub():
+        stack.pop()
+        if not any(k in ("$(", "`") for k in stack):
+            subs.append("".join(out[sub_start:]))
+
     while i < n:
         c = text[i]
-        if quote:
+        ctx = stack[-1]
+        if c == "\n" and pending:
             out.append(c)
-            if c == "\\" and quote == '"' and i + 1 < n:
-                out.append(text[i + 1])
-                i += 1
-            elif c == quote:
-                quote = None
-        elif c == "\\" and i + 1 < n:
-            out.append(c + text[i + 1])
             i += 1
-        elif c in "'\"":
-            quote = c
+            while pending and i < n:  # 본문 줄을 끝말 줄까지 건너뛴다
+                j = text.find("\n", i)
+                line = text[i:] if j < 0 else text[i:j]
+                i = n if j < 0 else j + 1
+                if line.strip() == pending[0]:
+                    pending.pop(0)
+            continue
+        if ctx == "'":
+            if c == "'":
+                stack.pop()
             out.append(c)
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == "$" and text.startswith("$(", i):
+            out.append("$(")
+            i += 2
+            open_sub("$(")
+            continue
+        if c == "`":
+            if ctx == "`":
+                close_sub()
+                out.append(c)
+            else:
+                out.append(c)
+                open_sub("`")
+            i += 1
+            continue
+        if ctx == '"':
+            if c == '"':
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        # 따옴표 밖(명령 자리)
+        if c in "'\"":
+            stack.append(c)
+        elif c == "(":
+            stack.append("(")
+        elif c == ")" and ctx in ("(", "$("):
+            if ctx == "$(":
+                close_sub()
+            else:
+                stack.pop()
         elif c == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
             while i < n and text[i] != "\n":
                 i += 1
             continue
-        else:
-            out.append(c)
+        elif c == "<" and text.startswith("<<", i) and not text.startswith("<<<", i) and (i == 0 or text[i - 1] != "<"):
+            m = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][\w.-]*)\1").match(text, i)
+            if m:
+                pending.append(m.group(2))
+                out.append(m.group(0))
+                i = m.end()
+                continue
+        out.append(c)
         i += 1
-    return "".join(out)
-
-
-def substitutions(text: str) -> list[str]:
-    found = []
-    for m in re.finditer(r"\$\(([^()]*(?:\([^()]*\)[^()]*)*)\)", text):
-        found.append(m.group(1))
-    for m in re.finditer(r"`([^`]*)`", text):
-        found.append(m.group(1))
-    return found
+    return "".join(out), subs
 
 
 def tokens(text: str) -> list[str]:
@@ -288,10 +350,10 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     args = rest[1:]
     seg = Ctx(worktree=ctx.worktree, cwd=cwd, env=ctx.env)
 
-    if name in ("bash", "sh", "zsh", "dash") and "-c" in args:
-        k = args.index("-c")
-        if k + 1 < len(args):
-            return check_bash(args[k + 1], seg, depth + 1)
+    if name in ("bash", "sh", "zsh", "dash"):
+        script = shell_c_script(args)
+        if script is not None:
+            return check_bash(script, seg, depth + 1)
     if name == "eval":
         return check_bash(" ".join(args), seg, depth + 1)
 
@@ -320,19 +382,73 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
         targets.append(operands[-1])
     elif name == "dd":
         targets += [a[3:] for a in args if a.startswith("of=")]
+    elif name in ("sed", "perl"):
+        targets += in_place_files(name, args)
     for t in targets:
         if t and outside(t, seg):
             return f"worktree 밖 `{t}`에 쓴다(worker는 `{ctx.worktree}` 안만 바꾼다)"
     return None
 
 
+def shell_c_script(args: list[str]) -> str | None:
+    """`bash -c 'x'`, `bash -lc 'x'`, `sh -o pipefail -ec 'x'`의 'x'. -c가 없으면 None."""
+    for k, a in enumerate(args):
+        if re.match(r"^-[A-Za-z]*c[A-Za-z]*$", a):
+            rest = [x for x in args[k + 1:] if not x.startswith(("-", "+"))]
+            return rest[0] if rest else None
+        if not a.startswith(("-", "+")) and (k == 0 or args[k - 1] not in ("-o", "+o", "-O", "+O")):
+            return None  # 스크립트 파일 실행: 따라가지 않는다
+    return None
+
+
+def in_place_files(name: str, args: list[str]) -> list[str]:
+    """`sed -i`·`perl -i`가 고쳐 쓰는 파일들. 제자리 고침이 아니면 빈 목록."""
+    in_place, has_script, files = False, False, []
+    takes_value = "ef" if name == "sed" else "eE"
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in ("--in-place",) or a.startswith("--in-place="):
+            in_place = True
+        elif a in ("--expression", "--file"):
+            has_script = skip = True
+        elif a.startswith(("--expression=", "--file=")):
+            has_script = True
+        elif a.startswith("--") or a == "-":
+            continue
+        elif a.startswith("-") and len(a) > 1:
+            for k, letter in enumerate(a[1:], start=1):
+                if letter == "i":  # -i, -i.bak, -pi: 뒤는 백업 접미사
+                    in_place = True
+                    break
+                if letter in takes_value:
+                    has_script = True
+                    skip = k == len(a) - 1  # 값이 다음 인자
+                    break
+        elif a:  # BSD `sed -i ''`의 빈 접미사는 건너뛴다
+            files.append(a)
+    if not in_place:
+        return []
+    return files if has_script else files[1:]
+
+
 def check_git(args: list[str], ctx: Ctx) -> str | None:
     gitdir = ctx.cwd
+    paths: list[str] = []  # --work-tree, --git-dir: git이 이 경로를 바꾼다
     i = 0
     while i < len(args) and args[i].startswith("-"):
-        if args[i] in GIT_OPTS_WITH_VALUE:
-            if args[i] == "-C" and i + 1 < len(args):
-                gitdir = os.path.join(gitdir, expand(args[i + 1], ctx.env))
+        a = args[i]
+        if a.startswith(("--work-tree=", "--git-dir=")):
+            paths.append(a.split("=", 1)[1])
+            i += 1
+        elif a in GIT_OPTS_WITH_VALUE:
+            if i + 1 < len(args):
+                if a == "-C":
+                    gitdir = os.path.join(gitdir, expand(args[i + 1], ctx.env))
+                elif a in ("--work-tree", "--git-dir"):
+                    paths.append(args[i + 1])
             i += 2
         else:
             i += 1
@@ -346,6 +462,10 @@ def check_git(args: list[str], ctx: Ctx) -> str | None:
         return f"force 계열(`git {sub} --force…`)은 되돌릴 수 없다"
     if sub in GIT_WRITES and "$" not in gitdir and outside(gitdir, ctx):
         return f"worktree 밖 `{gitdir}`에서 `git {sub}`를 한다(worker는 `{ctx.worktree}` 안만 바꾼다)"
+    there = Ctx(worktree=ctx.worktree, cwd=gitdir, env=ctx.env)
+    for p in paths:
+        if sub in GIT_WRITES and outside(p, there):
+            return f"worktree 밖 `{p}`를 가리켜 `git {sub}`를 한다(worker는 `{ctx.worktree}` 안만 바꾼다)"
     return None
 
 
@@ -375,6 +495,7 @@ def check_gh(args: list[str]) -> str | None:
                 method = a[2:].upper()
         explicit = any(a in ("-X", "--method") or a.startswith(("--method=", "-X")) for a in args)
         has_body = any(a in GH_API_BODY or a.startswith(tuple(f"{f}=" for f in GH_API_BODY if f.startswith("--")))
+                       or (a.startswith(("-f", "-F")) and len(a) > 2)  # -ftitle=x
                        for a in args)
         if method != "GET" or (has_body and not explicit):
             return f"`gh api`({method if explicit else 'POST'})는 GitHub에 쓴다"
