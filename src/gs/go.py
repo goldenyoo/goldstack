@@ -19,6 +19,7 @@ from .check import check
 from .feature import Feature, Ticket, work_rel
 
 CONFLICT = "conflict"
+HEARTBEAT_SECONDS = 60  # 상태가 그대로여도 이 간격마다 state.json을 다시 쓴다(진행 바가 오래된 실행으로 보고 지우지 않게)
 
 
 def integration_branch(feature: str) -> str:
@@ -45,6 +46,7 @@ class Run:
     order: list[str] = field(default_factory=list)
     prior: set[str] = field(default_factory=set)  # 이번 실행 전에 이미 병합돼 있던 티켓(표시용)
     ihead: str = ""  # gs가 아는 integration 끝. 병합할 때만 움직인다
+    saved: float = 0.0  # 마지막 save()의 time.monotonic(). heartbeat가 본다
 
     @property
     def name(self) -> str:
@@ -77,6 +79,7 @@ class Run:
             self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
             models={tid: self.feat.tickets[tid].model for tid in self.order})
         state.save(self.rundir, self.st)
+        self.saved = time.monotonic()
 
 
 def say(msg: str) -> None:
@@ -120,8 +123,10 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
             finished = False
             url = r.st.finish.get("url") if r.st else None
         except herdr.HerdrError as e:
+            # git 오류처럼 요약·알림까지 간다. 종료 코드는 1(finished가 False라 ok도 False).
             print(f"gs go: herdr 오류: {e}", file=sys.stderr)
-            return 1
+            finished = False
+            url = r.st.finish.get("url") if r.st else None
         finally:
             if r.st is not None:
                 r.st.finished_at = state.now()
@@ -271,7 +276,54 @@ def _resume_merged(r: Run) -> None:
         elif ts.status == state.MERGED and tid in r.order:
             say(f"[{tid}] state는 병합이라는데 integration에 표시가 없다. 다시 한다")
             _set(r, tid, status=state.PENDING, failures=0, failure_summary="")
+        _recheck_kept(r, tid)
     r.save()
+
+
+def _recheck_kept(r: Run, tid: str) -> None:
+    """남긴 worktree 중 병합된 지금 시도의 것이 아닌 옛 경로를 다시 본다(티켓이 대기로 돌아갔거나 재시도할 때).
+
+    경로가 없거나 미커밋 변경이 없으면 정리하고 목록에서 뺀다. 병합된 티켓의 지금 worktree는 _cleanup_merged가 본다.
+    """
+    ts = r.st.tickets[tid]
+    current = ts.worktree if ts.status == state.MERGED else None
+    keep = [p for p in ts.kept_worktrees if p == current or not _drop_kept(r, tid, Path(p))]
+    if keep != ts.kept_worktrees:
+        ts.kept_worktrees = keep
+        r.save()
+
+
+def _drop_kept(r: Run, tid: str, path: Path) -> bool:
+    """남긴 옛 worktree 하나를 정리한다. 목록에서 빼도 되면 True. 정리 오류는 경고뿐이다(목록에 남긴다)."""
+    try:
+        if not path.exists():
+            say(f"[{tid}] 남긴 worktree가 없어 목록에서 뺀다: {path}")
+            return True
+        wt = path.resolve()
+        suffix = wt.name.removeprefix(tid)
+        valid = wt.parent == (r.rundir / "wt").resolve() and wt.name.startswith(tid) and (
+            suffix == "" or (suffix.startswith("-retry-") and suffix.removeprefix("-retry-").isdigit()))
+        current = git.worktrees(r.repo)
+        if not valid or wt not in current or wt == r.iwt.resolve():
+            say(f"[{tid}] 경고: 남긴 경로가 이 티켓의 worktree가 아니라 정리하지 않는다: {path}")
+            return False
+        if not git.is_clean(wt):
+            say(f"[{tid}] 경고: 남긴 worktree: {wt} (미커밋 변경)")
+            return False
+        branch = current[wt]
+        git.run(r.repo, "worktree", "remove", str(wt))  # --force 없이: 검사 뒤 생긴 변경은 git이 지킨다
+        say(f"[{tid}] 남긴 worktree 정리: {wt}")
+        if branch == ticket_branch(r.name, tid) + suffix and git.branch_exists(r.repo, branch):
+            included = git.run(r.repo, "merge-base", "--is-ancestor", f"refs/heads/{branch}",
+                               f"refs/heads/{integration_branch(r.name)}", check=False)
+            if included.returncode:
+                say(f"[{tid}] 경고: 브랜치 끝이 integration에 포함되지 않아 남긴다: {branch}")
+            else:
+                git.run(r.repo, "branch", "-D", branch)
+        return True
+    except (git.GitError, OSError) as e:
+        say(f"[{tid}] 경고: 남긴 worktree 정리 실패: {_err(e)}")
+        return False
 
 
 def _cleanup_merged(r: Run, tid: str) -> None:
@@ -446,6 +498,8 @@ def _wait_any(r: Run, active: dict[str, Active], runner) -> tuple[str, int | Non
         # 끝난 티켓이 계속 들어와도 뒤쪽 worker의 활동·시간 초과를 빠뜨리지 않는다.
         if timed_out or result:
             return timed_out or result
+        if time.monotonic() - r.saved >= HEARTBEAT_SECONDS:
+            r.save()  # heartbeat: 바뀐 것이 없어도 mtime·경과 시간을 새로 쓴다
         time.sleep(worker.poll_interval(runner))
 
 
@@ -456,6 +510,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
     """
     proc = None
     try:
+        _recheck_kept(r, t.id)
         ts = r.st.ticket(t.id)
         summary = ""
         if ts.failure_summary:
