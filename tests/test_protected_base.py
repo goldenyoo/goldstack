@@ -86,6 +86,9 @@ elif cmd == "view":
     print(json.dumps(out))
 elif cmd == "checks":
     p = find(args[2])
+    error = here / f"checks.{p['number']}.error"
+    if error.exists():
+        fail(error.read_text())
     checks = here / f"checks.{p['number']}"
     checks = checks if checks.exists() else here / "checks.all"
     if not checks.exists():
@@ -295,6 +298,34 @@ class ProtectedBaseTest(unittest.TestCase):
         self.assertEqual(len(self.prs()), 2)
         self.assertEqual(self.calls(), ["01"])
         self.assertTrue(self.messages[-1].startswith("✅ demo"))
+        self.assert_no_base_push()
+
+    def test_report_pr_error_after_creation_stays_pending(self):
+        # 보고서 PR을 만든 뒤 검사 조회가 일시적으로 실패해도 완료로 치지 않는다. 다음 gs go가 그 PR을 다시 읽는다.
+        self.tearDown()
+        self.setUp(wait_checks=True)
+        (self.bin / "checks.all").write_text(json.dumps([{"name": "test", "bucket": "pass"}]))
+        (self.bin / "checks.2.error").write_text("HTTP 502 Bad Gateway")
+        code, out, err = self.go()
+        self.assertEqual(code, 1, out + err)
+        f = self.finish()
+        self.assertEqual(f["phase"], "report_pending")
+        self.assertIn(URL.format(2), f["outcome"])
+        self.assertIn("HTTP 502", f["outcome"])
+        self.assertFalse(f.get("base_report_tried"))
+        self.assertEqual(self.prs()[1]["state"], "OPEN")
+        self.assertIn(URL.format(2), self.messages[-1])
+
+        (self.bin / "checks.2.error").unlink()
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        f = self.finish()
+        self.assertEqual(f["phase"], "verified")
+        self.assertEqual(f["outcome"], "integration·main 검증 통과, PR 병합 완료")
+        self.assertTrue(f["base_report_tried"])
+        self.assertEqual(self.prs()[1]["state"], "MERGED")
+        self.assertIn("\n마무리: verified · ", self.base_report())
+        self.assertEqual(len(self.prs()), 2)
         self.assert_no_base_push()
 
     def test_feature_pr_blocked_by_approval_is_merge_pending(self):

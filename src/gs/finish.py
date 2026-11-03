@@ -604,8 +604,10 @@ def _report_side_pr(r, sha: str) -> None:
 
 def _report_pr(r, rel: str) -> None:
     """보호된 base: 최종 report.md를 `gs/<f>/report` PR로 올린다. 승인에 막히면 phase report_pending으로 멈춘다.
-    PR을 만들기 전 오류는 direct push 때처럼 경고뿐이다(base_report_tried)."""
+    PR을 만들기 전 오류는 direct push 때처럼 경고뿐이다(base_report_tried). PR을 만든 뒤 오류(검사·병합 조회 등)는
+    미병합 PR이 남으니 report_pending으로 멈춰 다음 gs go가 그 PR을 다시 읽게 한다."""
     f = r.st.finish
+    sha = ""
     try:
         sha = _report_commit(r, rel, (r.iwt / rel).read_bytes(), push=False)
         if not sha:
@@ -614,6 +616,12 @@ def _report_pr(r, rel: str) -> None:
         _save(r, report_result={"phase": f["phase"], "outcome": f.get("outcome", "")})
         _report_side_pr(r, sha)
     except Exception as e:  # noqa: BLE001 — 보고서는 최선. 병합·검증 결과를 바꾸지 않는다
+        url = f.get("report_pr")
+        if url and f.get("report_head") == sha and "report_result" in f:
+            # report_result는 남긴다. 다음 gs go가 PR 병합을 확인하면 기다리던 phase·outcome으로 돌아간다.
+            _save(r, error=str(e), phase="report_pending", outcome=f"report PR 확인 실패: {url} ({e})")
+            print(f"■ 경고: 최종 보고서 PR {url}을 확인하지 못했다. 다음 gs go가 다시 읽는다: {e}", flush=True)
+            return
         result = f.pop("report_result", {})
         _save(r, base_report_tried=True, phase=result.get("phase", f["phase"]),
               outcome=result.get("outcome", f.get("outcome", "")))
