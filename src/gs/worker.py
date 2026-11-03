@@ -218,16 +218,13 @@ class SubprocessRunner:
         try:
             proc.wait(timeout=1)
         except subprocess.TimeoutExpired:
-            pass
+            self.stop(proc)
 
     def stop(self, proc: subprocess.Popen) -> None:
         """끝내고 거둔다(좀비를 남기지 않게). 거두기 전의 pid는 재사용되지 않는다."""
         if proc.poll() is None:
             proc.kill()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
+        proc.wait()
 
 
 class HerdrRunner:

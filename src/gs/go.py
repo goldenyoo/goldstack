@@ -378,14 +378,17 @@ def _loop(r: Run) -> None:
             if not active:
                 return
             tid, code, error = _wait_any(r, active, runner)
-            a = active.pop(tid)
+            # 결과 처리가 끝날 때까지 정리 대상에 둔다. _finish·_fail이 예외를 내도 finally에서 거둔다.
+            a = active[tid]
             if error and not a.fix:  # 이 worker를 확인하다 오류가 났다. 이 티켓만 실패시킨다
                 a.proc.stop()
                 a.proc.finish(False)
                 _fail(r, a.t, error)
+                active.pop(tid)
                 continue
             try:
-                nxt = _finish(r, a, code, others=sorted(active), runner=runner, error=error)
+                nxt = _finish(r, a, code, others=sorted(t for t in active if t != tid), runner=runner, error=error)
+                active.pop(tid)
                 if nxt is not None:  # 수정 worker를 띄웠다. 끝나면 다시 _finish로 온다
                     active[tid] = nxt
             except (git.GitError, OSError) as e:
@@ -393,6 +396,7 @@ def _loop(r: Run) -> None:
                 a.proc.stop()
                 _reset_integration(r, r.ihead)
                 _fail(r, a.t, f"worker 결과 처리 중 오류: {_err(e)}")
+                active.pop(tid)
     finally:
         # 예상 못 한 오류로 루프를 떠나도 띄운 worker를 남기지 않는다.
         for a in active.values():
