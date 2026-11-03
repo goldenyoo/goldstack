@@ -2,8 +2,8 @@
 
 병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 모델로 한 번 재시도한다(07).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
-한 번 띄운다(06, review.py). 재리뷰는 없고 verify만 돈다. 끝에는 보고서·PR·main 검증·revert를 한다(08).
-진행 상태는 `.work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
+한 번 띄운다(06, review.py). 재리뷰는 없고 verify만 돈다. 끝에는 보고서·PR·base 검증·revert를 한다(08).
+진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
 from __future__ import annotations
@@ -14,12 +14,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, failure, finish, git, graph, herdr, review, state, verify, worker
+from . import adapters, config, failure, finish, git, graph, herdr, notify, review, state, verify, worker
 from .check import check
-from .feature import Feature, Ticket
+from .feature import Feature, Ticket, work_rel
 
-MAIN = "main"
-BASE = "origin/main"  # PR 대상. 로컬 main은 뒤처지거나 앞설 수 있어 쓰지 않는다
 CONFLICT = "conflict"
 
 
@@ -41,6 +39,7 @@ class Run:
     repo: Path
     feat: Feature
     only: list[str] | None
+    cfg: config.Config  # 실행 시작 시 읽은 설정을 모든 모델 호출에 함께 쓴다
     st: state.State | None = None  # 상태의 원천. 요약·PR 본문도 이것을 읽는다
     g: dict[str, list[str]] = field(default_factory=dict)
     order: list[str] = field(default_factory=list)
@@ -52,12 +51,32 @@ class Run:
         return self.feat.name
 
     @property
+    def remote(self) -> str:
+        return self.cfg.git.remote
+
+    @property
+    def base(self) -> str:
+        """PR 대상 브랜치 이름(예: main)."""
+        return self.cfg.git.base
+
+    @property
+    def base_ref(self) -> str:
+        """원격의 base(예: origin/main). 로컬 base 브랜치는 뒤처지거나 앞설 수 있어 쓰지 않는다."""
+        return f"{self.remote}/{self.base}"
+
+    @property
     def rundir(self) -> Path:
         return self.feat.root / "run"
 
     @property
     def iwt(self) -> Path:
         return self.rundir / "wt" / "integration"
+
+    def save(self) -> None:
+        self.st.progress = state.calculate_progress(
+            self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
+            models={tid: self.feat.tickets[tid].model for tid in self.order})
+        state.save(self.rundir, self.st)
 
 
 def say(msg: str) -> None:
@@ -71,7 +90,8 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     if feat.errors:
         print(f"gs go: 검사 오류 {len(feat.errors)}개. 아무것도 띄우지 않았다.", file=sys.stderr)
         return 1
-    r = Run(repo, feat, only)
+    cfg, _ = config.load(repo)  # check가 이미 검사했다(오류면 위에서 끝났다). 경고는 check가 보였다
+    r = Run(repo, feat, only, cfg)
     lock = state.Lock(r.rundir)
     try:
         lock.acquire()
@@ -81,20 +101,20 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     try:
         url, finished = None, False
         try:
-            git.run(repo, "fetch", "-q", "origin", MAIN)
-            _require_committed(repo, name)
+            git.run(repo, "fetch", "-q", r.remote, r.base)
+            _require_committed(r)
             _begin(r)
             _prepare_integration(r)
             _resume_merged(r)
-            # 병합 확인·main 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
+            # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
             if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
                 r.ihead = git.sha(r.iwt, "HEAD")
-                url, finished = finish.run(r)
+                url, finished = _finish_run(r)
             else:
                 finished = True
             if finished:
                 _loop(r)
-                url, finished = finish.run(r)
+                url, finished = _finish_run(r)
         except git.GitError as e:
             print(f"gs go: git 오류: {e}", file=sys.stderr)
             finished = False
@@ -105,12 +125,28 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         finally:
             if r.st is not None:
                 r.st.finished_at = state.now()
-                state.save(r.rundir, r.st)
+                for ts in r.st.tickets.values():
+                    state.end_phase(ts, r.st.finished_at)
+                r.st.phase = ""
+                r.save()
     finally:
         lock.release()
+    ok = finished and all(r.st.tickets[tid].status == state.MERGED for tid in r.order)
     if r.st is not None:
         _summary(r, url)
-    return 0 if finished and all(r.st.tickets[tid].status == state.MERGED for tid in r.order) else 1
+        if cfg.notify.telegram:
+            _notify(r, url, ok)
+    return 0 if ok else 1
+
+
+def _finish_run(r: Run) -> tuple[str | None, bool]:
+    r.st.phase = "finish"
+    r.save()
+    try:
+        return finish.run(r)
+    finally:
+        r.st.phase = ""
+        r.save()
 
 
 def _begin(r: Run) -> None:
@@ -119,6 +155,7 @@ def _begin(r: Run) -> None:
     r.g = _graph(r)
     r.order = graph.topo_order(r.g)
     for tid, ts in sorted(st.tickets.items()):
+        state.end_phase(ts, st.updated_at or state.now())
         if ts.status == state.RUNNING:
             say(f"[{tid}] 지난 실행이 중간에 끝나 running으로 남았다. 실패로 세지 않고 새로 시작한다")
             _stop_previous(tid, ts)
@@ -130,9 +167,9 @@ def _begin(r: Run) -> None:
             if ts.status in (state.FAILED, state.SKIPPED):
                 ts.failures, ts.failure_summary, ts.reason = 0, "", ""
             ts.status, ts.pane, ts.started_at, ts.ended_at = state.PENDING, "", "", ""
-    st.pid, st.only, st.started_at, st.finished_at = os.getpid(), r.only, state.now(), ""
+    st.pid, st.only, st.started_at, st.finished_at, st.phase = os.getpid(), r.only, state.now(), "", ""
     r.st = st
-    state.save(r.rundir, st)
+    r.save()
 
 
 def _stop_previous(tid: str, ts: state.TicketState) -> None:
@@ -165,16 +202,23 @@ def _set(r: Run, tid: str, **fields) -> None:
     ts = r.st.ticket(tid)
     for k, v in fields.items():
         setattr(ts, k, v)
-    state.save(r.rundir, r.st)
+    if ts.status != state.RUNNING:
+        state.end_phase(ts, ts.ended_at or state.now())
+    r.save()
 
 
-def _require_committed(repo: Path, name: str) -> None:
-    rel = f".work/{name}"
+def _phase(r: Run, tid: str, phase: str, model: str, *, attempt: int | None = None) -> None:
+    state.begin_phase(r.st.ticket(tid), phase, model, attempt=attempt)
+    r.save()
+
+
+def _require_committed(r: Run) -> None:
+    rel = work_rel(r.name)
     # report.md는 gs가 integration에서 쓴다. 호출 worktree의 보고서가 뒤처져도 티켓 재개를 막지 않는다.
     inputs = [f"{rel}/spec.md", f"{rel}/tickets"]
-    if git.out(repo, "status", "--porcelain", "--", *inputs) or git.run(repo, "diff", "--quiet", BASE, "--", *inputs,
-                                                                     check=False).returncode:
-        raise git.GitError(f"{rel}가 {BASE}와 다르다. worker는 {BASE} 기준으로 일하므로 먼저 커밋하고 push하라")
+    if git.out(r.repo, "status", "--porcelain", "--", *inputs) or git.run(r.repo, "diff", "--quiet", r.base_ref, "--",
+                                                                       *inputs, check=False).returncode:
+        raise git.GitError(f"{rel}가 {r.base_ref}와 다르다. worker는 {r.base_ref} 기준으로 일하므로 먼저 커밋하고 push하라")
 
 
 def _reset_integration(r: Run, to: str = "HEAD") -> bool:
@@ -191,12 +235,12 @@ def _reset_integration(r: Run, to: str = "HEAD") -> bool:
 
 def _prepare_integration(r: Run) -> None:
     branch = integration_branch(r.name)
-    git.ensure_worktree(r.repo, r.iwt, branch, start=BASE)
+    git.ensure_worktree(r.repo, r.iwt, branch, start=r.base_ref)
     if _reset_integration(r):
         say("■ integration worktree에 남은 병합·변경을 버렸다(지난 실행이 중간에 끝난 흔적)")
-    # 앞 wave가 main에 병합된 뒤라면 origin/main을 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
-    # main이 이 feature의 병합을 revert했으면 그 revert를 되돌린 커밋까지 합친다(feature 코드를 잃지 않는다).
-    finish.merge_main(r)
+    # 앞 wave가 base에 병합된 뒤라면 원격 base를 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
+    # base가 이 feature의 병합을 revert했으면 그 revert를 되돌린 커밋까지 합친다(feature 코드를 잃지 않는다).
+    finish.merge_base(r)
     say(f"■ integration: {branch} @ {git.sha(r.iwt, 'HEAD')[:8]} ({r.iwt})")
 
 
@@ -227,6 +271,7 @@ def _resume_merged(r: Run) -> None:
         elif ts.status == state.MERGED and tid in r.order:
             say(f"[{tid}] state는 병합이라는데 integration에 표시가 없다. 다시 한다")
             _set(r, tid, status=state.PENDING, failures=0, failure_summary="")
+    r.save()
 
 
 def _cleanup_merged(r: Run, tid: str) -> None:
@@ -412,7 +457,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
         if ts.failure_summary:
             path = Path(ts.failure_summary)
             if not path.exists():  # 요약 호출 중 코디네이터가 죽었으면 새 호출로 마무리한다
-                failure.summarize(r.repo, path.with_name("failure.log"))
+                failure.summarize(r.repo, path.with_name("failure.log"), r.cfg)
             summary = path.read_text(encoding="utf-8")
         # 실패·중단 worktree는 지우지 않는다. 실행 디렉터리 번호로 브랜치와 경로도 새로 고른다.
         while True:
@@ -425,12 +470,14 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
                 break
         base = r.ihead
         job = worker.Job(ticket=t, worktree=wt.resolve(), rundir=rundir)
+        started = state.now()
+        state.begin_phase(ts, "worker", t.model, attempt=int(rundir.name), at=started)
         _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
-             worktree=str(job.worktree), log=str(job.log), started_at=state.now(), ended_at="", reason="",
+             worktree=str(job.worktree), log=str(job.log), started_at=started, ended_at="", reason="",
              review={})
         git.ensure_worktree(r.repo, wt, branch, start=base)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
-        adapter = adapters.for_model(t.model)
+        adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
@@ -499,6 +546,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
                 return nxt
 
     # 그 사이 다른 티켓이 병합됐을 수 있다. 최신 integration 끝을 티켓 브랜치에 먼저 합쳐 본다.
+    _phase(r, t.id, "verify", t.model)
     if not _catch_up(r, a):
         return fail(CONFLICT)
 
@@ -520,6 +568,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         _reset_integration(r, r.ihead)
         return fail("검증하는 동안 integration이 바뀌었다(되돌림): 검증한 것과 커밋할 것이 다르다")
     # 커밋은 검증한 트리로 직접 만들고, 브랜치는 r.ihead에 있을 때만 옮긴다(그 사이 바뀌어도 섞이지 않게)
+    _phase(r, t.id, "finish", t.model)
     msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
     new = git.out(r.iwt, "commit-tree", merged[3], "-p", r.ihead, "-p", merged[2], "-m", msg)
     moved = git.run(r.iwt, "update-ref", "-m", f"gs: merge {t.id}", merged[1], new, r.ihead, check=False)
@@ -542,12 +591,13 @@ def _review(r: Run, a: Active) -> list[dict]:
     병합·검증처럼 루프 안에서 하나씩 돈다(다른 worker는 그동안 각자 돈다). 오래 걸리는 수정은 worker로 따로 띄운다.
     """
     t = a.t
+    _phase(r, t.id, "review", t.reviewer)
     say(f"[{t.id}] 리뷰: {t.reviewer}")
     rdir = a.proc.job.rundir / "review"
     try:
         rec = review.run(repo=r.repo, worktree=a.wt.resolve(), rdir=rdir, base=r.ihead, branch=a.branch,
                          ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model,
-                         reviewer=t.reviewer)
+                         reviewer=t.reviewer, cfg=r.cfg)
     except (review.Refused, git.GitError):
         raise  # 같은 계열은 거부, git 오류는 이 티켓의 실패(_finish·_loop가 처리)
     except Exception as e:  # noqa: BLE001 — 리뷰는 병합을 막지 않는다(spec 2-1). 뜻밖의 오류도 리뷰 실패로 적는다
@@ -564,6 +614,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
     띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 리뷰한 구현을 병합·검증한다.
     """
     t = a.t
+    _phase(r, t.id, "fix", t.model)
     job = worker.Job(ticket=t, worktree=a.wt.resolve(), rundir=a.proc.job.rundir / "fix")
     proc = None
     try:
@@ -571,7 +622,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
             f.write(review.fix_brief(todo))
-        adapter = adapters.for_model(t.model)
+        adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
         base = git.sha(r.repo, a.branch)
@@ -672,7 +723,7 @@ def _fail(r: Run, t: Ticket, reason: str) -> bool:
     _set(r, t.id, status=state.PENDING if retry else state.FAILED, reason=reason, ended_at=state.now(),
          failures=failures, failed_worktrees=paths, failure_summary=summary)
     if retry:
-        failure.summarize(r.repo, log)
+        failure.summarize(r.repo, log, r.cfg)
     say(f"[{t.id}] 실패: {reason}")
     if retry:
         say(f"[{t.id}] 같은 모델({t.model})로 최신 integration에서 한 번 재시도한다")
@@ -705,5 +756,42 @@ def _summary(r: Run, url: str | None) -> None:
     f = r.st.finish
     say(f"■ 마무리: {f.get('outcome', f.get('phase', '미완료'))}")
     left = sum(len(review.remaining(r.st.tickets[tid].review)) for tid in r.order)
-    say(f"■ 보고서: .work/{r.name}/report.md · 남은 리뷰 지적 {left}")
+    say(f"■ 보고서: {work_rel(r.name)}/report.md · 남은 리뷰 지적 {left}")
     say(f"■ PR: {url or '없음'}")
+
+
+def _message(r: Run, url: str | None, ok: bool) -> str:
+    """spec §4 "텔레그램" 형식. 성공은 세 줄, 실패는 한 줄."""
+    merged = sum(r.st.tickets[tid].status == state.MERGED for tid in r.order)
+    tickets = f"티켓 {merged}/{len(r.order)}"
+    if ok:
+        took = state.minutes(state.seconds_between(r.st.started_at, r.st.finished_at))
+        left = sum(len(review.remaining(r.st.tickets[tid].review)) for tid in r.order)
+        return (f"✅ {r.name} · {r.base} 병합\n{tickets} 병합 · {took}분 · 남은 지적 {left}\n"
+                f"PR {url or '없음'}")
+    f = r.st.finish
+    outcome = f.get("outcome", f.get("phase", "미완료"))
+    failed = [f"{tid} 실패: {(r.st.tickets[tid].reason.splitlines() or [''])[0]}"
+              for tid in r.order if r.st.tickets[tid].status == state.FAILED]
+    if failed:
+        tickets += f" ({', '.join(failed)})"
+    return f"❌ {r.name} · {outcome} · {tickets} · 보고서 {work_rel(r.name)}/report.md"
+
+
+def _notify(r: Run, url: str | None, ok: bool) -> None:
+    """실패해도 경고 한 줄만. 종료 코드·보고서는 바꾸지 않는다."""
+    token = ""
+    try:
+        env = config.read_local_env(r.repo)
+        token = env.get("TG_TOKEN", "")
+        missing = [key for key in ("TG_TOKEN", "TG_CHAT_ID") if not env.get(key)]
+        if missing:
+            error = f"알림을 보내지 않았다: .goldstack/local.env에 {', '.join(missing)} 값이 없다"
+        else:
+            sent, error = notify.send(token, env["TG_CHAT_ID"], _message(r, url, ok))
+            if sent:
+                return
+            error = f"알림 전송 실패: {error}"
+    except Exception as e:  # noqa: BLE001 — local.env를 못 읽어도 실행 결과는 그대로다
+        error = f"알림 실패: {notify.mask(f'{type(e).__name__}: {e}', token)}"
+    print(f"경고: 텔레그램 {error}", file=sys.stderr)

@@ -7,6 +7,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,7 +22,7 @@ class HookTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         base = Path(os.path.realpath(self.tmp.name))
-        self.wt = base / "repo" / ".work" / "f" / "run" / "wt" / "09"
+        self.wt = base / "repo" / ".goldstack" / "work" / "f" / "run" / "wt" / "09"
         self.wt.mkdir(parents=True)
         self.home = base / "home"
         scratch = tempfile.TemporaryDirectory()
@@ -170,6 +171,21 @@ class HookTest(unittest.TestCase):
         self.assertIsNone(hook.decide(self.payload("Write", file_path=str(self.wt / ".env.example"), content=""), e))
 
     # ---- GS_ROLE
+    def test_goldstack_local_env_is_secret_in_worktree_and_main_repo(self):
+        main = self.wt.parents[5]
+        for path in (".goldstack/local.env", str(self.wt / ".goldstack/local.env"),
+                     str(main / ".goldstack/local.env")):
+            with self.subTest(path=path):
+                for tool, inp in (("Read", {"file_path": path}), ("Grep", {"path": path, "pattern": "TOKEN"}),
+                                  ("Glob", {"pattern": path})):
+                    self.assertIsNotNone(hook.decide(self.payload(tool, **inp), self.env))
+                for cmd in (f"cat '{path}'", f"grep TOKEN '{path}'", f"cat < '{path}'"):
+                    self.assertBlocked(cmd)
+        self.assertBlocked("cd .goldstack && cat local.env")
+        self.assertBlocked(f"cd '{main}/.goldstack' && grep TOKEN local.env")
+        self.assertIsNone(hook.decide(self.payload("Read", file_path=".goldstack/local.env.example"), self.env))
+        self.assertAllowed("cat .goldstack/config.toml")
+
     def test_no_role_does_nothing(self):
         for env in [{}, {"GS_ROLE": ""}, {"GS_ROLE": "reviewer"}, {"GS_WORKTREE": str(self.wt)}]:
             for cmd in ["git push origin HEAD", "gh pr merge 3", "cat ~/.ssh/id_rsa", "rm -rf /"]:
@@ -215,6 +231,37 @@ class HookTest(unittest.TestCase):
 
 
 class PluginTest(unittest.TestCase):
+    def hook_command(self):
+        hooks = json.loads((REPO / "hooks/hooks.json").read_text())
+        return hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+
+    def test_missing_gs_is_quiet_for_non_workers_and_blocks_workers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for role in (None, "", "reviewer", "worker"):
+                with self.subTest(role=role):
+                    env = {"PATH": tmp}
+                    if role is not None:
+                        env["GS_ROLE"] = role
+                    cp = subprocess.run(["/bin/sh", "-c", self.hook_command()], env=env,
+                                        input="not json", text=True, capture_output=True)
+                    self.assertEqual(cp.returncode, 2 if role == "worker" else 0)
+                    self.assertEqual(cp.stdout, "")
+                    if role == "worker":
+                        self.assertIn("gs가 없어", cp.stderr)
+                    else:
+                        self.assertEqual(cp.stderr, "")
+
+    def test_available_gs_receives_hook_arguments_and_stdin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gs"
+            path.write_text('#!/bin/sh\n[ "$1 $2" = "hook pretooluse" ] || exit 9\n'
+                            'read -r payload\n[ "$payload" = "test payload" ] || exit 8\nexit 2\n')
+            path.chmod(0o755)
+            cp = subprocess.run(["/bin/sh", "-c", self.hook_command()],
+                                env={"PATH": tmp, "GS_ROLE": "worker"}, input="test payload\n",
+                                text=True, capture_output=True)
+            self.assertEqual((cp.returncode, cp.stdout, cp.stderr), (2, "", ""))
+
     def test_manifest_and_hook_config(self):
         plugin = json.loads((REPO / ".claude-plugin" / "plugin.json").read_text())
         self.assertEqual(plugin["name"], "goldstack")
@@ -222,7 +269,8 @@ class PluginTest(unittest.TestCase):
         self.assertEqual([p["name"] for p in market["plugins"]], ["goldstack"])
         hooks = json.loads((REPO / "hooks" / "hooks.json").read_text())
         cmds = [h["command"] for m in hooks["hooks"]["PreToolUse"] for h in m["hooks"]]
-        self.assertEqual(cmds, ["gs hook pretooluse"])
+        self.assertEqual(len(cmds), 1)
+        self.assertIn("exec gs hook pretooluse", cmds[0])
 
     def test_worker_keeps_tool_block_as_second_guard(self):
         self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)"', adapters.Claude.BASE)

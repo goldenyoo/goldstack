@@ -14,12 +14,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import adapters, cli, hook_agy, streamfmt, worker
+from gs import adapters, cli, config, hook_agy, streamfmt, worker
 from gs.adapters import AdapterError, WorkerInput
 from gs.feature import Ticket
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_go import FAKE_GH, SPEC, sh  # noqa: E402
+
+MODELS = config.ModelsConfig("judge-test", "review-test", "agy-test", "")
 
 GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t",
            "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
@@ -90,14 +92,14 @@ class CommandTest(Base):
         return shlex.split(cmd.replace("< ", "<"))
 
     def test_claude(self):
-        cmd = adapters.Claude().command(self.inp)
+        cmd = adapters.Claude(MODELS).command(self.inp)
         self.assertTrue(cmd.startswith("claude -p --output-format stream-json"))
         self.assertIn("--permission-mode bypassPermissions", cmd)
         self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)"', cmd)
         self.assertTrue(cmd.endswith(f"< {shlex.quote(str(self.inp.brief))}"), cmd)  # 공백 경로도 인용
 
     def test_codex(self):
-        cmd = adapters.Codex().command(self.inp)
+        cmd = adapters.Codex(MODELS).command(self.inp)
         self.assertTrue(cmd.startswith("codex exec --json -s workspace-write "), cmd)
         self.assertIn("-c sandbox_workspace_write.network_access=false", cmd)  # push가 나갈 길을 막는다
         self.assertNotIn("danger", cmd)
@@ -114,10 +116,10 @@ class CommandTest(Base):
 
     def test_codex_prepare_needs_git_worktree(self):
         with self.assertRaises(AdapterError):
-            adapters.Codex().prepare(WorkerInput(self.root / "b", self.root / "nogit", self.root / "l"))
+            adapters.Codex(MODELS).prepare(WorkerInput(self.root / "b", self.root / "nogit", self.root / "l"))
 
     def test_agy_follows_research_recommendation(self):
-        cmd = adapters.Agy().command(self.inp)
+        cmd = adapters.Agy(MODELS).command(self.inp)
         argv = shlex.split(cmd)
         self.assertEqual(argv[:2], ["agy", "-p"])
         self.assertEqual(argv[2], f"$(cat {shlex.quote(str(self.inp.brief))})")  # brief 전문을 프롬프트로(셸이 펼친다)
@@ -125,7 +127,7 @@ class CommandTest(Base):
         for flag in ("--output-format", "--dangerously-skip-permissions", "--settings", "--model"):
             self.assertIn(flag, argv)
         self.assertEqual(argv[argv.index("--output-format") + 1], "stream-json")
-        self.assertEqual(argv[argv.index("--model") + 1], "gemini-4-argon-high")
+        self.assertEqual(argv[argv.index("--model") + 1], MODELS.agy)
         for bad in ("--mode", "--sandbox", "--print-timeout", "--effort"):  # 11 §6: 넣지 않는다
             self.assertNotIn(bad, argv)
         deny = json.loads(argv[argv.index("--settings") + 1])["permissions"]["deny"]
@@ -134,7 +136,7 @@ class CommandTest(Base):
 
     def test_every_adapter_sets_worker_role(self):
         for cls in (adapters.Claude, adapters.Codex, adapters.Agy):
-            env = cls().env(self.inp)
+            env = cls(MODELS).env(self.inp)
             self.assertEqual(env["GS_ROLE"], "worker", cls)
             self.assertEqual(env["GS_WORKTREE"], str(self.wt))
 
@@ -144,7 +146,7 @@ class CommandTest(Base):
         t = Ticket(id="01", title="t", blocked_by=[], model="codex", reviewer="claude", path=Path("01-t.md"))
         job = worker.Job(ticket=t, worktree=self.wt, rundir=rundir)
         for cls in (adapters.Claude, adapters.Codex, adapters.Agy):
-            a = cls()
+            a = cls(MODELS)
             worker.write_script(job, a)
             text = job.script.read_text()
             self.assertIn("export GS_ROLE=worker", text, cls)
@@ -152,13 +154,13 @@ class CommandTest(Base):
             self.assertIn(f"( {a.command(job.input)} )", text)
 
     def test_for_model(self):
-        self.assertIsInstance(adapters.for_model("codex"), adapters.Codex)
-        self.assertIsInstance(adapters.for_model("agy"), adapters.Agy)
-        self.assertIsInstance(adapters.for_model("claude"), adapters.Claude)
+        self.assertIsInstance(adapters.for_model("codex", MODELS), adapters.Codex)
+        self.assertIsInstance(adapters.for_model("agy", MODELS), adapters.Agy)
+        self.assertIsInstance(adapters.for_model("claude", MODELS), adapters.Claude)
         with self.assertRaises(AdapterError):
-            adapters.for_model("gpt")
+            adapters.for_model("gpt", MODELS)
         with mock.patch.dict(os.environ, {"GS_WORKER_CMD": "bash w.sh"}):
-            a = adapters.for_model("agy")
+            a = adapters.for_model("agy", MODELS)
             self.assertEqual((a.name, a.command(self.inp)), ("custom", "bash w.sh"))
 
 
@@ -168,7 +170,7 @@ class AgyOutcomeTest(Base):
     def outcome(self, code, *lines):
         log = self.root / "worker.log"
         log.write_text("".join((json.dumps(x) if isinstance(x, dict) else x) + "\n" for x in lines))
-        return adapters.Agy().outcome(code, WorkerInput(self.root / "b", self.root, log))
+        return adapters.Agy(MODELS).outcome(code, WorkerInput(self.root / "b", self.root, log))
 
     def test_success(self):
         self.assertEqual(self.outcome(0, {"event": "init"}, {"event": "result", "result": {"status": "SUCCESS"}}),
@@ -244,32 +246,32 @@ class AgyGuardTest(Base):
 
     def test_prepare_installs_hook_outside_git(self):
         self.fake_agy("ok")
-        adapters.Agy().prepare(self.inp)
+        adapters.Agy(MODELS).prepare(self.inp)
         spec = json.loads((self.wt / ".agents" / "hooks.json").read_text())
         h = spec["goldstack-worker-guard"]["PreToolUse"][0]
         self.assertEqual(h["matcher"], "*")
         self.assertTrue(h["hooks"][0]["command"].endswith("-m gs.cli hook agy-pretooluse"))
         self.assertEqual(sh(self.wt, "git", "status", "--porcelain"), "")  # 커밋에 섞이지 않는다
-        adapters.Agy().prepare(self.inp)  # 다시 해도 exclude 줄은 하나
+        adapters.Agy(MODELS).prepare(self.inp)  # 다시 해도 exclude 줄은 하나
         exclude = Path(sh(self.wt, "git", "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"))
         self.assertEqual(exclude.read_text().splitlines().count("/.agents/hooks.json"), 1)
 
     def test_refused_when_agy_does_not_load_hook(self):
         self.fake_agy("nohook")
         with self.assertRaisesRegex(AdapterError, "agy 차단 장치가 없다.*구현 worker로 띄우지 않는다"):
-            adapters.Agy().prepare(self.inp)
+            adapters.Agy(MODELS).prepare(self.inp)
 
     def test_refused_when_agy_missing(self):
         os.environ["GS_AGY"] = str(self.root / "no-agy")
         self.addCleanup(os.environ.pop, "GS_AGY", None)
         with self.assertRaisesRegex(AdapterError, "없다"):
-            adapters.Agy().prepare(self.inp)
+            adapters.Agy(MODELS).prepare(self.inp)
 
     def test_refused_when_hook_command_does_not_block(self):
         self.fake_agy("ok")
         with mock.patch.object(adapters, "agy_hook_command", return_value="echo hook agy-pretooluse"):
             with self.assertRaisesRegex(AdapterError, "막지 않았다"):
-                adapters.Agy().prepare(self.inp)
+                adapters.Agy(MODELS).prepare(self.inp)
 
     def test_refused_when_repo_tracks_hook_file(self):
         self.fake_agy("ok")
@@ -278,7 +280,7 @@ class AgyGuardTest(Base):
         sh(self.wt, "git", "add", "-A")
         sh(self.wt, "git", "commit", "-qm", "own hooks")
         with self.assertRaisesRegex(AdapterError, "추적"):
-            adapters.Agy().prepare(self.inp)
+            adapters.Agy(MODELS).prepare(self.inp)
 
     def test_refused_when_agents_is_tracked_symlink(self):  # 리뷰 05 #1: 링크를 따라 밖의 파일을 덮어쓰지 않는다
         self.fake_agy("ok")
@@ -289,7 +291,7 @@ class AgyGuardTest(Base):
         sh(self.wt, "git", "add", "-A")
         sh(self.wt, "git", "commit", "-qm", "agents link")
         with self.assertRaisesRegex(AdapterError, "심볼릭 링크"):
-            adapters.Agy().prepare(self.inp)
+            adapters.Agy(MODELS).prepare(self.inp)
         self.assertEqual((shared / "hooks.json").read_text(), "original\n")
 
     def test_refused_when_hooks_file_is_symlink(self):
@@ -299,7 +301,7 @@ class AgyGuardTest(Base):
         (self.wt / ".agents").mkdir()
         (self.wt / ".agents" / "hooks.json").symlink_to(outside)
         with self.assertRaisesRegex(AdapterError, "심볼릭 링크"):
-            adapters.Agy().prepare(self.inp)
+            adapters.Agy(MODELS).prepare(self.inp)
         self.assertEqual(outside.read_text(), "original\n")
 
     def test_refused_when_agents_is_a_file(self):
@@ -308,7 +310,7 @@ class AgyGuardTest(Base):
         sh(self.wt, "git", "add", "-A")
         sh(self.wt, "git", "commit", "-qm", "agents file")
         with self.assertRaisesRegex(AdapterError, "디렉터리가 아니다"):
-            adapters.Agy().prepare(self.inp)
+            adapters.Agy(MODELS).prepare(self.inp)
         self.assertEqual((self.wt / ".agents").read_text(), "x\n")
 
 
@@ -360,6 +362,7 @@ class AgyHookTest(unittest.TestCase):
         self.assertEqual(self.verdict(self.payload("write_file", Path=str(self.wt / "a.py"), Content="")), "allow")
         self.assertEqual(self.verdict(self.payload("edit_file", Path=str(self.wt / "README.md"))), "allow")
         self.assertEqual(self.verdict(self.payload("read_file", Path="/home/u/.ssh/id_rsa")), "deny")
+        self.assertEqual(self.verdict(self.payload("read_file", Path=".goldstack/local.env")), "deny")
         self.assertEqual(self.verdict(self.payload("read_file", Path="/etc/hosts")), "allow")
         self.assertEqual(self.verdict(self.payload("search_web", Query="git push")), "allow")
 
@@ -403,9 +406,14 @@ class AgyGoAndCheckTest(Base):
         super().setUp()
         self.bin = self.root / "bin"
         self.bin.mkdir()
+        for name in ("claude", "codex"):
+            path = self.bin / name
+            path.write_text("#!/bin/sh\nexit 1\n")
+            path.chmod(0o755)
         (self.bin / "gh").write_text("#!/bin/bash\n" + FAKE_GH)
         (self.bin / "gh").chmod(0o755)
-        patch = mock.patch.dict(os.environ, {"GS_RUNNER": "subprocess", "GS_GH": str(self.bin / "gh"),
+        patch = mock.patch.dict(os.environ, {"PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
+                                            "GS_RUNNER": "subprocess", "GS_GH": str(self.bin / "gh"),
                                             "GS_JUDGE": "/usr/bin/true",
                                             "GS_REVIEWER_CMD": "echo '{\"findings\": []}'"})
         patch.start()
@@ -415,10 +423,12 @@ class AgyGoAndCheckTest(Base):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         sh(self.repo, "git", "init", "-q", "-b", "main")
-        (self.repo / ".gitignore").write_text(".work/*/run/\n")
-        tickets = self.repo / ".work" / "demo" / "tickets"
+        (self.repo / ".goldstack").mkdir()
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+        (self.repo / ".gitignore").write_text(".goldstack/work/*/run/\n")
+        tickets = self.repo / ".goldstack/work" / "demo" / "tickets"
         tickets.mkdir(parents=True)
-        (self.repo / ".work" / "demo" / "spec.md").write_text(SPEC)
+        (self.repo / ".goldstack/work" / "demo" / "spec.md").write_text(SPEC)
         (tickets / "01-t.md").write_text(AGY_TICKET.format(tid="01", model="agy"))
         (tickets / "02-t.md").write_text(AGY_TICKET.format(tid="02", model="codex"))
         sh(self.repo, "git", "add", "-A")
@@ -433,7 +443,7 @@ class AgyGoAndCheckTest(Base):
         return code, out.getvalue(), err.getvalue()
 
     def state(self):
-        return json.loads((self.repo / ".work" / "demo" / "run" / "state.json").read_text())["tickets"]
+        return json.loads((self.repo / ".goldstack/work" / "demo" / "run" / "state.json").read_text())["tickets"]
 
     def test_go_runs_agy_through_adapter(self):
         self.fake_agy("ok")
@@ -470,9 +480,13 @@ class AgyGoAndCheckTest(Base):
 
     def test_check_quiet_with_guard_or_without_agy_tickets(self):
         self.fake_agy("ok")
-        self.assertEqual(self.cli("check", "demo")[2], "")
+        code, out, err = self.cli("check", "demo")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("차단 장치가 없다", err)
         self.fake_agy("nohook")
-        self.assertEqual(self.cli("check", "demo", "--only", "02")[2], "")  # 범위에 agy 티켓이 없다
+        code, out, err = self.cli("check", "demo", "--only", "02")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("차단 장치가 없다", err)  # 범위에 agy 티켓이 없다
 
 
 class StreamfmtTest(unittest.TestCase):

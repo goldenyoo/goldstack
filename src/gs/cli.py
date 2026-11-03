@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from . import feature as featmod
+from . import config
 from .check import check
 
 
@@ -14,16 +15,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, help="레포 루트(기본: 현재 디렉터리에서 위로 .git을 찾는다)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    sub.add_parser("init", help=".goldstack 설정 파일과 비밀 파일 예제를 만든다")
+    p = sub.add_parser("config", help="설정 값을 한 줄로 출력한다")
+    p.add_argument("key", help="섹션.키(예: git.base)")
+    sub.add_parser("migrate", help="옛 위치(.work/, .out-of-scope/, .ideas/)를 .goldstack/ 아래로 git mv한다(커밋 안 함)")
+
     p = sub.add_parser("check", help="spec과 티켓 그래프를 검사한다")
-    p.add_argument("feature", help=".work/<feature>")
+    p.add_argument("feature", help=".goldstack/work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id. 이 부분 집합 기준으로 순서·frontier를 계산한다")
 
     p = sub.add_parser("go", help="티켓 실행·보고·PR 병합·main 재검증(실패하면 revert)")
-    p.add_argument("feature", help=".work/<feature>")
+    p.add_argument("feature", help=".goldstack/work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다")
 
     p = sub.add_parser("status", help="실행 상태(state.json)를 표로 본다(읽기 전용)")
-    p.add_argument("feature", nargs="?", help=".work/<feature>(생략하면 실행 중인 feature 전부)")
+    p.add_argument("feature", nargs="?", help=".goldstack/work/<feature>(생략하면 실행 중인 feature 전부)")
 
     p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
     p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
@@ -40,6 +46,14 @@ def main(argv: list[str] | None = None) -> int:
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
         return 2
+    if args.cmd == "init":
+        config.init(repo, sys.stdout)
+        return 0
+    if args.cmd == "config":
+        return cmd_config(repo, args.key)
+    if args.cmd == "migrate":
+        from .migrate import migrate
+        return migrate(repo, sys.stdout, sys.stderr)
     if args.cmd == "check":
         return cmd_check(repo, args.feature, _ids(args.only))
     if args.cmd == "go":
@@ -55,6 +69,21 @@ def _ids(raw: str | None) -> list[str] | None:
     if raw is None:
         return None
     return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def cmd_config(repo: Path, key: str) -> int:
+    cfg, problems = config.load(repo)
+    for p in problems:
+        print(p, file=sys.stderr)
+    if cfg is None:
+        return 1
+    section, sep, name = key.partition(".")
+    if not sep or section not in vars(cfg) or name not in vars(getattr(cfg, section)):
+        print(f"오류: 없는 설정 키 `{key}`", file=sys.stderr)
+        return 1
+    value = getattr(getattr(cfg, section), name)
+    print(str(value).lower() if isinstance(value, bool) else value)
+    return 0
 
 
 def cmd_check(repo: Path, name: str, only: list[str] | None) -> int:
