@@ -69,7 +69,12 @@ def _classic(data: object) -> tuple[bool, int, list[str]]:
     lock = data.get("lock_branch") or {}
     if not isinstance(lock, dict):
         raise ReadError("branch lock 응답 형식 오류")
-    banned = reviews is not None or data.get("restrictions") is not None or bool(lock.get("enabled"))
+    signatures = data.get("required_signatures") or {}
+    if not isinstance(signatures, dict):
+        raise ReadError("필수 서명 응답 형식 오류")
+    # 새 revert·보고서 커밋은 통과한 검사나 서명 없이 바로 push할 수 없다.
+    banned = (reviews is not None or data.get("restrictions") is not None or bool(lock.get("enabled"))
+              or bool(names) or bool(signatures.get("enabled")))
     return banned, approvals, names
 
 
@@ -91,13 +96,15 @@ def _rules(data: object) -> tuple[bool | None, int | None, list[str] | None]:
             if params.get("require_code_owner_review") or params.get("require_last_push_approval"):
                 count = max(1, count)
             approvals = max(approvals or 0, count)
-        elif rule["type"] == "update":
+        elif rule["type"] in ("update", "required_signatures"):
             banned = True
         elif rule["type"] == "required_status_checks":
             entries = params.get("required_status_checks")
             if not isinstance(entries, list) or any(not isinstance(x, dict) for x in entries):
                 raise ReadError("rulesets 필수 검사 응답 형식 오류")
             checks = _names((checks or []) + [x.get("context") for x in entries])
+            if checks:
+                banned = True
     return banned, approvals, checks
 
 

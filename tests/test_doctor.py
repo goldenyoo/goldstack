@@ -177,6 +177,49 @@ else:
         self.assertFalse(cfg.git.direct_push)
         self.assertTrue(cfg.git.wait_checks)
 
+    def test_classic_checks_or_signatures_alone_disable_direct_push(self):
+        cases = [
+            {"required_status_checks": {"contexts": ["CI"]}},
+            {"required_status_checks": {"checks": [{"context": "CI"}]}},
+            {"required_signatures": {"enabled": True}},
+        ]
+        for protection in cases:
+            with self.subTest(protection=protection):
+                self.path.write_text(self.original)
+                self.responses[self.protection] = protection
+                code, out = self.command("doctor", "--write")
+                self.assertEqual(code, 0, out)
+                self.assertIn("직접 push 금지 → git.direct_push = false", out)
+                cfg, _ = config.load(self.repo)
+                self.assertFalse(cfg.git.direct_push)
+                self.assertEqual(cfg.git.wait_checks, "required_status_checks" in protection)
+
+    def test_ruleset_checks_or_signatures_alone_disable_direct_push(self):
+        self.responses[self.protection] = {"error": "HTTP 403"}
+        for rule in (
+            {"type": "required_status_checks", "parameters": {"required_status_checks": [{"context": "CI"}]}},
+            {"type": "required_signatures"},
+        ):
+            with self.subTest(rule=rule):
+                self.path.write_text(self.original)
+                self.responses[self.rules] = [rule]
+                code, out = self.command("doctor", "--write")
+                self.assertEqual(code, 0, out)
+                self.assertIn("직접 push 금지 → git.direct_push = false", out)
+                cfg, _ = config.load(self.repo)
+                self.assertFalse(cfg.git.direct_push)
+                self.assertEqual(cfg.git.wait_checks, rule["type"] == "required_status_checks")
+
+    def test_disabled_signatures_and_empty_checks_do_not_disable_direct_push(self):
+        self.responses[self.protection] = {
+            "required_status_checks": {"contexts": [], "checks": []},
+            "required_signatures": {"enabled": False},
+        }
+        code, out = self.command("doctor", "--write")
+        self.assertEqual(code, 0, out)
+        self.assertIn("직접 push 제한 없음", out)
+        self.assertTrue(config.load(self.repo)[0].git.direct_push)
+
     def test_permission_failures_unknown_values_never_written(self):
         for endpoint in (self.root, self.protection, self.rules):
             self.responses[endpoint] = {"error": "HTTP 403: no permission"}
