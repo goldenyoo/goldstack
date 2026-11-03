@@ -12,7 +12,7 @@ from . import frontmatter
 
 FAMILIES = ("claude", "codex", "agy")
 SPEC_REQUIRED = ("feature", "verify")
-SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20}
+SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20}
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
 
 
@@ -32,6 +32,7 @@ class Spec:
     verify: str
     max_workers: int
     idle_minutes: int
+    verify_minutes: int
     path: Path
 
 
