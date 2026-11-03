@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import tomllib
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass, fields as dataclass_fields
 from pathlib import Path
 from typing import TextIO, get_type_hints
 
@@ -15,6 +15,12 @@ IGNORE_LINES = (".goldstack/local.env", ".goldstack/work/*/run/")
 DEFAULT_CONFIG = '''[git]
 remote = "origin"
 base = {base}
+merge_method = "merge"
+direct_push = true
+wait_checks = false
+
+[worktree]
+setup = ""
 
 [models]
 judge = "opus"
@@ -29,6 +35,8 @@ max_calls_per_run = 3
 review_minutes = 30
 judge_minutes = 10
 summary_seconds = 60
+checks_minutes = 60
+setup_minutes = 15
 
 [notify]
 telegram = false
@@ -45,6 +53,14 @@ TG_CHAT_ID=
 class GitConfig:
     remote: str
     base: str
+    merge_method: str = "merge"
+    direct_push: bool = True
+    wait_checks: bool = False
+
+
+@dataclass(frozen=True)
+class WorktreeConfig:
+    setup: str = ""
 
 
 @dataclass(frozen=True)
@@ -60,6 +76,8 @@ class TimeoutsConfig:
     review_minutes: int
     judge_minutes: int
     summary_seconds: int
+    checks_minutes: int = 60
+    setup_minutes: int = 15
 
 
 @dataclass(frozen=True)
@@ -79,6 +97,7 @@ class Config:
     timeouts: TimeoutsConfig
     notify: NotifyConfig
     agy: AgyConfig = AgyConfig()
+    worktree: WorktreeConfig = WorktreeConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -98,15 +117,14 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
     sections = {}
     names = {str: "문자열", int: "정수", bool: "불리언"}
     for section, cls in schema.items():
-        if section not in data and section != "agy":
+        if section not in data and section not in ("agy", "worktree"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
             continue
         raw = data.get(section, {})
         if not isinstance(raw, dict):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`는 테이블이어야 한다"))
             continue
-        if section == "agy":
-            raw = {"max_calls_per_run": AgyConfig().max_calls_per_run, **raw}
+        raw = {**{f.name: f.default for f in dataclass_fields(cls) if f.default is not MISSING}, **raw}
         fields = get_type_hints(cls)
         for key in raw.keys() - fields.keys():
             problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `{section}.{key}`"))
@@ -118,6 +136,8 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 {names[kind]}이어야 한다"))
             elif section == "timeouts" and raw[key] <= 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0보다 커야 한다"))
+            elif section == "git" and key == "merge_method" and raw[key] not in ("merge", "squash"):
+                problems.append(Problem("오류", CONFIG_PATH, "`git.merge_method`는 merge 또는 squash이어야 한다"))
             elif section == "agy" and raw[key] < 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0 이상이어야 한다"))
             elif section == "models" and key != "codex" and not raw[key].strip():
@@ -186,3 +206,5 @@ def init(repo: Path, out: TextIO) -> None:
     else:
         print("그대로 둠: .gitignore", file=out)
     print(".goldstack/config.toml을 확인하고, local.env.example을 local.env로 복사해 값을 채워라", file=out)
+    from .doctor import doctor
+    doctor(repo, out)

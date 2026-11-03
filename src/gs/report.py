@@ -44,7 +44,7 @@ def kept(ts) -> str:
 
 
 def evidence(r, tail: int = LOG_TAIL) -> str:
-    """티켓마다 가장 최근 verify 로그 하나와 마무리 검증 로그만, 끝부분 tail자씩 붙인다."""
+    """티켓·integration의 최신 준비 로그와 verify·base 준비 로그의 끝부분 tail자씩 붙인다."""
     rows, notes, timings = [], [], []
     logs = []
     for tid in r.order:
@@ -72,6 +72,14 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
         found = list((r.rundir / tid).glob("**/verify.log"))
         if found:
             logs.append(max(found, key=lambda p: p.stat().st_mtime))
+        found = list((r.rundir / tid).glob("*/setup.log"))
+        if found:
+            logs.append(max(found, key=lambda p: p.stat().st_mtime))
+    found = list((r.rundir / "integration").glob("*/setup.log"))
+    if found:
+        logs.append(max(found, key=lambda p: p.stat().st_mtime))
+    if (r.rundir / "finish" / "setup.log").is_file():
+        logs.append(r.rundir / "finish" / "setup.log")
     logs.extend(sorted((r.rundir / "finish").glob("*verify.log")))
     # 이번 범위(--only) 밖 티켓이 남긴 worktree도 사람이 치워야 하므로 보인다.
     outside = [f"- {tid}: " + kept(ts).strip().replace("\n", "; ")
@@ -83,7 +91,14 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             + "\n\n### 남은 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
             + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n"
             + f"티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `{r.rundir.resolve()}/<티켓>/`\n\n")
+    if (ticket_command := getattr(r.feat.spec, "verify_ticket", None)) is not None:
+        text += f"티켓 검증 명령: `{ticket_command}`\n\n"
     for log in logs:
+        # 본문 상한 때문에 원본 로그를 줄여도 재시도 성공·건너뜀은 남긴다.
+        outcomes = [line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
+                    if line.startswith(("flaky: ", "integration-final: 보고서만 바뀜, 건너뜀"))]
+        if outcomes:
+            text += "\n".join(outcomes) + "\n\n"
         text += _log(r, log, tail)
     return text + f"\n{agy_usage(r)}\n"
 
@@ -156,8 +171,16 @@ def status_line(r) -> str:
         parts = [f"{pr} 병합 대기", f"{r.base} 검증 미실행"]
     elif phase == "merged":
         parts = [f"{pr} 병합", f"{r.base} 검증 대기"]
+    elif phase == "revert_pending":
+        parts = [f"{r.base} 검증 실패", f"revert PR {f.get('revert_pr', '')} 병합 대기"]
+    elif phase == "report_pending":
+        parts = [f"{pr} 병합", f"보고서 PR {f.get('report_pr', '')} 병합 대기"]
     elif phase == "main_failed":
         parts = [f"{r.base} 검증 실패", f"revert {revert} push 안 됨" if revert else "revert push 안 됨"]
+    elif phase == "setup_failed":
+        parts = ["준비 실패", "병합 안 함"]
+    elif phase == "base_unverified":
+        parts = [f"{pr} 병합", "base 미검증(준비 실패)"]
     else:
         parts = ["병합 전"]
     if f.get("error") and phase not in ("verified", "reverted", "not_merged", "closed"):
@@ -176,7 +199,9 @@ def _render(r, summary: str, tail: int) -> str:
             f"{r.base} verify: {f.get('main_ok', '미실행')}\n\n")
     if f.get("merge_sha"):
         text += f"병합 커밋: `{merge}`\n\n"
-    if f.get("revert_sha"):
+    if f.get("revert_sha") and f.get("revert_pr"):
+        text += f"revert 커밋: `{f['revert_sha']}` ({r.base}에 직접 push하지 않고 PR {f['revert_pr']}로 올림)\n\n"
+    elif f.get("revert_sha"):
         text += f"revert 커밋: `{f['revert_sha']}` ({r.base}에 일반 push, force push 없음)\n\n"
     if f.get("closed_pr"):
         text += f"이전 PR {f['closed_pr']}은 병합되지 않고 닫혔다. 이 실행이 새 PR을 열었다.\n\n"

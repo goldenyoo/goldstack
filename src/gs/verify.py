@@ -10,7 +10,7 @@ import os
 import signal
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO
 
@@ -22,6 +22,7 @@ class Result:
     code: int  # 시간 초과면 끝낸 bash의 종료 코드(음수 = 시그널)
     timed_out: bool
     minutes: str  # 시간 제한(분). 로그·실패 이유에 쓴다
+    retries: int = 0  # 첫 실행을 제외하고 다시 돌린 횟수
 
     @property
     def ok(self) -> bool:
@@ -51,6 +52,23 @@ def env() -> dict[str, str]:
 
 
 def run(spec, cwd: Path, stream: IO[str]) -> Result:
+    """실패한 명령을 verify_retries만큼 다시 돌린다. 각 실행의 시간 제한은 같다."""
+    for attempt in range(getattr(spec, "verify_retries", 0) + 1):
+        if attempt:
+            stream.write(f"\n검증 재시도 {attempt}\n")
+        result = _run_once(spec, cwd, stream)
+        if result.ok:
+            break
+    return replace(result, retries=attempt)
+
+
+def flaky(result: Result, label: str, stream: IO[str]) -> None:
+    """재시도 성공은 원본 로그에 남겨 보고서의 수집 증거에도 들어가게 한다."""
+    if result.ok and result.retries:
+        stream.write(f"\nflaky: {label} 재시도 {result.retries}번 만에 통과\n")
+
+
+def _run_once(spec, cwd: Path, stream: IO[str]) -> Result:
     """spec.verify를 cwd에서 돌려 출력을 stream에 쓴다. 시간을 넘기면 끝에 `시간 초과: <N>분` 줄을 남긴다."""
     seconds = limit_seconds(spec)
     limit = minutes(seconds)
