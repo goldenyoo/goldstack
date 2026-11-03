@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from . import clean, git, report, state, verify
@@ -25,6 +26,8 @@ from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
 BASE_REPORT_PHASES = ("verified", "reverted")
+CHECK_PHASES = ("checks_pending", "checks_failed", "checks_timeout")
+CHECK_INTERVAL = 10
 
 
 def _save(r, **fields) -> None:
@@ -32,11 +35,14 @@ def _save(r, **fields) -> None:
     r.save()
 
 
-def _gh(r, *args: str) -> str:
+def _gh(r, *args: str, deadline: float | None = None) -> str:
     repository = git.github_repo(r.repo, r.remote)
+    timeout = None if deadline is None else deadline - time.monotonic()
+    if timeout is not None and timeout <= 0:
+        raise subprocess.TimeoutExpired(["gh", "pr", *args], 0)
     try:
         cp = subprocess.run([os.environ.get("GS_GH", "gh"), "pr", *args, "--repo", repository], cwd=r.repo,
-                            stdin=subprocess.DEVNULL, capture_output=True, text=True)
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
     except OSError as e:
         raise git.GitError(f"gh pr {args[0]}: {e}") from e
     if cp.returncode:
@@ -44,14 +50,92 @@ def _gh(r, *args: str) -> str:
     return cp.stdout.strip()
 
 
-def _view(r) -> dict:
+def _view(r, *, deadline: float | None = None) -> dict:
     try:
-        value = json.loads(_gh(r, "view", r.st.finish["url"], "--json", "state,mergeCommit,headRefOid,baseRefName"))
+        options = {"deadline": deadline} if deadline is not None else {}
+        value = json.loads(_gh(r, "view", r.st.finish["url"], "--json", "state,mergeCommit,headRefOid,baseRefName", **options))
         if not isinstance(value, dict):
             raise ValueError("PR 객체가 아니다")
         return value
     except ValueError as e:
         raise git.GitError(f"gh pr view 응답 오류: {e}") from e
+
+
+def _checks(r, *, required: bool, deadline: float) -> list[dict]:
+    """gh가 필수 여부를 판정한다. 검사 없음만 빈 목록이고 API·인증 오류는 실패다."""
+    try:
+        raw = _gh(r, "checks", r.st.finish["url"], "--json", "name,bucket",
+                  *(["--required"] if required else []), deadline=deadline)
+    except git.GitError as e:
+        if str(e).startswith(("gh pr checks: no checks reported on ",
+                              "gh pr checks: no required checks reported on ")):
+            return []
+        raise
+    try:
+        checks = json.loads(raw)
+        if not isinstance(checks, list) or any(
+                not isinstance(c, dict) or not isinstance(c.get("name"), str)
+                or c.get("bucket") not in ("pass", "fail", "pending", "skipping", "cancel") for c in checks):
+            raise ValueError("검사 목록이 아니다")
+        return sorted(checks, key=lambda c: (c["name"], c["bucket"]))
+    except ValueError as e:
+        raise git.GitError(f"gh pr checks 응답 오류: {e}") from e
+
+
+def _wait_checks(r) -> bool:
+    """보고서까지 검증한 head만 기다린다. 재실행에는 새 대기 시간을 주고 검사를 다시 읽는다."""
+    deadline = time.monotonic() + r.cfg.timeouts.checks_minutes * 60
+    previous = None
+    _save(r, phase="checks_pending", outcome="CI 검사 대기 중")
+    number = r.st.finish["url"].rstrip("/").rsplit("/", 1)[-1]
+    symbols = {"pass": "✓", "skipping": "✓", "pending": "…", "fail": "✗", "cancel": "✗"}
+    while True:
+        try:
+            checks = (_checks(r, required=True, deadline=deadline)
+                      or _checks(r, required=False, deadline=deadline))
+            # checks는 현재 PR을 읽으므로 조회 뒤 head를 대조한다. 병합도 --match-head-commit으로 고정한다.
+            view = _view(r, deadline=deadline)
+        except subprocess.TimeoutExpired:
+            _save(r, phase="checks_timeout", outcome="CI 대기 시간 초과")
+            return False
+        if view.get("state") != "OPEN" or view.get("headRefOid") != r.st.finish["merge_head"]:
+            raise git.GitError("CI 대기 중 PR 상태 또는 head가 바뀌었다. 다음 gs go에서 다시 확인한다")
+        if checks != previous:
+            detail = ", ".join(f"{c['name']} {symbols[c['bucket']]}" for c in checks) or "검사 없음"
+            print(f"■ PR #{number}: CI 검사 대기 중({detail})", flush=True)
+            previous = checks
+        _save(r, checks=checks)  # 변화가 없어도 진행 바의 경과 시간·heartbeat는 갱신한다.
+        failed = [c["name"] for c in checks if c["bucket"] in ("fail", "cancel")]
+        if failed:
+            _save(r, phase="checks_failed", outcome=f"CI 실패: {', '.join(failed)}")
+            return False
+        if all(c["bucket"] in ("pass", "skipping") for c in checks):
+            _save(r, phase="merge_requested", outcome="CI 검사 통과, 병합 대기")
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _save(r, phase="checks_timeout", outcome="CI 대기 시간 초과")
+            return False
+        time.sleep(min(CHECK_INTERVAL, remaining))
+
+
+def _refresh_check_head(r, view: dict) -> bool:
+    """사람이 고친 PR은 그 head 자체를 다시 검증한다. 보고서 커밋으로 CI를 다시 시작하지 않는다."""
+    head = view.get("headRefOid")
+    if head == r.st.finish["merge_head"]:
+        return True
+    if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40,64}", head):
+        raise git.GitError("CI 재개할 PR head를 확인할 수 없다")
+    git.run(r.repo, "fetch", "-q", r.remote, head)
+    _restore_integration(r, head)
+    r.ihead = head
+    ok = _verify(r, r.iwt, "integration-recheck")
+    if not ok:
+        _restore_integration(r, head)
+        _save(r, integration_ok=False, phase="not_merged", outcome="integration 검증 실패 → 병합 안 함")
+        return False
+    _save(r, head=head, merge_head=head, integration_ok=True)
+    return True
 
 
 def _ancestor(cwd: Path, a: str, b: str) -> bool:
@@ -105,6 +189,8 @@ def merge_base(r) -> None:
     run이 다시 부른다(그때는 _absorb_squash가 squash 커밋을 표시한다). 병합 대기 중인 PR head도 바꾸지 않는다.
     """
     f = r.st.finish
+    if f.get("phase") in CHECK_PHASES:
+        return  # 실패 기록·base 병합으로 CI를 기다리는 PR head를 바꾸지 않는다.
     if (f.get("merge_method") == "squash" and f.get("phase") in ("merge_requested", "merge_pending")
             and not f.get("merge_sha")):
         return
@@ -412,7 +498,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
     resume = bool(anchor and git.run(r.iwt, "merge-base", "--is-ancestor", anchor, "HEAD", check=False).returncode == 0
                   and not git.out(r.iwt, "log", "--min-parents=2", f"{anchor}..HEAD", "--format=%H",
                                   f"--grep=^gs-ticket: {r.name}/"))
-    if resume and f.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed", "verified", "reverted"):
+    if resume and f.get("phase") in (*CHECK_PHASES, "merge_requested", "merge_pending", "merged", "main_failed", "verified", "reverted"):
         # summarize가 돌려준 것과 같게(파일 끝 줄바꿈 제외). 재개가 보고서를 바꾸면 base의 보고서와 어긋난다.
         summary = (directory / "summary.md").read_text(encoding="utf-8").strip()
     else:
@@ -448,10 +534,15 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
             return f.get("url"), False
         _save(r, merge_head=git.sha(r.iwt, "HEAD"), merge_method=r.cfg.git.merge_method, phase="merge_requested")
     try:
-        if f["phase"] in ("merge_requested", "merge_pending"):
+        if f["phase"] in (*CHECK_PHASES, "merge_requested", "merge_pending"):
             # 지난 merge 명령이 응답 전에 끝났을 수도 있어 먼저 읽는다.
             view = _view(r)
             if view.get("state") not in ("MERGED", "CLOSED"):
+                if r.cfg.git.wait_checks or f["phase"] in CHECK_PHASES:
+                    if not _refresh_check_head(r, view):
+                        return f.get("url"), False
+                    if r.cfg.git.wait_checks and not _wait_checks(r):
+                        return f.get("url"), False
                 try:
                     _merge_pr(r)
                 except git.GitError as e:
@@ -464,7 +555,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         ok = f["phase"] != "closed" and _postmerge(r)
     except (git.GitError, OSError) as e:
         _save(r, error=str(e), outcome=f"마무리 실패: {e}")
-        if f["phase"] not in ("merge_requested", "merge_pending"):
+        if f["phase"] not in (*CHECK_PHASES, "merge_requested", "merge_pending"):
             _update(r, summary)
         raise git.GitError(str(e)) from e
     # base를 포함한 integration에 보고서를 쓴다. 다음 go가 보고서만 다시 병합하지 않는다.
