@@ -44,7 +44,7 @@ def kept(ts) -> str:
 
 
 def evidence(r, tail: int = LOG_TAIL) -> str:
-    """티켓마다 가장 최근 verify 로그 하나와 마무리 검증 로그만, 끝부분 tail자씩 붙인다."""
+    """티켓·integration의 최신 준비 로그와 verify·base 준비 로그의 끝부분 tail자씩 붙인다."""
     rows, notes, timings = [], [], []
     logs = []
     for tid in r.order:
@@ -72,6 +72,14 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
         found = list((r.rundir / tid).glob("**/verify.log"))
         if found:
             logs.append(max(found, key=lambda p: p.stat().st_mtime))
+        found = list((r.rundir / tid).glob("*/setup.log"))
+        if found:
+            logs.append(max(found, key=lambda p: p.stat().st_mtime))
+    found = list((r.rundir / "integration").glob("*/setup.log"))
+    if found:
+        logs.append(max(found, key=lambda p: p.stat().st_mtime))
+    if (r.rundir / "finish" / "setup.log").is_file():
+        logs.append(r.rundir / "finish" / "setup.log")
     logs.extend(sorted((r.rundir / "finish").glob("*verify.log")))
     # 이번 범위(--only) 밖 티켓이 남긴 worktree도 사람이 치워야 하므로 보인다.
     outside = [f"- {tid}: " + kept(ts).strip().replace("\n", "; ")
@@ -162,6 +170,10 @@ def status_line(r) -> str:
         parts = [f"{pr} 병합", f"보고서 PR {f.get('report_pr', '')} 병합 대기"]
     elif phase == "main_failed":
         parts = [f"{r.base} 검증 실패", f"revert {revert} push 안 됨" if revert else "revert push 안 됨"]
+    elif phase == "setup_failed":
+        parts = ["준비 실패", "병합 안 함"]
+    elif phase == "base_unverified":
+        parts = [f"{pr} 병합", "base 미검증(준비 실패)"]
     else:
         parts = ["병합 전"]
     if f.get("error") and phase not in ("verified", "reverted", "not_merged", "closed"):
