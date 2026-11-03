@@ -57,9 +57,12 @@ feature마다 다른 값(`verify`, `max_workers`, `idle_minutes`, `verify_minute
 
 **4. 텔레그램(선택)** — `cp .goldstack/local.env.example .goldstack/local.env` 뒤 값을 채운다(따옴표 없이 `KEY=value`).
 ```
-TG_TOKEN=123456:ABC...      # BotFather에서 받은 봇 토큰
-TG_CHAT_ID=987654321        # 알림 받을 채팅 ID
+# BotFather에서 받은 봇 토큰
+TG_TOKEN=123456:ABC...
+# 알림 받을 채팅 ID
+TG_CHAT_ID=987654321
 ```
+주석은 줄 맨 앞 `#`만 인정한다. 값 뒤에 붙인 `# ...`는 값의 일부가 된다.
 채팅 ID를 모르면 봇에게 아무 메시지나 보낸 뒤 `https://api.telegram.org/bot<TG_TOKEN>/getUpdates`의 `chat.id`를 본다. 그리고 config에서 `telegram = true`.
 gs는 이 파일만 읽는다(환경 변수는 보지 않는다). worker는 이 파일을 읽을 수 없다(차단 hook).
 
