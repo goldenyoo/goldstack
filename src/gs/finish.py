@@ -3,6 +3,11 @@
 base 브랜치와 원격은 `.goldstack/config.toml`의 `git.base`·`git.remote`다(r.base, r.remote, r.base_ref).
 상태 이름·로그 이름의 `main`(phase `main_failed`, `main-verify.log`)은 "base 브랜치"를 뜻하는 옛 이름이다.
 
+병합 방식은 `git.merge_method`(merge·squash)다. 병합을 요청할 때 finish에 남기고(`merge_method`) 그 PR의
+확인·revert·재개는 남긴 방식을 따른다. merge는 병합 커밋이 검증한 integration(`merge_head`)을 조상으로 갖는지,
+squash는 squash 커밋(부모 하나)의 tree가 `merge_head`의 tree와 같은지로 확인한다. revert는 둘 다 그 커밋 하나다.
+squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에서도 병합된 티켓·이 feature의 병합을 알아본다.
+
 finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행은 같은 PR을 다시 병합하지 않고
 base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
 """
@@ -58,11 +63,21 @@ def _revert_of(cwd: Path, sha: str, *revs: str) -> str:
     return git.out(cwd, "log", "-1", "--format=%H", "--fixed-strings", f"--grep=This reverts commit {sha}", *revs)
 
 
+def _trailers(r, rev: str) -> set[str]:
+    """rev까지의 커밋 메시지에 있는 이 feature의 gs-ticket 티켓 id."""
+    pattern = re.compile(rf"^gs-ticket: {re.escape(r.name)}/(\S+)[ \t]*$", re.M)
+    return set(pattern.findall(git.out(r.repo, "log", "--format=%B", f"--grep=^gs-ticket: {r.name}/", rev)))
+
+
 def _feature_merge(r, sha: str) -> bool:
-    """sha가 이 feature의 티켓을 base에 들인 병합 커밋인가."""
+    """sha가 이 feature의 티켓을 base에 들인 병합 커밋(merge) 또는 squash 커밋인가."""
     if sha == r.st.finish.get("merge_sha"):
         return True
     parents = git.out(r.repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+    if len(parents) == 1:
+        # squash 커밋은 부모가 하나이고 본문에 티켓별 gs-ticket 줄이 있다. integration의 티켓 병합은 늘 부모가 둘이다.
+        return bool(re.search(rf"^gs-ticket: {re.escape(r.name)}/", git.out(r.repo, "log", "-1", "--format=%B", sha),
+                              re.M))
     return len(parents) > 1 and bool(git.out(r.repo, "log", "-1", "--format=%H", f"--grep=^gs-ticket: {r.name}/",
                                              f"{parents[0]}..{parents[1]}"))
 
@@ -85,6 +100,7 @@ def merge_base(r) -> None:
     사라진다(gs-ticket 트레일러는 남아 티켓은 merged로 보인다). 그래서 원격 base 위에 그 revert를 되돌린
     커밋(revert의 revert)을 만들어 합친다. 다음 PR이 feature 코드를 다시 들인다.
     """
+    _absorb_squash(r)
     reverts = _undone_reverts(r)
     if not reverts:
         _merge(r, r.base_ref)
@@ -108,6 +124,27 @@ def merge_base(r) -> None:
     for d in done:
         print(f"■ {r.base}가 이 feature의 병합 {d['merge'][:8]}을 되돌렸다(revert {d['revert'][:8]}). "
               f"integration에서 그 revert를 다시 되돌렸다({d['commit'][:8]})", flush=True)
+
+
+def _absorb_squash(r) -> None:
+    """base에 든 이 PR의 squash 커밋을 integration에 '이미 병합됨'으로 남긴다.
+
+    squash 커밋은 merge_head를 조상으로 갖지 않아 integration과 base의 merge-base가 옛 base에 머문다. 그 뒤
+    integration의 보고서가 바뀌면(마무리 실패 기록 등) base를 합칠 때 report.md가 양쪽에서 따로 추가돼 충돌한다.
+    squash 커밋은 merge_head에 base의 변경을 얹은 것이므로 merge_head를 기준으로 합친다(tree가 같으면 integration 그대로).
+    """
+    f = r.st.finish
+    sha, head = f.get("merge_sha"), f.get("merge_head")
+    if (f.get("merge_method") != "squash" or not sha or not head or not _ancestor(r.repo, sha, r.base_ref)
+            or _ancestor(r.iwt, sha, "HEAD") or not _ancestor(r.iwt, head, "HEAD")):
+        return
+    res = git.run(r.iwt, "merge-tree", "--write-tree", f"--merge-base={head}", "HEAD", sha, check=False)
+    if res.returncode:
+        return  # 충돌(또는 옛 git). 아래 일반 병합이 충돌로 알린다
+    tree = res.stdout.split()[0]
+    commit = git.out(r.iwt, "commit-tree", tree, "-p", "HEAD", "-p", sha,
+                     "-m", f"gs: {r.base}의 squash 병합 {sha[:8]}을 gs/{r.name}/integration에 표시")
+    git.run(r.iwt, "merge", "-q", "--ff-only", commit)
 
 
 def _merge(r, rev: str) -> None:
@@ -174,6 +211,45 @@ def _publish(r, path: Path) -> str:
     return url
 
 
+def _squash_message(r) -> tuple[str, str]:
+    """squash 커밋 제목·본문(spec 2-2). 본문: base에 아직 없는 티켓의 `NN 제목` 목록과 티켓별 gs-ticket 줄."""
+    f = r.st.finish
+    number = re.search(r"/(\d+)/?$", f["url"])
+    title = f"{r.name}: gs go" + (f" (#{number.group(1)})" if number else "")
+    new = _trailers(r, f["merge_head"]) - _trailers(r, r.base_ref)
+    rank = {tid: i for i, tid in enumerate(r.feat.tickets)}
+    tids = sorted(new, key=lambda tid: (rank.get(tid, len(rank)), tid))
+    listing = [f"{tid} {r.feat.tickets[tid].title}" if tid in r.feat.tickets else tid for tid in tids]
+    trailers = [f"gs-ticket: {r.name}/{tid}" for tid in tids]
+    return title, "\n".join(listing) + "\n\n" + "\n".join(trailers)
+
+
+def _merge_pr(r) -> None:
+    f = r.st.finish
+    if f.get("merge_method", "merge") == "squash":
+        subject, body = _squash_message(r)
+        _gh(r, "merge", f["url"], "--squash", "--match-head-commit", f["merge_head"], "--subject", subject, "--body", body)
+    else:
+        _gh(r, "merge", f["url"], "--merge", "--match-head-commit", f["merge_head"])
+
+
+def _check_merge(r) -> None:
+    """병합 커밋이 검증한 integration(merge_head)을 들였는가. merge: 조상 관계, squash: 부모 하나·같은 tree."""
+    f = r.st.finish
+    merge, head = f["merge_sha"], f["merge_head"]
+    if f.get("merge_method", "merge") != "squash":
+        if not _ancestor(r.repo, head, merge):
+            raise git.GitError("병합 커밋에 검증한 integration이 포함되지 않았다")
+        return
+    parents = git.out(r.repo, "rev-list", "--parents", "-n", "1", merge).split()[1:]
+    if len(parents) != 1:
+        raise git.GitError(f"squash 병합인데 병합 커밋 {merge}의 부모가 {len(parents)}개다")
+    if git.out(r.repo, "rev-parse", f"{merge}^{{tree}}") != git.out(r.repo, "rev-parse", f"{head}^{{tree}}"):
+        raise git.GitError(f"squash 커밋 {merge}의 tree가 검증한 integration {head}의 tree와 다르다"
+                           f"(PR 병합 사이에 {r.base}가 움직였을 수 있다). 검증하지 않은 내용이 {r.base}에 들어갔으니 "
+                           f"사람이 {r.base}를 확인하라")
+
+
 def _confirm(r, view: dict) -> bool:
     if view.get("state") == "CLOSED":
         # 사람이 병합하지 않고 닫았다. 대기 상태를 풀어 다음 gs go가 새 PR을 열게 한다.
@@ -203,8 +279,7 @@ def _postmerge(r) -> bool:
     merge = f["merge_sha"]
     if not _ancestor(r.repo, merge, r.base_ref):
         raise git.GitError(f"병합 커밋 {merge}가 {r.base_ref}에 없다")
-    if git.run(r.repo, "merge-base", "--is-ancestor", f["merge_head"], merge, check=False).returncode:
-        raise git.GitError("병합 커밋에 검증한 integration이 포함되지 않았다")
+    _check_merge(r)
     tip = git.sha(r.repo, r.base_ref)
     sha = f.get("revert_sha")
     if sha and _ancestor(r.repo, sha, r.base_ref):
@@ -243,6 +318,7 @@ def _postmerge(r) -> bool:
             # 검증이 파일·HEAD를 바꿨더라도 받아 온 base의 정확한 끝에서 revert한다.
             git.run(wt, "checkout", "--detach", "--force", main_head)
             git.run(wt, "clean", "-fd")
+            # merge는 첫 부모(base)를 유지(-m 1), squash 커밋은 부모가 하나라 -m 없이 그 커밋 하나를 되돌린다.
             parents = git.out(wt, "rev-list", "--parents", "-n", "1", merge).split()[1:]
             git.run(wt, "revert", "--no-edit", *(["-m", "1"] if len(parents) > 1 else []), merge)
             sha = git.sha(wt, "HEAD")
@@ -304,6 +380,15 @@ def _report_to_base(r) -> None:
     print(f"■ 경고: 최종 보고서를 {r.base}에 push하지 못했다(두 번 시도). 실행 결과는 그대로다: {error}", flush=True)
 
 
+def _landed(r, commit: str, prev: dict) -> bool:
+    """commit이 base에 들어갔는가. squash로 병합한 PR의 커밋은 base의 조상이 되지 않으니 그 PR head에 들었는지로 본다."""
+    if _ancestor(r.repo, commit, r.base_ref):
+        return True
+    sha, head = prev.get("merge_sha"), prev.get("merge_head")
+    return bool(prev.get("merge_method") == "squash" and sha and head and _ancestor(r.repo, commit, head)
+                and _ancestor(r.repo, sha, r.base_ref))
+
+
 def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
     directory = r.rundir / "finish"
     directory.mkdir(parents=True, exist_ok=True)
@@ -311,11 +396,14 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
     # 외부 병합 후 재개. 최종 보고서 갱신 전이면 merge_head가 integration의 끝이다.
     anchor = f.get("head") or f.get("merge_head")
     # 정리 후 integration은 base에서 다시 만들 수 있다. 최종 integration 보고서 커밋은
-    # base에 직접 들어가지 않지만, 병합된 PR head는 base의 조상이라 재개 기준으로 쓸 수 있다.
+    # base에 직접 들어가지 않지만, 병합된 PR head(merge)나 squash 커밋(squash)은 base의 조상이라 재개 기준으로 쓸 수 있다.
     if f.get("phase") in BASE_REPORT_PHASES and anchor and not _ancestor(r.iwt, anchor, "HEAD"):
-        anchor = f.get("merge_head")
+        anchor = next((x for x in (f.get("merge_head"), f.get("merge_sha")) if x and _ancestor(r.iwt, x, "HEAD")),
+                      f.get("merge_head"))
+    # 새 티켓 병합만 본다(늘 부모가 둘). base에서 합쳐 온 squash 커밋(부모 하나)도 gs-ticket 줄을 갖는다.
     resume = bool(anchor and git.run(r.iwt, "merge-base", "--is-ancestor", anchor, "HEAD", check=False).returncode == 0
-                  and not git.out(r.iwt, "log", f"{anchor}..HEAD", "--format=%H", f"--grep=^gs-ticket: {r.name}/"))
+                  and not git.out(r.iwt, "log", "--min-parents=2", f"{anchor}..HEAD", "--format=%H",
+                                  f"--grep=^gs-ticket: {r.name}/"))
     if resume and f.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed", "verified", "reverted"):
         # summarize가 돌려준 것과 같게(파일 끝 줄바꿈 제외). 재개가 보고서를 바꾸면 base의 보고서와 어긋난다.
         summary = (directory / "summary.md").read_text(encoding="utf-8").strip()
@@ -324,7 +412,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         r.st.finish = {}
         f = r.st.finish
         # 아직 base에 들어가지 않은 되살림과 닫힌 이전 PR은 새 PR 보고서에도 남긴다.
-        again = [x for x in prev.get("reintroduced", []) if not _ancestor(r.repo, x["commit"], r.base_ref)]
+        again = [x for x in prev.get("reintroduced", []) if not _landed(r, x["commit"], prev)]
         if again:
             f["reintroduced"] = again
         if prev.get("phase") == "closed":
@@ -350,14 +438,14 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
             _save(r, phase="not_merged", outcome="merged 티켓 없음 → 병합 안 함" if not merged else "integration 검증 실패 → 병합 안 함")
             _update(r, summary)
             return f.get("url"), False
-        _save(r, merge_head=git.sha(r.iwt, "HEAD"), phase="merge_requested")
+        _save(r, merge_head=git.sha(r.iwt, "HEAD"), merge_method=r.cfg.git.merge_method, phase="merge_requested")
     try:
         if f["phase"] in ("merge_requested", "merge_pending"):
             # 지난 merge 명령이 응답 전에 끝났을 수도 있어 먼저 읽는다.
             view = _view(r)
             if view.get("state") not in ("MERGED", "CLOSED"):
                 try:
-                    _gh(r, "merge", f["url"], "--merge", "--match-head-commit", f["merge_head"])
+                    _merge_pr(r)
                 except git.GitError as e:
                     _save(r, error=str(e))
                 view = _view(r)  # 명령 성공/큐 진입을 실제 병합으로 착각하지 않는다
