@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import adapters, cli, herdr, review, state, worker
+from gs import adapters, cli, config, herdr, review, state, worker
 
 
 def git_clean(wt):
@@ -208,6 +208,8 @@ class GoTest(unittest.TestCase):
         self.repo = root / "repo"
         self.repo.mkdir()
         sh(self.repo, "git", "init", "-q", "-b", "main")
+        (self.repo / ".goldstack").mkdir()
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
         (self.repo / ".gitignore").write_text(".work/*/run/\n")
         fdir = self.repo / ".work" / "demo"
         (fdir / "tickets").mkdir(parents=True)

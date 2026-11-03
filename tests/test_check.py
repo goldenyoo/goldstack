@@ -1,10 +1,11 @@
 import contextlib
 import io
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from gs import cli
+from gs import cli, config
 from gs import feature as featmod
 
 REPO = Path(__file__).resolve().parents[1]
@@ -26,6 +27,8 @@ class CheckTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".git").mkdir()
+        (self.repo / ".goldstack").mkdir()
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
         self.tickets = self.repo / ".work" / "demo" / "tickets"
         self.tickets.mkdir(parents=True)
         (self.repo / ".work" / "demo" / "spec.md").write_text(SPEC)
@@ -162,8 +165,13 @@ class CheckTest(unittest.TestCase):
 class RealRepoTest(unittest.TestCase):
     def test_goldstack_v0_passes(self):
         out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = cli.main(["--repo", str(REPO), "check", "goldstack-v0"])
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            shutil.copytree(REPO / ".work/goldstack-v0", repo / ".work/goldstack-v0")
+            (repo / ".goldstack").mkdir()
+            (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = cli.main(["--repo", str(repo), "check", "goldstack-v0"])
         self.assertEqual(code, 0, err.getvalue())
         self.assertIn("지금 시작 가능: 01 11", out.getvalue())
 
