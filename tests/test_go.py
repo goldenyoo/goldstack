@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from gs import adapters, cli, config, herdr, review, state, worker
+from support import isolate_git_env
 
 
 def git_clean(wt):
@@ -185,6 +186,7 @@ class GoTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"  # .goldstack/config.toml [git]. TrunkUpstreamTest가 바꾼다
 
     def setUp(self):
+        isolate_git_env(self)
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name).resolve()
         self.bin = root / "bin"

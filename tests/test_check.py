@@ -9,6 +9,7 @@ from unittest import mock
 
 from gs import cli, config, git
 from gs import feature as featmod
+from support import isolate_git_env
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -26,6 +27,7 @@ def ticket(tid, blocked_by="[]", model="claude", reviewer="codex", extra=""):
 
 class CheckTest(unittest.TestCase):
     def setUp(self):
+        isolate_git_env(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         git.run(self.repo, "init", "-q")

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from gs import cli, config
+from support import isolate_git_env
 
 
 CONFIG = '''[git]
@@ -30,6 +31,7 @@ telegram = true
 
 class ConfigTest(unittest.TestCase):
     def setUp(self):
+        isolate_git_env(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
@@ -170,6 +172,7 @@ class ConfigTest(unittest.TestCase):
 
 class InitTest(unittest.TestCase):
     def setUp(self):
+        isolate_git_env(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
