@@ -16,6 +16,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init", help=".goldstack 설정 파일과 비밀 파일 예제를 만든다")
+    p = sub.add_parser("doctor", help="GitHub 병합·base 보호 설정을 읽고 config 값을 제안한다")
+    p.add_argument("--write", action="store_true", help="제안된 키만 config.toml에 쓴다(주석 보존)")
     p = sub.add_parser("config", help="설정 값을 한 줄로 출력한다")
     p.add_argument("key", help="섹션.키(예: git.base)")
     sub.add_parser("migrate", help="옛 위치(.work/, .out-of-scope/, .ideas/)를 .goldstack/ 아래로 git mv한다(커밋 안 함)")
@@ -60,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "config":
         return cmd_config(repo, args.key)
+    if args.cmd == "doctor":
+        from .doctor import doctor
+        return doctor(repo, sys.stdout, write=args.write)
     if args.cmd == "migrate":
         from .migrate import migrate
         return migrate(repo, sys.stdout, sys.stderr)
