@@ -17,7 +17,17 @@ disable-model-invocation: true
    **feature 실행**: `.goldstack/work/$ARGUMENTS/`의 실행 기록을 읽는다.
    - `report.md`: 결과, 티켓별 시도·리뷰, 마무리 상태.
    - `run/state.json`: 티켓별 단계, 시도 수, 걸린 시간.
-   - `run/NN/<시도>/`의 `worker.log`, `review`, `fix`: 실패한 시도와 리뷰 지적부터. 큰 로그는 끝부분(`tail -n 200`)과 오류 줄(`grep -n -iE 'error|fail|traceback|오류|실패'`)부터 읽고, 필요한 곳만 넓힌다.
+   - `run/NN/<시도>/`의 `worker.log`, `review`, `fix`: 실패한 시도와 리뷰 지적부터. `worker.log`를 읽는 법은 합계 크기로 정한다: `cat .goldstack/work/$ARGUMENTS/run/*/*/worker.log | wc -c`.
+     - **204800바이트(200KB) 미만**: 로그마다 끝부분(`tail -n 200`)과 오류 줄(`grep -n -iE 'error|fail|traceback|오류|실패'`)부터 읽고, 필요한 곳만 넓힌다.
+     - **200KB 이상**: 긴 문맥에 강한 Gemini(agy)에게 로그 요약을 맡기고, 너는 그 요약과 `report.md`·`state.json`으로 후보를 정한다. 근거로 인용할 곳만 해당 로그를 직접 연다.
+       1. 모델을 읽는다: `model=$(gs config models.agy)`. 모델 이름을 skill에 적지 않는다.
+       2. 부르기 전에 사람에게 한 줄로 알린다: "agy로 로그 N개 요약(한도 1회, gs 상한에는 안 셈)". N은 `worker.log` 개수다.
+       3. 레포 루트에서 한 번만 부른다. `--sandbox`가 workspace를 읽기 전용으로 만든다(gs의 agy 리뷰와 같은 플래그).
+          ```
+          agy -p "<프롬프트>" --sandbox --dangerously-skip-permissions --disable-slash-commands --model "$model"
+          ```
+          프롬프트에는 `worker.log` 경로 목록(레포 루트 기준)을 넣고, 파일을 고치지 말고 읽기만 하라고 적고, 티켓·시도별로 다음을 요약하게 한다: 실패 이유, 재시도 횟수, 리뷰 지적의 반복(같은 지적이 시도나 티켓을 건너 다시 나왔나), 오래 걸린 단계. 근거마다 로그 경로와 줄 번호를 붙이게 한다.
+     - **agy가 없거나 실패하면**(`command -v agy`가 비었다, 종료 코드가 0이 아니다, 답이 비었다) 다시 부르지 않는다. 사람에게 그 사실을 한 줄로 말하고 200KB 미만 방식(로그마다 끝부분과 오류 줄)으로 간다.
    - `spec.md`의 "grill 기록": 정한 것과 실제 실행이 어긋난 곳.
    - 다른 feature의 `.goldstack/work/*/report.md`: 같은 실패가 전에도 있었나(**반복**).
    - `/insights` 보고서: `~/.claude/usage-data/report-*.html`이 있으면 가장 최근 것. 없으면 건너뛴다.
