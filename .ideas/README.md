@@ -11,3 +11,4 @@
 - 2026-11-03 · 같은 파일 티켓 자동 검사(`.out-of-scope/same-file-serialization-check.md`, 조건 충족: v0 06) · 출처: v0 관찰
 - 2026-11-03 · worker 세션의 플러그인 격리: user scope 플러그인 skill이 worker 문맥에도 실린다(이식한 model-invoked skill 포함) · 출처: mattpocock 이식 논의
 - 2026-11-03 · 예상 시간 보정: v1을 60–80분으로 예상, 실제 37분. 보고서에 단계별 소요 시간을 남기면 다음 예상이 나아진다(진행 바 ETA에도 쓰임) · 출처: goldstack-v1 실행
+- 2026-11-03 · `/grill`이 짧은 답(예: "5. a,b", "2. C")을 받으면 spec에 쓰기 전에 "이렇게 읽었다"를 답마다 한 줄로 되짚고 확인받는다. skill 3·4단계에 한 줄 추가. 작아서 v2에 같이 넣을 수 있다 · 출처: /insights 보고서(2026-11-03), goldstack-v2 사전 논의에서 "5. a,b"를 잘못 읽음

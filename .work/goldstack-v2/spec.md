@@ -30,6 +30,7 @@ goldstack을 다른 레포에서도 가정 없이 쓸 수 있게 한다(설정 �
 - **자기 이동 문제**: 이 feature는 설치된 v1 엔진이 `.work/goldstack-v2/`에서 돈다. 파일 위치를 `.goldstack/`로 옮기는 티켓이 실행 중인 feature의 경로(보고서 `.work/<f>/report.md`, `_require_committed`)와 어긋나지 않게 순서·호환(옛 경로 읽기)을 정해야 한다.
 - 설정 파일 형식(toml 키 이름, 기본값, 없을 때 동작)과 `gs init`이 무엇을 쓰는지.
 - 진행 바 ETA에 필요한 단계별 시각을 state에 남길지.
+- `.ideas/`의 "grill 답 되짚기"(skill 한 줄)를 v2에 넣을지.
 
 ## 4. 환경 사실 (2026-11-03 확인)
 - 설치된 `gs`는 v1(verify 시간 제한, worktree 정리 포함). `~/.local/share/uv/tools/goldstack`(python 3.13)
