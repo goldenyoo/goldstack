@@ -59,7 +59,10 @@ def _send(token: str, chat_id: str, text: str) -> tuple[bool, str]:
                 return True, ""
             error = f"응답 ok가 아니다: {reply.get('description', reply)}"
         except urllib.error.HTTPError as e:
-            reply = _json(e.read())
+            try:  # 오류 본문을 읽다 끊겨도 재시도 판단은 상태 코드로 한다
+                reply = _json(e.read())
+            except Exception:  # noqa: BLE001
+                reply = {}
             error = f"HTTP {e.code}: {reply.get('description') or e.reason}"
             if 400 <= e.code < 500 and e.code != 429:  # 토큰·채팅 ID가 틀린 것은 다시 보내도 같다
                 break

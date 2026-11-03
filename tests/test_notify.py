@@ -3,6 +3,8 @@ import json
 import os
 import threading
 import unittest
+import urllib.error
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
@@ -88,6 +90,20 @@ class SendTest(FakeServerMixin, unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(len(fake.requests), 3)
         self.assertIn("HTTP 500", error)
+
+    def test_error_body_read_failure_still_retries(self):
+        def http_500(req, timeout):
+            err = urllib.error.HTTPError(req.full_url, 500, "Internal Server Error", {}, None)
+            err.read = mock.Mock(side_effect=TimeoutError("error response body timed out"))
+            raise err
+
+        self.serve()
+        with mock.patch.object(urllib.request, "urlopen", side_effect=http_500) as urlopen:
+            ok, error = notify.send(TOKEN, "42", "x")
+        self.assertFalse(ok)
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertIn("HTTP 500", error)
+        self.assertNotIn(TOKEN, error)
 
     def test_client_error_is_not_retried(self):
         fake = self.serve([400])
