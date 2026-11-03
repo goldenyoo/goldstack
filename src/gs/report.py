@@ -11,6 +11,9 @@ from pathlib import Path
 
 from . import git, review
 
+LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
+MAX_BODY = 60000  # GitHub PR 본문 상한(65,536자)보다 넉넉히 작게
+
 
 def block(text: str) -> str:
     fence = "```"
@@ -23,7 +26,19 @@ def cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", "<br>")
 
 
-def evidence(r) -> str:
+def _log(r, path: Path, tail: int) -> str:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    head = f"#### {path.relative_to(r.rundir)}\n\n"
+    if len(text) <= tail:
+        return head + block(text) + "\n"
+    note = f"전체 로그: `{path.resolve()}`"
+    if tail <= 0:
+        return head + note + "\n\n"
+    return head + f"앞 {len(text) - tail}자 생략. {note}\n\n" + block(text[-tail:]) + "\n"
+
+
+def evidence(r, tail: int = LOG_TAIL) -> str:
+    """티켓마다 가장 최근 verify 로그 하나와 마무리 검증 로그만, 끝부분 tail자씩 붙인다."""
     rows, notes = [], []
     logs = []
     for tid in r.order:
@@ -37,14 +52,17 @@ def evidence(r) -> str:
         for finding in review.remaining(rec):
             notes.append(f"- {tid} [{finding['severity']}] {finding['location']}: {finding['claim']}\n"
                          f"  근거: {finding['evidence'] or '없음'}; 판단: {finding.get('why', '')}")
-        # 재시도·수정 전의 실패 출력도 보고서에서 볼 수 있게 남긴다.
-        logs.extend(sorted((r.rundir / tid).glob("**/verify.log")))
+        # 지난 시도의 로그는 실행마다 쌓이므로 가장 최근 것만 붙인다(전부는 실행 디렉터리에 있다).
+        found = list((r.rundir / tid).glob("**/verify.log"))
+        if found:
+            logs.append(max(found, key=lambda p: p.stat().st_mtime))
     logs.extend(sorted((r.rundir / "finish").glob("*verify.log")))
     text = ("### 티켓별 결과\n\n| 티켓 | 제목 | 결과 | 이유 |\n|---|---|---|---|\n"
             + "\n".join(rows) + "\n\n### 남은 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
-            + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n")
+            + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n"
+            + f"티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `{r.rundir.resolve()}/<티켓>/`\n\n")
     for log in logs:
-        text += f"#### {log.relative_to(r.rundir)}\n\n" + block(log.read_text(encoding="utf-8", errors="replace")) + "\n"
+        text += _log(r, log, tail)
     return text
 
 
@@ -74,10 +92,24 @@ def summarize(r) -> str:
 
 
 def write(r, summary: str) -> Path:
+    # PR 본문 상한을 넘으면 gh pr create/edit가 매번 실패한다. 로그를 줄이고 그래도 길면 자른다.
+    for tail in (LOG_TAIL, 1000, 0):
+        text = _render(r, summary, tail)
+        if len(text) <= MAX_BODY:
+            break
+    else:
+        cut = f"\n\n…(보고서가 길어 잘랐다. 전체 로그: `{r.rundir.resolve()}`)\n"
+        text = text[:MAX_BODY - len(cut)] + cut
+    path = r.iwt / ".work" / r.name / "report.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _render(r, summary: str, tail: int) -> str:
     f = r.st.finish
     merge = f.get("merge_sha", "<PR의 mergeCommit.oid>")
     text = (f"# {r.name} 결과\n\n## Summary\n\n{summary}\n\n"
-            f"## Evidence\n\n{evidence(r)}\n"
+            f"## Evidence\n\n{evidence(r, tail)}\n"
             f"## Merge Danger\n\n마무리: {f.get('outcome', f.get('phase', '준비'))}\n\n"
             f"PR: {f.get('url') or '아직 없음'}\n\n"
             f"integration verify: {f.get('integration_ok')}\n\n"
@@ -86,14 +118,17 @@ def write(r, summary: str) -> Path:
         text += f"병합 커밋: `{merge}`\n\n"
     if f.get("revert_sha"):
         text += f"revert 커밋: `{f['revert_sha']}` (main에 일반 push, force push 없음)\n\n"
+    if f.get("closed_pr"):
+        text += f"이전 PR {f['closed_pr']}은 병합되지 않고 닫혔다. 이 실행이 새 PR을 열었다.\n\n"
+    for x in f.get("reintroduced", []):
+        text += (f"main이 이 feature의 병합 `{x['merge']}`을 되돌렸다(revert `{x['revert']}`). integration에서 그 revert를 "
+                 f"다시 되돌렸다(`{x['commit']}`). main으로 가는 다음 PR이 feature 코드를 다시 들인다.\n\n")
     if f.get("error"):
-        text += block(f["error"]) + "\n"
+        text += block(f["error"][-LOG_TAIL:]) + "\n"
     text += ("### 되돌리는 법\n\nmain의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert한다. "
              "병합 커밋의 첫 부모(main)를 유지한다. 한 부모 커밋이면 `-m 1`을 생략한다. "
              "이미 자동 revert됐다면 같은 병합을 다시 revert하지 않는다.\n\n"
-             "```sh\ngit fetch origin main\ngit worktree add --detach /tmp/gs-revert origin/main\n"
-             f"git -C /tmp/gs-revert revert --no-edit -m 1 {merge}\n"
-             "git -C /tmp/gs-revert push origin HEAD:refs/heads/main\n```\n")
-    path = r.iwt / ".work" / r.name / "report.md"
-    path.write_text(text, encoding="utf-8")
-    return path
+             "```sh\ngit fetch origin main\ndir=\"$(mktemp -d)\"\ngit worktree add --detach \"$dir\" origin/main\n"
+             f"git -C \"$dir\" revert --no-edit -m 1 {merge}\n"
+             "git -C \"$dir\" push origin HEAD:refs/heads/main\ngit worktree remove \"$dir\"\n```\n")
+    return text
