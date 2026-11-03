@@ -4,7 +4,7 @@
 
 | 파일 | 하는 일 |
 |---|---|
-| `cli.py` | `gs` 명령줄: `init`, `config`, `migrate`, `check`, `go`, `status`, `hook` |
+| `cli.py` | `gs` 명령줄: `init`, `config`, `migrate`, `check`, `go`, `status`, `backlog`, `hook` |
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
 | `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), 환경 검사 |
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 요약 출력, 알림 |
@@ -16,6 +16,8 @@
 | `notify.py` | 텔레그램 전송 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
+| `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건 |
+| `git.py` | git 호출, 원격 URL에서 GitHub owner/repo 풀기(`github_repo`) |
 
 ## 대상 레포의 파일 배치
 
@@ -26,17 +28,17 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 .goldstack/local.env.example    커밋. 빈 값 + 채우는 법 안내
 .goldstack/work/<feature>/      spec.md, tickets/NN-slug.md, report.md (run/은 gitignore)
 .goldstack/out-of-scope/        grill이 뺀 개념
-.goldstack/ideas/               아이디어 함
+.goldstack/ideas/               아이디어 함: <slug>.md 하나씩(아래 "아이디어 함"), README.md는 형식 설명
 ```
 `gs init`이 `.gitignore`에 넣는 줄: `.goldstack/local.env`, `.goldstack/work/*/run/`. 레포 루트는 지금 디렉터리에서 위로 `.git`을 찾는다(`--repo`로 지정 가능). 옛 위치(`.work/`, `.out-of-scope/`, `.ideas/`)는 읽지 않는다. `gs migrate`로 옮긴다.
 
 ## 설정
 
-**`config.toml`** — `gs init`이 전부 쓴다. 빠진 섹션·키와 형이 틀린 값(문자열·정수·불리언, 불리언은 정수로 받지 않는다)은 오류, 모르는 섹션·키는 경고. 없으면 `gs check`·`gs go`·`gs config`가 "`gs init`을 먼저" 오류로 멈춘다(내장 기본값으로 돌지 않는다). `gs go`는 시작할 때 한 번 읽어 그 실행의 모든 호출에 쓴다.
+**`config.toml`** — `gs init`이 전부 쓴다. 빠진 섹션·키와 형이 틀린 값(문자열·정수·불리언, 불리언은 정수로 받지 않는다)은 오류, 모르는 섹션·키는 경고. 값 범위도 본다: `timeouts.*`가 0 이하면 오류, `models.*`가 비었거나 공백뿐이면 오류(`models.codex`만 빈 값 허용: codex 기본 모델). 없으면 `gs check`·`gs go`·`gs config`가 "`gs init`을 먼저" 오류로 멈춘다(내장 기본값으로 돌지 않는다). `gs go`는 시작할 때 한 번 읽어 그 실행의 모든 호출에 쓴다.
 
 | 키 | 기본 | 쓰는 곳 |
 |---|---|---|
-| `git.remote` | `"origin"` | fetch, integration push, base push(revert), 원격 GitHub 검사 |
+| `git.remote` | `"origin"` | fetch, integration push, base push(revert·최종 보고서), PR 저장소(URL의 owner/repo → `gh pr … --repo`) |
 | `git.base` | `origin/HEAD`의 브랜치(없으면 `"main"`) | PR 대상, worker·integration의 출발점(`<remote>/<base>`), 재검증 |
 | `models.judge` | `"opus"` | 판단 모델 `claude -p --model`: 실패 요약, 리뷰 분류, 보고서 요약 |
 | `models.claude_review` | `"opus"` | reviewer가 claude일 때 `--model` |
@@ -55,7 +57,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 
 **티켓 frontmatter** — `id`, `title`, `blocked_by`(목록, 없으면 `[]`), `model`, `reviewer`가 모두 필요. 파일 이름은 `<id>-`로 시작한다. `model`·`reviewer`는 `claude|codex|agy` 중 하나이고 서로 달라야 한다. `gs check`는 없는 id 참조, 순환, 겹치는 id를 오류로 본다.
 
-**`gs check`의 환경 검사** — `git`, `gh`와 범위 안 티켓의 `model`·`reviewer` CLI가 PATH에 없으면 오류. `git.remote`의 URL이 GitHub가 아니면 경고(PR·병합은 `gh`로만 한다). `notify.telegram`이 켜졌는데 `local.env`에 `TG_TOKEN`·`TG_CHAT_ID`가 없으면 경고. 범위에 agy 구현 티켓이 있으면 버리는 디렉터리에서 agy 차단 장치를 확인해 안 되면 경고(아래 "모델 어댑터"). `gs go`는 같은 검사를 먼저 하고 오류가 있으면 아무것도 띄우지 않는다.
+**`gs check`의 환경 검사** — `git`, `gh`, `claude`(판단 모델은 티켓 모델과 무관하게 늘 claude다)와 범위 안 티켓의 `model`·`reviewer` CLI가 PATH에 없으면 오류. `git.remote`의 URL에서 GitHub owner/repo를 풀지 못하면 오류(``원격 `origin`의 URL `…`은 GitHub 저장소 형식이 아니다``). `https://github.com/o/r`, `git@github.com:o/r`, `ssh://git@github.com/o/r` 꼴을 받고 `.git` 접미사는 대소문자 없이 뗀다. `git remote get-url`(insteadOf 적용)이 GitHub가 아니면 원격에 직접 설정된 `remote.<이름>.url`을 다시 본다(시험·미러용 insteadOf). 아이디어 파일은 보지 않는다. `notify.telegram`이 켜졌는데 `local.env`에 `TG_TOKEN`·`TG_CHAT_ID`가 없으면 경고. 범위에 agy 구현 티켓이 있으면 버리는 디렉터리에서 agy 차단 장치를 확인해 안 되면 경고(아래 "모델 어댑터"). `gs go`는 같은 검사를 먼저 하고 오류가 있으면 아무것도 띄우지 않는다.
 
 ## `gs go`의 흐름
 
@@ -70,9 +72,9 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 ## 상태
 
 `run/state.json`이 상태의 원천이다. `gs go`의 요약·보고서·PR 본문·알림, `gs status`, 진행 바 mod가 모두 이 파일을 읽는다. 쓰기는 같은 디렉터리의 임시 파일 뒤 rename(원자적)이다.
-- 위: `feature`, `pid`(마지막으로 쓴 `gs go`), `only`, `started_at`, `updated_at`, `finished_at`, `phase`(feature 전체 마무리 중이면 `finish`), `finish`(마무리 재개 지점), `progress`.
+- 위: `feature`, `pid`(마지막으로 쓴 `gs go`), `only`, `started_at`, `updated_at`(heartbeat로 상태가 그대로여도 60초마다 바뀐다), `finished_at`, `phase`(feature 전체 마무리 중이면 `finish`), `finish`(마무리 재개 지점: `phase`, `outcome`, `url`, `merge_sha`, `revert_sha`, `integration_ok`, `main_ok`, `base_report_tried`, `base_report` 등), `progress`.
 - 티켓마다: `status`(`pending`, `running`, `merged`, `failed`, `skipped`), `attempts`, `branch`, `pane`(`pane <id>` 또는 `pid <n>`), `started_at`·`ended_at`, `log`, `reason`, `worktree`, `failures`, `failed_worktrees`, `kept_worktrees`, `failure_summary`, `review`, `phases`.
-- `phases`: 단계 전환마다 `{attempt, phase, model, started_at, ended_at}`를 더한다. phase는 `worker`, `review`, `fix`, `verify`, `finish`(티켓을 integration에 커밋하는 순간). 보고서의 단계별 소요가 이것을 합산한다(지난 시도 포함).
+- `phases`: 단계 전환마다 `{attempt, phase, model, started_at, ended_at}`를 더한다. phase는 `worker`, `review`, `fix`, `verify`, `finish`(티켓을 integration에 커밋하는 순간). 보고서의 단계별 소요가 이것을 합산한다(지난 시도 포함). 분으로 반올림해 0분인 단계(대개 순간인 `finish`)는 줄에서 빼고, 모두 0분이면 `모두 1분 미만`이다.
 
 다시 실행하면 integration에 병합된 티켓은 건너뛰고, 실패·건너뜀 티켓은 `failures`·요약·이유를 비우고 다시 한다. state는 merged인데 integration에 표시가 없으면 다시 한다. 지난 `gs`가 죽어 `running`으로 남은 티켓은 실패로 세지 않고(`attempts`에서 하나 뺀다) 새로 시작한다. 그 시도의 worker가 살아 있으면(명령줄에 그 시도의 `run.sh`가 있는 프로세스) 먼저 끝내고 herdr pane도 닫는다.
 
@@ -99,7 +101,7 @@ frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max
 - 증거: 시도마다 `failure.log`(이유 + worker·verify·merge 로그 끝 64KiB), `failure-summary.md`, `judge.log`. 실패 worktree는 지우지 않고 `failed_worktrees`에 남긴다.
 - 한 티켓의 준비·확인·병합 중 오류(git, herdr, 파일, 어댑터)는 그 티켓의 실패로 한정한다. 예상 못 한 오류로 루프를 떠나도 띄운 worker를 끝낸다.
 
-**worktree 정리** — 티켓이 integration에 병합되면 성공한 시도의 worktree를 바로 지우고(`--force` 없이) `[NN] worktree 정리: <경로>`를 출력한다. 로컬 티켓 브랜치는 끝이 integration에 포함될 때만(`merge-base --is-ancestor`) 지우고, 아니면 경고하고 남긴다. 병합된 worktree에 미커밋 변경이 있으면 worktree·브랜치를 모두 남기고 `kept_worktrees`에 적으며 보고서 티켓 결과에 `남긴 worktree: <경로> (미커밋 변경)`을 표시한다. 재시작 때도 이미 병합된 티켓의 남은 worktree·브랜치를 같은 규칙으로 정리한다. 실패한 시도의 worktree·브랜치, integration worktree, 로컬·원격 integration 브랜치는 남긴다. 정리 오류는 경고만 하고 티켓의 merged 상태를 바꾸지 않는다.
+**worktree 정리** — 티켓이 integration에 병합되면 성공한 시도의 worktree를 바로 지우고(`--force` 없이) `[NN] worktree 정리: <경로>`를 출력한다. 로컬 티켓 브랜치는 끝이 integration에 포함될 때만(`merge-base --is-ancestor`) 지우고, 아니면 경고하고 남긴다. 병합된 worktree에 미커밋 변경이 있으면 worktree·브랜치를 모두 남기고 `kept_worktrees`에 적으며 보고서 티켓 결과에 `남긴 worktree: <경로> (미커밋 변경)`을 표시한다. 재시작 때도 이미 병합된 티켓의 남은 worktree·브랜치를 같은 규칙으로 정리한다. `kept_worktrees`의 옛 경로는 티켓이 다시 대기로 돌아가거나 새 시도를 띄울 때 다시 본다: 경로가 없거나 미커밋 변경이 없어졌으면 worktree를 정리하고 목록에서 뺀다. 그 worktree의 실제 브랜치가 티켓 브랜치와 다르면(분리 HEAD 포함. 사람이 거기서 커밋했을 수 있다) 경고하고 남긴다. 브랜치는 끝이 integration에 있을 때만 지운다. `--only` 범위 밖 티켓이 남긴 worktree도 보고서 티켓별 결과 아래 `범위 밖 티켓의 남긴 worktree:`에 나온다. 실패한 시도의 worktree·브랜치, integration worktree, 로컬·원격 integration 브랜치는 남긴다. 정리 오류는 경고만 하고 티켓의 merged 상태를 바꾸지 않는다.
 
 ## 리뷰
 
@@ -122,16 +124,40 @@ reviewer 명령(모두 읽기 전용, worker와 같은 push·gh 차단 환경):
 ## 마무리
 
 티켓 루프가 끝나면(`state.phase = finish`) `finish.py`가 외부 작업마다 `state.finish`를 저장하며 진행한다. 중단 뒤 다시 실행해도 같은 PR을 두 번 병합하거나 두 번 revert하지 않는다.
+
+모든 `gh pr` 호출(`view`, `list`, `create`, `edit`, `merge`)은 `--repo <owner/repo>`를 붙인다. owner/repo는 그때마다 `git.remote`의 URL에서 푼다(위 "환경 검사"). gh의 기본 저장소(`gh repo set-default`, 첫 원격)를 따르지 않으므로, 원격이 여럿이어도 gs가 push한 그 저장소의 PR만 다룬다. 그래서 `git.remote`는 GitHub 저장소여야 한다.
+
 1. integration 검증(`integration`). 실패하면 integration을 되돌린다.
-2. 보고서: 새 판단 모델 호출(`models.judge`, 제한 `timeouts.judge_minutes`)이 증거 파일(`finish/report-input.md`, `finish/diff-stat.txt`, spec)을 읽고 Summary를 쓴다. gs가 원본 증거를 붙여 `.goldstack/work/<f>/report.md`를 integration에 커밋한다: Summary, Evidence(티켓별 결과, 단계별 소요 `단계별 소요: worker 9분 · 리뷰 4분 · 수정 2분 · 검증 3분`, 남은 리뷰 지적, verify 출력), Merge Danger(마무리 결과, PR, verify 결과, 병합·revert 커밋, 되돌리는 법). PR 본문 상한(60,000자)을 넘으면 로그를 줄이고, 그래도 길면 자른다. 판단 모델이 실패하면 그 사실을 Summary에 쓴다.
-3. integration을 `<remote>`에 일반 push하고 `gh pr create --base <base>`(열린 PR이 있으면 `gh pr edit`). PR 본문은 보고서와 같다.
+2. 보고서: 새 판단 모델 호출(`models.judge`, 제한 `timeouts.judge_minutes`)이 증거 파일(`finish/report-input.md`, `finish/diff-stat.txt`, spec)을 읽고 Summary를 쓴다. 프롬프트는 마무리 상태·병합 여부 문장을 쓰지 말라고 한다(그 시점에는 아직 모른다). gs가 원본 증거를 붙여 `.goldstack/work/<f>/report.md`를 integration에 커밋한다: Summary, 마무리 상태 줄(아래), Evidence(티켓별 결과, 단계별 소요 `단계별 소요: worker 9분 · 리뷰 4분 · 수정 2분 · 검증 3분`, 남은 리뷰 지적, verify 출력), Merge Danger(`결과:` 줄, PR, verify 결과, 병합·revert 커밋, 되돌리는 법). PR 본문 상한(60,000자)을 넘으면 로그를 줄이고, 그래도 길면 자른다. 판단 모델이 실패하면 그 사실을 Summary에 쓴다.
+3. integration을 `<remote>`에 일반 push하고 `gh pr create --repo <owner/repo> --base <base>`(열린 PR이 있으면 `gh pr edit`). PR 본문은 보고서와 같다.
 4. 보고서 커밋까지 포함한 PR head를 다시 검증(`integration-final`).
-5. merged 티켓이 하나 이상이고 1과 4가 모두 통과하면 `gh pr merge --merge --match-head-commit <검증한 head>`. 아니면 `not_merged`(병합 안 함).
+5. merged 티켓이 하나 이상이고 1과 4가 모두 통과하면 `gh pr merge --repo <owner/repo> --merge --match-head-commit <검증한 head>`. 아니면 `not_merged`(병합 안 함).
 6. PR을 다시 읽어 실제 `MERGED`, base 이름, 병합 커밋, head가 검증한 것과 같은지 확인한다. 아직이면 `merge_pending`(병합 큐 대기, 종료 1, 다음 실행이 이어 간다). 사람이 닫았으면 `closed`(다음 실행이 새 PR을 연다).
 7. 최신 `<remote>/<base>`를 임시 detached worktree에 받아 재검증(`main`). 실패하면 그 병합 커밋을 `git revert`(병합 커밋이면 `-m 1`)해 base에 일반 push한다(force push 없음). 실패 뒤 base가 움직였으면 최신 base를 다시 검증(`main-recheck`)한다. gs 밖에서 이미 되돌렸으면 다시 revert하지 않는다.
-8. base를 integration에 합치고 보고서를 갱신해 push, PR 본문도 갱신한다.
+8. base를 integration에 합치고 보고서를 갱신해 push, PR 본문도 갱신한다. 같은 `finish/summary.md`(끝 줄바꿈을 뗀다)로 다시 쓰므로 재개해도 보고서가 어긋나지 않는다.
+9. **base에 최종 보고서 push** — 이 마무리가 `verified`·`reverted`로 끝났을 때만. 원격 base의 최신 끝을 임시 detached worktree에 받아 `.goldstack/work/<f>/report.md`만 integration의 최종판으로 바꾼 커밋 `gs: <f> 최종 보고서(병합 후)`를 만들어 `<remote>`의 base에 일반 push한다(force 없음). base에 이미 같은 내용이면 커밋하지 않는다. 성공하면 `■ 최종 보고서를 <base>에 push했다(<sha8>)`를 출력하고 state `finish.base_report`에 sha를 적는다.
+   - 거부되면(그 사이 base가 움직임) fetch 뒤 최신 base 위에서 다시 만들어 한 번 더 시도한다. 그래도 실패면 `■ 경고: 최종 보고서를 <base>에 push하지 못했다(두 번 시도). 실행 결과는 그대로다: …`만 쓴다. 실행 결과·종료 코드는 바뀌지 않는다.
+   - 시도를 마치면(성공이든 실패든) `finish.base_report_tried`를 남기고, 다음 `gs go`는 다시 시도하지 않는다. 시도 전에 끊긴 실행(예: 8의 `gh pr edit` 실패)은 다음 재개가 처음으로 시도한다.
+   - `not_merged`·`closed`·`merge_pending`이면 push하지 않는다. 보호된 base(직접 push 금지)는 다루지 않는다: push가 두 번 거부되어 경고로 끝나고, base에는 병합 시점의 report.md가 남는다.
+
+**마무리 상태 줄** — report.md의 Summary 바로 아래 한 줄을 gs가 `state.finish`에서 만든다(`report.status_line`). 판단 모델의 글이 아니라서, 병합 전에 쓴 Summary가 "아직 병합 전"으로 남는 일이 없다. 형식은 `마무리: <phase> · …`:
+
+| phase | 줄 |
+|---|---|
+| `verified` | `마무리: verified · PR <url> 병합 · <base> 검증 통과` |
+| `reverted` | `마무리: reverted · <base> 검증 실패 → revert <sha8>`(gs 밖에서 되돌렸으면 `<base>에서 이미 되돌림 → revert …`) |
+| `not_merged` | `마무리: not_merged · integration 검증 실패`, merged 티켓이 없으면 `… · merged 티켓 없음` |
+| `closed` | `마무리: closed · PR <url>이 병합되지 않고 닫힘` |
+| `merge_requested`, `merge_pending` | `마무리: merge_pending · PR <url> 병합 대기 · <base> 검증 미실행` |
+| `merged` | `마무리: merged · PR <url> 병합 · <base> 검증 대기` |
+| `main_failed` | `마무리: main_failed · <base> 검증 실패 · revert push 안 됨` |
+| 그 밖(`preparing`) | `마무리: preparing · 병합 전` |
+
+끝나지 않은 phase에 오류가 있으면 끝에 `· 오류(아래 Merge Danger)`가 붙는다. PR이 없으면 `<url>` 자리가 `PR 없음`이다. 보고서 커밋 때문에 병합 revert가 report.md에서 충돌하면, 되돌리는 법에 지금 보고서를 남기고 이어 가는 명령이 적힌다.
 
 base가 이 feature의 병합을 revert했으면, 다음 실행이 integration을 준비할 때 그 revert를 되돌린 커밋을 만들어 합친다(그냥 합치면 feature 코드가 조용히 사라진다). 보고서에 그 사실을 적고, 다음 PR이 feature 코드를 다시 들인다. 상태 이름·로그 이름의 `main`(`main_failed`, `main-verify.log`)은 "base 브랜치"를 뜻하는 옛 이름이다.
+
+git 오류나 herdr 오류(`HerdrError`)로 루프를 떠나도 `gs go: … 오류: …`를 stderr에 쓰고 `finished_at` 기록, 요약 출력, 알림까지 간다(종료 1).
 
 마지막 출력은 요약과 PR 링크다:
 ```
@@ -144,6 +170,8 @@ base가 이 feature의 병합을 revert했으면, 다음 실행이 integration�
 ## 진행 계산과 진행 바 mod
 
 gs가 state를 쓸 때마다 `progress`를 계산해 같이 쓴다(`state.calculate_progress`, Python 시험). mod는 그리기만 한다.
+
+**heartbeat** — state는 상태가 바뀔 때(`Run.save()`)만 쓰이므로, worker가 10분 넘게 단계를 바꾸지 않으면 mod의 10분 기준에 걸려 바가 사라졌다. 그래서 `go._wait_any`의 polling 루프가 상태 변화가 없어도 마지막 저장에서 `HEARTBEAT_SECONDS`(60초)가 지나면 `Run.save()`를 다시 불러 `updated_at`·`progress`(경과 시간 포함)와 파일 수정 시각을 새로 쓴다. mod 기준(10분)은 그대로다. heartbeat는 `_wait_any` 안에만 있으므로, 코디네이터가 동기로 기다리는 리뷰(`review.run`, 제한 `timeouts.review_minutes` 기본 30분)·검증(`verify.run`, 제한 `verify_minutes` 기본 20분)·병합·feature 마무리 동안에는 state가 다시 쓰이지 않는다. 그 단계가 10분을 넘으면 정상 실행이어도 바가 사라졌다가 단계가 끝나 `save()`하면 돌아온다. 그러니 10분 넘게 안 바뀐 state가 곧 `gs go`가 죽었다는 뜻은 아니다. 죽었는지는 `gs status`가 `pid`의 생존으로 가린다(`실행 중`/`중단됨`).
 ```json
 {"done": 3, "total": 8, "running": [{"id": "04", "phase": "review", "model": "codex"}],
  "elapsed_s": 1440, "eta_s": 2400, "line": "▓▓▓░░░░░ goldstack-v2 3/8 · 04 리뷰 중(codex) · 24분 · 약 40분 남음"}
@@ -152,8 +180,39 @@ gs가 state를 쓸 때마다 `progress`를 계산해 같이 쓴다(`state.calcul
 - `running`: 돌고 있는 티켓마다 마지막 단계와 그 모델(리뷰면 reviewer). feature 전체 마무리 중이면 `{"id": "", "phase": "finish", "model": "claude"}` 하나(`마무리 중(claude)`).
 - `eta_s`: 이번 실행에서 끝난 티켓(이번 실행 전에 이미 병합된 티켓은 뺀다)의 평균 소요(재시도를 포함한 첫 단계부터 끝까지) × 남은 티켓 수 ÷ `max_workers`, 분 단위로 반올림. 표본이 없으면 `null`이고 line은 `남은 시간 계산 중`.
 
-**mod**(`hooks/register.tsx`, `hooks/hooks.json`의 `modules`): 세션 시작 때와 1초마다(`$.clock.every(1000)`) 지금 디렉터리의 `.goldstack/work/*/run/state.json` 중 최근 10분 안에 바뀐 것을 수정 시각이 가장 최근인 것부터 보며, `finished_at`이 빈 첫 파일의 `progress.line`을 `AbovePrompt`에 `Text`(dim, 끝 자름)로 그린다(끝난 실행은 건너뛴다). 고를 것이 없거나, 가장 최근 파일을 읽지 못하면(깨진 JSON 등) 더 오래된 실행으로 넘어가지 않고 아무것도 그리지 않는다(`next(e)`). 설문이 떠 있을 때도 그리지 않는다. 상태 계약은 `types/index.d.ts`(`goldstack.line`). 시험은 `claude plugin test .`(`hooks/register.test.tsx`).
+**mod**(`hooks/register.tsx`, `hooks/hooks.json`의 `modules`): 세션 시작 때와 1초마다(`$.clock.every(1000)`) `.goldstack/work`를 찾는다. 엔진의 `$.session.cwd()`가 세션 디렉터리를 절대 경로로 주고 `$.fs`는 절대 경로를 그대로 쓰므로, cwd에서 위로 올라가며 처음 만나는 `.goldstack/work`를 쓴다(레포 하위 디렉터리에서 연 세션도 보이고, 레포가 겹치면 가장 가까운 것). cwd를 묻지 못하면 예전처럼 cwd 바로 아래만 본다. 그 아래 `*/run/state.json` 중 최근 10분 안에 바뀐 것을 수정 시각이 가장 최근인 것부터 보며, `finished_at`이 빈 첫 파일의 `progress.line`을 `AbovePrompt`에 `Text`(dim, 끝 자름)로 그린다(끝난 실행은 건너뛴다). 고를 것이 없거나, 가장 최근 파일을 읽지 못하면(깨진 JSON 등) 더 오래된 실행으로 넘어가지 않고 아무것도 그리지 않는다(`next(e)`). 설문이 떠 있을 때도 그리지 않는다. 상태 계약은 `types/index.d.ts`(`goldstack.line`). 시험은 `claude plugin test .`(`hooks/register.test.tsx`).
 mod의 hooks API는 early-access다. Claude Code 2.1.317에서 command hook과 `modules`를 같은 `hooks.json`에 두고 `claude plugin validate .`가 통과하며, `--plugin-dir`로 실은 세션에서 둘 다 로드됨을 확인했다. marketplace 설치본에서 mod가 안 뜨면 `--plugin-dir`이나 `CLAUDE_CODE_PLUGIN_DIRS`로 레포 디렉터리를 싣는다.
+
+## 아이디어 함
+
+`.goldstack/ideas/<slug>.md`가 아이디어 하나다. slug(소문자·숫자·`-`)가 파일 이름이자 id다. `README.md`는 형식 설명이라 아이디어가 아니다.
+```
+---
+date: 2026-11-03          # YYYY-MM-DD, 필수
+severity: high            # high | medium | low, 필수
+source: goldstack-v2 리뷰 02   # 자유 문장, 필수
+status: open              # open | taken | dropped, 필수
+feature: ""               # status가 taken이면 필수(예: goldstack-v3)
+---
+<첫 줄: 한 줄 요약. 이어서 근거·생각. dropped면 끝에 `버린 이유: …` 한 줄>
+```
+줄 끝 `#` 설명은 형식을 보이려는 것이다. frontmatter는 spec·티켓과 같은 파서(`frontmatter.py`)로 읽는다: 한 줄 `key: value`, `: `·` # ` 등이 든 값은 따옴표로 감싼다. 날짜는 실제 날짜여야 한다.
+
+쓰는 쪽: `/idea`(새 파일, 또는 비슷한 열린 아이디어 끝에 `- <날짜> <근거> (출처: …)` 줄), `/retro <feature>`(사람이 고른 후보를 `/idea` 형식으로), `/grill`(라운드 1에서 고른 아이디어를 `status: "taken"`, `feature: "<f>"`로). 셋 다 커밋하지 않는다. `/grill` 6단계와 `/go` 2단계의 커밋 경로에 `.goldstack/ideas`가 들어 있다(디렉터리가 없으면 `git add`에서 뺀다. `gs init`은 이 디렉터리를 만들지 않는다).
+
+**`gs backlog [--all]`**(`backlog.py`) — 읽기 전용, 경고가 있어도 종료 0.
+```
+아이디어 (열림 3)
+high    2026-11-03  pr-repo-flag  PR 명령이 git.remote를 따르지 않는다   (goldstack-v2 리뷰 02)
+low     …
+범위 밖 (다시 볼 조건)
+same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이 또 버려지면.
+…
+```
+- 열: severity, date, slug, 본문 첫 줄, `(source)`. 정렬은 severity(high→medium→low) → date(오래된 것 먼저) → slug.
+- `--all`: 머리가 `아이디어 (전체 N, 열림 M)`이고 date 뒤에 status 열을 더해 taken·dropped도 보인다.
+- `README.md`는 건너뛴다. 형식이 틀린 파일(slug, 빠진 필수 키, 허용 밖 값, 날짜, taken인데 빈 feature 등)은 `경고: <파일>: <이유>`로 보이고 목록에서 뺀다. `.goldstack/ideas/`가 없으면 빈 목록. `gs check`는 아이디어를 보지 않는다(아이디어가 실행을 막을 이유가 없다).
+- 범위 밖 줄: `.goldstack/out-of-scope/*.md`마다 `<slug>  <**다시 볼 조건**: 뒤 문장>`. 조건 줄이 없거나 비면 `(조건 없음)`.
 
 ## 텔레그램 알림
 
