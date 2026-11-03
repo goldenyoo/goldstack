@@ -287,7 +287,9 @@ def _prepare_integration(r: Run) -> bool:
         finally:
             r.st.phase = ""
         if not res.ok:
-            r.st.finish.update(phase="setup_failed", outcome="준비 실패 → 병합 안 함")
+            # 이미 진행한 병합·base 검증·revert·보고서의 재개 상태를 준비 실패로 덮지 않는다.
+            if r.st.finish.get("phase") not in (*finish.RESUME_PHASES, *finish.BASE_REPORT_PHASES):
+                r.st.finish.update(phase="setup_failed", outcome="준비 실패 → 병합 안 함")
             r.save()
             report.write(r, "integration 준비 실패. setup.log를 확인하라.")
             return False

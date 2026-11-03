@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_go
-from gs import config, setup, state, verify
+from gs import config, finish, setup, state, verify
 from test_go import sh
 from test_verify import wait_dead
 
@@ -188,6 +188,54 @@ class WorktreeSetupTest(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertEqual([Path(c).name for c in self.setup_calls()], ["integration", "01", "base"])
         self.assertEqual(self.calls(), ["01"])
+
+    def test_integration_setup_failure_preserves_resumable_finish(self):
+        self.configure('echo integration-boom; exit 8')
+        self.assertEqual(self.go("--only", "01")[0], 1)
+        wt = self.rundir / "wt/integration"
+        head = sh(wt, "git", "rev-parse", "HEAD")
+        for phase in (*finish.RESUME_PHASES, *finish.BASE_REPORT_PHASES):
+            with self.subTest(phase=phase):
+                st = state.load(self.rundir, "demo")
+                previous = dict(phase=phase, outcome="기존 마무리", url="https://example.test/pr/1",
+                                head=head, merge_sha=head, revert_sha=head,
+                                report_result={"phase": "verified", "outcome": "검증 성공"})
+                st.finish = previous.copy()
+                state.save(self.rundir, st)
+                with mock.patch("gs.verify.run", side_effect=AssertionError("verify before setup")), \
+                        mock.patch("gs.finish.run", side_effect=AssertionError("finish before setup")):
+                    code, out, err = self.go("--only", "01")
+                self.assertEqual(code, 1, out + err)
+                self.assertEqual(self.finish(), previous)
+                self.assertFalse(setup.marker(wt).exists())
+                report = (wt / ".goldstack/work/demo/report.md").read_text()
+                self.assertIn("integration 준비 실패", report)
+                self.assertIn("integration-boom", report)
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.lines("gh.log"), [])
+
+    def test_recreated_integration_setup_failure_resumes_pending_merge_next_go(self):
+        blocked = self.bin / "setup-blocked"
+        self.configure(f'test ! -f {blocked} || {{ echo integration-boom; exit 8; }}; echo ready > installed')
+        (self.bin / "gh.queue").touch()
+        self.assertEqual(self.go("--only", "01")[0], 1)
+        previous = self.finish()
+        self.assertEqual(previous["phase"], "merge_pending")
+        calls = self.lines("gh.log")
+        sh(self.repo, "git", "worktree", "remove", "--force", str(self.rundir / "wt/integration"))
+        blocked.touch()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.finish(), previous)
+        self.assertEqual(self.lines("gh.log"), calls)
+
+        blocked.unlink()
+        (self.bin / "gh.queue").unlink()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.finish()["phase"], "verified")
+        self.assertEqual(self.calls(), ["01"])
+        self.assertEqual(sum("pr create " in line for line in self.lines("gh.log")), 1)
 
     def test_base_setup_failure_never_reverts_and_next_go_rechecks_base_first(self):
         self.configure(self.record_setup + f'case "$PWD" in */gs-main-*/base) '
