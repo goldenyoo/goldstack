@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import git, graph, herdr, state, worker
+from . import adapters, git, graph, herdr, state, worker
 from .check import check
 from .feature import Feature, Ticket
 
@@ -267,14 +267,15 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
          log=str(job.log), started_at=state.now(), ended_at="", reason="")
     worker.write_brief(job, r.feat.spec, r.name, branch)
     try:
-        cmd = worker.worker_command(t)
-    except ValueError as e:
+        adapter = adapters.for_model(t.model)
+        adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
+        worker.write_script(job, adapter)
+    except adapters.AdapterError as e:
         _fail(r, t, str(e))
         return None
-    worker.write_script(job, cmd)
-    proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}")
+    proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
     _set(r, t.id, pane=proc.where)
-    say(f"[{t.id}] 시작: {t.title} ({proc.where}, 로그 {job.log})")
+    say(f"[{t.id}] 시작: {t.title} ({adapter.name}, {proc.where}, 로그 {job.log})")
     return Active(t, proc, branch, wt, base)
 
 
@@ -285,7 +286,8 @@ def _finish(r: Run, a: Active, code: int, others: list[str] = ()) -> bool:
     """
     t, wt, branch = a.t, a.wt, a.branch
     commits = git.count(r.repo, f"{a.base}..{branch}")
-    say(f"[{t.id}] worker 끝: 종료 코드 {code}, 새 커밋 {commits}")
+    note = a.proc.note
+    say(f"[{t.id}] worker 끝: 종료 코드 {code}, 새 커밋 {commits}" + (f" ({note})" if note else ""))
 
     def fail(reason: str) -> bool:
         a.proc.finish(False)
@@ -299,7 +301,8 @@ def _finish(r: Run, a: Active, code: int, others: list[str] = ()) -> bool:
         say(f"[{t.id}] 경고: integration worktree가 바뀌어 되돌렸다. 함께 돌던 worker({', '.join([t.id, *others])}) 중 "
             "누구 짓인지 모른다")
     if code != 0:
-        return fail(f"worker 종료 코드 {code}" if code >= 0 else "worker 실행기가 사라졌다")
+        why = f"worker 종료 코드 {code}" if code >= 0 else "worker 실행기가 사라졌다"
+        return fail(why + (f" ({note})" if note else ""))
     if commits == 0:
         return fail("커밋 없음")
     if not git.is_clean(wt):

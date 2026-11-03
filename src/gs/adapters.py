@@ -1,0 +1,284 @@
+"""모델 어댑터: 티켓의 `model`(claude | codex | agy)에 맞춰 worker 실행 명령을 만들고 종료 코드를 판정한다.
+
+입력은 모두 같다(WorkerInput: brief 경로, worktree, 로그 경로). 어댑터가 하는 일은 넷이다.
+- prepare: 띄우기 전 준비와 확인. 차단 장치를 걸 수 없으면 AdapterError로 거부한다.
+- env: worker 환경. 모든 어댑터가 `GS_ROLE=worker`를 넣는다(09 hook이 이 값을 본다).
+- command: worktree에서 돌릴 셸 명령. 실행 스크립트(worker.write_script)가 이것을 감싸 로그와 exit 파일을 남긴다.
+- outcome: 프로세스 종료 코드와 로그로 최종 종료 코드를 정한다. agy는 종료 0이 성공이 아니다(docs/research/agy.md §3.1).
+
+차단 장치(spec 3-1): claude는 plugin hook + 도구 차단 옵션, codex는 `workspace-write` sandbox,
+agy는 deny 규칙 + `gs hook agy-pretooluse`(worktree의 `.agents/hooks.json`) 두 겹. agy hook이 걸리지 않으면 거부한다.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shlex
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+from . import git
+
+q = shlex.quote
+
+
+class AdapterError(Exception):
+    """이 worker를 띄울 수 없다(차단 장치를 걸 수 없음 등)."""
+
+
+@dataclass(frozen=True)
+class WorkerInput:
+    brief: Path
+    worktree: Path
+    log: Path
+
+
+class Adapter:
+    name = ""
+
+    def prepare(self, inp: WorkerInput) -> None:
+        pass
+
+    def env(self, inp: WorkerInput) -> dict[str, str]:
+        return {"GS_ROLE": "worker", "GS_BRIEF": str(inp.brief), "GS_WORKTREE": str(inp.worktree)}
+
+    def command(self, inp: WorkerInput) -> str:
+        raise NotImplementedError
+
+    def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
+        """(최종 종료 코드, 사람이 읽을 메모). 메모는 실패 이유나 조용한 강등 경고다."""
+        return code, ""
+
+
+# ---------------------------------------------------------------- claude
+
+class Claude(Adapter):
+    """도구 차단으로 push와 gh를 막는다. 09의 plugin hook(`gs hook pretooluse`, GS_ROLE=worker일 때)과
+    겹치는 이중 장치로 남겨 둔다: plugin이 설치되지 않았거나 hook이 따라가지 못한 형태도 여기서 한 번 더 막힌다."""
+    name = "claude"
+    BASE = ('claude -p --output-format stream-json --verbose --permission-mode bypassPermissions '
+            '--disallowedTools "Bash(git push *)" "Bash(gh *)"')
+
+    def command(self, inp: WorkerInput) -> str:
+        return f"{self.BASE} < {q(str(inp.brief))}"
+
+
+# ---------------------------------------------------------------- codex
+
+class Codex(Adapter):
+    """`codex exec --json -s workspace-write`. 네트워크는 명시적으로 끈다(사용자 설정이 켜 두었어도 push가 안 되게).
+
+    worktree의 `.git`은 파일이고 실제 git 디렉터리는 주 레포의 `.git/` 아래라 sandbox 밖이다. 그대로면 커밋이
+    `index.lock: Operation not permitted`로 실패한다(05에서 측정). codex는 `.git` 디렉터리를 통째로 add-dir해도
+    쓰기를 막으므로, 커밋에 필요한 곳만 연다: 이 worktree의 git 디렉터리, objects, 이 브랜치의 ref·reflog 디렉터리.
+
+    sandbox 안에서 못 도는 시험(localhost, 홈 디렉터리 쓰기 등: ORIGINS 실패 13)은 gs가 verify로 다시 돌린다.
+    그래서 그런 실패로 멈추지 말고 커밋하라는 한 줄을 brief 앞에 붙인다(brief는 stdin으로 들어가 뒤에 붙는다).
+    """
+    name = "codex"
+    NOTE = ("아래 <stdin>의 brief대로 일한다. sandbox 때문에 검증 명령 일부가 못 도는 것(네트워크, localhost, "
+            "홈 디렉터리 쓰기)은 실패로 보지 말고 커밋한다. gs가 sandbox 밖에서 검증을 다시 돌린다.")
+
+    def writable_dirs(self, worktree: Path) -> list[Path]:
+        common = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+        own = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-dir"))
+        ref = git.out(worktree, "symbolic-ref", "HEAD")  # refs/heads/gs/<feature>/NN
+        refdir = str(Path(ref).parent)
+        dirs = [own, common / "objects", common / refdir, common / "logs" / refdir]
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)  # add-dir은 있는 디렉터리여야 한다
+        return list(dict.fromkeys(dirs))
+
+    def prepare(self, inp: WorkerInput) -> None:
+        try:
+            self.writable_dirs(inp.worktree)
+        except (git.GitError, OSError) as e:
+            raise AdapterError(f"codex: worktree의 git 디렉터리를 찾지 못했다: {e}") from e
+
+    def command(self, inp: WorkerInput) -> str:
+        adds = " ".join(f"--add-dir {q(str(d))}" for d in self.writable_dirs(inp.worktree))
+        return (f"codex exec --json -s workspace-write -c sandbox_workspace_write.network_access=false "
+                f"--skip-git-repo-check -C {q(str(inp.worktree))} {adds} {q(self.NOTE)} < {q(str(inp.brief))}")
+
+
+# ---------------------------------------------------------------- agy
+
+AGY_HOOK_NAME = "goldstack-worker-guard"
+AGY_HOOK_FILE = Path(".agents") / "hooks.json"
+AGY_MODEL = "gemini-4-argon-high"  # 강도가 붙은 slug 하나. Gemini를 명시해 다른 계열(Claude·GPT)로 새지 않게(11 §4)
+# deny 규칙: hook이 빠져도 직접 쓴 형태는 막는 마지막 줄(11 §6). 단어 단위 매칭이라 혼자서는 부족하다.
+AGY_DENY = ["command(git push)", "command(gh pr create)", "command(gh pr merge)", "command(gh pr close)",
+            "command(gh api)", "command(gh repo)", "command(gh release)", "command(gh auth)"]
+
+
+def agy_bin() -> str:
+    return os.environ.get("GS_AGY", "agy")  # 시험 seam
+
+
+def agy_hook_command() -> str:
+    """hook이 부를 명령. 지금 도는 gs와 같은 python을 쓴다(PATH의 `gs`가 다른 버전이어도 같은 판정)."""
+    return f"{q(sys.executable)} -m gs.cli hook agy-pretooluse"
+
+
+def agy_hooks_json() -> str:
+    spec = {AGY_HOOK_NAME: {"PreToolUse": [{"matcher": "*", "hooks": [
+        {"type": "command", "command": agy_hook_command(), "timeout": 30}]}]}}
+    return json.dumps(spec, ensure_ascii=False, indent=2) + "\n"
+
+
+class Agy(Adapter):
+    """11 §6 권고대로: skip-permissions + deny 규칙 + gs PreToolUse hook(두 겹, 둘 다 필수).
+
+    `--mode auto`는 넣지 않는다(이 계정에서 무시되고, -p에서 '묻는다'가 거부라 정상 작업이 막힌다).
+    `--sandbox`(workspace가 읽기 전용이 됨), `--print-timeout`(시간 제한은 gs가 한다)도 넣지 않는다.
+    hook은 worktree의 `.agents/hooks.json`에 쓰고 git exclude에 넣는다(11 §6 3(b), 로딩은 측정됨). 전역 설정은
+    건드리지 않는다. agent가 그 파일을 바꾸지 못하게 hook이 `.agents/` 쓰기를 막고, 재시도는 worktree를 새로 만든다.
+    """
+    name = "agy"
+    EXCLUDE = "/" + str(AGY_HOOK_FILE)
+
+    def settings(self) -> str:
+        return json.dumps({"permissions": {"deny": AGY_DENY}}, separators=(",", ":"))
+
+    def command(self, inp: WorkerInput) -> str:
+        return (f"{q(agy_bin())} -p \"$(cat {q(str(inp.brief))})\" --output-format stream-json "
+                f"--dangerously-skip-permissions --disable-slash-commands "
+                f"--settings {q(self.settings())} --model {q(AGY_MODEL)}")
+
+    def prepare(self, inp: WorkerInput) -> None:
+        install_agy_hook(inp.worktree)
+        problem = agy_guard_problem(inp.worktree)
+        if problem:
+            raise AdapterError(f"agy 차단 장치가 없다: {problem}. agy는 구현 worker로 띄우지 않는다(리뷰 전용)")
+
+    def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
+        """성공 = 종료 0 + 마지막 `result` 이벤트의 status SUCCESS + finished_reason 없음(11 §6 끝 판정)."""
+        result, warnings, errors = None, [], 0
+        try:
+            lines = inp.log.read_text(encoding="utf-8", errors="replace").splitlines()
+        except FileNotFoundError:
+            lines = []
+        for line in lines:
+            if line.startswith("warning:"):
+                warnings.append(line.strip())
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("event") == "result" and isinstance(ev.get("result"), dict):
+                result = ev["result"]
+            su = ev.get("step_update")
+            if ev.get("event") == "step_update" and isinstance(su, dict) and su.get("state") == "ERROR":
+                errors += 1
+        notes = list(dict.fromkeys(warnings))
+        if errors:
+            notes.append(f"ERROR 단계 {errors}개(막힌 도구 호출 포함)")
+        if result is not None and result.get("denied_actions"):
+            acts = ", ".join(str(d.get("action")) for d in result["denied_actions"] if isinstance(d, dict))
+            notes.append(f"자동 거부: {acts}")
+        if code == 0:
+            if result is None:
+                code, why = 1, "agy: result 이벤트가 없다"
+            elif result.get("status") != "SUCCESS":
+                code, why = 1, f"agy: result status {result.get('status')}"
+            elif result.get("finished_reason"):
+                code, why = 1, f"agy: finished_reason {result.get('finished_reason')}"
+            else:
+                why = ""
+            if why:
+                notes.insert(0, why)
+        return code, "; ".join(notes)
+
+
+def install_agy_hook(worktree: Path) -> None:
+    """worktree에 `.agents/hooks.json`을 쓰고 git exclude에 넣는다. 레포가 그 파일을 추적하면 거부한다."""
+    if git.run(worktree, "ls-files", "--error-unmatch", str(AGY_HOOK_FILE), check=False).returncode == 0:
+        raise AdapterError(f"agy: 레포가 {AGY_HOOK_FILE}를 추적한다. gs hook을 넣을 수 없다")
+    path = worktree / AGY_HOOK_FILE
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(agy_hooks_json(), encoding="utf-8")
+    exclude = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"))
+    text = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    if Agy.EXCLUDE not in text.splitlines():
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        sep = "\n" if text and not text.endswith("\n") else ""
+        exclude.write_text(text + sep + Agy.EXCLUDE + "\n", encoding="utf-8")
+
+
+def agy_guard_problem(workspace: Path) -> str:
+    """agy가 workspace에서 gs hook을 실제로 거는지 본다. 문제가 없으면 빈 문자열.
+
+    1) `agy -p /hooks`(모델 호출 없음) 출력에 gs hook 줄(PreToolUse, enabled)이 있는가
+    2) hook 명령이 실제로 `git push`를 막는가(지금 gs에 agy-pretooluse 진입점이 있는가)
+    """
+    try:
+        cp = subprocess.run([agy_bin(), "-p", "/hooks"], cwd=workspace, capture_output=True, text=True,
+                            stdin=subprocess.DEVNULL, timeout=60)
+    except FileNotFoundError:
+        return f"`{agy_bin()}`가 없다"
+    except subprocess.TimeoutExpired:
+        return "`agy -p /hooks`가 60초 안에 끝나지 않았다"
+    if not any(_is_gs_hook_line(line) for line in cp.stdout.splitlines()):
+        return f"`agy -p /hooks`에 {AGY_HOOK_NAME}(PreToolUse) 줄이 없다(종료 {cp.returncode})"
+    sample = {"workspacePaths": [str(workspace)], "toolCall": {"name": "run_command",
+                                                               "args": {"CommandLine": "git push origin HEAD"}}}
+    env = {**os.environ, "GS_ROLE": "worker", "GS_WORKTREE": str(workspace)}
+    try:
+        hp = subprocess.run(shlex.split(agy_hook_command()), input=json.dumps(sample), capture_output=True,
+                            text=True, env=env, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return f"hook 명령을 돌리지 못했다: {e}"
+    try:
+        verdict = json.loads(hp.stdout).get("decision")
+    except (ValueError, AttributeError):
+        verdict = None
+    if verdict != "deny":
+        return f"hook 명령이 `git push`를 막지 않았다(종료 {hp.returncode}, 출력 {hp.stdout.strip()[:120]!r})"
+    return ""
+
+
+def _is_gs_hook_line(line: str) -> bool:
+    # `agy -p /hooks` 한 줄: 이름 \t enabled \t 이벤트 \t matcher \t type \t 명령
+    cols = line.split("\t")
+    return (len(cols) >= 6 and cols[0] == AGY_HOOK_NAME and cols[1] == "enabled" and cols[2] == "PreToolUse"
+            and "hook agy-pretooluse" in cols[5])
+
+
+def agy_probe() -> str:
+    """`gs check`용: 버리는 디렉터리에 같은 hook을 깔고 agy가 거는지 본다. 문제가 없으면 빈 문자열."""
+    with tempfile.TemporaryDirectory(prefix="gs-agy-probe.") as d:
+        ws = Path(d)
+        (ws / AGY_HOOK_FILE).parent.mkdir()
+        (ws / AGY_HOOK_FILE).write_text(agy_hooks_json(), encoding="utf-8")
+        return agy_guard_problem(ws)
+
+
+# ---------------------------------------------------------------- 고르기
+
+class Custom(Adapter):
+    """`GS_WORKER_CMD`로 바꿔 끼운 명령(시험 seam). 준비·판정 없이 그대로 돌린다."""
+    name = "custom"
+
+    def __init__(self, cmd: str):
+        self.cmd = cmd
+
+    def command(self, inp: WorkerInput) -> str:
+        return self.cmd
+
+
+ADAPTERS: dict[str, type[Adapter]] = {"claude": Claude, "codex": Codex, "agy": Agy}
+
+
+def for_model(model: str) -> Adapter:
+    override = os.environ.get("GS_WORKER_CMD")
+    if override:
+        return Custom(override)
+    try:
+        return ADAPTERS[model]()
+    except KeyError:
+        raise AdapterError(f"model `{model}` 어댑터가 없다({'|'.join(ADAPTERS)})") from None

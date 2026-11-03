@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gs import cli, hook, worker
+from gs import adapters, cli, hook
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -181,7 +181,7 @@ class PluginTest(unittest.TestCase):
         self.assertEqual(cmds, ["gs hook pretooluse"])
 
     def test_worker_keeps_tool_block_as_second_guard(self):
-        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)"', worker.CLAUDE_CMD)
+        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)"', adapters.Claude.BASE)
 
     def test_force_push_message_says_force(self):
         env = {"GS_ROLE": "worker", "GS_WORKTREE": "/w"}
