@@ -22,6 +22,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("feature", help=".work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다")
 
+    p = sub.add_parser("status", help="실행 상태(state.json)를 표로 본다(읽기 전용)")
+    p.add_argument("feature", nargs="?", help=".work/<feature>(생략하면 실행 중인 feature 전부)")
+
     args = parser.parse_args(argv)
     repo = args.repo or featmod.find_repo_root(Path.cwd())
     if repo is None:
@@ -32,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "go":
         from .go import go
         return go(repo, args.feature, _ids(args.only))
+    if args.cmd == "status":
+        from .status import status
+        return status(repo, args.feature, sys.stdout)
     return 2  # argparse가 막으므로 오지 않는다
 
 
