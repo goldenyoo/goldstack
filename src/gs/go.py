@@ -9,13 +9,12 @@ worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰�
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, failure, finish, git, graph, herdr, review, state, worker
+from . import adapters, failure, finish, git, graph, herdr, review, state, verify, worker
 from .check import check
 from .feature import Feature, Ticket
 
@@ -457,10 +456,10 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         _reset_integration(r, r.ihead)
         return fail("integration 병합 충돌")
     merged = _merge_state(r)  # 검증할 것: 병합 결과 트리
-    ok, log = _verify(r, t)
-    if not ok:
+    res, log = _verify(r, t)
+    if not res.ok:
         _reset_integration(r, r.ihead)
-        return fail(f"검증 실패(로그 {log})")
+        return fail(f"검증 시간 초과({res.minutes}분, 로그 {log})" if res.timed_out else f"검증 실패(로그 {log})")
     # 검증하는 동안 다른 worker가 integration(index, HEAD, 병합 상태)을 바꿨으면 검증한 것과 커밋할 것이 다르다
     expected = (r.ihead, f"refs/heads/{integration_branch(r.name)}")
     if _merge_state(r) != merged or merged[:2] != expected or not all(merged):
@@ -625,14 +624,14 @@ def _fail(r: Run, t: Ticket, reason: str) -> bool:
     return False
 
 
-def _verify(r: Run, t: Ticket) -> tuple[bool, Path]:
+def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path]:
     log = Path(r.st.ticket(t.id).log).parent / "verify.log"
     say(f"[{t.id}] 검증: {r.feat.spec.verify}")
-    env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "GS_ROLE")}
     with log.open("w", encoding="utf-8") as f:
-        code = subprocess.run(["bash", "-c", r.feat.spec.verify], cwd=r.iwt, stdin=subprocess.DEVNULL,
-                              stdout=f, stderr=subprocess.STDOUT, env=env).returncode
-    return code == 0, log
+        res = verify.run(r.feat.spec, r.iwt, f)
+    if res.timed_out:
+        say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
+    return res, log
 
 
 LABEL = {"merged": "병합", "already": "이미 병합", "failed": "실패", "skipped": "건너뜀", "pending": "대기",

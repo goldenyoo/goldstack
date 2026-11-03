@@ -25,6 +25,9 @@ gs status [<feature>]           # 실행 상태 표(읽기 전용). 생략하면
 uv run python -m unittest discover -s tests   # 검증 명령
 ```
 
+spec frontmatter: `feature`, `verify`(셸 명령 한 줄)는 필수, 숫자 키는 모두 1 이상 정수로 `max_workers`(기본 3),
+`idle_minutes`(기본 20), `verify_minutes`(기본 20)다. 그 밖의 키는 `gs check` 경고, 0·정수 아닌 값은 오류다.
+
 `gs go`: 시작할 수 있는 티켓(frontier)을 spec의 `max_workers`(기본 3)개까지 동시에 돌린다(04). worker마다
 티켓 `model`의 headless CLI(아래 "모델 어댑터")를 herdr pane에서 돌리고, pane들은 feature마다 탭 하나(`gs:<feature>`)에 모인다.
 worker는 최신 integration 끝에서 만든 `gs/<feature>/NN` worktree에서 커밋하고 끝난다. 하나 끝날 때마다 gs가
@@ -44,7 +47,11 @@ main 검증 결과와 revert SHA도 보고서·PR 본문에 반영한다. 병합
 실행 흔적은 `.work/<feature>/run/`(gitignore): `NN/<시도>/brief.md`, `run.sh`, `worker.log`, `verify.log`, `wt/`.
 
 실패 처리(07): worker의 로그 출력도 새 커밋도 없이 spec의 `idle_minutes`(기본 20분)가 지나면 프로세스와
-pane을 끝낸다. 종료 코드, 커밋 없음, 시간 초과, 검증 실패, 병합 충돌은 같은 모델로 한 번 재시도한다.
+pane을 끝낸다. verify 명령(티켓 병합 전, integration, integration-final, main·main-recheck 모두 `src/gs/verify.py`)은
+새 프로세스 그룹에서 돌고, spec의 `verify_minutes`(기본 20분, `GS_VERIFY_TIMEOUT`(초)이 있으면 그 값)를 넘기면 그룹 전체에
+SIGTERM, 5초 뒤 남았으면 SIGKILL을 보내 자손까지 끝낸다. 로그 끝에 `시간 초과: <N>분` 줄을 남기고 검증 실패로 친다:
+티켓이면 실패 이유 `검증 시간 초과(<N>분, 로그 <경로>)`로 재시도, integration이면 병합 안 함, main이면 병합 커밋 revert.
+종료 코드, 커밋 없음, 시간 초과, 검증 실패(시간 초과 포함), 병합 충돌은 같은 모델로 한 번 재시도한다.
 매번 최신 integration에서 새 브랜치·worktree(`NN-retry-<번호>`)를 만들고, 새 `claude -p --model opus` 호출이
 요약한 실패 로그를 brief에 붙인다. 요약 호출이 실패하면 증거 파일 경로를 붙여 재시도한다.
 두 번째 실패는 `failed`, 여기에 직접·간접으로 막힌 티켓은 `skipped`로 두고 나머지는 계속한다.
@@ -69,7 +76,8 @@ fix가 있으면 같은 구현 모델로 수정 worker를 같은 브랜치에 �
 
 바꿔 끼우는 곳(시험 seam): `GS_RUNNER=subprocess|herdr`(기본: herdr 안이면 herdr), `GS_WORKER_CMD`(worker 셸 명령,
 어댑터를 건너뛴다), `GS_GH`(gh 경로), `GS_AGY`(agy 경로), `GS_JUDGE`(실패 요약·리뷰 분류·보고서용 Claude CLI 경로),
-`GS_REVIEWER_CMD`(reviewer 셸 명령: stdin = 프롬프트, stdout = JSON 답).
+`GS_REVIEWER_CMD`(reviewer 셸 명령: stdin = 프롬프트, stdout = JSON 답), `GS_VERIFY_TIMEOUT`(verify 시간 제한 초,
+spec `verify_minutes`를 덮는다).
 
 ## 모델 어댑터(05)
 `src/gs/adapters.py`. 어댑터마다 같은 입력(brief, worktree, 로그 경로)을 받아 준비(`prepare`), 환경(`env`, 모두

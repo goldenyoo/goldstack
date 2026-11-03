@@ -912,6 +912,105 @@ class GoTest(unittest.TestCase):
         self.assertEqual(self.calls(), ["06", "06"])
         self.assertIn("판단 모델의 실패 요약", (self.rundir / "06/2/brief.md").read_text())
 
+    # --- verify 시간 제한(v1 01): GS_VERIFY_TIMEOUT=1초 ---
+    def hang_verify(self, stage):
+        """stage(ticket: 병합 전, integration: 마무리 integration, main: main 검증)에서만 멈추는 verify.
+        멈출 때 자식을 백그라운드로 띄우고 그 pid를 bin/bg_<n>에 적는다. 나머지는 `test ! -f BROKEN`."""
+        (self.bin / "verify.sh").write_text(textwrap.dedent(f"""\
+            here="{self.bin}"
+            if git rev-parse -q --verify MERGE_HEAD >/dev/null; then now=ticket
+            elif git symbolic-ref -q HEAD >/dev/null; then now=integration
+            else now=main; fi
+            hang=no
+            case "$now" in
+              ticket) [ -f HANG ] && hang=yes ;;
+              integration) [ {stage} = integration ] && hang=yes ;;
+              main) [ {stage} = main ] && [ -f file_01 ] && hang=yes ;;
+            esac
+            if [ $hang = yes ]; then
+              n=$(ls "$here" | grep -c '^bg_')
+              sleep 300 & echo $! > "$here/bg_$n"
+              echo "hanging in $now"; sleep 300
+            fi
+            test ! -f BROKEN
+            """))
+        self.parallel(1, verify=f"bash {self.bin / 'verify.sh'}")
+
+    def assert_children_dead(self):
+        pids = [int(p.read_text()) for p in sorted(self.bin.glob("bg_*"))]
+        self.assertTrue(pids)
+        for pid in pids:
+            for _ in range(60):  # 고아는 init이 거둔다
+                if not alive(pid):
+                    break
+                time.sleep(0.05)
+            self.assertFalse(alive(pid), f"verify의 백그라운드 자식 {pid}가 살아 있다")
+
+    def test_ticket_verify_timeout_retries_with_same_model(self):
+        self.hang_verify("ticket")
+        (self.bin / "worker.sh").write_text(textwrap.dedent('''\
+            here="$(dirname "$0")"
+            echo "$GS_TICKET" >> "$here/calls.log"
+            if [ ! -f "$here/first" ]; then
+              touch "$here/first"; echo x > HANG  # 첫 시도: verify가 멈춘다
+            else
+              grep -q '검증 시간 초과' "$GS_BRIEF" || exit 9
+            fi
+            echo done > file_01; git add -A; git commit -qm done
+        '''))
+        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertEqual(self.calls(), ["01", "01"])
+        log = self.rundir / "01/1/verify.log"
+        self.assertIn(f"[01] 실패: 검증 시간 초과(0.02분, 로그 {log})", out)
+        self.assertIn("같은 모델(claude)로", out)
+        self.assertTrue(log.read_text().endswith("\n시간 초과: 0.02분\n"))
+        self.assertIn("검증 시간 초과(0.02분", (self.rundir / "01/1/failure.log").read_text())
+        self.assertNotIn("시간 초과", (self.rundir / "01/2/verify.log").read_text())
+        self.assertNotIn("HANG", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+        self.assert_children_dead()
+
+    def test_integration_verify_timeout_does_not_merge(self):
+        self.hang_verify("integration")
+        initial = sh(self.remote, "git", "rev-parse", "main")
+        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual((f["phase"], f["integration_ok"]), ("not_merged", False))
+        self.assertEqual(state.load(self.rundir, "demo").tickets["01"].status, "merged")
+        self.assertFalse(any(x.startswith("pr merge ") for x in self.lines("gh.log")))
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), initial)
+        log = (self.rundir / "finish/integration-verify.log").read_text()
+        self.assertTrue(log.startswith(f"$ bash {self.bin / 'verify.sh'}\nHEAD: "), log)
+        self.assertTrue(log.endswith("\n시간 초과: 0.02분\n"), log)
+        self.assertFalse((self.rundir / "finish/integration-final-verify.log").exists())
+        self.assertTrue(git_clean(self.rundir / "wt/integration"))
+        self.assert_children_dead()
+
+    def test_main_verify_timeout_reverts_merge(self):
+        self.hang_verify("main")
+        initial = sh(self.remote, "git", "rev-parse", "main")
+        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "reverted")
+        self.assertTrue(f["integration_ok"])
+        self.assertFalse(f["main_ok"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["revert_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^"), f["merge_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^{tree}"),
+                         sh(self.remote, "git", "rev-parse", f"{initial}^{{tree}}"))
+        log = (self.rundir / "finish/main-verify.log").read_text()
+        self.assertTrue(log.endswith("\n시간 초과: 0.02분\n"), log)
+        self.assertIn("시간 초과: 0.02분", self.final_report())
+        self.assertEqual(list(self.rundir.glob("gs-main-*")), [])
+        self.assert_children_dead()
+
     # --- 병렬(04) ---
     def test_parallel_overlaps_and_respects_dependencies(self):
         for tid in ("11", "12", "13"):
