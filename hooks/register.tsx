@@ -10,17 +10,33 @@ const FRESH_MS = 10 * 60 * 1000
 
 const line = atom({ plugin: 'goldstack', key: 'line' } as const, null as ProgressLine)
 
+// 세션 cwd에서 위로 올라가며 처음 만나는 `.goldstack/work`(절대 경로). 레포 하위 디렉터리에서 연 세션도 찾는다.
+// 엔진은 cwd를 절대 경로로 주고($.session.cwd), $.fs는 절대 경로를 그대로 쓴다. 없으면 null.
+const findWork = async ($: EngineInterface): Promise<string | null> => {
+  const cwd = await $.session.cwd().catch(() => null)
+  if (cwd === null) return (await $.fs.exists(WORK)) ? WORK : null // cwd를 못 물으면 예전처럼 cwd 바로 아래만
+  let dir = cwd.replace(/\/+$/, '')
+  for (;;) {
+    const work = `${dir}/${WORK}`
+    if (await $.fs.exists(work)) return work
+    const up = dir.lastIndexOf('/')
+    if (up < 0 || dir === '') return null
+    dir = dir.slice(0, up)
+  }
+}
+
 // `.goldstack/work/*/run/state.json` 중 finished_at이 비었고 최근 10분 안에 바뀐 것 하나(가장 최근)의 progress.line.
 // 고를 것이 없거나 읽지 못하면 null. 가장 최근 파일을 읽지 못하면 더 오래된 실행으로 넘어가지 않는다
 // (다른 실행의 진행을 지금 것처럼 보이지 않게).
 const pick = async ($: EngineInterface): Promise<ProgressLine> => {
   // 없는 경로는 exists로 먼저 거른다(list·stat의 ENOENT가 1초마다 debug 로그에 쌓이지 않게).
-  if (!(await $.fs.exists(WORK))) return null
+  const work = await findWork($)
+  if (work === null) return null
   const now = await $.clock.now()
   const candidates: { path: string; mtimeMs: number }[] = []
-  for (const f of await $.fs.list(WORK)) {
+  for (const f of await $.fs.list(work)) {
     if (f.kind !== 'dir') continue
-    const path = `${WORK}/${f.name}/run/state.json`
+    const path = `${work}/${f.name}/run/state.json`
     if (!(await $.fs.exists(path))) continue
     const st = await $.fs.stat(path)
     if (st.kind === 'file' && now - st.mtimeMs <= FRESH_MS) {

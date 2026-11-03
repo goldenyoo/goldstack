@@ -39,6 +39,10 @@ def _log(r, path: Path, tail: int) -> str:
     return head + f"앞 {len(text) - tail}자 생략. {note}\n\n" + block(text[-tail:]) + "\n"
 
 
+def kept(ts) -> str:
+    return "".join(f"\n남긴 worktree: {path} (미커밋 변경)" for path in ts.kept_worktrees)
+
+
 def evidence(r, tail: int = LOG_TAIL) -> str:
     """티켓마다 가장 최근 verify 로그 하나와 마무리 검증 로그만, 끝부분 tail자씩 붙인다."""
     rows, notes, timings = [], [], []
@@ -48,11 +52,11 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
         reason = ts.reason or ("integration에 병합·검증됨" if ts.status == "merged" else "")
         durations = state.phase_durations(ts)
         if durations:
-            timings.append(f"- {tid} 단계별 소요: " + " · ".join(
-                f"{label} {state.minutes(durations[phase])}분" for phase, label in state.PHASE_LABELS.items()
-                if phase in durations))
-        for path in ts.kept_worktrees:
-            reason += f"\n남긴 worktree: {path} (미커밋 변경)"
+            # 반올림해 0분인 단계(병합 커밋만 하는 마무리 등)는 줄에서 뺀다. 모두 0분이면 1분 미만으로 적는다.
+            spent = [f"{label} {n}분" for phase, label in state.PHASE_LABELS.items()
+                     if phase in durations and (n := state.minutes(durations[phase]))]
+            timings.append(f"- {tid} 단계별 소요: " + (" · ".join(spent) or "모두 1분 미만"))
+        reason += kept(ts)
         rows.append("| " + " | ".join(cell(s) for s in (tid, r.feat.tickets[tid].title, ts.status, reason)) + " |")
         rec = ts.review
         for key in ("note", "fix"):
@@ -66,8 +70,13 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
         if found:
             logs.append(max(found, key=lambda p: p.stat().st_mtime))
     logs.extend(sorted((r.rundir / "finish").glob("*verify.log")))
+    # 이번 범위(--only) 밖 티켓이 남긴 worktree도 사람이 치워야 하므로 보인다.
+    outside = [f"- {tid}: " + kept(ts).strip().replace("\n", "; ")
+               for tid, ts in sorted(r.st.tickets.items()) if tid not in r.order and ts.kept_worktrees]
     text = ("### 티켓별 결과\n\n| 티켓 | 제목 | 결과 | 이유 |\n|---|---|---|---|\n"
-            + "\n".join(rows) + ("\n\n" + "\n".join(timings) if timings else "")
+            + "\n".join(rows)
+            + ("\n\n범위 밖 티켓의 남긴 worktree:\n\n" + "\n".join(outside) if outside else "")
+            + ("\n\n" + "\n".join(timings) if timings else "")
             + "\n\n### 남은 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
             + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n"
             + f"티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `{r.rundir.resolve()}/<티켓>/`\n\n")
