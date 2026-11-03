@@ -2,7 +2,9 @@
 
 병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 모델로 한 번 재시도한다(07).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
-한 번 띄운다(06, review.py). 재리뷰는 없고 verify만 돈다. 끝에는 보고서·PR·base 검증·revert를 한다(08).
+한 번 띄운다(06, review.py). 티켓에 second_reviewer가 있으면 두 리뷰를 동시에 띄우고 지적을 합쳐 수정은 한 번이다.
+gs가 띄우는 agy 호출(worker·리뷰·수정·재시도)을 state에 세고 config `[agy] max_calls_per_run`에 닿으면 더 띄우지 않는다.
+재리뷰는 없고 verify만 돈다. 끝에는 보고서·PR·base 검증·revert를 한다(08).
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
@@ -14,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, config, failure, finish, git, graph, herdr, notify, review, state, verify, worker
+from . import adapters, clean, config, failure, finish, git, graph, herdr, notify, review, state, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -47,6 +49,7 @@ class Run:
     prior: set[str] = field(default_factory=set)  # 이번 실행 전에 이미 병합돼 있던 티켓(표시용)
     ihead: str = ""  # gs가 아는 integration 끝. 병합할 때만 움직인다
     saved: float = 0.0  # 마지막 save()의 time.monotonic(). heartbeat가 본다
+    history_median_s: float | None = None  # 실행 시작에 한 번 읽은 다른 feature의 ETA 표본 중앙값
 
     @property
     def name(self) -> str:
@@ -77,7 +80,8 @@ class Run:
     def save(self) -> None:
         self.st.progress = state.calculate_progress(
             self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
-            models={tid: self.feat.tickets[tid].model for tid in self.order})
+            models={tid: self.feat.tickets[tid].model for tid in self.order},
+            history_median_s=self.history_median_s)
         state.save(self.rundir, self.st)
         self.saved = time.monotonic()
 
@@ -107,17 +111,23 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
             git.run(repo, "fetch", "-q", r.remote, r.base)
             _require_committed(r)
             _begin(r)
-            _prepare_integration(r)
-            _resume_merged(r)
-            # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
-            if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
-                r.ihead = git.sha(r.iwt, "HEAD")
-                url, finished = _finish_run(r)
+            if _finished_after_clean(r):
+                url, finished = r.st.finish.get("url"), r.st.finish["phase"] == "verified"
+                say(f"■ 이미 끝남: {r.name} ({r.st.finish['phase']})")
+                clean.integration(r)  # 지난 자동 정리가 원격 삭제에서만 실패했을 수 있다
             else:
-                finished = True
-            if finished:
-                _loop(r)
-                url, finished = _finish_run(r)
+                _prepare_integration(r)
+                _resume_merged(r)
+                # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
+                if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
+                    r.ihead = git.sha(r.iwt, "HEAD")
+                    # 회복 뒤 새 범위를 이어 돌릴 수 있어, 마지막 마무리까지 integration을 둔다.
+                    url, finished = _finish_run(r, cleanup=False)
+                else:
+                    finished = True
+                if finished:
+                    _loop(r)
+                    url, finished = _finish_run(r)
         except git.GitError as e:
             print(f"gs go: git 오류: {e}", file=sys.stderr)
             finished = False
@@ -144,11 +154,11 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     return 0 if ok else 1
 
 
-def _finish_run(r: Run) -> tuple[str | None, bool]:
+def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
     r.st.phase = "finish"
     r.save()
     try:
-        return finish.run(r)
+        return finish.run(r, cleanup=cleanup)
     finally:
         r.st.phase = ""
         r.save()
@@ -173,7 +183,9 @@ def _begin(r: Run) -> None:
                 ts.failures, ts.failure_summary, ts.reason = 0, "", ""
             ts.status, ts.pane, ts.started_at, ts.ended_at = state.PENDING, "", "", ""
     st.pid, st.only, st.started_at, st.finished_at, st.phase = os.getpid(), r.only, state.now(), "", ""
+    st.agy_calls = 0  # 상한은 실행마다다(spec 1-9)
     r.st = st
+    r.history_median_s = state.load_eta_history(r.repo, r.name)
     r.save()
 
 
@@ -238,9 +250,25 @@ def _reset_integration(r: Run, to: str = "HEAD") -> bool:
     return dirty or moved
 
 
+def _finished_after_clean(r: Run) -> bool:
+    """정리된 완료 범위는 재생성하지 않는다. 새 티켓·남긴 worktree가 있으면 기존 재개 흐름으로 간다."""
+    return bool(r.st.finish.get("phase") in finish.BASE_REPORT_PHASES and r.st.finish.get("base_report_tried")
+            and not r.iwt.exists()
+            and not git.out(r.repo, "for-each-ref", "--format=%(refname)", f"refs/heads/gs/{r.name}/")
+            and all(r.st.tickets[tid].status == state.MERGED for tid in r.order)
+            and not any(ts.kept_worktrees for ts in r.st.tickets.values()))
+
+
 def _prepare_integration(r: Run) -> None:
     branch = integration_branch(r.name)
-    git.ensure_worktree(r.repo, r.iwt, branch, start=r.base_ref)
+    start = r.base_ref
+    # 정리 뒤 새 wave·남긴 worktree를 처리할 때는 보존된 head로 기존 재개 판단을 유지한다.
+    # 객체가 GC됐으면 base로 돌아간다. 완료 범위만의 재개는 위에서 이미 끝낸다.
+    head = r.st.finish.get("head")
+    if r.st.finish.get("phase") in finish.BASE_REPORT_PHASES and head:
+        if git.run(r.repo, "cat-file", "-e", f"{head}^{{commit}}", check=False).returncode == 0:
+            start = head
+    git.ensure_worktree(r.repo, r.iwt, branch, start=start)
     if _reset_integration(r):
         say("■ integration worktree에 남은 병합·변경을 버렸다(지난 실행이 중간에 끝난 흔적)")
     # 앞 wave가 base에 병합된 뒤라면 원격 base를 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
@@ -513,6 +541,10 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
     어떤 오류든(git, herdr, 파일, 어댑터 준비) 이 티켓만 실패시킨다. 이미 띄운 worker가 있으면 끝낸다.
     """
     proc = None
+    if _is_agy(t.model) and state.agy_reached(r.st, _agy_limit(r)):
+        _fail(r, t, f"agy 한도: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿아 worker를 띄우지 않았다"
+                    "(config agy.max_calls_per_run)", retry=False)
+        return None
     try:
         _recheck_kept(r, t.id)
         ts = r.st.ticket(t.id)
@@ -537,12 +569,13 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
         state.begin_phase(ts, "worker", t.model, attempt=int(rundir.name), at=started)
         _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
              worktree=str(job.worktree), log=str(job.log), started_at=started, ended_at="", reason="",
-             review={})
+             review={}, second_review={})
         git.ensure_worktree(r.repo, wt, branch, start=base)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
         adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
+        _count_agy(r, t.model)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
         _set(r, t.id, pane=proc.where)
     except adapters.AdapterError as e:
@@ -652,23 +685,87 @@ def _review(r: Run, a: Active) -> list[dict]:
     """다른 계열이 이 티켓 diff(최신 integration과의 merge-base 기준)를 리뷰한다. 고칠 지적을 돌려준다.
 
     병합·검증처럼 루프 안에서 하나씩 돈다(다른 worker는 그동안 각자 돈다). 오래 걸리는 수정은 worker로 따로 띄운다.
+    second_reviewer가 있으면 두 리뷰를 동시에 띄우고, 둘 다 끝나면 fix 지적을 합쳐 돌려준다(수정은 한 번).
+    그때는 한쪽이 거부·실패·시간 초과여도 다른 쪽으로 간다. 둘 다 거부면 하나일 때처럼 티켓 실패다.
+    agy 리뷰는 이번 실행의 상한에 닿았으면 띄우지 않고 "건너뜀(한도)"으로 적는다.
     """
     t = a.t
-    _phase(r, t.id, "review", t.reviewer)
-    say(f"[{t.id}] 리뷰: {t.reviewer}")
-    rdir = a.proc.job.rundir / "review"
-    try:
-        rec = review.run(repo=r.repo, worktree=a.wt.resolve(), rdir=rdir, base=r.ihead, branch=a.branch,
-                         ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model,
-                         reviewer=t.reviewer, cfg=r.cfg)
-    except (review.Refused, git.GitError):
-        raise  # 같은 계열은 거부, git 오류는 이 티켓의 실패(_finish·_loop가 처리)
-    except Exception as e:  # noqa: BLE001 — 리뷰는 병합을 막지 않는다(spec 2-1). 뜻밖의 오류도 리뷰 실패로 적는다
-        rec = {"reviewer": t.reviewer, "dir": str(rdir), "merge_base": "", "fix": "", "findings": [],
-               "note": f"리뷰 실패(리뷰 없음, verify만으로 병합한다): 뜻밖의 오류 {_err(e)}"}
-    _set(r, t.id, review=rec)
-    say(f"[{t.id}] 리뷰 끝: {review.counts(rec)}" + (f" — {rec['note']}" if rec["note"] else ""))
-    return review.fixes(rec)
+    base = a.proc.job.rundir
+    slots = [("review", t.reviewer, base / "review")]
+    if t.second_reviewer:
+        slots.append(("second_review", t.second_reviewer, base / f"review-{t.second_reviewer}"))
+    recs: dict[str, dict] = {}
+    refused: list[review.Refused] = []
+    launch: list[tuple[str, str, Path]] = []
+    for key, who, rdir in slots:
+        try:
+            review.require_other_family(t.model, who)
+        except review.Refused as e:
+            if len(slots) == 1:
+                raise  # 같은 계열은 거부(_finish가 티켓 실패로 처리)
+            refused.append(e)
+            recs[key] = review.record(who, str(e))
+            continue
+        if _is_agy(who) and state.agy_reached(r.st, _agy_limit(r)):
+            recs[key] = review.record(who, f"{review.LIMIT}: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다")
+            continue
+        launch.append((key, who, rdir))
+    if len(refused) == len(slots):
+        raise refused[0]
+    for _, who, _ in launch:
+        _count_agy(r, who)
+    names = "+".join(who for _, who, _ in launch) or "+".join(who for _, who, _ in slots)
+    _phase(r, t.id, "review", names)
+    say(f"[{t.id}] 리뷰: {names}")
+    jobs = [dict(repo=r.repo, worktree=a.wt.resolve(), rdir=rdir, base=r.ihead, branch=a.branch,
+                 ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg)
+            for _, who, rdir in launch]
+    if len(jobs) == 1:  # 하나면 이 스레드에서 부른다(second_reviewer가 없는 티켓의 흐름 그대로)
+        try:
+            results: list = [review.run(**jobs[0])]
+        except (review.Refused, git.GitError):
+            raise
+        except Exception as e:  # noqa: BLE001 — 아래에서 리뷰 실패로 적는다
+            results = [e]
+    else:
+        results = review.run_together(jobs)
+    errors = []
+    for (key, who, rdir), res in zip(launch, results):
+        if isinstance(res, git.GitError):
+            errors.append(res)
+            res = review.record(who, f"리뷰 실패(리뷰 없음, verify만으로 병합한다): git 오류 {_err(res)}", rdir)
+        elif isinstance(res, BaseException):  # 리뷰는 병합을 막지 않는다(spec 2-1). 뜻밖의 오류도 리뷰 실패로 적는다
+            res = review.record(who, f"리뷰 실패(리뷰 없음, verify만으로 병합한다): 뜻밖의 오류 {_err(res)}", rdir)
+        recs[key] = res
+    if errors and len(errors) == len(launch):
+        raise errors[0]  # 띄운 리뷰가 모두 git 오류면 하나일 때처럼 이 티켓의 실패다(_finish·_loop가 처리)
+    _set(r, t.id, review=recs["review"], second_review=recs.get("second_review", {}))
+    ordered = [recs[key] for key, _, _ in slots]
+    for rec in ordered:
+        who = f"({rec['reviewer']})" if len(slots) > 1 else ""
+        say(f"[{t.id}] 리뷰 끝{who}: {review.counts(rec)}" + (f" — {rec['note']}" if rec["note"] else ""))
+    if len(slots) == 1:
+        return review.fixes(ordered[0])
+    return review.labeled_fixes(ordered)
+
+
+def _is_agy(model: str) -> bool:
+    return review.family(model) == "agy"
+
+
+def _agy_limit(r: Run) -> int:
+    return r.cfg.agy.max_calls_per_run
+
+
+def _agy_usage(r: Run) -> str:
+    return f"{r.st.agy_calls}/{_agy_limit(r)}"
+
+
+def _count_agy(r: Run, model: str) -> None:
+    """gs가 agy를 한 번 띄운다(worker·리뷰·수정 각각 1회). 띄우기 직전에 센다."""
+    if _is_agy(model):
+        r.st.agy_calls += 1
+        r.save()
 
 
 def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
@@ -677,6 +774,10 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
     띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 리뷰한 구현을 병합·검증한다.
     """
     t = a.t
+    if _is_agy(t.model) and state.agy_reached(r.st, _agy_limit(r)):
+        _note_fix(r, t, f"수정 worker {review.LIMIT}: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다. "
+                        "리뷰한 구현을 병합·검증한다. fix 지적은 남는다")
+        return None
     _phase(r, t.id, "fix", t.model)
     job = worker.Job(ticket=t, worktree=a.wt.resolve(), rundir=a.proc.job.rundir / "fix")
     proc = None
@@ -690,6 +791,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
         worker.write_script(job, adapter)
         base = git.sha(r.repo, a.branch)
         _set(r, t.id, log=str(job.log), pane="")  # 재실행 때 살아 남은 수정 worker를 run.sh로 찾게
+        _count_agy(r, t.model)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:fix", adapter)
         _set(r, t.id, pane=proc.where)
     except Exception as e:  # noqa: BLE001 — 수정은 덤이다. 리뷰한 구현은 그대로 병합한다
@@ -702,9 +804,11 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
 
 
 def _note_fix(r: Run, t: Ticket, msg: str) -> None:
-    rec = r.st.ticket(t.id).review
-    rec["fix"] = msg
-    _set(r, t.id, review=rec)
+    """수정 결과를 fix 지적을 낸 리뷰 기록마다 적는다(두 리뷰의 지적을 수정 한 번으로 고친다)."""
+    ts = r.st.ticket(t.id)
+    for rec in [rec for rec in state.reviews(ts) if review.fixes(rec)] or [ts.review]:
+        rec["fix"] = msg
+    r.save()
     say(f"[{t.id}] {msg}")
 
 
@@ -724,7 +828,9 @@ def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> N
         if not git.is_clean(wt):
             say(f"[{t.id}] 경고: 수정 worker가 커밋 안 된 변경을 남겼다(병합에 들어가지 않는다)")
         _mark_fixes(r, t, review.ATTEMPTED)
-        ids = ", ".join(str(f["id"]) for f in review.fixes(r.st.ticket(t.id).review))
+        recs = state.reviews(r.st.ticket(t.id))
+        found = review.fixes(recs[0]) if len(recs) == 1 else review.labeled_fixes(recs)
+        ids = ", ".join(str(f["id"]) for f in found)
         _note_fix(r, t, f"수정 커밋 {commits}개(재리뷰 없음, verify만 돈다). fix 지적 {ids}는 수정을 시도했지만 "
                         "고쳐졌는지 확인하지 않았다(남은 지적에 둔다)")
         return
@@ -737,10 +843,10 @@ def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> N
 
 
 def _mark_fixes(r: Run, t: Ticket, result: str) -> None:
-    rec = r.st.ticket(t.id).review
-    for f in review.fixes(rec):
-        f["fix_attempt"] = result
-    _set(r, t.id, review=rec)
+    for rec in state.reviews(r.st.ticket(t.id)):
+        for f in review.fixes(rec):
+            f["fix_attempt"] = result
+    r.save()
 
 
 def _merge_state(r: Run) -> tuple[str, str, str, str]:
@@ -769,7 +875,8 @@ def _catch_up(r: Run, a: Active) -> bool:
     return False
 
 
-def _fail(r: Run, t: Ticket, reason: str) -> bool:
+def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
+    """티켓 실패를 적는다. 첫 실패는 재시도한다. retry=False(다시 해도 같은 이유로 막힌다: agy 한도)면 바로 실패다."""
     ts = r.st.ticket(t.id)
     paths = list(ts.failed_worktrees)
     if ts.worktree and Path(ts.worktree).exists() and ts.worktree not in paths:
@@ -780,7 +887,7 @@ def _fail(r: Run, t: Ticket, reason: str) -> bool:
     directory = Path(ts.log).parent if ts.log and ts.status == state.RUNNING else worker.attempt_dir(r.rundir / t.id)
     directory.mkdir(parents=True, exist_ok=True)
     log = failure.record(directory, reason, [directory / "worker.log", directory / "verify.log", directory / "merge.log"])
-    retry = failures < 2
+    retry = retry and failures < 2
     summary = str(log.with_name("failure-summary.md")) if retry else ts.failure_summary
     # 판단 모델 호출 전에 실패 횟수를 남긴다. 호출 도중 gs가 죽어도 재시도 횟수가 늘지 않는다.
     _set(r, t.id, status=state.PENDING if retry else state.FAILED, reason=reason, ended_at=state.now(),
@@ -818,9 +925,14 @@ def _summary(r: Run, url: str | None) -> None:
     say("■ 요약: " + ", ".join(f"{LABEL[k]} {n}" for k, n in counts.items() if n))
     f = r.st.finish
     say(f"■ 마무리: {f.get('outcome', f.get('phase', '미완료'))}")
-    left = sum(len(review.remaining(r.st.tickets[tid].review)) for tid in r.order)
+    left = _left(r)
     say(f"■ 보고서: {work_rel(r.name)}/report.md · 남은 리뷰 지적 {left}")
     say(f"■ PR: {url or '없음'}")
+
+
+def _left(r: Run) -> int:
+    """남은 리뷰 지적 수(두 리뷰 합)."""
+    return sum(len(review.remaining(rec)) for tid in r.order for rec in state.reviews(r.st.tickets[tid]))
 
 
 def _message(r: Run, url: str | None, ok: bool) -> str:
@@ -829,7 +941,7 @@ def _message(r: Run, url: str | None, ok: bool) -> str:
     tickets = f"티켓 {merged}/{len(r.order)}"
     if ok:
         took = state.minutes(state.seconds_between(r.st.started_at, r.st.finished_at))
-        left = sum(len(review.remaining(r.st.tickets[tid].review)) for tid in r.order)
+        left = _left(r)
         return (f"✅ {r.name} · {r.base} 병합\n{tickets} 병합 · {took}분 · 남은 지적 {left}\n"
                 f"PR {url or '없음'}")
     f = r.st.finish

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from . import frontmatter
 
@@ -14,6 +14,7 @@ FAMILIES = ("claude", "codex", "agy")
 SPEC_REQUIRED = ("feature", "verify")
 SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20}
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
+TICKET_OPTIONAL = ("touches", "second_reviewer")
 WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
 
 
@@ -56,6 +57,8 @@ class Ticket:
     reviewer: str
     path: Path
     body: str = ""
+    touches: list[str] = field(default_factory=list)
+    second_reviewer: str | None = None
 
 
 @dataclass
@@ -174,12 +177,12 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
     for key in TICKET_KEYS:
         if key not in data:
             err(f"`{key}`가 없다")
-    for key in ("id", "title", "model", "reviewer"):
+    for key in ("id", "title", "model", "reviewer", "second_reviewer"):
         if key in data and not isinstance(data[key], str):
             err(f"`{key}`는 문자열이어야 한다")
     if "blocked_by" in data and not isinstance(data["blocked_by"], list):
         err("`blocked_by`는 목록이어야 한다(없으면 [])")
-    for key in data.keys() - set(TICKET_KEYS):
+    for key in data.keys() - set(TICKET_KEYS) - set(TICKET_OPTIONAL):
         problems.append(Problem("경고", where, f"알 수 없는 키 `{key}`"))
     if any(p.level == "오류" for p in problems[n:]):
         return None  # 형태가 틀리면 그래프에 넣을 수 없다
@@ -187,14 +190,31 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
     tid = data["id"]
     if not path.name.startswith(f"{tid}-"):
         err(f"파일 이름이 `{tid}-`로 시작해야 한다(id와 파일 이름 불일치)")
-    for key in ("model", "reviewer"):
-        if data[key] not in FAMILIES:
+    for key in ("model", "reviewer", "second_reviewer"):
+        if key in data and data[key] not in FAMILIES:
             err(f"`{key}` 값 `{data[key]}`는 {'|'.join(FAMILIES)} 중 하나여야 한다")
     if data["model"] == data["reviewer"]:
         err(f"리뷰는 다른 계열이어야 한다: model과 reviewer가 둘 다 `{data['model']}`")
+    second_reviewer = data.get("second_reviewer")
+    for key in ("model", "reviewer"):
+        if second_reviewer is not None and second_reviewer == data[key]:
+            err(f"리뷰는 다른 계열이어야 한다: {key}과 second_reviewer가 둘 다 `{second_reviewer}`")
     deps = data["blocked_by"]
     if len(set(deps)) != len(deps):
         err("`blocked_by`에 같은 id가 두 번 있다")
+    touches = data.get("touches", [])
+    if not isinstance(touches, list):
+        err("`touches`는 문자열 목록이어야 한다(없으면 [])")
+        touches = []
+    valid_touches = []
+    for value in touches:
+        if (not isinstance(value, str) or not value.strip()
+                or PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
+                or ".." in value.replace("\\", "/").split("/")):
+            err(f"`touches`는 비어 있지 않은 레포 루트 기준 경로여야 한다(절대 경로·.. 금지): {value!r}")
+        else:
+            valid_touches.append(value)
     # 값 오류가 있어도 그래프에는 넣는다. 빼면 이 티켓을 참조하는 티켓마다 "없는 id" 오류가 덧붙는다.
     return Ticket(id=tid, title=data["title"], blocked_by=list(deps), model=data["model"],
-                  reviewer=data["reviewer"], path=path, body=body)
+                  reviewer=data["reviewer"], path=path, body=body, touches=valid_touches,
+                  second_reviewer=second_reviewer)

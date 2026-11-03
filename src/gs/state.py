@@ -18,6 +18,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 
 PENDING, RUNNING, MERGED, FAILED, SKIPPED = "pending", "running", "merged", "failed", "skipped"
 STATUSES = (PENDING, RUNNING, MERGED, FAILED, SKIPPED)
@@ -54,6 +55,8 @@ class TicketState:
     # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
     # 지적마다 severity·location·claim·evidence·action(fix|report)·why·fix_attempt. 재리뷰가 없어 지적은 모두 남아 보고서(08)에 들어간다
     review: dict = field(default_factory=dict)
+    # 두 번째 리뷰(second_reviewer)의 기록. 모양은 review와 같다. second_reviewer가 없는 티켓은 비어 있다
+    second_review: dict = field(default_factory=dict)
     # 단계 전환마다 추가한다. attempt는 worker 실행 디렉터리 번호(중단 재개 때도 재사용하지 않음).
     # 각 항목: attempt, phase, model, started_at, ended_at. 지난 시도도 보고서에 합산한다.
     phases: list[dict] = field(default_factory=list)
@@ -71,9 +74,20 @@ class State:
     finish: dict = field(default_factory=dict)  # 08: PR·병합·main 검증·revert의 재개 지점
     phase: str = ""  # feature 전체 마무리 중이면 finish
     progress: dict = field(default_factory=dict)
+    agy_calls: int = 0  # 이번 실행에서 gs가 띄운 agy 호출 수(worker 1번·리뷰 1번 = 1회, 재시도·수정 포함). 실행마다 0에서
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
+
+
+def reviews(ts: TicketState) -> list[dict]:
+    """티켓의 리뷰 기록들: 첫 리뷰, 있으면 두 번째 리뷰. 빈 기록은 뺀다."""
+    return [rec for rec in (ts.review, ts.second_review) if rec]
+
+
+def agy_reached(st: State, limit: int) -> bool:
+    """이번 실행의 agy 호출이 상한에 닿았나. 닿았으면 더 띄우지 않는다."""
+    return st.agy_calls >= limit
 
 
 PHASE_LABELS = {"worker": "worker", "review": "리뷰", "fix": "수정", "verify": "검증", "finish": "마무리"}
@@ -112,9 +126,34 @@ def phase_durations(ts: TicketState) -> dict[str, float]:
     return totals
 
 
+def load_eta_history(repo: Path, feature: str) -> float | None:
+    """다른 feature의 merged 티켓 소요 중앙값(초). 로컬 실행 기록만 읽는다."""
+    durations = []
+    for p in (repo / ".goldstack" / "work").glob("*/run/state.json"):
+        if p.parent.parent.name == feature:
+            continue
+        try:
+            st = load(p.parent, p.parent.parent.name)
+            samples = []
+            for ts in st.tickets.values():
+                if ts.status != MERGED:
+                    continue
+                starts = [start for phase in ts.phases
+                          if (start := parse_time(phase["started_at"]))]
+                start = min(starts) if starts else parse_time(ts.started_at)
+                end = parse_time(ts.ended_at)
+                if start and end and end >= start:
+                    samples.append((end - start).total_seconds())
+            durations.extend(samples)
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            continue  # 깨졌거나 읽을 수 없는 이력은 실행을 막지 않는다
+    return median(durations) if durations else None
+
+
 def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(),
-                       models: dict[str, str] | None = None, at: str | None = None) -> dict:
-    """이번 실행·범위만으로 진행 문구를 계산한다. 이전 실행의 완료 티켓은 ETA 표본에서 뺀다."""
+                       models: dict[str, str] | None = None, at: str | None = None,
+                       history_median_s: float | None = None) -> dict:
+    """이번 실행 평균으로 ETA를 계산한다. 완료 표본이 없으면 이전 실행 중앙값을 쓴다."""
     at = st.finished_at or at or now()
     run_start = parse_time(st.started_at)
     terminal = (MERGED, FAILED, SKIPPED)
@@ -139,14 +178,19 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
         # 빈 id는 개별 티켓이 아닌 feature 전체의 보고서·PR·base 검증을 뜻한다.
         running = [{"id": "", "phase": "finish", "model": "claude"}]
     total = len(order)
-    eta = minutes(sum(durations) / len(durations) * (total - done) / max(1, max_workers)) * 60 if durations else None
+    historical = not durations and history_median_s is not None
+    average = sum(durations) / len(durations) if durations else history_median_s
+    eta = minutes(average * (total - done) / max(1, max_workers)) * 60 if average is not None else None
     elapsed = int(seconds_between(st.started_at, at))
     filled = 8 * done // total if total else 0
     parts = [f"{'▓' * filled}{'░' * (8 - filled)} {st.feature} {done}/{total}"]
     for p in running:
         label = PHASE_LABELS[p["phase"]]
         parts.append(f"{p['id'] + ' ' if p['id'] else ''}{label} 중({p['model']})")
-    parts += [f"{minutes(elapsed)}분", f"약 {eta // 60}분 남음" if eta is not None else "남은 시간 계산 중"]
+    eta_text = f"약 {eta // 60}분 남음" if eta is not None else "남은 시간 계산 중"
+    if historical:
+        eta_text += "(이전 실행 기준)"
+    parts += [f"{minutes(elapsed)}분", eta_text]
     return {"done": done, "total": total, "running": running, "elapsed_s": elapsed, "eta_s": eta,
             "line": " · ".join(parts)}
 

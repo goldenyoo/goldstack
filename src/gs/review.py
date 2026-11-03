@@ -11,6 +11,11 @@
    재리뷰가 없으니 수정 worker가 커밋해도 지적이 고쳐졌는지는 모른다. fix 지적은 "수정 시도, 재리뷰 없음"으로
    남은 지적에 그대로 두어 보고서에 나오게 한다.
 
+두 번째 리뷰어(spec 1-8, 2-4): 티켓에 `second_reviewer`가 있으면 두 리뷰를 동시에 띄운다(run_together).
+둘이 끝나거나 각자 시간 제한에 닿으면 지적을 합쳐 수정 worker를 한 번 띄운다. 한쪽이 실패·시간 초과·거부여도
+다른 쪽 결과로 진행한다. 기록은 리뷰마다 따로(state의 review, second_review) 남고 보고서에도 리뷰마다 나온다.
+agy 리뷰는 이번 실행의 agy 호출 상한에 닿았으면 띄우지 않고 "건너뜀(한도)"으로 적는다(spec 1-9, go.py가 센다).
+
 reviewer·판단 모델 호출이 실패해도(답의 형식이 틀려도) 티켓을 실패시키지 않는다. 병합 관문은 언제나 verify다
 (spec 2-1). 실패는 state의 리뷰 기록(note: "리뷰 실패…")에 남아 보고서(08)에 나온다. 판단 모델이 실패하면
 모든 지적이 report다.
@@ -23,6 +28,7 @@ import json
 import os
 import re
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -33,6 +39,7 @@ FIX, REPORT = "fix", "report"
 FIELDS = ("severity", "location", "claim", "evidence")
 ATTEMPTED = "attempted"  # 수정 worker가 받아 커밋했다. 재리뷰가 없어 고쳐졌는지는 모른다
 DISCARDED = "discarded"  # 수정 worker가 실패해 수정을 버렸다
+LIMIT = "건너뜀(한도)"  # agy 호출 상한에 닿아 띄우지 않은 리뷰의 note
 
 
 class ReviewError(Exception):
@@ -285,6 +292,26 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
     return rec
 
 
+def record(reviewer: str, note: str, rdir: Path | None = None) -> dict:
+    """reviewer를 부르지 않았거나 부르다 실패한 리뷰의 기록(지적 없음)."""
+    return {"reviewer": reviewer, "dir": str(rdir) if rdir else "", "merge_base": "", "note": note, "fix": "",
+            "findings": []}
+
+
+def run_together(jobs: list[dict]) -> list[dict | BaseException]:
+    """run(**job)을 동시에 돌리고 결과를 jobs 순서로 돌려준다. 예외는 그 자리에 예외 객체로 둔다.
+
+    모두 끝날 때까지 기다린다. reviewer·판단 모델 호출은 각자 시간 제한(timeouts)이 있어 무한히 기다리지 않는다.
+    """
+    with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
+        futures = [pool.submit(run, **job) for job in jobs]
+    out: list[dict | BaseException] = []
+    for fut in futures:
+        e = fut.exception()
+        out.append(e if e is not None else fut.result())
+    return out
+
+
 # ---------------------------------------------------------------- 기록 읽기
 
 def fixes(rec: dict) -> list[dict]:
@@ -297,6 +324,11 @@ def remaining(rec: dict) -> list[dict]:
     fix 지적의 수정 결과는 `fix_attempt`에, 수정 worker 결과 요약은 기록의 `fix`에 있다.
     """
     return list(rec.get("findings", []))
+
+
+def labeled_fixes(recs: list[dict]) -> list[dict]:
+    """여러 리뷰의 fix 지적을 합친다. 지적 번호가 리뷰마다 1부터라 수정 brief에서는 계열 이름을 붙인다."""
+    return [{**f, "id": f"{rec.get('reviewer', '?')}-{f['id']}"} for rec in recs for f in fixes(rec)]
 
 
 def counts(rec: dict) -> str:

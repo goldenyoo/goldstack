@@ -261,6 +261,12 @@ class GoTest(unittest.TestCase):
         return p.read_text().split() if p.exists() else []
 
     def integration(self, *args):
+        # verified 뒤 브랜치는 정리된다. 커밋 내용 검사는 state에 남긴 마지막 integration head를 본다.
+        if args and args[0] in ("log", "show", "ls-tree", "rev-parse", "rev-list") and any(
+                "gs/demo/integration" in arg for arg in args[1:]):
+            if not sh(self.repo, "git", "branch", "--list", "gs/demo/integration"):
+                head = state.load(self.rundir, "demo").finish["head"]
+                args = tuple(arg.replace("gs/demo/integration", head) for arg in args)
         return sh(self.repo, "git", *args)
 
     def add_ticket(self, tid, title=None, push=True):
@@ -349,9 +355,9 @@ fi
         for tid in ("01", "04"):
             self.assert_ticket_cleaned(tid)
             self.assertIn(f"[{tid}] worktree 정리: {self.rundir / 'wt' / tid}", out)
-        self.assertTrue((self.rundir / "wt/integration").exists())
-        self.assertEqual(self.integration("branch", "--list", "gs/demo/integration").strip(), "+ gs/demo/integration")
-        self.assertIn("gs/demo/integration", sh(self.remote, "git", "branch", "--list", "gs/demo/integration"))
+        self.assertFalse((self.rundir / "wt/integration").exists())
+        self.assertEqual(self.integration("branch", "--list", "gs/demo/integration"), "")
+        self.assertEqual(sh(self.remote, "git", "branch", "--list", "gs/demo/integration"), "")
 
     def test_dirty_merged_ticket_is_kept_and_reported_until_clean(self):
         (self.bin / "worker.sh").write_text(FAKE_WORKER + '\necho unfinished > pending.txt\n')
@@ -1271,7 +1277,7 @@ fi
         self.assertEqual(st["01"].status, "merged", out)
         self.assertEqual(st["07"].status, "failed", out)
         self.assertNotIn("evil", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
-        self.assertNotIn("evil", sh(self.remote, "git", "ls-tree", "--name-only", "gs/demo/integration").split())
+        self.assertNotIn("evil", sh(self.remote, "git", "ls-tree", "--name-only", "main").split())
 
     def test_herdr_panes_share_one_tab_per_feature(self):
         for tid in ("11", "12"):
@@ -1400,7 +1406,7 @@ fi
     def test_worker_cannot_push(self):  # 구조적 push·gh 차단(hook·도구 차단과 별개)
         self.add_ticket("16")
         self.push_blocked([self.remote])
-        self.assertIn("gs/demo/integration", sh(self.remote, "git", "branch", "--list", "gs/demo/integration"))  # gs push는 된다
+        self.assertIn("file_16", self.remote_files())  # gs push·병합은 된다(verified 뒤 원격 integration도 정리)
 
     def test_worker_cannot_push_with_pushurl(self):  # pushurl이 있으면 pushInsteadOf가 듣지 않는다
         self.add_ticket("16")
@@ -1417,7 +1423,7 @@ fi
         self.assertEqual(code, 1)
         self.assertIn("[07] 실패: worker가 integration worktree를 바꿨다", out)
         self.assertNotIn("evil", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
-        self.assertNotIn("evil", sh(self.remote, "git", "ls-tree", "--name-only", "gs/demo/integration").split())
+        self.assertNotIn("evil", sh(self.remote, "git", "ls-tree", "--name-only", "main").split())
 
     def test_dirty_integration_is_cleaned_and_ticket_fails(self):  # 지적 3
         self.add_ticket("08")
@@ -1436,6 +1442,8 @@ fi
     def test_interrupted_merge_is_discarded_and_ticket_rerun(self):  # 지적 1
         self.assertEqual(self.go("--only", "01")[0], 0)
         iwt = self.repo / ".goldstack/work/demo/run/wt/integration"
+        from gs import git
+        git.ensure_worktree(self.repo, iwt, "gs/demo/integration", state.load(self.rundir, "demo").finish["head"])
         sh(self.repo, "git", "branch", "gs/demo/04", "gs/demo/integration")
         (iwt / "half").write_text("x")
         sh(iwt, "git", "switch", "-q", "gs/demo/04")
@@ -1486,8 +1494,7 @@ fi
         self.assertNotIn("BROKEN", files)  # 검증 실패한 병합은 되돌렸다
         self.assertEqual(self.integration("show", "gs/demo/integration:file_01"), "01 worker")  # GS_ROLE 전달
 
-        self.assertEqual(sh(self.remote, "git", "rev-parse", "gs/demo/integration"),
-                         self.integration("rev-parse", "gs/demo/integration"))
+        self.assertEqual(sh(self.remote, "git", "branch", "--list", "gs/demo/integration"), "")
         gh_log = (self.bin / "gh.log").read_text()
         self.assertIn("pr create --base main --head gs/demo/integration", gh_log)
         self.assertIn("pr merge https://example.test/pr/1 --merge --match-head-commit", gh_log)
@@ -1664,7 +1671,7 @@ class TrunkUpstreamTest(unittest.TestCase):
         self.assertEqual(sh(self.remote, "git", "branch", "--list", "main"), "")
         self.assertEqual(self.integration("remote"), "upstream")
         self.assertEqual(self.integration("show", "upstream/trunk:file_01"), "01 worker")
-        self.assertIn("gs/demo/integration", sh(self.remote, "git", "branch", "--list", "gs/*"))
+        self.assertEqual(sh(self.remote, "git", "branch", "--list", "gs/*"), "")
         gh = self.lines("gh.log")
         self.assertTrue(any(x.startswith("pr create --base trunk ") for x in gh), gh)
         self.assertTrue(any(x.startswith("pr list ") and "--base trunk" in x for x in gh), gh)
