@@ -135,6 +135,27 @@ class KeptWorktreesTest(GoCase):
         self.assertEqual(sh(self.repo, "git", "rev-parse", "gs/demo/01"), user_commit)
         self.assertIn("브랜치 끝이 integration에 포함되지 않아 남긴다: gs/demo/01", out)
 
+    def test_detached_head_kept_worktree_is_not_removed(self):
+        init = sh(self.repo, "git", "rev-parse", "HEAD")
+        (self.bin / "worker.sh").write_text(DIRTY_ONCE)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        wt = self.rundir / "wt/01"
+        # 사람이 분리 HEAD에서 커밋했다: 그 커밋을 가리키는 것은 이 worktree의 HEAD뿐이다
+        sh(wt, "git", "checkout", "-q", "--detach")
+        sh(wt, "git", "add", "-A")
+        sh(wt, "git", "commit", "-qm", "분리 HEAD에서 마무리")
+        user_commit = sh(wt, "git", "rev-parse", "HEAD")
+        sh(self.remote, "git", "update-ref", "refs/heads/main", init)
+        sh(self.remote, "git", "update-ref", "refs/heads/gs/demo/integration", init)
+        sh(self.rundir / "wt/integration", "git", "reset", "-q", "--hard", init)
+        code, out, err = self.go("--only", "01")
+        self.assertIn(f"[01] 경고: 남긴 worktree의 브랜치가 gs/demo/01가 아니라 정리하지 않는다: {wt}", out)
+        self.assertNotIn(f"[01] 남긴 worktree 정리: {wt}", out)
+        self.assertTrue(wt.exists())
+        self.assertEqual(sh(wt, "git", "rev-parse", "HEAD"), user_commit)
+        self.assertIn(str(wt), self.kept())
+
     def test_missing_or_still_dirty_old_paths(self):
         (self.bin / "worker.sh").write_text(DIRTY_ONCE)
         code, out, err = self.go("--only", "01")

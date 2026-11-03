@@ -310,10 +310,14 @@ def _drop_kept(r: Run, tid: str, path: Path) -> bool:
         if not git.is_clean(wt):
             say(f"[{tid}] 경고: 남긴 worktree: {wt} (미커밋 변경)")
             return False
-        branch = current[wt]
+        branch = ticket_branch(r.name, tid) + suffix
+        if current[wt] != branch:
+            # 분리 HEAD나 다른 브랜치의 커밋은 이 worktree만 가리킬 수 있다. 지우면 잃으니 남긴다.
+            say(f"[{tid}] 경고: 남긴 worktree의 브랜치가 {branch}가 아니라 정리하지 않는다: {wt}")
+            return False
         git.run(r.repo, "worktree", "remove", str(wt))  # --force 없이: 검사 뒤 생긴 변경은 git이 지킨다
         say(f"[{tid}] 남긴 worktree 정리: {wt}")
-        if branch == ticket_branch(r.name, tid) + suffix and git.branch_exists(r.repo, branch):
+        if git.branch_exists(r.repo, branch):
             included = git.run(r.repo, "merge-base", "--is-ancestor", f"refs/heads/{branch}",
                                f"refs/heads/{integration_branch(r.name)}", check=False)
             if included.returncode:
