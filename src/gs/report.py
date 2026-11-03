@@ -156,6 +156,10 @@ def status_line(r) -> str:
         parts = [f"{pr} 병합 대기", f"{r.base} 검증 미실행"]
     elif phase == "merged":
         parts = [f"{pr} 병합", f"{r.base} 검증 대기"]
+    elif phase == "revert_pending":
+        parts = [f"{r.base} 검증 실패", f"revert PR {f.get('revert_pr', '')} 병합 대기"]
+    elif phase == "report_pending":
+        parts = [f"{pr} 병합", f"보고서 PR {f.get('report_pr', '')} 병합 대기"]
     elif phase == "main_failed":
         parts = [f"{r.base} 검증 실패", f"revert {revert} push 안 됨" if revert else "revert push 안 됨"]
     else:
@@ -176,7 +180,9 @@ def _render(r, summary: str, tail: int) -> str:
             f"{r.base} verify: {f.get('main_ok', '미실행')}\n\n")
     if f.get("merge_sha"):
         text += f"병합 커밋: `{merge}`\n\n"
-    if f.get("revert_sha"):
+    if f.get("revert_sha") and f.get("revert_pr"):
+        text += f"revert 커밋: `{f['revert_sha']}` ({r.base}에 직접 push하지 않고 PR {f['revert_pr']}로 올림)\n\n"
+    elif f.get("revert_sha"):
         text += f"revert 커밋: `{f['revert_sha']}` ({r.base}에 일반 push, force push 없음)\n\n"
     if f.get("closed_pr"):
         text += f"이전 PR {f['closed_pr']}은 병합되지 않고 닫혔다. 이 실행이 새 PR을 열었다.\n\n"
