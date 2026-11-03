@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import herdr
 from .adapters import Adapter, WorkerInput
-from .feature import Spec, Ticket
+from .feature import Spec, Ticket, work_rel
 
 POLL_SECONDS = 2.0
 PUSH_BLOCKED = "/dev/null/gs-worker-push-blocked/"  # 만들 수 없는 경로: push가 여기로 바뀌면 반드시 실패한다
@@ -34,7 +34,7 @@ GH_BLOCKED = "gs-worker-no-gh"  # gh는 GH_TOKEN을 keyring보다 먼저 쓴다.
 class Job:
     ticket: Ticket
     worktree: Path
-    rundir: Path  # .work/<f>/run/NN/<시도>: 시도마다 새로
+    rundir: Path  # .goldstack/work/<f>/run/NN/<시도>: 시도마다 새로
 
     @property
     def brief(self) -> Path:
@@ -59,8 +59,8 @@ class Job:
 
 def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "") -> None:
     t = job.ticket
-    spec_rel = f".work/{feature}/spec.md"
-    ticket_rel = f".work/{feature}/tickets/{t.path.name}"
+    spec_rel = f"{work_rel(feature)}/spec.md"
+    ticket_rel = f"{work_rel(feature)}/tickets/{t.path.name}"
     job.brief.write_text(f"""# 티켓 {t.id}: {t.title}
 
 너는 goldstack worker다. 이 worktree(`{job.worktree}`, 브랜치 `{branch}`)에서 아래 티켓 하나를 구현한다.

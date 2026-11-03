@@ -1,4 +1,4 @@
-"""feature 디렉터리(`.work/<feature>/`)의 spec과 티켓을 읽는다.
+"""feature 디렉터리(`.goldstack/work/<feature>/`)의 spec과 티켓을 읽는다.
 
 읽기에서 생긴 문제는 예외로 던지지 않고 Problem 목록에 모은다. 한 번에 전부 보여 주기 위해서다.
 """
@@ -14,6 +14,16 @@ FAMILIES = ("claude", "codex", "agy")
 SPEC_REQUIRED = ("feature", "verify")
 SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20}
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
+WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
+
+
+def work_rel(name: str) -> str:
+    """레포 루트 기준 feature 디렉터리 경로(문자열). 사람에게 보이는 경로와 git 경로 인자에 쓴다."""
+    return f"{WORK}/{name}"
+
+
+def work_dir(repo: Path, name: str) -> Path:
+    return repo / WORK / name
 
 
 @dataclass(frozen=True)
@@ -51,7 +61,7 @@ class Ticket:
 @dataclass
 class Feature:
     name: str
-    root: Path  # .work/<feature>
+    root: Path  # .goldstack/work/<feature>
     spec: Spec | None
     tickets: dict[str, Ticket] = field(default_factory=dict)
     problems: list[Problem] = field(default_factory=list)
@@ -73,7 +83,7 @@ def find_repo_root(start: Path) -> Path | None:
 
 
 def load(repo: Path, name: str) -> Feature:
-    root = repo / ".work" / name
+    root = work_dir(repo, name)
     feat = Feature(name=name, root=root, spec=None)
     if not root.is_dir():
         feat.problems.append(Problem("오류", rel(root, repo), "feature 디렉터리가 없다"))

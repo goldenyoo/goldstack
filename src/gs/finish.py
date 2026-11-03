@@ -1,7 +1,10 @@
-"""integration 보고서 → PR → 병합 확인 → main 재검증 → 필요하면 일반 revert push.
+"""integration 보고서 → PR → 병합 확인 → base 재검증 → 필요하면 일반 revert push.
+
+base 브랜치와 원격은 `.goldstack/config.toml`의 `git.base`·`git.remote`다(r.base, r.remote, r.base_ref).
+상태 이름·로그 이름의 `main`(phase `main_failed`, `main-verify.log`)은 "base 브랜치"를 뜻하는 옛 이름이다.
 
 finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행은 같은 PR을 다시 병합하지 않고
-main 검증/revert를 이어 간다. 호출 worktree의 main 브랜치는 건드리지 않는다.
+base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
 """
 from __future__ import annotations
 
@@ -13,8 +16,6 @@ import tempfile
 from pathlib import Path
 
 from . import git, report, state, verify
-
-BASE = "origin/main"
 
 
 def _save(r, **fields) -> None:
@@ -53,7 +54,7 @@ def _revert_of(cwd: Path, sha: str, *revs: str) -> str:
 
 
 def _feature_merge(r, sha: str) -> bool:
-    """sha가 이 feature의 티켓을 main에 들인 병합 커밋인가."""
+    """sha가 이 feature의 티켓을 base에 들인 병합 커밋인가."""
     if sha == r.st.finish.get("merge_sha"):
         return True
     parents = git.out(r.repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
@@ -62,37 +63,37 @@ def _feature_merge(r, sha: str) -> bool:
 
 
 def _undone_reverts(r) -> list[tuple[str, str]]:
-    """origin/main에 있는, 이 feature의 병합을 되돌린 revert 중 integration·main 어디서도 다시 되돌리지 않은 것.
+    """원격 base에 있는, 이 feature의 병합을 되돌린 revert 중 integration·base 어디서도 다시 되돌리지 않은 것.
     [(revert, 되돌린 병합)], 오래된 것부터."""
     found = []
-    for c in reversed(git.out(r.repo, "log", "--format=%H", "--grep=^This reverts commit ", BASE).split()):
+    for c in reversed(git.out(r.repo, "log", "--format=%H", "--grep=^This reverts commit ", r.base_ref).split()):
         m = re.search(r"^This reverts commit ([0-9a-f]{40,64})", git.out(r.repo, "log", "-1", "--format=%B", c), re.M)
-        if m and _feature_merge(r, m.group(1)) and not _revert_of(r.repo, c, BASE, f"gs/{r.name}/integration"):
+        if m and _feature_merge(r, m.group(1)) and not _revert_of(r.repo, c, r.base_ref, f"gs/{r.name}/integration"):
             found.append((c, m.group(1)))
     return found
 
 
-def merge_main(r) -> None:
-    """origin/main을 integration에 합친다.
+def merge_base(r) -> None:
+    """원격 base(r.base_ref)를 integration에 합친다.
 
-    main이 이 feature의 병합을 revert했으면 그냥 합칠 때 integration이 revert까지 따라가 feature 코드가 조용히
-    사라진다(gs-ticket 트레일러는 남아 티켓은 merged로 보인다). 그래서 origin/main 위에 그 revert를 되돌린
+    base가 이 feature의 병합을 revert했으면 그냥 합칠 때 integration이 revert까지 따라가 feature 코드가 조용히
+    사라진다(gs-ticket 트레일러는 남아 티켓은 merged로 보인다). 그래서 원격 base 위에 그 revert를 되돌린
     커밋(revert의 revert)을 만들어 합친다. 다음 PR이 feature 코드를 다시 들인다.
     """
     reverts = _undone_reverts(r)
     if not reverts:
-        _merge(r, BASE)
+        _merge(r, r.base_ref)
         return
     with tempfile.TemporaryDirectory(prefix="gs-restore-", dir=r.rundir) as tmp:
-        wt = Path(tmp) / "main"
-        git.run(r.repo, "worktree", "add", "--detach", str(wt), BASE)
+        wt = Path(tmp) / "base"
+        git.run(r.repo, "worktree", "add", "--detach", str(wt), r.base_ref)
         try:
             done = []
             for c, merge in reverts:
                 res = git.run(wt, "revert", "--no-edit", c, check=False)
                 if res.returncode:
                     git.run(wt, "revert", "--abort", check=False)
-                    raise git.GitError(f"main의 revert {c}(병합 {merge}를 되돌림)를 다시 되돌리다 충돌했다. "
+                    raise git.GitError(f"{r.base}의 revert {c}(병합 {merge}를 되돌림)를 다시 되돌리다 충돌했다. "
                                        f"feature 코드를 손으로 되살려라: {(res.stdout + res.stderr).strip()}")
                 done.append({"revert": c, "merge": merge, "commit": git.sha(wt, "HEAD")})
             _merge(r, done[-1]["commit"])
@@ -100,7 +101,7 @@ def merge_main(r) -> None:
             git.remove_worktree(r.repo, wt)
     _save(r, reintroduced=r.st.finish.get("reintroduced", []) + done)
     for d in done:
-        print(f"■ main이 이 feature의 병합 {d['merge'][:8]}을 되돌렸다(revert {d['revert'][:8]}). "
+        print(f"■ {r.base}가 이 feature의 병합 {d['merge'][:8]}을 되돌렸다(revert {d['revert'][:8]}). "
               f"integration에서 그 revert를 다시 되돌렸다({d['commit'][:8]})", flush=True)
 
 
@@ -108,7 +109,7 @@ def _merge(r, rev: str) -> None:
     res = git.run(r.iwt, "merge", "--no-edit", rev, check=False)
     if res.returncode:
         git.run(r.iwt, "merge", "--abort", check=False)
-        raise git.GitError(f"{BASE}를 gs/{r.name}/integration에 합치다 충돌했다: {res.stdout.strip()}")
+        raise git.GitError(f"{r.base_ref}를 gs/{r.name}/integration에 합치다 충돌했다: {res.stdout.strip()}")
 
 
 def _verify(r, wt: Path, label: str) -> bool:
@@ -150,16 +151,16 @@ def _commit_report(r, summary: str) -> Path:
 
 
 def _push(r) -> None:
-    git.run(r.iwt, "push", "-u", "origin", f"HEAD:refs/heads/gs/{r.name}/integration")
+    git.run(r.iwt, "push", "-u", r.remote, f"HEAD:refs/heads/gs/{r.name}/integration")
 
 
 def _publish(r, path: Path) -> str:
     branch = f"gs/{r.name}/integration"
-    url = _gh(r, "list", "--head", branch, "--base", "main", "--state", "open", "--json", "url", "--jq", ".[0].url")
+    url = _gh(r, "list", "--head", branch, "--base", r.base, "--state", "open", "--json", "url", "--jq", ".[0].url")
     if url:
         _gh(r, "edit", url, "--body-file", str(path.resolve()))
     else:
-        created = _gh(r, "create", "--base", "main", "--head", branch, "--title", f"{r.name}: gs go",
+        created = _gh(r, "create", "--base", r.base, "--head", branch, "--title", f"{r.name}: gs go",
                       "--body-file", str(path.resolve()))
         url = created.splitlines()[-1] if created else ""
     if not url:
@@ -175,15 +176,15 @@ def _confirm(r, view: dict) -> bool:
                                          "다음 gs go가 새 PR을 연다")
         return False
     if view.get("state") != "MERGED":
-        _save(r, phase="merge_pending", outcome="병합 명령 뒤 PR이 아직 MERGED가 아니다. main 검증은 미실행")
+        _save(r, phase="merge_pending", outcome=f"병합 명령 뒤 PR이 아직 MERGED가 아니다. {r.base} 검증은 미실행")
         return False
     commit = view.get("mergeCommit")
     sha = commit.get("oid", "") if isinstance(commit, dict) else ""
-    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40,64}", sha) or view.get("baseRefName") != "main":
-        raise git.GitError("병합된 PR의 main 대상·병합 커밋을 확인할 수 없다")
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40,64}", sha) or view.get("baseRefName") != r.base:
+        raise git.GitError(f"병합된 PR의 {r.base} 대상·병합 커밋을 확인할 수 없다")
     if view.get("headRefOid") != r.st.finish["merge_head"]:
         raise git.GitError("병합된 PR head가 검증한 integration과 다르다")
-    _save(r, merge_sha=sha, phase="merged", outcome="PR 병합 확인, main 검증 대기")
+    _save(r, merge_sha=sha, phase="merged", outcome=f"PR 병합 확인, {r.base} 검증 대기")
     return True
 
 
@@ -193,57 +194,57 @@ def _postmerge(r) -> bool:
         return True
     if f["phase"] == "reverted":
         return False
-    git.run(r.repo, "fetch", "-q", "origin", "main")
+    git.run(r.repo, "fetch", "-q", r.remote, r.base)
     merge = f["merge_sha"]
-    if not _ancestor(r.repo, merge, BASE):
-        raise git.GitError(f"병합 커밋 {merge}가 origin/main에 없다")
+    if not _ancestor(r.repo, merge, r.base_ref):
+        raise git.GitError(f"병합 커밋 {merge}가 {r.base_ref}에 없다")
     if git.run(r.repo, "merge-base", "--is-ancestor", f["merge_head"], merge, check=False).returncode:
         raise git.GitError("병합 커밋에 검증한 integration이 포함되지 않았다")
-    main = git.sha(r.repo, BASE)
+    tip = git.sha(r.repo, r.base_ref)
     sha = f.get("revert_sha")
-    if sha and _ancestor(r.repo, sha, BASE):
-        _save(r, phase="reverted", outcome=f"main 검증 실패 → revert {sha}를 main에 push함")
+    if sha and _ancestor(r.repo, sha, r.base_ref):
+        _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
         return False
-    theirs = _revert_of(r.repo, merge, f"{merge}..{BASE}")
+    theirs = _revert_of(r.repo, merge, f"{merge}..{r.base_ref}")
     if theirs:  # gs가 아닌 누군가 이미 되돌렸다. 같은 병합을 두 번 revert하지 않는다
         _save(r, phase="reverted", revert_sha=theirs,
-              outcome=f"main에서 이미 병합 커밋을 되돌렸다(revert {theirs}, gs가 아닌 다른 곳). gs는 revert를 push하지 않음")
+              outcome=f"{r.base}에서 이미 병합 커밋을 되돌렸다(revert {theirs}, gs가 아닌 다른 곳). gs는 revert를 push하지 않음")
         return False
-    # revert push 직전에 중단됐고 main이 그대로면 같은 커밋을 일반 push한다(두 번 revert하지 않는다).
-    if sha and git.sha(r.repo, f"{sha}^") == main:
-        git.run(r.repo, "push", "origin", f"{sha}:refs/heads/main")
-        _save(r, phase="reverted", outcome=f"main 검증 실패 → revert {sha}를 main에 push함")
+    # revert push 직전에 중단됐고 base가 그대로면 같은 커밋을 일반 push한다(두 번 revert하지 않는다).
+    if sha and git.sha(r.repo, f"{sha}^") == tip:
+        git.run(r.repo, "push", r.remote, f"{sha}:refs/heads/{r.base}")
+        _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
         return False
     with tempfile.TemporaryDirectory(prefix="gs-main-", dir=r.rundir) as tmp:
-        wt = Path(tmp) / "main"
-        git.run(r.repo, "worktree", "add", "--detach", str(wt), main)
+        wt = Path(tmp) / "base"
+        git.run(r.repo, "worktree", "add", "--detach", str(wt), tip)
         try:
             main_head = git.sha(wt, "HEAD")
             if f["phase"] != "main_failed":
                 ok = _verify(r, wt, "main")
             elif f.get("main_head") != main_head:
-                # 실패 뒤 main이 움직였다(그사이 push로 revert push가 거부됐을 수 있다). 최신 main을 다시 검증한다.
+                # 실패 뒤 base가 움직였다(그사이 push로 revert push가 거부됐을 수 있다). 최신 base를 다시 검증한다.
                 ok = _verify(r, wt, "main-recheck")
             else:
                 ok = False
             _save(r, main_ok=ok, main_head=main_head)
             if ok:
                 stale = f.pop("revert_sha", None)
-                _save(r, phase="verified", outcome="integration·main 검증 통과, PR 병합 완료" if not stale else
-                      f"main 검증 실패 뒤 main이 바뀌었고 최신 main 검증 통과 → revert하지 않음(쓰지 않은 revert {stale})")
+                _save(r, phase="verified", outcome=f"integration·{r.base} 검증 통과, PR 병합 완료" if not stale else
+                      f"{r.base} 검증 실패 뒤 {r.base}가 바뀌었고 최신 {r.base} 검증 통과 → revert하지 않음(쓰지 않은 revert {stale})")
                 return True
-            _save(r, phase="main_failed", outcome="main 검증 실패, 병합 커밋 revert 중")
-            f.pop("revert_sha", None)  # 옛 main 위에 만든 revert는 쓰지 않는다
-            # 검증이 파일·HEAD를 바꿨더라도 받아 온 main의 정확한 끝에서 revert한다.
+            _save(r, phase="main_failed", outcome=f"{r.base} 검증 실패, 병합 커밋 revert 중")
+            f.pop("revert_sha", None)  # 옛 base 위에 만든 revert는 쓰지 않는다
+            # 검증이 파일·HEAD를 바꿨더라도 받아 온 base의 정확한 끝에서 revert한다.
             git.run(wt, "checkout", "--detach", "--force", main_head)
             git.run(wt, "clean", "-fd")
             parents = git.out(wt, "rev-list", "--parents", "-n", "1", merge).split()[1:]
             git.run(wt, "revert", "--no-edit", *(["-m", "1"] if len(parents) > 1 else []), merge)
             sha = git.sha(wt, "HEAD")
             _save(r, revert_sha=sha)  # push 실패·중단 때 재사용할 커밋
-            # 절대로 force하지 않는다. 거부되면(main이 움직임) 다음 실행이 최신 main 위에서 다시 만든다.
-            git.run(wt, "push", "origin", "HEAD:refs/heads/main")
-            _save(r, phase="reverted", outcome=f"main 검증 실패 → revert {sha}를 main에 push함")
+            # 절대로 force하지 않는다. 거부되면(base가 움직임) 다음 실행이 최신 base 위에서 다시 만든다.
+            git.run(wt, "push", r.remote, f"HEAD:refs/heads/{r.base}")
+            _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
             return False
         finally:
             git.remove_worktree(r.repo, wt)
@@ -271,8 +272,8 @@ def run(r) -> tuple[str | None, bool]:
         prev = r.st.finish
         r.st.finish = {}
         f = r.st.finish
-        # 아직 main에 들어가지 않은 되살림과 닫힌 이전 PR은 새 PR 보고서에도 남긴다.
-        again = [x for x in prev.get("reintroduced", []) if not _ancestor(r.repo, x["commit"], BASE)]
+        # 아직 base에 들어가지 않은 되살림과 닫힌 이전 PR은 새 PR 보고서에도 남긴다.
+        again = [x for x in prev.get("reintroduced", []) if not _ancestor(r.repo, x["commit"], r.base_ref)]
         if again:
             f["reintroduced"] = again
         if prev.get("phase") == "closed":
@@ -319,8 +320,8 @@ def run(r) -> tuple[str | None, bool]:
         if f["phase"] not in ("merge_requested", "merge_pending"):
             _update(r, summary)
         raise git.GitError(str(e)) from e
-    # main을 포함한 integration에 보고서를 쓴다. 다음 go가 보고서만 다시 병합하지 않는다.
-    git.run(r.repo, "fetch", "-q", "origin", "main")
-    merge_main(r)
+    # base를 포함한 integration에 보고서를 쓴다. 다음 go가 보고서만 다시 병합하지 않는다.
+    git.run(r.repo, "fetch", "-q", r.remote, r.base)
+    merge_base(r)
     _update(r, summary)
     return f.get("url"), ok
