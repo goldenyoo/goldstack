@@ -1,7 +1,7 @@
 """`gs go`: 시작할 수 있는 티켓을 max_workers개까지 동시에 worker에 맡기고 integration에 모아 PR을 연다.
 
-병렬 실행(04). 병합·검증은 한 번에 하나씩. 재시도 없음, 리뷰 없음, PR 병합 없음:
-리뷰(06), 재시도·충돌 후 재실행(07), 병합(08)은 뒤 티켓.
+병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 모델로 한 번 재시도한다(07).
+리뷰(06), PR 병합(08)은 뒤 티켓.
 진행 상태는 `.work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
@@ -14,13 +14,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, git, graph, herdr, state, worker
+from . import adapters, failure, git, graph, herdr, state, worker
 from .check import check
 from .feature import Feature, Ticket
 
 MAIN = "main"
 BASE = "origin/main"  # PR 대상. 로컬 main은 뒤처지거나 앞설 수 있어 쓰지 않는다
-CONFLICT = "conflict"  # 최신 integration과 충돌한 티켓의 실패 이유(07이 이것을 보고 다시 한다)
+CONFLICT = "conflict"
 
 
 def integration_branch(feature: str) -> str:
@@ -116,14 +116,16 @@ def _begin(r: Run) -> None:
     for tid in r.order:
         ts = st.ticket(tid)
         if ts.status != state.MERGED:  # 실패·건너뜀은 이번 실행에서 다시 한다
-            ts.status, ts.reason, ts.pane, ts.started_at, ts.ended_at = state.PENDING, "", "", "", ""
+            if ts.status in (state.FAILED, state.SKIPPED):
+                ts.failures, ts.failure_summary, ts.reason = 0, "", ""
+            ts.status, ts.pane, ts.started_at, ts.ended_at = state.PENDING, "", "", ""
     st.pid, st.only, st.started_at, st.finished_at = os.getpid(), r.only, state.now(), ""
     r.st = st
     state.save(r.rundir, st)
 
 
 def _stop_previous(tid: str, ts: state.TicketState) -> None:
-    """gs만 죽고 worker는 살아 남았을 수 있다. 그 시도의 worker를 끝내야 새 시도가 worktree를 지우고 다시 만들 수 있다.
+    """gs만 죽고 worker는 살아 남았을 수 있다. 새 시도를 시작하기 전에 지난 worker를 끝낸다.
 
     worker는 명령줄의 run.sh 경로(시도마다 다르다)로 찾는다. 찾아서 끝냈고 herdr pane에서 돌았으면 그 pane도 닫는다.
     """
@@ -206,6 +208,27 @@ class Active:
     branch: str
     wt: Path
     base: str  # worker를 띄울 때의 integration 끝
+    last_activity: float = field(default_factory=time.monotonic)
+    last_log: tuple[int, int] | None = None
+    last_head: str = ""
+
+    def idle(self, repo: Path) -> float:
+        """로그 출력 또는 브랜치 커밋이 바뀌면 유휴 시계를 다시 시작한다."""
+        try:
+            stat = self.proc.job.log.stat()
+            log = (stat.st_size, stat.st_mtime_ns)
+        except FileNotFoundError:
+            log = None
+        head = git.sha(repo, self.branch)
+        if log != self.last_log or head != (self.last_head or self.base):
+            self.last_activity = time.monotonic()
+        self.last_log, self.last_head = log, head
+        return time.monotonic() - self.last_activity
+
+
+def _idle_seconds(r: Run) -> float:
+    """시험은 이 시간만 짧게 바꿔 실제 worker의 멈춤을 확인할 수 있다."""
+    return r.feat.spec.idle_minutes * 60
 
 
 def _loop(r: Run) -> None:
@@ -251,9 +274,15 @@ def _loop(r: Run) -> None:
                 a.proc.finish(False)
                 _fail(r, a.t, error)
                 continue
-            _finish(r, a, code, others=sorted(active))
+            try:
+                _finish(r, a, code, others=sorted(active))
+            except (git.GitError, OSError) as e:
+                # 브랜치 삭제·검증 실행 오류도 이 티켓의 실패로 한정한다.
+                a.proc.stop()
+                _reset_integration(r, r.ihead)
+                _fail(r, a.t, f"worker 결과 처리 중 오류: {_err(e)}")
     finally:
-        # 예상 못 한 오류로 루프를 떠나도 띄운 worker를 남기지 않는다(남으면 재실행이 그 worktree를 지운다)
+        # 예상 못 한 오류로 루프를 떠나도 띄운 worker를 남기지 않는다.
         for a in active.values():
             say(f"[{a.t.id}] gs가 멈춰 worker를 끝낸다")
             a.proc.stop()
@@ -285,14 +314,22 @@ def _wait_any(r: Run, active: dict[str, Active], runner) -> tuple[str, int | Non
     (티켓, 종료 코드, 오류). 확인 중 오류(실행기·어댑터 판정의 예외)는 그 티켓의 오류로 돌려준다.
     """
     while True:
+        result = timed_out = None
         for tid in r.order:
             if tid in active:
                 try:
                     code = active[tid].proc.poll()
+                    if code is None and active[tid].idle(r.repo) >= _idle_seconds(r):
+                        timed_out = timed_out or (
+                            tid, None, f"시간 초과: {r.feat.spec.idle_minutes}분 동안 로그 출력·새 커밋 없음")
                 except Exception as e:  # noqa: BLE001 — 한 worker의 오류로 코디네이터가 멈추지 않게
-                    return tid, None, f"worker 확인 중 오류: {_err(e)}"
-                if code is not None:
-                    return tid, code, ""
+                    result = result or (tid, None, f"worker 확인 중 오류: {_err(e)}")
+                else:
+                    if code is not None:
+                        result = result or (tid, code, "")
+        # 끝난 티켓이 계속 들어와도 뒤쪽 worker의 활동·시간 초과를 빠뜨리지 않는다.
+        if timed_out or result:
+            return timed_out or result
         time.sleep(worker.poll_interval(runner))
 
 
@@ -303,17 +340,28 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
     """
     proc = None
     try:
-        branch = ticket_branch(r.name, t.id)
-        wt = r.rundir / "wt" / t.id
+        ts = r.st.ticket(t.id)
+        summary = ""
+        if ts.failure_summary:
+            path = Path(ts.failure_summary)
+            if not path.exists():  # 요약 호출 중 코디네이터가 죽었으면 새 호출로 마무리한다
+                failure.summarize(r.repo, path.with_name("failure.log"))
+            summary = path.read_text(encoding="utf-8")
+        # 실패·중단 worktree는 지우지 않는다. 실행 디렉터리 번호로 브랜치와 경로도 새로 고른다.
+        while True:
+            rundir = worker.attempt_dir((r.rundir / t.id).resolve())
+            rundir.mkdir(parents=True)
+            suffix = "" if rundir.name == "1" else f"-retry-{int(rundir.name) - 1}"
+            branch = ticket_branch(r.name, t.id) + suffix
+            wt = r.rundir / "wt" / (t.id + suffix)
+            if not wt.exists() and not git.branch_exists(r.repo, branch):
+                break
         base = r.ihead
-        git.remove_worktree(r.repo, wt, branch)  # 이어가기는 없다: 지난 시도는 버리고 새로
-        git.ensure_worktree(r.repo, wt, branch, start=base)
-        rundir = worker.attempt_dir((r.rundir / t.id).resolve())  # 시도마다 새 실행 디렉터리
         job = worker.Job(ticket=t, worktree=wt.resolve(), rundir=rundir)
-        job.rundir.mkdir(parents=True)
         _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
-             log=str(job.log), started_at=state.now(), ended_at="", reason="")
-        worker.write_brief(job, r.feat.spec, r.name, branch)
+             worktree=str(job.worktree), log=str(job.log), started_at=state.now(), ended_at="", reason="")
+        git.ensure_worktree(r.repo, wt, branch, start=base)
+        worker.write_brief(job, r.feat.spec, r.name, branch, summary)
         adapter = adapters.for_model(t.model)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
@@ -368,6 +416,7 @@ def _finish(r: Run, a: Active, code: int, others: list[str] = ()) -> bool:
     # 중간에 죽으면 표시 없는 미완 병합만 남고, 다음 실행이 그것을 버리고 티켓을 다시 한다.
     res = git.run(r.iwt, "merge", "--no-ff", "--no-commit", branch, check=False)
     if res.returncode:
+        (a.proc.job.rundir / "merge.log").write_text(res.stdout + res.stderr, encoding="utf-8")
         _reset_integration(r, r.ihead)
         return fail("integration 병합 충돌")
     merged = _merge_state(r)  # 검증할 것: 병합 결과 트리
@@ -416,18 +465,37 @@ def _catch_up(r: Run, a: Active) -> bool:
     files = git.out(a.wt, "diff", "--name-only", "--diff-filter=U").split()
     git.run(a.wt, "merge", "--abort", check=False)
     detail = ", ".join(files) if files else (res.stderr or res.stdout).strip()
+    (a.proc.job.rundir / "merge.log").write_text(
+        f"최신 integration: {r.ihead}\n충돌 파일: {detail}\n{res.stdout}{res.stderr}", encoding="utf-8")
     say(f"[{a.t.id}] 최신 integration({r.ihead[:8]})과 충돌: {detail}")
     return False
 
 
 def _fail(r: Run, t: Ticket, reason: str) -> bool:
-    _set(r, t.id, status=state.FAILED, reason=reason, ended_at=state.now())
+    ts = r.st.ticket(t.id)
+    paths = list(ts.failed_worktrees)
+    if ts.worktree and Path(ts.worktree).exists() and ts.worktree not in paths:
+        paths.append(ts.worktree)
+    failures = ts.failures + 1
+    # 시작 준비 단계에서 실패했더라도 증거를 쓸 디렉터리는 확보한다.
+    directory = Path(ts.log).parent if ts.log else worker.attempt_dir(r.rundir / t.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    log = failure.record(directory, reason, [directory / "worker.log", directory / "verify.log", directory / "merge.log"])
+    retry = failures < 2
+    summary = str(log.with_name("failure-summary.md")) if retry else ts.failure_summary
+    # 판단 모델 호출 전에 실패 횟수를 남긴다. 호출 도중 gs가 죽어도 재시도 횟수가 늘지 않는다.
+    _set(r, t.id, status=state.PENDING if retry else state.FAILED, reason=reason, ended_at=state.now(),
+         failures=failures, failed_worktrees=paths, failure_summary=summary)
+    if retry:
+        failure.summarize(r.repo, log)
     say(f"[{t.id}] 실패: {reason}")
+    if retry:
+        say(f"[{t.id}] 같은 모델({t.model})로 최신 integration에서 한 번 재시도한다")
     return False
 
 
 def _verify(r: Run, t: Ticket) -> tuple[bool, Path]:
-    log = (r.rundir / t.id / "verify.log").resolve()
+    log = Path(r.st.ticket(t.id).log).parent / "verify.log"
     say(f"[{t.id}] 검증: {r.feat.spec.verify}")
     env = {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "GS_ROLE")}
     with log.open("w", encoding="utf-8") as f:

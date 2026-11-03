@@ -96,6 +96,15 @@ case "$1 $2" in
 esac
 """
 
+FAKE_JUDGE = """\
+here="$(dirname "$0")"
+echo "$@" >> "$here/judge.calls"
+cat > "$here/judge.input"
+log=$(tail -n 1 "$here/judge.input")
+echo '판단 모델의 실패 요약'
+head -n 4 "$log"
+"""
+
 SPEC = """---
 feature: demo
 verify: test ! -f BROKEN
@@ -116,16 +125,19 @@ def sh(cwd, *args):
 class GoTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        root = Path(self.tmp.name)
+        root = Path(self.tmp.name).resolve()
         self.bin = root / "bin"
         self.bin.mkdir()
         (self.bin / "worker.sh").write_text(FAKE_WORKER)
         (self.bin / "gh").write_text("#!/bin/bash\n" + FAKE_GH)
         (self.bin / "gh").chmod(0o755)
+        (self.bin / "judge").write_text("#!/bin/bash\n" + FAKE_JUDGE)
+        (self.bin / "judge").chmod(0o755)
         self.env = mock.patch.dict(os.environ, {
             "GS_RUNNER": "subprocess",
             "GS_WORKER_CMD": f"bash {self.bin / 'worker.sh'}",
             "GS_GH": str(self.bin / "gh"),
+            "GS_JUDGE": str(self.bin / "judge"),
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
@@ -196,6 +208,155 @@ class GoTest(unittest.TestCase):
     def events(self):
         return (self.bin / "events.log").read_text().split("\n")[:-1]
 
+    # --- 실패·멈춤과 재시도(07) ---
+    def timeout_retry(self, runner):
+        script = self.bin / "worker.sh"
+        script.write_text(textwrap.dedent('''\
+            here="$(dirname "$0")"
+            echo "$GS_TICKET" >> "$here/calls.log"
+            if [ "$GS_TICKET" = 04 ]; then
+              echo done > file_04; git add file_04; git commit -qm done; exit $?
+            fi
+            if [ ! -f "$here/first" ]; then
+              touch "$here/first"
+              echo $$ > "$here/old.pid"
+              echo 'first attempt stuck'
+              echo 'keep this evidence' > debug.txt
+              sleep 20
+              exit 1
+            fi
+            grep -q '판단 모델의 실패 요약' "$GS_BRIEF" || exit 9
+            grep -q '시간 초과' "$GS_BRIEF" || exit 10
+            test ! -e debug.txt || exit 11
+            echo recovered > file_01
+            git add file_01 && git commit -qm recovered
+        '''))
+        env = {"GS_RUNNER": runner}
+        if runner == "herdr":
+            path = self.bin / "herdr"
+            path.write_text("#!/bin/bash\n" + FAKE_HERDR)
+            path.chmod(0o755)
+            env.update(HERDR_BIN_PATH=str(path), HERDR_SESSION="t", HERDR_WORKSPACE_ID="w1")
+        with mock.patch.dict(os.environ, env), mock.patch("gs.go._idle_seconds", return_value=0.4), \
+                mock.patch.object(worker, "POLL_SECONDS", 0.05), \
+                mock.patch.object(adapters, "for_model", wraps=adapters.for_model) as choose:
+            code, out, err = self.go("--only", "01,04")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([c.args[0] for c in choose.call_args_list], ["claude", "claude", "claude"])
+        self.assertEqual(self.calls(), ["01", "01", "04"])
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        old = self.rundir / "wt/01"
+        self.assertEqual(ts.failed_worktrees, [str(old)])
+        self.assertEqual((old / "debug.txt").read_text(), "keep this evidence\n")
+        self.assertEqual(ts.worktree, str(self.rundir / "wt/01-retry-1"))
+        self.assertIn("first attempt stuck", (self.rundir / "01/1/failure.log").read_text())
+        self.assertIn("시간 초과", out)
+        self.assertIn("-p --model opus", (self.bin / "judge.calls").read_text())
+        # 판단 모델에는 로그 내용이 아닌 경로만 준다.
+        prompt = (self.bin / "judge.input").read_text()
+        self.assertNotIn("first attempt stuck", prompt)
+        self.assertEqual(Path(prompt.splitlines()[-1]), self.rundir / "01/1/failure.log")
+        if runner == "herdr":
+            cmds = (self.bin / "herdr.log").read_text().splitlines()
+            self.assertIn("pane close w1:p1", cmds)  # 유휴 시간 초과는 실패 pane도 닫는다
+            self.assertEqual(sum(c.startswith("pane close") for c in cmds), 3)
+        self.assertFalse(alive(int((self.bin / "old.pid").read_text())))
+
+    def test_idle_timeout_retries_successfully(self):
+        self.timeout_retry("subprocess")
+
+    def test_idle_timeout_terminates_process_and_herdr_pane(self):
+        self.timeout_retry("herdr")
+
+    def test_output_or_commits_reset_idle_timeout(self):
+        # 각각 전체 실행 시간은 유휴 제한보다 길지만, 출력 또는 커밋이 계속 생긴다.
+        for mode in ("output", "commits"):
+            with self.subTest(mode=mode):
+                tid = "17" if mode == "output" else "18"
+                self.add_ticket(tid)
+                (self.bin / "worker.sh").write_text(textwrap.dedent(f'''\
+                    for i in 1 2 3 4 5 6; do
+                      sleep 0.15
+                      if [ '{mode}' = 'output' ]; then echo "working $i";
+                      else echo "$i" > file_$GS_TICKET; git add -A; git commit -qm "step $i"; fi
+                    done
+                    echo done > file_$GS_TICKET; git add -A; git commit -qm done
+                '''))
+                with mock.patch("gs.go._idle_seconds", return_value=0.4):
+                    code, out, err = self.go("--only", tid)
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(state.load(self.rundir, "demo").tickets[tid].attempts, 1)
+                self.assertNotIn("시간 초과", out)
+
+    def test_twice_failed_skips_transitive_dependents_only(self):
+        self.add_ticket("11")
+        (self.repo / ".work/demo/tickets/09-t.md").write_text(ticket("09", '["03"]'))
+        self.parallel(3)
+        code, out, err = self.go("--only", "02,03,09,11")
+        self.assertEqual(code, 1, out + err)
+        st = state.load(self.rundir, "demo").tickets
+        self.assertEqual({tid: ts.status for tid, ts in st.items()},
+                         {"02": "failed", "03": "skipped", "09": "skipped", "11": "merged"})
+        self.assertEqual(sorted(self.calls()), ["02", "02", "11"])
+        self.assertEqual((st["02"].attempts, st["02"].failures), (2, 2))
+        self.assertEqual(len(st["02"].failed_worktrees), 2)
+        for wt in st["02"].failed_worktrees:
+            self.assertTrue(Path(wt).is_dir())
+        self.assertEqual(st["03"].attempts, 0)
+        self.assertEqual(st["09"].attempts, 0)
+        self.assertEqual(self.merged(), ["11"])
+
+    def test_verify_failure_retries_in_fresh_worktree(self):
+        (self.bin / "worker.sh").write_text(textwrap.dedent('''\
+            here="$(dirname "$0")"
+            if [ ! -f "$here/first" ]; then
+              touch "$here/first" BROKEN
+            else
+              test ! -e BROKEN || exit 8
+              grep -q '검증 실패' "$GS_BRIEF" || exit 9
+            fi
+            echo done > file_01; git add -A; git commit -qm done
+        '''))
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual((ts.status, ts.attempts), ("merged", 2))
+        self.assertTrue((self.rundir / "01/1/verify.log").exists())
+        self.assertTrue((self.rundir / "01/2/verify.log").exists())
+        self.assertTrue((self.rundir / "wt/01/BROKEN").exists())
+        self.assertNotIn("BROKEN", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+
+    def test_judge_failure_still_retries_with_evidence_path(self):
+        with mock.patch.dict(os.environ, {"GS_JUDGE": "/does/not/exist"}):
+            code, out, err = self.go("--only", "06")
+        self.assertEqual(code, 1, out + err)
+        ts = state.load(self.rundir, "demo").tickets["06"]
+        self.assertEqual(ts.attempts, 2)
+        brief = (self.rundir / "06/2/brief.md").read_text()
+        self.assertIn("실패 요약 호출 불가", brief)
+        self.assertIn(str(self.rundir / "06/1/failure.log"), brief)
+
+    def test_resume_after_first_failure_keeps_retry_limit(self):
+        from gs.go import _start as real_start
+
+        def start(r, t, runner):
+            if r.st.ticket(t.id).failures:
+                raise RuntimeError("coordinator interrupted before retry")
+            return real_start(r, t, runner)
+
+        with mock.patch("gs.go._start", side_effect=start):
+            with self.assertRaisesRegex(RuntimeError, "coordinator interrupted"):
+                self.go("--only", "06")
+        ts = state.load(self.rundir, "demo").tickets["06"]
+        self.assertEqual((ts.status, ts.failures), ("pending", 1))
+        code, out, err = self.go("--only", "06")
+        self.assertEqual(code, 1, out + err)
+        ts = state.load(self.rundir, "demo").tickets["06"]
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("failed", 2, 2))
+        self.assertEqual(self.calls(), ["06", "06"])
+        self.assertIn("판단 모델의 실패 요약", (self.rundir / "06/2/brief.md").read_text())
+
     # --- 병렬(04) ---
     def test_parallel_overlaps_and_respects_dependencies(self):
         for tid in ("11", "12", "13"):
@@ -222,7 +383,7 @@ class GoTest(unittest.TestCase):
         # 병합·검증은 한 번에 하나씩
         self.assertEqual(vlog.read_text().split(), ["s", "e"] * 5)
 
-    def test_parallel_conflict_fails_ticket(self):
+    def test_parallel_conflict_retries_on_latest_integration(self):
         for tid in ("21", "22", "23"):
             self.add_ticket(tid)
         (self.repo / ".work/demo/tickets/23-t.md").write_text(ticket("23", '["22"]'))
@@ -230,19 +391,26 @@ class GoTest(unittest.TestCase):
         self.parallel(3)
         (self.bin / "barrier").write_text("2")  # 21과 22가 같은 integration 끝에서 시작한다
         code, out, err = self.go("--only", "21,22,23")
-        self.assertEqual(code, 1, out + err)
+        self.assertEqual(code, 0, out + err)
         st = state.load(self.rundir, "demo").tickets
-        first, second = sorted(("21", "22"), key=lambda tid: st[tid].status != "merged")
-        self.assertEqual((st[first].status, st[second].status), ("merged", "failed"), out)
-        self.assertEqual(st[second].reason, "conflict")
+        first, second = sorted(("21", "22"), key=lambda tid: st[tid].attempts)
+        self.assertEqual((st[first].attempts, st[second].attempts), (1, 2), out)
+        self.assertEqual((st[first].status, st[second].status, st["23"].status), ("merged", "merged", "merged"))
         self.assertIn(f"[{second}] 최신 integration(", out)
         self.assertIn("shared.txt", out)
-        self.assertEqual(self.integration("show", "gs/demo/integration:shared.txt"), first)
-        if second == "22":  # 충돌로 실패한 티켓에 막힌 티켓은 건너뛴다
-            self.assertEqual((st["23"].status, st["23"].reason), ("skipped", "막힘: 22"))
-            self.assertEqual(self.merged(), ["21"])
-        else:
-            self.assertEqual(self.merged(), ["22", "23"])
+        self.assertEqual(self.integration("show", "gs/demo/integration:shared.txt"), second)
+        self.assertEqual(st[second].branch, f"gs/demo/{second}-retry-1")
+        self.assertEqual(st[second].failed_worktrees, [str(self.rundir / "wt" / second)])
+        retry_commit = self.integration("log", "--format=%H", f"--grep=^t{second}$", st[second].branch)
+        retry_parent = self.integration("rev-parse", f"{retry_commit}^")
+        self.assertIn(f"gs-ticket: demo/{first}", self.integration("show", "-s", "--format=%B", retry_parent))
+        failure_log = (self.rundir / second / "1/failure.log").read_text()
+        self.assertIn("conflict", failure_log)
+        self.assertIn("shared.txt", failure_log)
+        brief = (self.rundir / second / "2/brief.md").read_text()
+        self.assertIn("판단 모델의 실패 요약", brief)
+        self.assertIn("conflict", brief)
+        self.assertEqual(self.merged(), ["21", "22", "23"])
         wt = self.rundir / "wt" / second
         self.assertTrue(git_clean(wt))  # 합쳐 보다 만 병합은 취소했다
         self.assertNotEqual(subprocess.run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"], cwd=wt,
@@ -287,7 +455,7 @@ class GoTest(unittest.TestCase):
         cmds = (self.bin / "herdr.log").read_text().splitlines()
         self.assertEqual(sum(c.startswith("tab create") for c in cmds), 1, cmds)  # feature마다 탭 하나
         self.assertIn("--label gs:demo", next(c for c in cmds if c.startswith("tab create")))
-        self.assertEqual(sum(c.startswith("pane split") for c in cmds), 3, cmds)  # 나머지는 그 탭의 pane
+        self.assertEqual(sum(c.startswith("pane split") for c in cmds), 4, cmds)  # 02 재시도도 새 pane
         closed = sorted(c.split()[2] for c in cmds if c.startswith("pane close"))
         panes = {tid: state.load(self.rundir, "demo").tickets[tid].pane.split()[-1] for tid in ("01", "02", "11", "12")}
         self.assertEqual(closed, sorted(panes[t] for t in ("01", "11", "12")))  # 성공한 pane만 닫는다
@@ -328,10 +496,11 @@ class GoTest(unittest.TestCase):
         self.add_ticket("15")
         self.parallel(3, verify=f"touch {self.bin / 'verifying'}; test ! -f BROKEN && sleep 1")
         code, out, err = self.go("--only", "01,15")
-        self.assertEqual(code, 1, out + err)
+        self.assertEqual(code, 0, out + err)
         st = state.load(self.rundir, "demo").tickets
-        self.assertEqual(st["01"].status, "failed", out)
-        self.assertIn("검증하는 동안 integration이 바뀌었다", st["01"].reason)
+        self.assertEqual(st["01"].status, "merged", out)  # 실패한 검증은 버리고 새 시도가 성공한다
+        self.assertEqual(st["01"].attempts, 2)
+        self.assertIn("검증하는 동안 integration이 바뀌었다", (self.rundir / "01/1/failure.log").read_text())
         self.assertEqual(st["15"].status, "merged", out)
         self.assertNotIn("BROKEN", self.integration("ls-tree", "-r", "--name-only", "gs/demo/integration").split())
 
@@ -471,7 +640,7 @@ class GoTest(unittest.TestCase):
         self.assertIn("[05] 실패: 검증 실패", out)
         self.assertIn("[06] 실패: 커밋 없음", out)
         self.assertIn("■ PR: https://example.test/pr/1", out)
-        self.assertEqual(self.calls(), ["01", "02", "04", "05", "06"])  # max_workers 1: 02와 같은 순서
+        self.assertEqual(self.calls(), ["01", "02", "02", "04", "05", "05", "06", "06"])
 
         log = self.integration("log", "--format=%B", "gs/demo/integration")
         merged = sorted(line.split("/")[-1] for line in log.splitlines() if line.startswith("gs-ticket:"))
@@ -584,9 +753,10 @@ class GoTest(unittest.TestCase):
         code, out, _ = self.go("--only", "01,06")
         self.assertIn("[01] 이미 병합됨", out)
         self.assertIn("[06] 실패: 커밋 없음", out)
-        self.assertEqual(self.calls(), ["01", "06", "06"])
+        self.assertEqual(self.calls(), ["01", "06", "06", "06", "06"])
         st = state.load(self.rundir, "demo")
-        self.assertEqual((st.tickets["01"].attempts, st.tickets["06"].attempts), (1, 2))
+        self.assertEqual((st.tickets["01"].attempts, st.tickets["06"].attempts), (1, 4))
+        self.assertEqual(len(st.tickets["06"].failed_worktrees), 4)
 
     def test_status_without_runs(self):
         code, out = self.status()
