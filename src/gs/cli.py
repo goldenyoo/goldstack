@@ -28,6 +28,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("feature", nargs="+", help=".goldstack/work/<feature>. 여러 개면 verified 뒤 차례로 실행")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다")
 
+    p = sub.add_parser("clean", help="feature의 worktree·로컬·원격 브랜치를 지운다(실행 기록은 남김)")
+    p.add_argument("feature", help=".goldstack/work/<feature>")
+    p.add_argument("--force", action="store_true", help="verified·reverted가 아니어도 정리한다(실행 중이면 거부)")
+
     p = sub.add_parser("status", help="실행 상태(state.json)를 표로 본다(읽기 전용)")
     p.add_argument("feature", nargs="?", help=".goldstack/work/<feature>(생략하면 실행 중인 feature 전부)")
 
@@ -63,6 +67,9 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_check(repo, args.feature, _ids(args.only))
     if args.cmd == "go":
         return cmd_go(repo, args.feature, _ids(args.only))
+    if args.cmd == "clean":
+        from .clean import clean
+        return clean(repo, args.feature, args.force, sys.stdout, sys.stderr)
     if args.cmd == "status":
         from .status import status
         return status(repo, args.feature, sys.stdout)
