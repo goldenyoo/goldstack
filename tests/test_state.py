@@ -23,11 +23,13 @@ class StateTest(unittest.TestCase):
         st = state.State(feature="f", only=["01"])
         st.ticket("01").status = state.RUNNING
         st.ticket("01").attempts = 2
+        st.ticket("01").kept_worktrees = ["/tmp/dirty-worktree"]
         state.save(self.rundir, st)
         got = state.load(self.rundir, "f")
         self.assertEqual(got.only, ["01"])
         self.assertEqual((got.tickets["01"].status, got.tickets["01"].attempts), ("running", 2))
         self.assertTrue(got.updated_at)
+        self.assertEqual(got.tickets["01"].kept_worktrees, ["/tmp/dirty-worktree"])
 
     def test_failed_write_keeps_old_file(self):
         st = state.State(feature="f")
@@ -45,6 +47,7 @@ class StateTest(unittest.TestCase):
         state.path(self.rundir).write_text(json.dumps({"feature": "f", "x": 1, "tickets": {"01": {"status": "merged",
                                                                                                "y": 2}}}))
         self.assertEqual(state.load(self.rundir, "f").tickets["01"].status, "merged")
+        self.assertEqual(state.load(self.rundir, "f").tickets["01"].kept_worktrees, [])
 
     def test_lock(self):
         self.assertIsNone(state.running_pid(self.rundir))
