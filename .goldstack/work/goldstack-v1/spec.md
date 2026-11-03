@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack-v1 — spec
 
-상태: grill 완료(라운드 2개) · 2026-11-03 · 근거 [goldstack-v0 spec §9](../goldstack-v0/spec.md) · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../.out-of-scope/)
+상태: **완료**(PR #3, 2026-11-03, 37분) · grill 완료(라운드 2개) · 2026-11-03 · 근거 [goldstack-v0 spec §9](../goldstack-v0/spec.md) · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../out-of-scope/)
 
 ## 1. 목표
 `gs go`가 멈춘 검증 명령에 무한히 붙잡히지 않고(verify 시간 제한), 병합이 끝난 티켓의 worktree를 스스로 치운다(성공 worktree 정리).

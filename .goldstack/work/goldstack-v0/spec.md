@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack v0 — spec
 
-상태: **완료**(티켓 11장 PR #1, #2 · 완료 조건: goldstack-v1 무인 완주 PR #3, 2026-11-03) · grill 2026-11-03 · 근거 [docs/ORIGINS.md](../../docs/ORIGINS.md) · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../.out-of-scope/)
+상태: **완료**(티켓 11장 PR #1, #2 · 완료 조건: goldstack-v1 무인 완주 PR #3, 2026-11-03) · grill 2026-11-03 · 근거 [docs/ORIGINS.md](../../../docs/ORIGINS.md) · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../out-of-scope/)
 
 ## 1. 목표
 Claude Code로 프로젝트를 진행하는 개인 운영 kit. grill로 깊게 정렬 → `go` 한 번 → 자율 실행 → main 병합 → 최종 보고.

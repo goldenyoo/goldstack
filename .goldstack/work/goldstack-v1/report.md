@@ -74,6 +74,23 @@ Ran 193 tests in 187.296s
 OK
 ```
 
+#### finish/integration-final-verify.log
+
+```text
+$ uv run python -m unittest discover -s tests
+HEAD: 7538e4043a579a89f158e8d51016e10d8aba3554
+....................................................................................................................................../Users/goldenyoo/.local/share/uv/python/cpython-3.12.15-macos-aarch64-none/lib/python3.12/subprocess.py:1127: ResourceWarning: subprocess 35865 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...........................................................
+----------------------------------------------------------------------
+Ran 193 tests in 194.889s
+
+OK
+
+종료 코드: 0
+```
+
 #### finish/integration-verify.log
 
 ```text
@@ -91,16 +108,40 @@ OK
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+```text
+$ uv run python -m unittest discover -s tests
+HEAD: 8aa4b20471a39e25daa7d8e93656c35722233d69
+Using CPython 3.12.15
+Creating virtual environment at: .venv
+   Building goldstack @ file:///Users/goldenyoo/workspace/goldstack/.work/goldstack-v1/run/gs-main-nawv6o7d/main
+      Built goldstack @ file:///Users/goldenyoo/workspace/goldstack/.work/goldstack-v1/run/gs-main-nawv6o7d/main
+Installed 1 package in 1ms
+....................................................................................................................................../Users/goldenyoo/.local/share/uv/python/cpython-3.12.15-macos-aarch64-none/lib/python3.12/subprocess.py:1127: ResourceWarning: subprocess 57863 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+...........................................................
+----------------------------------------------------------------------
+Ran 193 tests in 205.519s
+
+OK
+
+종료 코드: 0
+```
+
 
 ## Merge Danger
 
-마무리: integration 검증 중
+마무리: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/3
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `8aa4b20471a39e25daa7d8e93656c35722233d69`
 
 ### 되돌리는 법
 
@@ -110,7 +151,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 8aa4b20471a39e25daa7d8e93656c35722233d69
 git -C "$dir" push origin HEAD:refs/heads/main
 git worktree remove "$dir"
 ```

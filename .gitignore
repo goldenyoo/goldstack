@@ -1,6 +1,7 @@
-.work/*/run/
+.goldstack/work/*/run/
 __pycache__/
 .DS_Store
 .venv/
 *.egg-info/
 .omc/
+.goldstack/local.env

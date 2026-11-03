@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack-v2 — spec
 
-상태: grill 완료(라운드 2개) · 2026-11-03 · 근거 [goldstack-v1 진행 대화](../goldstack-v1/spec.md) · 아이디어 [.ideas/](../../.ideas/) · 범위 밖 [.out-of-scope/](../../.out-of-scope/)
+상태: **완료**(PR #4, 2026-11-03, 2시간 11분, 티켓 8장 첫 시도 병합, 남은 지적 18) · 병합 뒤 손 마무리(`gs` 재설치, `gs migrate`, 링크 수정, v0–v2 `gs check` 통과) 완료 · grill 완료(라운드 2개) · 2026-11-03 · 근거 [goldstack-v1 진행 대화](../goldstack-v1/spec.md) · 아이디어 [.ideas/](../../ideas/) · 범위 밖 [.out-of-scope/](../../out-of-scope/)
 
 ## 1. 목표
 goldstack을 다른 레포에서도 가정 없이 쓸 수 있게 한다(설정 파일, 하드코딩 제거). 실행 중에는 진행 바로, 끝나면 텔레그램으로 안다. mattpocock skill 5개를 이식하고, README를 사람용으로 다시 쓴다.

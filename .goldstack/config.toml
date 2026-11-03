@@ -1,0 +1,17 @@
+[git]
+remote = "origin"
+base = "main"
+
+[models]
+judge = "opus"
+claude_review = "opus"
+agy = "gemini-4-argon-high"
+codex = ""
+
+[timeouts]
+review_minutes = 30
+judge_minutes = 10
+summary_seconds = 60
+
+[notify]
+telegram = false

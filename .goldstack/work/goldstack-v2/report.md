@@ -443,6 +443,63 @@ The directory also runs a safety scan and a policy review that this command does
 ✔ Validation passed with warnings
 ```
 
+#### finish/integration-final-verify.log
+
+```text
+$ uv run python -m unittest discover -s tests && claude plugin validate .
+HEAD: 251f974c0b44b4684cb34f01be1c38a381d6d03b
+........................................................................................................................................................../Users/goldenyoo/.local/share/uv/python/cpython-3.12.15-macos-aarch64-none/lib/python3.12/subprocess.py:1127: ResourceWarning: subprocess 34792 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.........................................................................................................
+----------------------------------------------------------------------
+Ran 259 tests in 209.115s
+
+OK
+Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/wt/integration/.claude-plugin/marketplace.json
+
+⚠ Found 1 warning:
+
+  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
+
+Validating plugin: /Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/wt/integration/.claude-plugin/plugin.json
+
+  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
+  ❯ types ./types/index.d.ts declares state: goldstack.line
+
+Validating hooks: /Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/wt/integration/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.state.get, $.state.set, $.ui.resolve
+  ❯ ./register.tsx state writes: goldstack.line
+  ❯ ./register.tsx state reads: goldstack.line
+
+Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
+
+✘ Found 1 problem the plugin directory refuses a submission for:
+
+  ❯ LICENSE: License missing (LICENSE_MISSING). This plugin has no LICENSE file and plugin.json has no `license`. The directory requires one of them.
+    Fix: Add a LICENSE file to the plugin folder, or set `license` (an SPDX id) in plugin.json. A LICENSE at the repository root also counts for a plugin in a sub-folder.
+
+⚠ Found 1 plugin directory warning:
+
+  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
+    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below. To fail on problems the directory refuses a submission for, run this command with --profile directory.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
 #### finish/integration-verify.log
 
 ```text
@@ -500,16 +557,78 @@ The directory also runs a safety scan and a policy review that this command does
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+앞 273자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/finish/main-verify.log`
+
+```text
+gs-main-xqhkeni6/main
+      Built goldstack @ file:///Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/gs-main-xqhkeni6/main
+Installed 1 package in 1ms
+........................................................................................................................................................../Users/goldenyoo/.local/share/uv/python/cpython-3.12.15-macos-aarch64-none/lib/python3.12/subprocess.py:1127: ResourceWarning: subprocess 59241 is still running
+  _warn("subprocess %s is still running" % self.pid,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.........................................................................................................
+----------------------------------------------------------------------
+Ran 259 tests in 210.045s
+
+OK
+Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/gs-main-xqhkeni6/main/.claude-plugin/marketplace.json
+
+⚠ Found 1 warning:
+
+  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
+
+Validating plugin: /Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/gs-main-xqhkeni6/main/.claude-plugin/plugin.json
+
+  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
+  ❯ types ./types/index.d.ts declares state: goldstack.line
+
+Validating hooks: /Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/gs-main-xqhkeni6/main/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.state.get, $.state.set, $.ui.resolve
+  ❯ ./register.tsx state writes: goldstack.line
+  ❯ ./register.tsx state reads: goldstack.line
+
+Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.work/goldstack-v2/run/gs-main-xqhkeni6/main. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
+
+✘ Found 1 problem the plugin directory refuses a submission for:
+
+  ❯ LICENSE: License missing (LICENSE_MISSING). This plugin has no LICENSE file and plugin.json has no `license`. The directory requires one of them.
+    Fix: Add a LICENSE file to the plugin folder, or set `license` (an SPDX id) in plugin.json. A LICENSE at the repository root also counts for a plugin in a sub-folder.
+
+⚠ Found 1 plugin directory warning:
+
+  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
+    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below. To fail on problems the directory refuses a submission for, run this command with --profile directory.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
 
 ## Merge Danger
 
-마무리: integration 검증 중
+마무리: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/4
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `4b5b405d1602aab45414eb0e2d879db9ab1fdadd`
 
 ### 되돌리는 법
 
@@ -519,7 +638,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 4b5b405d1602aab45414eb0e2d879db9ab1fdadd
 git -C "$dir" push origin HEAD:refs/heads/main
 git worktree remove "$dir"
 ```
