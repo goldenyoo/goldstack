@@ -26,7 +26,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import clean, git, report, state, verify
+from . import clean, git, report, setup, state, verify
 from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
@@ -35,7 +35,8 @@ CHECK_PHASES = ("checks_pending", "checks_failed", "checks_timeout")
 # 보호된 base에서 gs의 revert·보고서 PR이 사람을 기다린다. 다음 gs go가 그 PR을 다시 읽는다.
 PENDING_PHASES = ("revert_pending", "report_pending")
 # gs go가 새 worker보다 먼저 마무리를 회복하는 phase.
-RESUME_PHASES = (*CHECK_PHASES, "merge_requested", "merge_pending", "merged", "main_failed", *PENDING_PHASES)
+RESUME_PHASES = (*CHECK_PHASES, "merge_requested", "merge_pending", "merged", "main_failed", "base_unverified",
+                 *PENDING_PHASES)
 CHECK_INTERVAL = 10
 
 
@@ -281,7 +282,7 @@ def _verify(r, wt: Path, label: str) -> bool:
         if res.timed_out:
             print(f"■ {label} 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다", flush=True)
             return False
-        changed = (git.sha(wt, "HEAD") != head or not git.is_clean(wt)
+        changed = (git.sha(wt, "HEAD") != head or not setup.is_clean(wt)
                    or git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout != branch)
         stream.write(f"\n종료 코드: {res.code}\n")
         if changed:
@@ -293,7 +294,7 @@ def _restore_integration(r, head: str) -> None:
     git.run(r.iwt, "merge", "--abort", check=False)
     git.run(r.iwt, "checkout", "--force", f"gs/{r.name}/integration")
     git.run(r.iwt, "reset", "--hard", head)
-    git.run(r.iwt, "clean", "-fd")
+    setup.clean(r.iwt, "-fd")
 
 
 def _commit_report(r, summary: str) -> Path:
@@ -502,6 +503,19 @@ def _postmerge(r) -> bool:
         wt = Path(tmp) / "base"
         git.run(r.repo, "worktree", "add", "--detach", str(wt), tip)
         try:
+            if r.cfg.worktree.setup.strip():
+                r.st.phase = "setup"
+                r.save()
+                try:
+                    print(f"■ {r.base} 준비 중", flush=True)
+                    prepared = setup.run(r.cfg, wt, r.rundir / "finish" / "setup.log").ok
+                finally:
+                    r.st.phase = "finish"
+                    r.save()
+                if not prepared:
+                    _save(r, phase="base_unverified", main_ok=None, outcome="base 미검증(준비 실패)")
+                    return False
+                setup.remember(wt)
             main_head = git.sha(wt, "HEAD")
             if f["phase"] != "main_failed":
                 ok = _verify(r, wt, "main")

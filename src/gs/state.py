@@ -91,7 +91,7 @@ def agy_reached(st: State, limit: int) -> bool:
 
 
 PHASE_LABELS = {"worker": "worker", "review": "리뷰", "fix": "수정", "verify": "검증", "finish": "마무리",
-                "checks": "CI 대기"}
+                "checks": "CI 대기", "setup": "준비"}
 
 
 def end_phase(ts: TicketState, at: str | None = None) -> None:
@@ -175,10 +175,10 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
         end = parse_time(ts.ended_at)
         if start and end and run_start and start >= run_start:
             durations.append(max(0, (end - start).total_seconds()))
-    if st.phase == "finish" and not st.finished_at:
+    if st.phase in ("finish", "setup") and not st.finished_at:
         # 빈 id는 개별 티켓이 아닌 feature 전체의 보고서·PR·base 검증을 뜻한다.
-        phase = "checks" if st.finish.get("phase") == "checks_pending" else "finish"
-        running = [{"id": "", "phase": phase, "model": "" if phase == "checks" else "claude"}]
+        phase = "setup" if st.phase == "setup" else "checks" if st.finish.get("phase") == "checks_pending" else "finish"
+        running = [{"id": "", "phase": phase, "model": "claude" if phase == "finish" else ""}]
     total = len(order)
     historical = not durations and history_median_s is not None
     average = sum(durations) / len(durations) if durations else history_median_s

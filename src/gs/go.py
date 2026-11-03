@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, clean, config, failure, finish, git, graph, herdr, notify, review, state, verify, worker
+from . import adapters, clean, config, failure, finish, git, graph, herdr, notify, report, review, setup, state, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -116,10 +116,12 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 say(f"■ 이미 끝남: {r.name} ({r.st.finish['phase']})")
                 clean.integration(r)  # 지난 자동 정리가 원격 삭제에서만 실패했을 수 있다
             else:
-                _prepare_integration(r)
+                prepared = _prepare_integration(r)
                 _resume_merged(r)
                 # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
-                if r.st.finish.get("phase") in finish.RESUME_PHASES:
+                if not prepared:
+                    finished = False
+                elif r.st.finish.get("phase") in finish.RESUME_PHASES:
                     r.ihead = git.sha(r.iwt, "HEAD")
                     # 회복 뒤 새 범위를 이어 돌릴 수 있어, 마지막 마무리까지 integration을 둔다.
                     url, finished = _finish_run(r, cleanup=False)
@@ -240,13 +242,13 @@ def _require_committed(r: Run) -> None:
 
 def _reset_integration(r: Run, to: str = "HEAD") -> bool:
     """integration worktree는 gs만 쓴다. 남은 병합·변경을 버리고 to로 되돌린다. 무언가 버렸으면 True."""
-    dirty = not git.is_clean(r.iwt)
+    dirty = not setup.is_clean(r.iwt)
     if git.run(r.iwt, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
         git.run(r.iwt, "merge", "--abort", check=False)
         dirty = True
     moved = git.sha(r.iwt, "HEAD") != git.sha(r.iwt, to)
     git.run(r.iwt, "reset", "-q", "--hard", to)
-    git.run(r.iwt, "clean", "-q", "-fd")
+    setup.clean(r.iwt, "-q", "-fd")
     return dirty or moved
 
 
@@ -259,7 +261,7 @@ def _finished_after_clean(r: Run) -> bool:
             and not any(ts.kept_worktrees for ts in r.st.tickets.values()))
 
 
-def _prepare_integration(r: Run) -> None:
+def _prepare_integration(r: Run) -> bool:
     branch = integration_branch(r.name)
     start = r.base_ref
     # 정리 뒤 새 wave·남긴 worktree를 처리할 때는 보존된 head로 기존 재개 판단을 유지한다.
@@ -275,6 +277,24 @@ def _prepare_integration(r: Run) -> None:
     # base가 이 feature의 병합을 revert했으면 그 revert를 되돌린 커밋까지 합친다(feature 코드를 잃지 않는다).
     finish.merge_base(r)
     say(f"■ integration: {branch} @ {git.sha(r.iwt, 'HEAD')[:8]} ({r.iwt})")
+    if r.cfg.worktree.setup.strip() and not setup.marker(r.iwt).exists():
+        directory = worker.attempt_dir(r.rundir / "integration")
+        r.st.phase = "setup"
+        r.save()
+        try:
+            say("■ integration 준비 중")
+            res = setup.run(r.cfg, r.iwt, directory / "setup.log")
+        finally:
+            r.st.phase = ""
+        if not res.ok:
+            # 이미 진행한 병합·base 검증·revert·보고서의 재개 상태를 준비 실패로 덮지 않는다.
+            if r.st.finish.get("phase") not in (*finish.RESUME_PHASES, *finish.BASE_REPORT_PHASES):
+                r.st.finish.update(phase="setup_failed", outcome="준비 실패 → 병합 안 함")
+            r.save()
+            report.write(r, "integration 준비 실패. setup.log를 확인하라.")
+            return False
+        setup.remember(r.iwt)
+    return True
 
 
 def _graph(r: Run) -> dict[str, list[str]]:
@@ -566,11 +586,19 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
         base = r.ihead
         job = worker.Job(ticket=t, worktree=wt.resolve(), rundir=rundir)
         started = state.now()
-        state.begin_phase(ts, "worker", t.model, attempt=int(rundir.name), at=started)
+        preparing = bool(r.cfg.worktree.setup.strip())
+        state.begin_phase(ts, "setup" if preparing else "worker", "" if preparing else t.model,
+                          attempt=int(rundir.name), at=started)
         _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
              worktree=str(job.worktree), log=str(job.log), started_at=started, ended_at="", reason="",
              review={}, second_review={})
         git.ensure_worktree(r.repo, wt, branch, start=base)
+        if preparing:
+            say(f"[{t.id}] 준비 중")
+            if not setup.run(r.cfg, wt, rundir / "setup.log").ok:
+                _fail(r, t, "준비 실패", retry=False)
+                return None
+            _phase(r, t.id, "worker", t.model)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
         adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
@@ -672,7 +700,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         _reset_integration(r, r.ihead)
         return fail("검증하는 동안 integration이 바뀌었다(되돌림): 브랜치가 움직였다")
     git.run(r.iwt, "reset", "-q", "--hard", new)  # 병합 상태와 검증이 남긴 파일은 버린다
-    git.run(r.iwt, "clean", "-q", "-fd")
+    setup.clean(r.iwt, "-q", "-fd")
     r.ihead = new
     a.proc.finish(True)
     _set(r, t.id, status=state.MERGED, ended_at=state.now())
@@ -886,7 +914,8 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
     # ts.log는 RUNNING일 때만 이번 시도의 것이다. 시작 전에 실패했으면 지난 시도 증거를 덮지 않게 새 디렉터리를 쓴다
     directory = Path(ts.log).parent if ts.log and ts.status == state.RUNNING else worker.attempt_dir(r.rundir / t.id)
     directory.mkdir(parents=True, exist_ok=True)
-    log = failure.record(directory, reason, [directory / "worker.log", directory / "verify.log", directory / "merge.log"])
+    log = failure.record(directory, reason, [directory / "setup.log", directory / "worker.log",
+                                            directory / "verify.log", directory / "merge.log"])
     retry = retry and failures < 2
     summary = str(log.with_name("failure-summary.md")) if retry else ts.failure_summary
     # 판단 모델 호출 전에 실패 횟수를 남긴다. 호출 도중 gs가 죽어도 재시도 횟수가 늘지 않는다.
