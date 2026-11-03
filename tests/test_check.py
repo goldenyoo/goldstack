@@ -109,6 +109,18 @@ class CheckTest(unittest.TestCase):
         self.assertIn("디렉터리 이름", err)
         self.assertIn("`max_workers`", err)
 
+    def test_spec_verify_must_be_one_nonempty_line(self):  # codex 리뷰 지적 1
+        self.write("01-a.md", ticket("01"))
+        for verify in ('""', '"   "', r'"echo a\nfalse"'):
+            with self.subTest(verify):
+                (self.repo / ".work" / "demo" / "spec.md").write_text(f"---\nfeature: demo\nverify: {verify}\n---\n")
+                self.assert_error("`verify`는 비어 있지 않은 한 줄")
+
+    def test_spec_non_ascii_digit_is_error_not_crash(self):  # codex 리뷰 지적 3
+        self.write("01-a.md", ticket("01"))
+        (self.repo / ".work" / "demo" / "spec.md").write_text('---\nfeature: demo\nverify: "true"\nmax_workers: ²\n---\n')
+        self.assert_error("`max_workers`는 1 이상의 정수")
+
     def test_no_tickets(self):
         self.assert_error("티켓이 없다")
 

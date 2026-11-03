@@ -37,6 +37,15 @@ class GraphTest(unittest.TestCase):
         two = graph.cycles({"a": ["b"], "b": ["a"], "c": ["d"], "d": ["c"]})
         self.assertEqual(len(two), 2)
 
+    def test_long_chain_does_not_recurse_out(self):  # codex 리뷰 지적 2
+        ids = [f"{i:04d}" for i in range(1100)]
+        g = {n: [ids[i + 1]] if i + 1 < len(ids) else [] for i, n in enumerate(ids)}
+        self.assertEqual(graph.cycles(g), [])
+        self.assertEqual(graph.frontier(g), ["1099"])
+        self.assertEqual(graph.topo_order(g)[:2], ["1099", "1098"])
+        g["1099"] = ["0000"]
+        self.assertEqual(len(graph.cycles(g)), 1)
+
     def test_cycle_members_drop_out_of_order(self):
         g = {"a": [], "b": ["c"], "c": ["b"], "d": ["a"]}
         self.assertEqual(graph.topo_order(g), ["a", "d"])

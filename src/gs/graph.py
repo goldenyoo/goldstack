@@ -29,26 +29,31 @@ def cycles(g: Graph) -> list[list[str]]:
     found: list[list[str]] = []
     seen: set[frozenset[str]] = set()
 
-    def visit(n: str, stack: list[str]) -> None:
-        color[n] = GREY
-        stack.append(n)
-        for d in sorted(g[n]):
+    # 재귀 대신 명시적 스택: 긴 의존 사슬에서도 RecursionError가 나지 않게
+    for root in sorted(g):
+        if color[root] != WHITE:
+            continue
+        path: list[str] = [root]
+        todo = [iter(sorted(g[root]))]
+        color[root] = GREY
+        while todo:
+            d = next(todo[-1], None)
+            if d is None:
+                color[path.pop()] = BLACK
+                todo.pop()
+                continue
             if d not in g:
                 continue
             if color[d] == GREY:
-                path = stack[stack.index(d):] + [d]
-                key = frozenset(path)
+                cyc = path[path.index(d):] + [d]
+                key = frozenset(cyc)
                 if key not in seen:
                     seen.add(key)
-                    found.append(path)
+                    found.append(cyc)
             elif color[d] == WHITE:
-                visit(d, stack)
-        stack.pop()
-        color[n] = BLACK
-
-    for n in sorted(g):
-        if color[n] == WHITE:
-            visit(n, [])
+                color[d] = GREY
+                path.append(d)
+                todo.append(iter(sorted(g[d])))
     return found
 
 

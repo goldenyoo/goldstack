@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -127,10 +128,15 @@ def _load_spec(path: Path, name: str, repo: Path, problems: list[Problem]) -> Sp
     if isinstance(data.get("feature"), str) and data["feature"] != name:
         problems.append(Problem("오류", where, f"feature `{data['feature']}`가 디렉터리 이름 `{name}`과 다르다"))
         ok = False
+    verify = data.get("verify")
+    if isinstance(verify, str) and (not verify.strip() or "\n" in verify or "\r" in verify):
+        # 빈 명령은 `sh -c ""`로 늘 성공해서 검증이 조용히 사라진다
+        problems.append(Problem("오류", where, "`verify`는 비어 있지 않은 한 줄 셸 명령이어야 한다"))
+        ok = False
     ints = {}
     for key, default in SPEC_DEFAULTS.items():
         raw = data.get(key, str(default))
-        if not (isinstance(raw, str) and raw.isdigit() and int(raw) >= 1):
+        if not (isinstance(raw, str) and re.fullmatch(r"[0-9]+", raw) and int(raw) >= 1):
             problems.append(Problem("오류", where, f"`{key}`는 1 이상의 정수여야 한다: {raw!r}"))
             ok = False
             continue
