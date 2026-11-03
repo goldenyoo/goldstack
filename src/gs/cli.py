@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("feature", help=".work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id. 이 부분 집합 기준으로 순서·frontier를 계산한다")
 
-    p = sub.add_parser("go", help="티켓을 worker에 맡기고 integration에 모아 PR을 연다")
+    p = sub.add_parser("go", help="티켓 실행·보고·PR 병합·main 재검증(실패하면 revert)")
     p.add_argument("feature", help=".work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다")
 

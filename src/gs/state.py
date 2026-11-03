@@ -64,6 +64,7 @@ class State:
     updated_at: str = ""
     finished_at: str = ""
     tickets: dict[str, TicketState] = field(default_factory=dict)
+    finish: dict = field(default_factory=dict)  # 08: PR·병합·main 검증·revert의 재개 지점
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())

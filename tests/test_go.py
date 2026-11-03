@@ -93,11 +93,35 @@ esac
 """
 
 FAKE_GH = """\
-echo "$@" >> "$(dirname "$0")/gh.log"
+here="$(dirname "$0")"
+echo "$@" >> "$here/gh.log"
+body() { while [ "$#" -gt 0 ]; do
+  if [ "$1" = --body-file ]; then cp "$2" "$here/pr-body.md"; break; fi
+  shift
+done; }
 case "$1 $2" in
-  "pr list") exit 0 ;;
-  "pr create") echo "https://example.test/pr/1" ;;
-  "pr edit") exit 0 ;;
+  "pr list") [ -f "$here/gh.open" ] && echo "https://example.test/pr/1"; exit 0 ;;
+  "pr create") body "$@"; touch "$here/gh.open"; rm -f "$here/gh.merged"; echo "https://example.test/pr/1" ;;
+  "pr edit") body "$@" ;;
+  "pr view")
+    if [ -f "$here/gh.merged" ]; then cat "$here/gh.merged"
+    else echo '{"state":"OPEN"}'; fi ;;
+  "pr merge")
+    [ -f "$here/gh.queue" ] && exit 0
+    [ -f "$here/gh.reject" ] && { echo 'merge refused' >&2; exit 1; }
+    set -e
+    head=$(git rev-parse gs/demo/integration)
+    [ "$6" = "$head" ] || { echo 'head mismatch' >&2; exit 1; }
+    remote=$(git remote get-url --push origin)
+    if [ ! -d "$here/merge" ]; then git clone -q "$remote" "$here/merge"; fi
+    git -C "$here/merge" fetch -q origin
+    git -C "$here/merge" reset -q --hard origin/main
+    git -C "$here/merge" merge -q --no-ff origin/gs/demo/integration -m 'Merge feature'
+    git -C "$here/merge" push -q origin main
+    sha=$(git -C "$here/merge" rev-parse HEAD)
+    echo '{"state":"MERGED","mergeCommit":{"oid":"'$sha'"},"headRefOid":"'$head'","baseRefName":"main"}' > "$here/gh.merged"
+    rm -f "$here/gh.open"
+    [ -f "$here/gh.badexit" ] && exit 1; exit 0 ;;
 esac
 """
 
@@ -116,6 +140,7 @@ FAKE_REVIEW_JUDGE = """\
 here="$(dirname "$0")"
 echo "$@" >> "$here/judge.calls"
 cat > "$here/judge.input"
+if grep -q report-input.md "$here/judge.input"; then echo '남은 리뷰 지적과 검증 출력을 확인했다.'; exit 0; fi
 "$PY" - "$(grep -o '/[^ `]*findings.json' "$here/judge.input" | head -n 1)" <<'PYEOF'
 import json, sys
 fs = json.load(open(sys.argv[1]))["findings"]
@@ -128,6 +153,8 @@ FAKE_JUDGE = """\
 here="$(dirname "$0")"
 echo "$@" >> "$here/judge.calls"
 cat > "$here/judge.input"
+if grep -q report-input.md "$here/judge.input"; then echo '티켓의 변경을 integration에서 모아 검증했다.'; exit 0; fi
+cp "$here/judge.input" "$here/failure-judge.input"
 log=$(tail -n 1 "$here/judge.input")
 echo '판단 모델의 실패 요약'
 head -n 4 "$log"
@@ -217,6 +244,7 @@ class GoTest(unittest.TestCase):
         return sh(self.repo, "git", *args)
 
     def add_ticket(self, tid, title=None, push=True):
+        sh(self.repo, "git", "pull", "-q", "--ff-only", "origin", "main")
         (self.repo / ".work" / "demo" / "tickets" / f"{tid}-t.md").write_text(ticket(tid, title=title))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", f"ticket {tid}")
@@ -229,6 +257,7 @@ class GoTest(unittest.TestCase):
 
     def parallel(self, n=3, verify="test ! -f BROKEN"):
         """spec을 max_workers n으로 바꿔 커밋·push한다."""
+        sh(self.repo, "git", "pull", "-q", "--ff-only", "origin", "main")
         (self.repo / ".work" / "demo" / "spec.md").write_text(
             f"---\nfeature: demo\nverify: {verify}\nmax_workers: {n}\n---\n")
         sh(self.repo, "git", "add", "-A")
@@ -237,6 +266,140 @@ class GoTest(unittest.TestCase):
 
     def events(self):
         return (self.bin / "events.log").read_text().split("\n")[:-1]
+
+    # --- 마무리(08): 로컬 bare 원격도 실제로 병합·revert한다 ---
+    def final_report(self):
+        return self.integration("show", "gs/demo/integration:.work/demo/report.md")
+
+    def test_finish_merges_and_verifies_main_in_temporary_worktree(self):
+        initial = self.integration("rev-parse", "main")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "verified")
+        self.assertTrue(f["integration_ok"] and f["main_ok"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["merge_sha"])
+        self.assertEqual(self.integration("rev-parse", "main"), initial)  # 호출 worktree는 움직이지 않는다
+        self.assertEqual(len(self.integration("rev-list", "--parents", "-n", "1", f["merge_sha"]).split()), 3)
+        self.assertEqual(self.integration("show", "origin/main:file_01"), "01 worker")
+        report = self.final_report()
+        for text in ("## Summary", "## Evidence", "## Merge Danger", "| 01 | t01 | merged |",
+                     "main-verify.log", "종료 코드: 0", "git -C /tmp/gs-revert revert", f["merge_sha"]):
+            self.assertIn(text, report)
+        self.assertEqual((self.bin / "pr-body.md").read_text().strip(), report)
+        self.assertEqual(list(self.rundir.glob("gs-main-*")), [])
+        self.assertNotIn("gs-main-", self.integration("worktree", "list"))
+        self.assertEqual(len(out.strip().splitlines()[-4:]), 4)
+        self.assertTrue(out.strip().splitlines()[-4].startswith("■ 요약:"))
+        self.assertIn("-p --model opus", (self.bin / "judge.calls").read_text())
+        self.assertIn("report-input.md", (self.bin / "judge.input").read_text())
+        self.assertNotIn("01 worker", (self.bin / "judge.input").read_text())
+        merges = self.lines("gh.log").count(next(x for x in self.lines("gh.log") if x.startswith("pr merge ")))
+        self.assertEqual(self.go("--only", "01")[0], 0)  # 결과 보고서만 새 PR로 병합하지 않는다
+        self.assertEqual(sum(x.startswith("pr merge ") for x in self.lines("gh.log")), merges)
+
+    def test_finish_main_failure_pushes_revert_and_records_it(self):
+        self.parallel(1, verify='test "$(git log -1 --format=%s)" != "Merge feature"')
+        initial = sh(self.remote, "git", "rev-parse", "main")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "reverted")
+        self.assertTrue(f["integration_ok"])
+        self.assertFalse(f["main_ok"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["revert_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^"), f["merge_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^{tree}"),
+                         sh(self.remote, "git", "rev-parse", f"{initial}^{{tree}}"))
+        self.assertIn(f["revert_sha"], self.final_report())
+        self.assertIn("종료 코드: 1", self.final_report())
+        self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
+        self.assertIn("revert", out)
+        self.assertEqual(self.go("--only", "01")[0], 1)  # 같은 병합을 두 번 revert하지 않는다
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), f["revert_sha"])
+
+    def test_finish_no_merged_ticket_keeps_report_pr_without_merging(self):
+        initial = sh(self.remote, "git", "rev-parse", "main")
+        code, out, err = self.go("--only", "02,03")
+        self.assertEqual(code, 1, out + err)
+        self.assertFalse(any(x.startswith("pr merge ") for x in self.lines("gh.log")))
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), initial)
+        self.assertIn("merged 티켓 없음", self.final_report())
+        self.assertIn("| 02 | t02 | failed | worker 종료 코드 1 |", self.final_report())
+        self.assertIn("| 03 | t03 | skipped | 막힘: 02 |", self.final_report())
+        self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
+
+    def test_finish_verifies_report_commit_before_merging(self):
+        self.parallel(1, verify="test ! -f .work/demo/report.md")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(state.load(self.rundir, "demo").tickets["01"].status, "merged")
+        self.assertFalse(any(x.startswith("pr merge ") for x in self.lines("gh.log")))
+        self.assertIn("integration 검증 실패", self.final_report())
+        self.assertIn("integration-final-verify.log", self.final_report())
+
+    def test_finish_merge_queue_is_not_success_and_resume_rechecks_pr(self):
+        (self.bin / "gh.queue").touch()
+        initial = sh(self.remote, "git", "rev-parse", "main")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "merge_pending")
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), initial)
+        log = self.lines("gh.log")
+        ix = next(i for i, line in enumerate(log) if line.startswith("pr merge "))
+        self.assertTrue(log[ix + 1].startswith("pr view "))
+        self.assertFalse((self.rundir / "finish/main-verify.log").exists())
+        (self.bin / "gh.queue").unlink()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.calls(), ["01"])
+
+    def test_finish_resumes_after_merge_before_main_verify(self):
+        with mock.patch("gs.finish._postmerge", side_effect=RuntimeError("interrupted")):
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                self.go("--only", "01")
+        self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "merged")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(sum(x.startswith("pr merge ") for x in self.lines("gh.log")), 1)
+        self.assertEqual(self.calls(), ["01"])
+
+    def test_finish_checks_actual_merge_even_if_command_returns_error(self):
+        (self.bin / "gh.badexit").touch()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "verified")
+        self.assertTrue((self.rundir / "finish/main-verify.log").exists())
+
+    def test_finish_resumes_revert_push_without_another_revert(self):
+        from gs import git
+        self.parallel(1, verify='test "$(git log -1 --format=%s)" != "Merge feature"')
+        real_run = git.run
+
+        def run(cwd, *args, **kw):
+            if args == ("push", "origin", "HEAD:refs/heads/main"):
+                raise git.GitError("push interrupted")
+            return real_run(cwd, *args, **kw)
+
+        with mock.patch("gs.git.run", side_effect=run):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "main_failed")
+        revert = f["revert_sha"]
+        self.assertNotEqual(sh(self.remote, "git", "rev-parse", "main"), revert)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), revert)
+        self.assertEqual(sum(x.startswith("pr merge ") for x in self.lines("gh.log")), 1)
+        self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "reverted")
+
+    def test_finish_updates_existing_open_pr(self):
+        for _ in range(2):
+            code, out, err = self.go("--only", "06")
+            self.assertEqual(code, 1, out + err)
+        self.assertEqual(sum(x.startswith("pr create ") for x in self.lines("gh.log")), 1)
+        self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
 
     # --- 다른 계열 리뷰와 수정 1회(06) ---
     def review_with(self, findings):
@@ -291,7 +454,7 @@ class GoTest(unittest.TestCase):
         brief = (self.rundir / "04/1/fix/brief.md").read_text()
         self.assertIn("FIX: 값이 틀렸다", brief)
         self.assertNotIn("마음에 안 든다", brief)
-        self.assertIn("04 병합 · 남은 리뷰 지적 2", out)
+        self.assertIn("남은 리뷰 지적 2", out)
 
     def test_review_report_only_merges_directly(self):
         with self.review_with([{"severity": "low", "location": "file_01", "claim": "변수 이름이 짧다",
@@ -390,7 +553,7 @@ class GoTest(unittest.TestCase):
         self.assertIn("시간 초과", out)
         self.assertIn("-p --model opus", (self.bin / "judge.calls").read_text())
         # 판단 모델에는 로그 내용이 아닌 경로만 준다.
-        prompt = (self.bin / "judge.input").read_text()
+        prompt = (self.bin / "failure-judge.input").read_text()
         self.assertNotIn("first attempt stuck", prompt)
         self.assertEqual(Path(prompt.splitlines()[-1]), self.rundir / "01/1/failure.log")
         if runner == "herdr":
@@ -517,7 +680,7 @@ class GoTest(unittest.TestCase):
         t04 = self.integration("log", "--format=%H", "--grep=^t04$", "gs/demo/04")
         self.assertIn("file_01", self.integration("ls-tree", "--name-only", f"{t04}^").split())
         # 병합·검증은 한 번에 하나씩
-        self.assertEqual(vlog.read_text().split(), ["s", "e"] * 5)
+        self.assertEqual(vlog.read_text().split(), ["s", "e"] * 8)  # 티켓 5 + integration 2 + main 1
 
     def test_parallel_conflict_retries_on_latest_integration(self):
         for tid in ("21", "22", "23"):
@@ -688,9 +851,11 @@ class GoTest(unittest.TestCase):
             if (self.bin / "pid_11").exists():
                 kill_quietly(int((self.bin / "pid_11").read_text()))
 
-    def push_blocked(self, remotes):
+    def push_blocked(self, remotes, expected_code=0):
         code, out, err = self.go("--only", "16")
-        self.assertEqual(code, 0, out + err)
+        self.assertEqual(code, expected_code, out + err)
+        if expected_code:
+            self.assertIn("origin/main에 없다", err)  # 서로 다른 fetch/push 원격의 병합을 main 성공으로 보지 않는다
         self.assertTrue((self.bin / "fetch_16").exists(), out)  # fetch는 된다
         self.assertNotIn("pushed", (self.bin / "push_16").read_text())
         for remote in remotes:
@@ -707,7 +872,7 @@ class GoTest(unittest.TestCase):
         mirror = Path(self.tmp.name) / "mirror.git"
         sh(Path(self.tmp.name), "git", "clone", "-q", "--bare", str(self.remote), str(mirror))
         sh(self.repo, "git", "config", "remote.origin.pushurl", str(mirror))
-        self.push_blocked([self.remote, mirror])
+        self.push_blocked([self.remote, mirror], expected_code=1)
         self.assertIn("gs/demo/integration", sh(mirror, "git", "branch", "--list", "gs/demo/integration"))
 
     # --- codex 리뷰(02) 지적 재현 ---
@@ -790,8 +955,8 @@ class GoTest(unittest.TestCase):
                          self.integration("rev-parse", "gs/demo/integration"))
         gh_log = (self.bin / "gh.log").read_text()
         self.assertIn("pr create --base main --head gs/demo/integration", gh_log)
-        self.assertNotIn("merge", gh_log)  # 08 전까지 병합하지 않는다
-        self.assertEqual(self.integration("rev-parse", "main"), self.integration("rev-parse", "origin/main"))
+        self.assertIn("pr merge https://example.test/pr/1 --merge --match-head-commit", gh_log)
+        self.assertEqual(self.integration("show", "origin/main:file_01"), "01 worker")
 
         # 상태의 원천은 state.json 하나
         raw = json.loads((self.rundir / "state.json").read_text())
