@@ -128,4 +128,6 @@ reviewer: codex      # model과 다른 계열
 - ② wave 1(03 04 09 11 05): 5장 첫 시도 병합, $11.7·50분. 리뷰 지적 21 → fix 16 / report 5. 구조 장치 추가: worker 환경의 push URL 차단 + 무효 GH_TOKEN(실제 claude worker에서 `sh -c "git push"` 차단 확인). PR #1
 - ③ wave 2(06 07 08 10): 06이 07과 같은 파일 충돌로 한 번 버려짐(blocked_by 누락), 08은 무관한 경합 시험으로 gs 검증 실패 → 손 병합 + 시험 수정. 리뷰 지적 → fix 14 / report 7. PR #2
 - 관찰(v1 grill 입력): 같은 파일 티켓 직렬화를 사람 판단에만 맡기면 빠진다. codex worker 비용은 집계되지 않는다. verify에 시간 제한이 없다. 성공 worktree가 쌓인다.
-- 남은 것: plugin 설치 → `/grill <v1 feature>` → `/go` → 사람 개입 없이 main까지 = v0 완료.
+- plugin 설치 완료(goldstack@goldstack, user scope). cc-ops-kit plugin·marketplace·캐시는 Claude Code와 Codex에서 제거.
+- v1 주제(사용자 선택): **verify 시간 제한 + 성공 worktree 정리**(08 리뷰 nit, 07 리뷰 nit에서 관찰).
+- 남은 것: 새 세션에서 `/goldstack:grill goldstack-v1` → `/goldstack:go goldstack-v1` → 사람 개입 없이 main까지 = v0 완료.
