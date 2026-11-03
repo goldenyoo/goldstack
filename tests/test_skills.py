@@ -128,7 +128,7 @@ class IdeaFlowTest(unittest.TestCase):
         for name, step in (("grill", 6), ("go", 2)):
             with self.subTest(name):
                 text = steps(self.read(name))[step]
-                self.assertRegex(text, r"git add -- \.goldstack/work/\$ARGUMENTS \.goldstack/out-of-scope \.goldstack/ideas &&")
+                self.assertRegex(text, r"git add -- \.goldstack/work/\$ARGUMENTS \.goldstack/out-of-scope \.goldstack/ideas \.goldstack/profile\.md &&")
 
     def test_retro_reads_feature_run(self):
         data, body = skill_frontmatter(self.read("retro"))
