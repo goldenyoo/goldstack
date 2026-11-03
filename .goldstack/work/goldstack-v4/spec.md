@@ -60,7 +60,7 @@ goldstack을 이 레포 밖의 실제 레포에 들일 수 있게 하고(adopt),
 08·09는 worker가 실제 `claude`·`codex`를 띄워 실험하므로 claude(codex sandbox에선 어렵다). agy 리뷰는 좁고 시험으로 확인되는 05·07에 배정해 실전 경험을 쌓는다.
 
 ## 6. 환경 사실 (2026-11-03 확인)
-- **v3가 실행 중**(2026-11-03 21:47 시작). 이 spec은 v3 병합 전 코드를 보고 쓴다. v3가 고치는 곳: `finish.py`(`_gh --repo`, main에 최종 보고서 push, 마무리 상태 줄), `check.py`·`config.py`(GitHub 원격·값 범위·`claude` CLI 검사), `hook.py`(비밀 차단), `go.py`(heartbeat, herdr 경로, 마무리 0분, kept_worktrees), `report.py`, 새 `backlog.py`, `skills/{idea,retro,grill,go}`, docs, LICENSE. v4 실행 전 v3 병합 코드로 이 절을 다시 확인한다.
+- **v3 병합됨**(PR #5, verified, 2026-11-03 밤 확인). grill은 v3 병합 전 코드를 보고 했고, 띄우기 전에 병합된 코드와 대조했다(아래 grill 기록 '띄우기 전 대조'). v3가 고치는 곳: `finish.py`(`_gh --repo`, main에 최종 보고서 push, 마무리 상태 줄), `check.py`·`config.py`(GitHub 원격·값 범위·`claude` CLI 검사), `hook.py`(비밀 차단), `go.py`(heartbeat, herdr 경로, 마무리 0분, kept_worktrees), `report.py`, 새 `backlog.py`, `skills/{idea,retro,grill,go}`, docs, LICENSE. v4 실행 전 v3 병합 코드로 이 절을 다시 확인한다.
 - `gs`는 `uv tool install`로 복사 설치(editable 아님, goldstack v0.0.1). v3 병합 뒤 `uv tool install --reinstall .` 없이는 v4 실행이 옛 gs로 돈다.
 - CLI: Claude Code 2.1.317, codex-cli 0.166.0, agy 1.4.12.
 - claude worker 명령: `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools "Bash(git push *)" "Bash(gh *)"`(`adapters.Claude`). 플러그인·skill을 거르는 옵션 없음. `claude --help`: `--bare`(설정·플러그인 hook, LSP, plugin sync, `--settings`, `--agents`, `--plugin-dir`을 건너뜀), `--disable-slash-commands`(skill·명령 끔), `--plugin-dir`, `--mcp-config`·strict. worker 차단의 한 겹은 goldstack 플러그인의 PreToolUse hook(`gs hook pretooluse`, GS_ROLE=worker)이므로 플러그인을 통째로 끄면 그 겹이 사라진다.
@@ -99,3 +99,10 @@ goldstack을 이 레포 밖의 실제 레포에 들일 수 있게 하고(adopt),
 
 ### 라운드 3 — 티켓 분해 (추천대로)
 사람 답: "yes". 표는 §5. 범위 밖 정리: `integration-cleanup`·`failed-worktree-cleanup`·`progress-eta-history`·`same-file-serialization-check`는 v4 범위가 되어 삭제, `usage-adapters`는 유지, `gitlab-support`는 v5 grill에서.
+
+### 띄우기 전 대조 (2026-11-03 밤, 사람 없이 — §2 '사소한 어긋남' 허락으로)
+v3 verified(PR #5) 뒤 main pull·gs 재설치. 확인: `gs backlog`·`gs --help` 동작, 모르는 키는 여전히 경고(feature.py), `finish.py`에 병합 뒤 base 보고서 push(`base_report_tried`), `/retro`가 feature 인자를 받음. 결정은 그대로, 티켓 글만 고침:
+- 08: 아이디어 파일이 이미 있음(v3가 `worker-plugin-isolation.md`로 옮김) → "새로 쓴다"를 "기존 파일 갱신, open으로 되돌림"으로.
+- 09: 아이디어 파일 이름을 `codex-worker-hook.md`로 명시.
+- 06: 자동 정리를 base 보고서 push 뒤에 하라는 참고 한 줄.
+- 아이디어 상태: agy-gemini-usage·codex-worker-hook·worker-plugin-isolation·same-file-serialization-check → taken/goldstack-v4, adopt → taken/goldstack-v5.

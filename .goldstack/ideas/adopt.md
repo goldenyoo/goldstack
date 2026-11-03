@@ -2,8 +2,8 @@
 date: "2026-11-03"
 severity: "medium"
 source: "goldstack-v2 실행 중 대화, 코드 확인(finish.py의 `--merge`, main 직접 push)"
-status: "open"
-feature: ""
+status: "taken"
+feature: goldstack-v5
 ---
 **기존 프로젝트 들이기(adopt) 묶음**. 이미 진행 중인 레포에 goldstack을 맞추기:
   - `gs doctor`: 대상 레포의 GitHub 설정(허용 병합 방식, branch protection, 필수 CI 검사)을 읽어 미리 경고

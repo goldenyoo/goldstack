@@ -19,4 +19,5 @@ reviewer: claude
 - 실행 기록(`run/` 로그) 지우기
 
 ## 참고
+- 자동 정리는 v3가 넣은 병합 뒤 base 보고서 push(`base_report_tried`)가 끝난 다음에 한다(integration worktree를 보고서 커밋에 쓴다).
 - spec §3 1-5, 2-2, §6 worktree·브랜치. touches: `src/gs/clean.py` `src/gs/finish.py` `src/gs/cli.py` `tests/test_clean.py`
