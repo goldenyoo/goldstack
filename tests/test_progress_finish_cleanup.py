@@ -10,7 +10,7 @@ import test_go
 import test_notify
 from test_go import FAKE_WORKER, sh
 
-from gs import herdr, report, state
+from gs import git, herdr, report, state
 
 START = datetime(2026, 11, 3, 9, tzinfo=timezone.utc)
 
@@ -123,6 +123,7 @@ class KeptWorktreesTest(GoCase):
         user_commit = sh(wt, "git", "rev-parse", "HEAD")
         sh(self.remote, "git", "update-ref", "refs/heads/main", init)
         sh(self.remote, "git", "update-ref", "refs/heads/gs/demo/integration", init)
+        git.ensure_worktree(self.repo, self.rundir / "wt/integration", "gs/demo/integration", init)
         sh(self.rundir / "wt/integration", "git", "reset", "-q", "--hard", init)
         code, out, err = self.go("--only", "01")
         self.assertIn("[01] state는 병합이라는데 integration에 표시가 없다", out)
@@ -148,6 +149,7 @@ class KeptWorktreesTest(GoCase):
         user_commit = sh(wt, "git", "rev-parse", "HEAD")
         sh(self.remote, "git", "update-ref", "refs/heads/main", init)
         sh(self.remote, "git", "update-ref", "refs/heads/gs/demo/integration", init)
+        git.ensure_worktree(self.repo, self.rundir / "wt/integration", "gs/demo/integration", init)
         sh(self.rundir / "wt/integration", "git", "reset", "-q", "--hard", init)
         code, out, err = self.go("--only", "01")
         self.assertIn(f"[01] 경고: 남긴 worktree의 브랜치가 gs/demo/01가 아니라 정리하지 않는다: {wt}", out)

@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, config, failure, finish, git, graph, herdr, notify, review, state, verify, worker
+from . import adapters, clean, config, failure, finish, git, graph, herdr, notify, review, state, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -109,17 +109,23 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
             git.run(repo, "fetch", "-q", r.remote, r.base)
             _require_committed(r)
             _begin(r)
-            _prepare_integration(r)
-            _resume_merged(r)
-            # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
-            if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
-                r.ihead = git.sha(r.iwt, "HEAD")
-                url, finished = _finish_run(r)
+            if _finished_after_clean(r):
+                url, finished = r.st.finish.get("url"), r.st.finish["phase"] == "verified"
+                say(f"■ 이미 끝남: {r.name} ({r.st.finish['phase']})")
+                clean.integration(r)  # 지난 자동 정리가 원격 삭제에서만 실패했을 수 있다
             else:
-                finished = True
-            if finished:
-                _loop(r)
-                url, finished = _finish_run(r)
+                _prepare_integration(r)
+                _resume_merged(r)
+                # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
+                if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
+                    r.ihead = git.sha(r.iwt, "HEAD")
+                    # 회복 뒤 새 범위를 이어 돌릴 수 있어, 마지막 마무리까지 integration을 둔다.
+                    url, finished = _finish_run(r, cleanup=False)
+                else:
+                    finished = True
+                if finished:
+                    _loop(r)
+                    url, finished = _finish_run(r)
         except git.GitError as e:
             print(f"gs go: git 오류: {e}", file=sys.stderr)
             finished = False
@@ -146,11 +152,11 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     return 0 if ok else 1
 
 
-def _finish_run(r: Run) -> tuple[str | None, bool]:
+def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
     r.st.phase = "finish"
     r.save()
     try:
-        return finish.run(r)
+        return finish.run(r, cleanup=cleanup)
     finally:
         r.st.phase = ""
         r.save()
@@ -241,9 +247,25 @@ def _reset_integration(r: Run, to: str = "HEAD") -> bool:
     return dirty or moved
 
 
+def _finished_after_clean(r: Run) -> bool:
+    """정리된 완료 범위는 재생성하지 않는다. 새 티켓·남긴 worktree가 있으면 기존 재개 흐름으로 간다."""
+    return bool(r.st.finish.get("phase") in finish.BASE_REPORT_PHASES and r.st.finish.get("base_report_tried")
+            and not r.iwt.exists()
+            and not git.out(r.repo, "for-each-ref", "--format=%(refname)", f"refs/heads/gs/{r.name}/")
+            and all(r.st.tickets[tid].status == state.MERGED for tid in r.order)
+            and not any(ts.kept_worktrees for ts in r.st.tickets.values()))
+
+
 def _prepare_integration(r: Run) -> None:
     branch = integration_branch(r.name)
-    git.ensure_worktree(r.repo, r.iwt, branch, start=r.base_ref)
+    start = r.base_ref
+    # 정리 뒤 새 wave·남긴 worktree를 처리할 때는 보존된 head로 기존 재개 판단을 유지한다.
+    # 객체가 GC됐으면 base로 돌아간다. 완료 범위만의 재개는 위에서 이미 끝낸다.
+    head = r.st.finish.get("head")
+    if r.st.finish.get("phase") in finish.BASE_REPORT_PHASES and head:
+        if git.run(r.repo, "cat-file", "-e", f"{head}^{{commit}}", check=False).returncode == 0:
+            start = head
+    git.ensure_worktree(r.repo, r.iwt, branch, start=start)
     if _reset_integration(r):
         say("■ integration worktree에 남은 병합·변경을 버렸다(지난 실행이 중간에 끝난 흔적)")
     # 앞 wave가 base에 병합된 뒤라면 원격 base를 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
