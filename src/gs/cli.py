@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from importlib import metadata
 from pathlib import Path
 
 from . import feature as featmod
@@ -12,6 +13,7 @@ from .check import check
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gs", description="goldstack: grill → go → main")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {metadata.version('goldstack')}")
     parser.add_argument("--repo", type=Path, help="레포 루트(기본: 현재 디렉터리에서 위로 .git을 찾는다)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

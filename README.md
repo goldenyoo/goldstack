@@ -10,19 +10,20 @@ Claude Code로 feature 하나를 끝까지 보내는 개인 운영 kit.
 
 필요한 것: Python 3.12+와 [uv](https://docs.astral.sh/uv/), `git`, 로그인한 `gh`(GitHub), `claude`(Claude Code). 대상 레포의 원격(`git.remote`, 기본 `origin`)은 GitHub 저장소여야 한다(PR·병합을 `gh pr … --repo <owner/repo>`로 한다). 한계(GitHub만, rebase 병합 미지원, 승인은 사람)는 [docs/guide.md](docs/guide.md#한계). 티켓이 쓰는 모델이 있으면 `codex`, `agy`. `herdr`(터미널 멀티플렉서)는 선택이다. `gs go`를 herdr 안에서 돌리면 worker마다 pane이 보이고, 아니면 worker가 화면 없는 프로세스로 돈다.
 
-**1. `gs` CLI** — 이 레포를 받아 설치한다. main을 새로 받을 때마다 다시 실행한다(고정 복사로 설치된다).
+**1. `gs` CLI** — 릴리스 태그에서 설치한다.
 ```sh
-git clone https://github.com/goldenyoo/goldstack && cd goldstack
-uv tool install --reinstall .
-gs --help
+uv tool install git+https://github.com/goldenyoo/goldstack@v0.1.0
+gs --version
 ```
+태그가 생기기 전이면 `@v0.1.0` 대신 `@main`을 쓴다.
+저장소가 private이면 접근 권한(collaborator)이 필요하다.
 
 **2. Claude Code plugin** — `/grill`·`/go` 같은 skill, worker 차단 hook, 진행 바 mod가 들어 있다. Claude Code에서:
 ```
-/plugin marketplace add /path/to/goldstack   # 이 레포 디렉터리를 로컬 marketplace로 등록
+/plugin marketplace add goldenyoo/goldstack
 /plugin install goldstack@goldstack          # user scope: 모든 프로젝트에서 쓴다
 ```
-명령줄로는 `claude plugin marketplace add /path/to/goldstack && claude plugin install goldstack@goldstack`. 레포를 새로 받은 뒤에는 `/plugin marketplace update goldstack`.
+명령줄로는 `claude plugin marketplace add goldenyoo/goldstack && claude plugin install goldstack@goldstack`. 플러그인을 갱신하려면 `/plugin marketplace update goldstack`.
 
 **3. 대상 레포에서 `/adopt`** — goldstack을 쓸 레포에서 Claude Code를 열고 `/adopt`. 레포를 훑어 요약 `.goldstack/profile.md`를 쓰고, 그 사이 `gs init`과 `gs doctor`(GitHub 병합 방식·base 보호·필수 승인·필수 검사를 읽어 맞는 config 줄을 보인다)를 거친다. 커밋은 하지 않는다. skill 없이 터미널에서 해도 된다. 이미 있는 파일은 그대로 둔다.
 ```console
@@ -53,6 +54,19 @@ cp .goldstack/local.env.example .goldstack/local.env
 - 그 Claude Code 세션이 대상 레포 안(루트나 하위 디렉터리)에서 열렸는지 본다. mod는 세션 디렉터리에서 위로 올라가며 처음 만나는 `.goldstack/work/*/run/state.json`을 읽고, 끝나지 않았고 최근 10분 안에 바뀐 실행만 그린다. `gs go`는 worker를 기다리는 동안 상태가 그대로여도 60초마다 state를 다시 쓰지만, 리뷰·검증·병합·마무리를 하는 동안에는 쓰지 않는다. 그래서 오래 걸리는 리뷰(기본 30분까지)나 검증(기본 20분까지) 중에는 정상 실행이어도 바가 잠시 사라질 수 있다. 바가 사라졌다고 `gs go`가 죽은 것은 아니다. `gs status <feature>`가 `실행 중(pid …)`인지 `중단됨`인지로 확인한다.
 - mod(hooks API)는 early-access라 Claude Code 버전에 따라 동작이 바뀔 수 있다(2.1.317에서 확인). marketplace 설치본에서 mod가 안 뜨면 레포 디렉터리를 직접 싣는다: `claude --plugin-dir /path/to/goldstack`, 또는 늘 그렇게 하려면 환경(또는 settings의 `env`)에 `CLAUDE_CODE_PLUGIN_DIRS=/path/to/goldstack`.
 - 바가 없어도 실행에는 영향이 없다. 같은 줄을 `gs status <feature>`가 표 아래에 보여 준다.
+
+**개발할 때** — 로컬 clone에서 CLI와 플러그인을 설치한다. CLI는 고정 복사이므로 소스를 고친 뒤 다시 설치한다.
+```sh
+git clone https://github.com/goldenyoo/goldstack && cd goldstack
+uv tool install --reinstall .
+gs --version
+```
+Claude Code에서 로컬 디렉터리를 marketplace로 등록한다:
+```
+/plugin marketplace add /path/to/goldstack
+/plugin install goldstack@goldstack
+```
+레포를 새로 받은 뒤에는 `/plugin marketplace update goldstack`.
 
 ## 5분 따라 하기
 
