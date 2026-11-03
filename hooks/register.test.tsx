@@ -133,3 +133,14 @@ test('1초마다 다시 읽어 바뀐 줄을 그리고, 실행이 끝나면 지�
   await clock.advance(1000)
   expect(await shown($)).toEqual([])
 })
+
+test('가장 최근 파일을 읽지 못하면 더 오래된 실행으로 넘어가지 않고 아무것도 그리지 않는다', async ($, on) => {
+  mock.clock(on, { now: NOW })
+  repo(on, {
+    older: { mtimeMs: NOW - 4 * MIN, state: LIVE('older') },
+    newer: { mtimeMs: NOW - 1 * MIN, state: '{"finished_at": ' },
+  })
+  await start($, on)
+
+  expect(await shown($)).toEqual([])
+})
