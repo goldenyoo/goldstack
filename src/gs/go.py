@@ -39,7 +39,7 @@ class Run:
     repo: Path
     feat: Feature
     only: list[str] | None
-    gitcfg: config.GitConfig  # .goldstack/config.toml [git]: 원격 이름과 PR 대상 base 브랜치
+    cfg: config.Config  # 실행 시작 시 읽은 설정을 모든 모델 호출에 함께 쓴다
     st: state.State | None = None  # 상태의 원천. 요약·PR 본문도 이것을 읽는다
     g: dict[str, list[str]] = field(default_factory=dict)
     order: list[str] = field(default_factory=list)
@@ -52,12 +52,12 @@ class Run:
 
     @property
     def remote(self) -> str:
-        return self.gitcfg.remote
+        return self.cfg.git.remote
 
     @property
     def base(self) -> str:
         """PR 대상 브랜치 이름(예: main)."""
-        return self.gitcfg.base
+        return self.cfg.git.base
 
     @property
     def base_ref(self) -> str:
@@ -85,7 +85,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         print(f"gs go: 검사 오류 {len(feat.errors)}개. 아무것도 띄우지 않았다.", file=sys.stderr)
         return 1
     cfg, _ = config.load(repo)  # check가 이미 검사했다(오류면 위에서 끝났다). 경고는 check가 보였다
-    r = Run(repo, feat, only, cfg.git)
+    r = Run(repo, feat, only, cfg)
     lock = state.Lock(r.rundir)
     try:
         lock.acquire()
@@ -426,7 +426,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
         if ts.failure_summary:
             path = Path(ts.failure_summary)
             if not path.exists():  # 요약 호출 중 코디네이터가 죽었으면 새 호출로 마무리한다
-                failure.summarize(r.repo, path.with_name("failure.log"))
+                failure.summarize(r.repo, path.with_name("failure.log"), r.cfg)
             summary = path.read_text(encoding="utf-8")
         # 실패·중단 worktree는 지우지 않는다. 실행 디렉터리 번호로 브랜치와 경로도 새로 고른다.
         while True:
@@ -444,7 +444,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
              review={})
         git.ensure_worktree(r.repo, wt, branch, start=base)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
-        adapter = adapters.for_model(t.model)
+        adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
@@ -561,7 +561,7 @@ def _review(r: Run, a: Active) -> list[dict]:
     try:
         rec = review.run(repo=r.repo, worktree=a.wt.resolve(), rdir=rdir, base=r.ihead, branch=a.branch,
                          ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model,
-                         reviewer=t.reviewer)
+                         reviewer=t.reviewer, cfg=r.cfg)
     except (review.Refused, git.GitError):
         raise  # 같은 계열은 거부, git 오류는 이 티켓의 실패(_finish·_loop가 처리)
     except Exception as e:  # noqa: BLE001 — 리뷰는 병합을 막지 않는다(spec 2-1). 뜻밖의 오류도 리뷰 실패로 적는다
@@ -585,7 +585,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
             f.write(review.fix_brief(todo))
-        adapter = adapters.for_model(t.model)
+        adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
         base = git.sha(r.repo, a.branch)
@@ -686,7 +686,7 @@ def _fail(r: Run, t: Ticket, reason: str) -> bool:
     _set(r, t.id, status=state.PENDING if retry else state.FAILED, reason=reason, ended_at=state.now(),
          failures=failures, failed_worktrees=paths, failure_summary=summary)
     if retry:
-        failure.summarize(r.repo, log)
+        failure.summarize(r.repo, log, r.cfg)
     say(f"[{t.id}] 실패: {reason}")
     if retry:
         say(f"[{t.id}] 같은 모델({t.model})로 최신 integration에서 한 번 재시도한다")

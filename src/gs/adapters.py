@@ -20,7 +20,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import git
+from . import config, git
 
 q = shlex.quote
 
@@ -38,6 +38,9 @@ class WorkerInput:
 
 class Adapter:
     name = ""
+
+    def __init__(self, models: config.ModelsConfig):
+        self.models = models
 
     def prepare(self, inp: WorkerInput) -> None:
         pass
@@ -100,7 +103,8 @@ class Codex(Adapter):
 
     def command(self, inp: WorkerInput) -> str:
         adds = " ".join(f"--add-dir {q(str(d))}" for d in self.writable_dirs(inp.worktree))
-        return (f"codex exec --json -s workspace-write -c sandbox_workspace_write.network_access=false "
+        model = f"--model {q(self.models.codex)} " if self.models.codex else ""
+        return (f"codex exec --json -s workspace-write {model}-c sandbox_workspace_write.network_access=false "
                 f"--skip-git-repo-check -C {q(str(inp.worktree))} {adds} {q(self.NOTE)} < {q(str(inp.brief))}")
 
 
@@ -108,7 +112,6 @@ class Codex(Adapter):
 
 AGY_HOOK_NAME = "goldstack-worker-guard"
 AGY_HOOK_FILE = Path(".agents") / "hooks.json"
-AGY_MODEL = "gemini-4-argon-high"  # 강도가 붙은 slug 하나. Gemini를 명시해 다른 계열(Claude·GPT)로 새지 않게(11 §4)
 # deny 규칙: hook이 빠져도 직접 쓴 형태는 막는 마지막 줄(11 §6). 단어 단위 매칭이라 혼자서는 부족하다.
 AGY_DENY = ["command(git push)", "command(gh pr create)", "command(gh pr merge)", "command(gh pr close)",
             "command(gh api)", "command(gh repo)", "command(gh release)", "command(gh auth)"]
@@ -140,13 +143,14 @@ class Agy(Adapter):
     name = "agy"
     EXCLUDE = "/" + str(AGY_HOOK_FILE)
 
-    def settings(self) -> str:
+    @staticmethod
+    def settings() -> str:
         return json.dumps({"permissions": {"deny": AGY_DENY}}, separators=(",", ":"))
 
     def command(self, inp: WorkerInput) -> str:
         return (f"{q(agy_bin())} -p \"$(cat {q(str(inp.brief))})\" --output-format stream-json "
                 f"--dangerously-skip-permissions --disable-slash-commands "
-                f"--settings {q(self.settings())} --model {q(AGY_MODEL)}")
+                f"--settings {q(self.settings())} --model {q(self.models.agy)}")
 
     def prepare(self, inp: WorkerInput) -> None:
         install_agy_hook(inp.worktree)
@@ -312,11 +316,11 @@ class Custom(Adapter):
 ADAPTERS: dict[str, type[Adapter]] = {"claude": Claude, "codex": Codex, "agy": Agy}
 
 
-def for_model(model: str) -> Adapter:
+def for_model(model: str, models: config.ModelsConfig) -> Adapter:
     override = os.environ.get("GS_WORKER_CMD")
     if override:
         return Custom(override)
     try:
-        return ADAPTERS[model]()
+        return ADAPTERS[model](models)
     except KeyError:
         raise AdapterError(f"model `{model}` 어댑터가 없다({'|'.join(ADAPTERS)})") from None

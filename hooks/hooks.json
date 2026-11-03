@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "gs hook pretooluse"
+            "command": "if [ \"${GS_ROLE:-}\" != worker ]; then exit 0; fi; if command -v gs >/dev/null 2>&1; then exec gs hook pretooluse; else echo 'gs가 없어 worker 도구 호출을 막는다' >&2; exit 2; fi"
           }
         ]
       }

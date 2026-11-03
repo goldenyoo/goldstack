@@ -1,11 +1,13 @@
 import contextlib
 import io
+import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from gs import cli, config
+from gs import cli, config, git
 from gs import feature as featmod
 
 REPO = Path(__file__).resolve().parents[1]
@@ -26,7 +28,17 @@ class CheckTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
-        (self.repo / ".git").mkdir()
+        git.run(self.repo, "init", "-q")
+        self.bin = self.repo / "bin"
+        self.bin.mkdir()
+        (self.bin / "git").symlink_to(shutil.which("git"))
+        for name in ("gh", "claude", "codex", "agy"):
+            path = self.bin / name
+            path.write_text("#!/bin/sh\nexit 0\n")
+            path.chmod(0o755)
+        patch = mock.patch.dict(os.environ, {"PATH": str(self.bin)})
+        patch.start()
+        self.addCleanup(patch.stop)
         (self.repo / ".goldstack").mkdir()
         (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
         self.tickets = self.repo / ".goldstack/work" / "demo" / "tickets"
@@ -161,6 +173,51 @@ class CheckTest(unittest.TestCase):
         self.write("01-a.md", ticket("01"))
         self.assert_error("없는 티켓: 99", "--only", "01,99")
 
+    def test_required_clis_missing_from_path(self):
+        self.write("01-a.md", ticket("01"))
+        self.write("02-b.md", ticket("02", model="agy", reviewer="codex"))
+        for name in ("git", "gh", "claude", "codex", "agy"):
+            with self.subTest(name=name):
+                path = self.bin / name
+                hidden = self.repo / name
+                path.rename(hidden)
+                try:
+                    self.assert_error(f"CLI `{name}`가 PATH에 없다")
+                finally:
+                    hidden.rename(path)
+
+    def test_cli_checks_only_selected_tickets(self):
+        self.write("01-a.md", ticket("01"))
+        self.write("02-b.md", ticket("02", model="agy", reviewer="codex"))
+        (self.bin / "agy").unlink()
+        code, out, err = self.run_check("--only", "01")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assert_error("CLI `agy`가 PATH에 없다", "--only", "02")
+
+    def test_reviewer_cli_is_required(self):
+        self.write("01-a.md", ticket("01", model="codex", reviewer="agy"))
+        (self.bin / "agy").unlink()
+        self.assert_error("CLI `agy`가 PATH에 없다")
+
+    def test_non_github_remote_warning_uses_configured_remote(self):
+        self.write("01-a.md", ticket("01"))
+        path = self.repo / config.CONFIG_PATH
+        path.write_text(path.read_text().replace('remote = "origin"', 'remote = "upstream"'))
+        git.run(self.repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
+        git.run(self.repo, "remote", "add", "upstream", "https://gitlab.com/owner/repo.git")
+        for url in ("https://gitlab.com/owner/repo.git", "git@gitlab.com:owner/repo.git",
+                    "https://github.com.example.org/owner/repo.git", "/tmp/github.com/repo.git"):
+            with self.subTest(url=url):
+                git.run(self.repo, "remote", "set-url", "upstream", url)
+                code, out, err = self.run_check()
+                self.assertEqual(code, 0, out + err)
+                self.assertIn(f"경고: 원격 {url}은 GitHub가 아니다. PR·병합은 gh로만 한다", err)
+        for url in ("https://github.com/owner/repo.git", "git@github.com:owner/repo.git",
+                    "ssh://git@github.com/owner/repo.git"):
+            with self.subTest(url=url):
+                git.run(self.repo, "remote", "set-url", "upstream", url)
+                self.assertEqual(self.run_check()[::2], (0, ""))
+
 
 class RealRepoTest(unittest.TestCase):
     def test_goldstack_v0_passes(self):
@@ -172,7 +229,8 @@ class RealRepoTest(unittest.TestCase):
             shutil.copytree(src, repo / ".goldstack/work/goldstack-v0")
             (repo / ".goldstack").mkdir(exist_ok=True)
             (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+                    mock.patch("gs.check.shutil.which", return_value="/test/cli"):
                 code = cli.main(["--repo", str(repo), "check", "goldstack-v0"])
         self.assertEqual(code, 0, err.getvalue())
         self.assertIn("지금 시작 가능: 01 11", out.getvalue())

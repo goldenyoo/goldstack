@@ -189,6 +189,10 @@ class GoTest(unittest.TestCase):
         root = Path(self.tmp.name).resolve()
         self.bin = root / "bin"
         self.bin.mkdir()
+        for name in ("claude", "codex"):
+            path = self.bin / name
+            path.write_text("#!/bin/sh\nexit 1\n")
+            path.chmod(0o755)
         (self.bin / "worker.sh").write_text(FAKE_WORKER)
         (self.bin / "gh").write_text("#!/bin/bash\n" + FAKE_GH)
         (self.bin / "gh").chmod(0o755)
@@ -196,6 +200,7 @@ class GoTest(unittest.TestCase):
         (self.bin / "judge").chmod(0o755)
         (self.bin / "reviewer.sh").write_text(FAKE_REVIEWER)
         self.env = mock.patch.dict(os.environ, {
+            "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
             "GS_REVIEWER_CMD": f"bash {self.bin / 'reviewer.sh'}",
             "GS_RUNNER": "subprocess",
             "GS_WORKER_CMD": f"bash {self.bin / 'worker.sh'}",
@@ -826,7 +831,8 @@ fi
         # 리뷰 단계 자체도 같은 계열이면 reviewer를 부르지 않고 거부한다
         with self.assertRaisesRegex(review.Refused, "같은 계열"):
             review.run(repo=self.repo, worktree=self.repo, rdir=self.rundir / "x", base="main", branch="main",
-                       ticket=Path("t"), spec=Path("s"), model="claude", reviewer="claude")
+                       ticket=Path("t"), spec=Path("s"), model="claude", reviewer="claude",
+                       cfg=config.load(self.repo)[0])
         self.assertEqual(self.lines("review.calls"), [])
 
     def test_failed_fix_is_discarded_and_reviewed_work_merged(self):
