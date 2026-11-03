@@ -2,8 +2,8 @@
 
 병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 모델로 한 번 재시도한다(07).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
-한 번 띄운다(06, review.py). 재리뷰는 없고 verify만 돈다. 끝에는 보고서·PR·main 검증·revert를 한다(08).
-진행 상태는 `.work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
+한 번 띄운다(06, review.py). 재리뷰는 없고 verify만 돈다. 끝에는 보고서·PR·base 검증·revert를 한다(08).
+진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
 from __future__ import annotations
@@ -14,12 +14,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import adapters, failure, finish, git, graph, herdr, review, state, verify, worker
+from . import adapters, config, failure, finish, git, graph, herdr, review, state, verify, worker
 from .check import check
-from .feature import Feature, Ticket
+from .feature import Feature, Ticket, work_rel
 
-MAIN = "main"
-BASE = "origin/main"  # PR 대상. 로컬 main은 뒤처지거나 앞설 수 있어 쓰지 않는다
 CONFLICT = "conflict"
 
 
@@ -41,6 +39,7 @@ class Run:
     repo: Path
     feat: Feature
     only: list[str] | None
+    gitcfg: config.GitConfig  # .goldstack/config.toml [git]: 원격 이름과 PR 대상 base 브랜치
     st: state.State | None = None  # 상태의 원천. 요약·PR 본문도 이것을 읽는다
     g: dict[str, list[str]] = field(default_factory=dict)
     order: list[str] = field(default_factory=list)
@@ -50,6 +49,20 @@ class Run:
     @property
     def name(self) -> str:
         return self.feat.name
+
+    @property
+    def remote(self) -> str:
+        return self.gitcfg.remote
+
+    @property
+    def base(self) -> str:
+        """PR 대상 브랜치 이름(예: main)."""
+        return self.gitcfg.base
+
+    @property
+    def base_ref(self) -> str:
+        """원격의 base(예: origin/main). 로컬 base 브랜치는 뒤처지거나 앞설 수 있어 쓰지 않는다."""
+        return f"{self.remote}/{self.base}"
 
     @property
     def rundir(self) -> Path:
@@ -71,7 +84,8 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     if feat.errors:
         print(f"gs go: 검사 오류 {len(feat.errors)}개. 아무것도 띄우지 않았다.", file=sys.stderr)
         return 1
-    r = Run(repo, feat, only)
+    cfg, _ = config.load(repo)  # check가 이미 검사했다(오류면 위에서 끝났다). 경고는 check가 보였다
+    r = Run(repo, feat, only, cfg.git)
     lock = state.Lock(r.rundir)
     try:
         lock.acquire()
@@ -81,12 +95,12 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     try:
         url, finished = None, False
         try:
-            git.run(repo, "fetch", "-q", "origin", MAIN)
-            _require_committed(repo, name)
+            git.run(repo, "fetch", "-q", r.remote, r.base)
+            _require_committed(r)
             _begin(r)
             _prepare_integration(r)
             _resume_merged(r)
-            # 병합 확인·main 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
+            # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
             if r.st.finish.get("phase") in ("merge_requested", "merge_pending", "merged", "main_failed"):
                 r.ihead = git.sha(r.iwt, "HEAD")
                 url, finished = finish.run(r)
@@ -168,13 +182,13 @@ def _set(r: Run, tid: str, **fields) -> None:
     state.save(r.rundir, r.st)
 
 
-def _require_committed(repo: Path, name: str) -> None:
-    rel = f".work/{name}"
+def _require_committed(r: Run) -> None:
+    rel = work_rel(r.name)
     # report.md는 gs가 integration에서 쓴다. 호출 worktree의 보고서가 뒤처져도 티켓 재개를 막지 않는다.
     inputs = [f"{rel}/spec.md", f"{rel}/tickets"]
-    if git.out(repo, "status", "--porcelain", "--", *inputs) or git.run(repo, "diff", "--quiet", BASE, "--", *inputs,
-                                                                     check=False).returncode:
-        raise git.GitError(f"{rel}가 {BASE}와 다르다. worker는 {BASE} 기준으로 일하므로 먼저 커밋하고 push하라")
+    if git.out(r.repo, "status", "--porcelain", "--", *inputs) or git.run(r.repo, "diff", "--quiet", r.base_ref, "--",
+                                                                       *inputs, check=False).returncode:
+        raise git.GitError(f"{rel}가 {r.base_ref}와 다르다. worker는 {r.base_ref} 기준으로 일하므로 먼저 커밋하고 push하라")
 
 
 def _reset_integration(r: Run, to: str = "HEAD") -> bool:
@@ -191,12 +205,12 @@ def _reset_integration(r: Run, to: str = "HEAD") -> bool:
 
 def _prepare_integration(r: Run) -> None:
     branch = integration_branch(r.name)
-    git.ensure_worktree(r.repo, r.iwt, branch, start=BASE)
+    git.ensure_worktree(r.repo, r.iwt, branch, start=r.base_ref)
     if _reset_integration(r):
         say("■ integration worktree에 남은 병합·변경을 버렸다(지난 실행이 중간에 끝난 흔적)")
-    # 앞 wave가 main에 병합된 뒤라면 origin/main을 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
-    # main이 이 feature의 병합을 revert했으면 그 revert를 되돌린 커밋까지 합친다(feature 코드를 잃지 않는다).
-    finish.merge_main(r)
+    # 앞 wave가 base에 병합된 뒤라면 원격 base를 받아 둔다. 보통 fast-forward라 force push가 필요 없다.
+    # base가 이 feature의 병합을 revert했으면 그 revert를 되돌린 커밋까지 합친다(feature 코드를 잃지 않는다).
+    finish.merge_base(r)
     say(f"■ integration: {branch} @ {git.sha(r.iwt, 'HEAD')[:8]} ({r.iwt})")
 
 
@@ -705,5 +719,5 @@ def _summary(r: Run, url: str | None) -> None:
     f = r.st.finish
     say(f"■ 마무리: {f.get('outcome', f.get('phase', '미완료'))}")
     left = sum(len(review.remaining(r.st.tickets[tid].review)) for tid in r.order)
-    say(f"■ 보고서: .work/{r.name}/report.md · 남은 리뷰 지적 {left}")
+    say(f"■ 보고서: {work_rel(r.name)}/report.md · 남은 리뷰 지적 {left}")
     say(f"■ PR: {url or '없음'}")

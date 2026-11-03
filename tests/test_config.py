@@ -144,11 +144,11 @@ class ConfigTest(unittest.TestCase):
                     self.assertIn(expected + "\n", err)
                     self.assertNotIn("feature 디렉터리", err)
             git_run.assert_not_called()
-        self.assertFalse((self.repo / ".work").exists())
+        self.assertFalse((self.repo / ".goldstack/work").exists())
         self.assertEqual(self.cli("config", "git.base"), (1, "", expected + "\n"))
 
     def test_check_and_go_reject_invalid_config_and_check_reports_warnings(self):
-        root = self.repo / ".work/demo"
+        root = self.repo / ".goldstack/work/demo"
         (root / "tickets").mkdir(parents=True)
         (root / "spec.md").write_text('---\nfeature: demo\nverify: "true"\n---\n')
         (root / "tickets/01-a.md").write_text(

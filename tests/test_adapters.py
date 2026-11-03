@@ -417,10 +417,10 @@ class AgyGoAndCheckTest(Base):
         sh(self.repo, "git", "init", "-q", "-b", "main")
         (self.repo / ".goldstack").mkdir()
         (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
-        (self.repo / ".gitignore").write_text(".work/*/run/\n")
-        tickets = self.repo / ".work" / "demo" / "tickets"
+        (self.repo / ".gitignore").write_text(".goldstack/work/*/run/\n")
+        tickets = self.repo / ".goldstack/work" / "demo" / "tickets"
         tickets.mkdir(parents=True)
-        (self.repo / ".work" / "demo" / "spec.md").write_text(SPEC)
+        (self.repo / ".goldstack/work" / "demo" / "spec.md").write_text(SPEC)
         (tickets / "01-t.md").write_text(AGY_TICKET.format(tid="01", model="agy"))
         (tickets / "02-t.md").write_text(AGY_TICKET.format(tid="02", model="codex"))
         sh(self.repo, "git", "add", "-A")
@@ -435,7 +435,7 @@ class AgyGoAndCheckTest(Base):
         return code, out.getvalue(), err.getvalue()
 
     def state(self):
-        return json.loads((self.repo / ".work" / "demo" / "run" / "state.json").read_text())["tickets"]
+        return json.loads((self.repo / ".goldstack/work" / "demo" / "run" / "state.json").read_text())["tickets"]
 
     def test_go_runs_agy_through_adapter(self):
         self.fake_agy("ok")

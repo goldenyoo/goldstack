@@ -52,7 +52,7 @@ class SkillTest(unittest.TestCase):
             (repo / ".git").mkdir()
             (repo / ".goldstack").mkdir()
             (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
-            root = repo / ".work" / "demo"
+            root = repo / ".goldstack/work" / "demo"
             (root / "tickets").mkdir(parents=True)
             spec = (TEMPLATES / "spec.md").read_text(encoding="utf-8")
             spec = spec.replace("<셸 명령 한 줄. gs가 integration에서 직접 돌린다>", '"true"')

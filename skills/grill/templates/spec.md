@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # <feature> — spec
 
-상태: grill 진행 중(라운드 <n>) · <YYYY-MM-DD> · 티켓 [tickets/](tickets/) · 범위 밖 [.out-of-scope/](../../.out-of-scope/)
+상태: grill 진행 중(라운드 <n>) · <YYYY-MM-DD> · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 <!-- 끝나면: "grill 완료(라운드 <n>개)". 이 템플릿의 주석은 쓰면서 지운다 -->
 
 ## 1. 목표

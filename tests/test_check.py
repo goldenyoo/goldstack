@@ -29,9 +29,9 @@ class CheckTest(unittest.TestCase):
         (self.repo / ".git").mkdir()
         (self.repo / ".goldstack").mkdir()
         (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
-        self.tickets = self.repo / ".work" / "demo" / "tickets"
+        self.tickets = self.repo / ".goldstack/work" / "demo" / "tickets"
         self.tickets.mkdir(parents=True)
-        (self.repo / ".work" / "demo" / "spec.md").write_text(SPEC)
+        (self.repo / ".goldstack/work" / "demo" / "spec.md").write_text(SPEC)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -108,7 +108,7 @@ class CheckTest(unittest.TestCase):
 
     def test_spec_errors(self):
         self.write("01-a.md", ticket("01"))
-        (self.repo / ".work" / "demo" / "spec.md").write_text("---\nfeature: other\nmax_workers: 0\n---\n")
+        (self.repo / ".goldstack/work" / "demo" / "spec.md").write_text("---\nfeature: other\nmax_workers: 0\n---\n")
         err = self.assert_error("`verify`가 없거나")
         self.assertIn("디렉터리 이름", err)
         self.assertIn("`max_workers`", err)
@@ -117,17 +117,17 @@ class CheckTest(unittest.TestCase):
         self.write("01-a.md", ticket("01"))
         for verify in ('""', '"   "', r'"echo a\nfalse"'):
             with self.subTest(verify):
-                (self.repo / ".work" / "demo" / "spec.md").write_text(f"---\nfeature: demo\nverify: {verify}\n---\n")
+                (self.repo / ".goldstack/work" / "demo" / "spec.md").write_text(f"---\nfeature: demo\nverify: {verify}\n---\n")
                 self.assert_error("`verify`는 비어 있지 않은 한 줄")
 
     def test_spec_non_ascii_digit_is_error_not_crash(self):  # codex 리뷰 지적 3
         self.write("01-a.md", ticket("01"))
-        (self.repo / ".work" / "demo" / "spec.md").write_text('---\nfeature: demo\nverify: "true"\nmax_workers: ²\n---\n')
+        (self.repo / ".goldstack/work" / "demo" / "spec.md").write_text('---\nfeature: demo\nverify: "true"\nmax_workers: ²\n---\n')
         self.assert_error("`max_workers`는 1 이상의 정수")
 
     def test_spec_verify_minutes(self):
         self.write("01-a.md", ticket("01"))
-        spec = self.repo / ".work" / "demo" / "spec.md"
+        spec = self.repo / ".goldstack/work" / "demo" / "spec.md"
         for value in ("0", "abc"):
             with self.subTest(value):
                 spec.write_text(f'---\nfeature: demo\nverify: "true"\nverify_minutes: {value}\n---\n')
@@ -167,8 +167,10 @@ class RealRepoTest(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            shutil.copytree(REPO / ".work/goldstack-v0", repo / ".work/goldstack-v0")
-            (repo / ".goldstack").mkdir()
+            # 이 레포는 병합 뒤 손으로 gs migrate한다(goldstack-v2 1-1). 그 전에는 옛 위치에서 복사한다.
+            src = next(p for p in (REPO / ".goldstack/work/goldstack-v0", REPO / ".work/goldstack-v0") if p.is_dir())
+            shutil.copytree(src, repo / ".goldstack/work/goldstack-v0")
+            (repo / ".goldstack").mkdir(exist_ok=True)
             (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 code = cli.main(["--repo", str(repo), "check", "goldstack-v0"])

@@ -21,7 +21,7 @@ class HookTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         base = Path(os.path.realpath(self.tmp.name))
-        self.wt = base / "repo" / ".work" / "f" / "run" / "wt" / "09"
+        self.wt = base / "repo" / ".goldstack" / "work" / "f" / "run" / "wt" / "09"
         self.wt.mkdir(parents=True)
         self.home = base / "home"
         scratch = tempfile.TemporaryDirectory()

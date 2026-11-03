@@ -94,6 +94,7 @@ esac
 
 FAKE_GH = """\
 here="$(dirname "$0")"
+B="${GS_FAKE_BASE:-main}"; R="${GS_FAKE_REMOTE:-origin}"  # 시험 레포의 git.base·git.remote
 echo "$@" >> "$here/gh.log"
 body() { while [ "$#" -gt 0 ]; do
   if [ "$1" = --body-file ]; then cp "$2" "$here/pr-body.md"; break; fi
@@ -105,7 +106,7 @@ case "$1 $2" in
     echo "https://example.test/pr/1" ;;
   "pr edit") body "$@" ;;
   "pr view")
-    if [ -f "$here/gh.closed" ]; then echo '{"state":"CLOSED","baseRefName":"main"}'
+    if [ -f "$here/gh.closed" ]; then echo '{"state":"CLOSED","baseRefName":"'$B'"}'
     elif [ -f "$here/gh.merged" ]; then cat "$here/gh.merged"
     else echo '{"state":"OPEN"}'; fi ;;
   "pr merge")
@@ -115,14 +116,14 @@ case "$1 $2" in
     set -e
     head=$(git rev-parse gs/demo/integration)
     [ "$6" = "$head" ] || { echo 'head mismatch' >&2; exit 1; }
-    remote=$(git remote get-url --push origin)
+    remote=$(git remote get-url --push "$R")
     if [ ! -d "$here/merge" ]; then git clone -q "$remote" "$here/merge"; fi
     git -C "$here/merge" fetch -q origin
-    git -C "$here/merge" reset -q --hard origin/main
+    git -C "$here/merge" reset -q --hard "origin/$B"
     git -C "$here/merge" merge -q --no-ff origin/gs/demo/integration -m 'Merge feature'
-    git -C "$here/merge" push -q origin main
+    git -C "$here/merge" push -q origin "HEAD:refs/heads/$B"
     sha=$(git -C "$here/merge" rev-parse HEAD)
-    echo '{"state":"MERGED","mergeCommit":{"oid":"'$sha'"},"headRefOid":"'$head'","baseRefName":"main"}' > "$here/gh.merged"
+    echo '{"state":"MERGED","mergeCommit":{"oid":"'$sha'"},"headRefOid":"'$head'","baseRefName":"'$B'"}' > "$here/gh.merged"
     rm -f "$here/gh.open"
     [ -f "$here/gh.badexit" ] && exit 1; exit 0 ;;
 esac
@@ -181,6 +182,8 @@ def sh(cwd, *args):
 
 
 class GoTest(unittest.TestCase):
+    BASE, REMOTE = "main", "origin"  # .goldstack/config.toml [git]. TrunkUpstreamTest가 바꾼다
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name).resolve()
@@ -198,28 +201,30 @@ class GoTest(unittest.TestCase):
             "GS_WORKER_CMD": f"bash {self.bin / 'worker.sh'}",
             "GS_GH": str(self.bin / "gh"),
             "GS_JUDGE": str(self.bin / "judge"),
+            "GS_FAKE_BASE": self.BASE, "GS_FAKE_REMOTE": self.REMOTE,
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
         })
         self.env.start()
         self.remote = root / "remote.git"
-        sh(root, "git", "init", "-q", "--bare", "-b", "main", str(self.remote))
+        sh(root, "git", "init", "-q", "--bare", "-b", self.BASE, str(self.remote))
         self.repo = root / "repo"
         self.repo.mkdir()
-        sh(self.repo, "git", "init", "-q", "-b", "main")
+        sh(self.repo, "git", "init", "-q", "-b", self.BASE)
         (self.repo / ".goldstack").mkdir()
-        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
-        (self.repo / ".gitignore").write_text(".work/*/run/\n")
-        fdir = self.repo / ".work" / "demo"
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base=f'"{self.BASE}"')
+                                                     .replace('remote = "origin"', f'remote = "{self.REMOTE}"'))
+        (self.repo / ".gitignore").write_text(".goldstack/work/*/run/\n")
+        fdir = self.repo / ".goldstack/work" / "demo"
         (fdir / "tickets").mkdir(parents=True)
         (fdir / "spec.md").write_text(SPEC)
         for tid, deps in [("01", "[]"), ("02", "[]"), ("03", '["02"]'), ("04", '["01"]'), ("05", "[]"), ("06", "[]")]:
             (fdir / "tickets" / f"{tid}-t.md").write_text(ticket(tid, deps))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", "init")
-        sh(self.repo, "git", "remote", "add", "origin", str(self.remote))
-        sh(self.repo, "git", "push", "-q", "-u", "origin", "main")
+        sh(self.repo, "git", "remote", "add", self.REMOTE, str(self.remote))
+        sh(self.repo, "git", "push", "-q", "-u", self.REMOTE, self.BASE)
 
     def tearDown(self):
         self.env.stop()
@@ -239,7 +244,7 @@ class GoTest(unittest.TestCase):
 
     @property
     def rundir(self):
-        return self.repo / ".work" / "demo" / "run"
+        return self.repo / ".goldstack/work" / "demo" / "run"
 
     def calls(self):
         p = self.bin / "calls.log"
@@ -249,12 +254,12 @@ class GoTest(unittest.TestCase):
         return sh(self.repo, "git", *args)
 
     def add_ticket(self, tid, title=None, push=True):
-        sh(self.repo, "git", "pull", "-q", "--ff-only", "origin", "main")
-        (self.repo / ".work" / "demo" / "tickets" / f"{tid}-t.md").write_text(ticket(tid, title=title))
+        sh(self.repo, "git", "pull", "-q", "--ff-only", self.REMOTE, self.BASE)
+        (self.repo / ".goldstack/work" / "demo" / "tickets" / f"{tid}-t.md").write_text(ticket(tid, title=title))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", f"ticket {tid}")
         if push:
-            sh(self.repo, "git", "push", "-q", "origin", "main")
+            sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
 
     def merged(self):
         log = self.integration("log", "--format=%B", "gs/demo/integration")
@@ -262,19 +267,19 @@ class GoTest(unittest.TestCase):
 
     def parallel(self, n=3, verify="test ! -f BROKEN"):
         """spec을 max_workers n으로 바꿔 커밋·push한다."""
-        sh(self.repo, "git", "pull", "-q", "--ff-only", "origin", "main")
-        (self.repo / ".work" / "demo" / "spec.md").write_text(
+        sh(self.repo, "git", "pull", "-q", "--ff-only", self.REMOTE, self.BASE)
+        (self.repo / ".goldstack/work" / "demo" / "spec.md").write_text(
             f"---\nfeature: demo\nverify: {verify}\nmax_workers: {n}\n---\n")
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", f"max_workers {n}")
-        sh(self.repo, "git", "push", "-q", "origin", "main")
+        sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
 
     def events(self):
         return (self.bin / "events.log").read_text().split("\n")[:-1]
 
     # --- 마무리(08): 로컬 bare 원격도 실제로 병합·revert한다 ---
     def final_report(self):
-        return self.integration("show", "gs/demo/integration:.work/demo/report.md")
+        return self.integration("show", "gs/demo/integration:.goldstack/work/demo/report.md")
 
     # --- 병합한 티켓 worktree·브랜치 정리(v1 02) ---
     def assert_ticket_cleaned(self, tid, suffix=""):
@@ -453,7 +458,7 @@ fi
         self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
 
     def test_finish_verifies_report_commit_before_merging(self):
-        self.parallel(1, verify="test ! -f .work/demo/report.md")
+        self.parallel(1, verify="test ! -f .goldstack/work/demo/report.md")
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         self.assertEqual(state.load(self.rundir, "demo").tickets["01"].status, "merged")
@@ -703,8 +708,8 @@ fi
         self.assertIn("file_04", diff)
         self.assertNotIn("file_01", diff)
         prompt = (self.bin / "review.prompt").read_text()
-        self.assertIn(str(self.repo.resolve() / ".work/demo/tickets/04-t.md"), prompt)
-        self.assertIn(str(self.repo.resolve() / ".work/demo/spec.md"), prompt)
+        self.assertIn(str(self.repo.resolve() / ".goldstack/work/demo/tickets/04-t.md"), prompt)
+        self.assertIn(str(self.repo.resolve() / ".goldstack/work/demo/spec.md"), prompt)
         # 판단 모델은 새 claude -p(Opus)이고 파일 경로만 받는다
         self.assertIn("-p --model opus", (self.bin / "judge.calls").read_text())
         self.assertNotIn("값이 틀렸다", (self.bin / "judge.input").read_text())
@@ -809,7 +814,7 @@ fi
         self.assertEqual(len(review.remaining(rec)), 1)
 
     def test_same_family_reviewer_is_refused(self):
-        (self.repo / ".work/demo/tickets/10-t.md").write_text(ticket("10").replace("reviewer: codex", "reviewer: claude"))
+        (self.repo / ".goldstack/work/demo/tickets/10-t.md").write_text(ticket("10").replace("reviewer: codex", "reviewer: claude"))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", "same family")
         sh(self.repo, "git", "push", "-q", "origin", "main")
@@ -932,7 +937,7 @@ fi
 
     def test_twice_failed_skips_transitive_dependents_only(self):
         self.add_ticket("11")
-        (self.repo / ".work/demo/tickets/09-t.md").write_text(ticket("09", '["03"]'))
+        (self.repo / ".goldstack/work/demo/tickets/09-t.md").write_text(ticket("09", '["03"]'))
         self.parallel(3)
         code, out, err = self.go("--only", "02,03,09,11")
         self.assertEqual(code, 1, out + err)
@@ -1162,7 +1167,7 @@ fi
     def test_parallel_conflict_retries_on_latest_integration(self):
         for tid in ("21", "22", "23"):
             self.add_ticket(tid)
-        (self.repo / ".work/demo/tickets/23-t.md").write_text(ticket("23", '["22"]'))
+        (self.repo / ".goldstack/work/demo/tickets/23-t.md").write_text(ticket("23", '["22"]'))
         sh(self.repo, "git", "commit", "-qam", "23 needs 22")
         self.parallel(3)
         (self.bin / "barrier").write_text("2")  # 21과 22가 같은 integration 끝에서 시작한다
@@ -1366,7 +1371,7 @@ fi
         code, out, _ = self.go("--only", "08,01")
         self.assertIn("[08] 실패: worker가 integration worktree를 바꿨다", out)
         self.assertIn("[01] 검증 통과", out)  # BROKEN이 지워져 01 검증은 깨끗한 트리에서 돈다
-        self.assertFalse((self.repo / ".work/demo/run/wt/integration/BROKEN").exists())
+        self.assertFalse((self.repo / ".goldstack/work/demo/run/wt/integration/BROKEN").exists())
 
     def test_title_is_not_executed(self):  # 지적 4
         self.add_ticket("09", title='"`touch PWNED1` \\"q\\" $(touch PWNED2)"')
@@ -1377,7 +1382,7 @@ fi
 
     def test_interrupted_merge_is_discarded_and_ticket_rerun(self):  # 지적 1
         self.assertEqual(self.go("--only", "01")[0], 0)
-        iwt = self.repo / ".work/demo/run/wt/integration"
+        iwt = self.repo / ".goldstack/work/demo/run/wt/integration"
         sh(self.repo, "git", "branch", "gs/demo/04", "gs/demo/integration")
         (iwt / "half").write_text("x")
         sh(iwt, "git", "switch", "-q", "gs/demo/04")
@@ -1562,20 +1567,70 @@ fi
         self.assertIn("[04] 검증 통과", out)
 
     def test_uncommitted_ticket_change_stops_before_launch(self):
-        (self.repo / ".work" / "demo" / "tickets" / "01-t.md").write_text(ticket("01") + "more\n")
+        (self.repo / ".goldstack/work" / "demo" / "tickets" / "01-t.md").write_text(ticket("01") + "more\n")
         code, out, err = self.go()
         self.assertEqual(code, 1)
         self.assertIn("origin/main와 다르다", err)
         self.assertNotIn("시작:", out)
 
     def test_check_error_stops_before_launch(self):
-        (self.repo / ".work" / "demo" / "tickets" / "07-t.md").write_text(ticket("07", '["99"]'))
+        (self.repo / ".goldstack/work" / "demo" / "tickets" / "07-t.md").write_text(ticket("07", '["99"]'))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", "bad")
         code, out, err = self.go()
         self.assertEqual(code, 1)
         self.assertIn("아무것도 띄우지 않았다", err)
         self.assertNotIn("시작:", out)
+
+
+class TrunkUpstreamTest(unittest.TestCase):
+    """git.base·git.remote가 main·origin이 아닌 레포. origin 원격도 main 브랜치도 없으니 남은 가정은 바로 실패한다."""
+    BASE, REMOTE = "trunk", "upstream"
+    setUp, tearDown, go = GoTest.setUp, GoTest.tearDown, GoTest.go
+    rundir, integration, parallel, lines, final_report = (GoTest.rundir, GoTest.integration, GoTest.parallel,
+                                                          GoTest.lines, GoTest.final_report)
+
+    def test_go_merges_and_verifies_on_configured_base_and_remote(self):
+        initial = sh(self.remote, "git", "rev-parse", "trunk")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "verified")
+        self.assertTrue(f["integration_ok"] and f["main_ok"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "trunk"), f["merge_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['merge_sha']}^1"), initial)
+        self.assertEqual(sh(self.remote, "git", "branch", "--list", "main"), "")
+        self.assertEqual(self.integration("remote"), "upstream")
+        self.assertEqual(self.integration("show", "upstream/trunk:file_01"), "01 worker")
+        self.assertIn("gs/demo/integration", sh(self.remote, "git", "branch", "--list", "gs/*"))
+        gh = self.lines("gh.log")
+        self.assertTrue(any(x.startswith("pr create --base trunk ") for x in gh), gh)
+        self.assertTrue(any(x.startswith("pr list ") and "--base trunk" in x for x in gh), gh)
+        report = self.final_report()
+        for text in ("git fetch upstream trunk", 'git worktree add --detach "$dir" upstream/trunk',
+                     'git -C "$dir" push upstream HEAD:refs/heads/trunk', "trunk verify: True"):
+            self.assertIn(text, report)
+        self.assertNotIn("origin", report)
+        self.assertEqual(self.go("--only", "01")[0], 0)  # 재실행도 trunk·upstream으로 끝난다
+
+    def test_base_failure_reverts_on_configured_base(self):
+        self.parallel(1, verify='test "$(git log -1 --format=%s)" != "Merge feature"')
+        initial = sh(self.remote, "git", "rev-parse", "trunk")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "reverted", out + err)
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "trunk"), f["revert_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "trunk^"), f["merge_sha"])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "trunk^{tree}"),
+                         sh(self.remote, "git", "rev-parse", f"{initial}^{{tree}}"))
+        self.assertIn("trunk에 push함", f["outcome"])
+
+    def test_require_committed_compares_with_configured_base(self):
+        (self.repo / ".goldstack/work/demo/tickets/01-t.md").write_text(ticket("01") + "more\n")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1)
+        self.assertIn(".goldstack/work/demo가 upstream/trunk와 다르다", err)
 
 
 if __name__ == "__main__":

@@ -6,15 +6,16 @@ from datetime import datetime
 from pathlib import Path
 
 from . import state
+from .feature import WORK
 
 LABEL = {"pending": "대기", "running": "실행 중", "merged": "병합", "failed": "실패", "skipped": "건너뜀"}
 
 
 def status(repo: Path, name: str | None, out) -> int:
-    work = repo / ".work"
+    work = repo / WORK
     if name is not None:
         if not (work / name).is_dir():
-            print(f"gs status: .work/{name}이 없다", file=out)
+            print(f"gs status: {WORK}/{name}이 없다", file=out)
             return 1
         names = [name]
     else:

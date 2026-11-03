@@ -18,17 +18,18 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("init", help=".goldstack 설정 파일과 비밀 파일 예제를 만든다")
     p = sub.add_parser("config", help="설정 값을 한 줄로 출력한다")
     p.add_argument("key", help="섹션.키(예: git.base)")
+    sub.add_parser("migrate", help="옛 위치(.work/, .out-of-scope/, .ideas/)를 .goldstack/ 아래로 git mv한다(커밋 안 함)")
 
     p = sub.add_parser("check", help="spec과 티켓 그래프를 검사한다")
-    p.add_argument("feature", help=".work/<feature>")
+    p.add_argument("feature", help=".goldstack/work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id. 이 부분 집합 기준으로 순서·frontier를 계산한다")
 
     p = sub.add_parser("go", help="티켓 실행·보고·PR 병합·main 재검증(실패하면 revert)")
-    p.add_argument("feature", help=".work/<feature>")
+    p.add_argument("feature", help=".goldstack/work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다")
 
     p = sub.add_parser("status", help="실행 상태(state.json)를 표로 본다(읽기 전용)")
-    p.add_argument("feature", nargs="?", help=".work/<feature>(생략하면 실행 중인 feature 전부)")
+    p.add_argument("feature", nargs="?", help=".goldstack/work/<feature>(생략하면 실행 중인 feature 전부)")
 
     p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
     p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
@@ -50,6 +51,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.cmd == "config":
         return cmd_config(repo, args.key)
+    if args.cmd == "migrate":
+        from .migrate import migrate
+        return migrate(repo, sys.stdout, sys.stderr)
     if args.cmd == "check":
         return cmd_check(repo, args.feature, _ids(args.only))
     if args.cmd == "go":

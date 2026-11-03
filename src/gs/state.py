@@ -1,4 +1,4 @@
-"""실행 상태 `.work/<f>/run/state.json`과 실행 잠금 `.work/<f>/run/lock`.
+"""실행 상태 `.goldstack/work/<f>/run/state.json`과 실행 잠금 `.goldstack/work/<f>/run/lock`.
 
 상태의 원천은 state.json 하나다(ORIGINS 실패 3). `gs go`의 요약·PR 본문과 `gs status`가 모두 이것을 읽는다.
 쓰기는 같은 디렉터리의 임시 파일에 쓴 뒤 rename한다. 읽는 쪽은 반쯤 쓴 파일을 보지 않는다.
