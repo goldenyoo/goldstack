@@ -988,7 +988,8 @@ class GoTest(unittest.TestCase):
             while True:
                 st = state.load(self.rundir, "demo")
                 t = st.tickets.get("04")
-                if t and t.status == "running" and t.pane:
+                # 로그가 생겨야 '마지막 출력'이 찍힌다. 상태가 running이 된 직후에는 아직 없을 수 있다(경합)
+                if t and t.status == "running" and t.pane and t.log and Path(t.log).exists():
                     break
                 self.assertIsNone(proc.poll(), log.read_text())
                 self.assertLess(time.monotonic(), deadline, log.read_text())
