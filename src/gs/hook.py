@@ -59,7 +59,7 @@ GH_API_BODY = {"-f", "-F", "--field", "--raw-field", "--input"}
 
 SECRET_DIRS = {".ssh", ".gnupg", ".aws"}
 SECRET_FILES = {".netrc", ".git-credentials", ".pypirc"}
-SECRET_SUFFIX_PATHS = (("gh", "hosts.yml"), (".kube", "config"), (".docker", "config.json"))
+SECRET_SUFFIX_PATHS = ((".goldstack", "local.env"), ("gh", "hosts.yml"), (".kube", "config"), (".docker", "config.json"))
 PRIVATE_KEYS = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
 ENV_SAFE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 
@@ -551,7 +551,7 @@ def outside(path: str, ctx: Ctx) -> bool:
 
 
 def is_secret(path: str, ctx: Ctx) -> bool:
-    p = expand(path, ctx.env)
+    p = os.path.join(ctx.cwd, expand(path, ctx.env))
     parts = [x for x in os.path.normpath(p).split("/") if x not in ("", ".")]
     if not parts:
         return False

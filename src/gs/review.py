@@ -4,7 +4,7 @@
 1. worker가 성공하면 merge-base 기준 diff를 파일로 남기고 reviewer 모델에 diff·티켓·spec 경로를 준다.
    reviewer는 고정된 JSON으로 답한다: {"findings": [{"severity", "location", "claim", "evidence"}]}.
    reviewer가 구현 모델과 같은 계열이면 부르지 않고 거부한다(Refused). 같은 문맥의 리뷰는 확인 편향일 뿐이다.
-2. 판단 모델(매번 새 `claude -p`, Opus)이 지적마다 fix(고칠 것)·report(보고만)를 정한다. 파일 경로만 넘긴다.
+2. 판단 모델(매번 새 `claude -p`, models.judge)이 지적마다 fix(고칠 것)·report(보고만)를 정한다. 파일 경로만 넘긴다.
    근거(evidence)가 빈 지적은 판단 모델이 뭐라 하든 report다(코드 규칙: 취향은 고치지 않는다).
 3. fix가 있으면 gs(go.py)가 같은 구현 모델로 새 worker를 한 번 띄운다. 재리뷰는 없고 verify만 돈다.
    리뷰를 깨끗해질 때까지 돌리지 않는다. 그러면 끝나지 않는다(ORIGINS 실패 6).
@@ -26,15 +26,13 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from . import adapters, git, worker
+from . import adapters, config, git, worker
 
 SEVERITIES = ("high", "medium", "low")
 FIX, REPORT = "fix", "report"
 FIELDS = ("severity", "location", "claim", "evidence")
 ATTEMPTED = "attempted"  # 수정 worker가 받아 커밋했다. 재리뷰가 없어 고쳐졌는지는 모른다
 DISCARDED = "discarded"  # 수정 worker가 실패해 수정을 버렸다
-REVIEW_TIMEOUT = 30 * 60
-JUDGE_TIMEOUT = 10 * 60
 
 
 class ReviewError(Exception):
@@ -167,21 +165,23 @@ def _call(argv: list[str], *, prompt: str | None, cwd: Path, env: dict[str, str]
     return cp.stdout
 
 
-def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path) -> tuple[list[str], str | None, bool]:
+def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path,
+                  models: config.ModelsConfig) -> tuple[list[str], str | None, bool]:
     """(명령, stdin 프롬프트, 답이 out 파일에 남는가). 모두 읽기 전용으로 띄운다."""
     custom = os.environ.get("GS_REVIEWER_CMD")
     if custom:
         return ["bash", "-c", custom], prompt, False
     if reviewer == "claude":
-        return ["claude", "-p", "--model", "opus", "--permission-mode", "bypassPermissions",
+        return ["claude", "-p", "--model", models.claude_review, "--permission-mode", "bypassPermissions",
                 "--tools", "Read,Grep,Glob"], prompt, False
     if reviewer == "codex":
-        return ["codex", "exec", "-s", "read-only", "--skip-git-repo-check", "-C", str(worktree),
+        model = ["--model", models.codex] if models.codex else []
+        return ["codex", "exec", *model, "-s", "read-only", "--skip-git-repo-check", "-C", str(worktree),
                 "--output-last-message", str(out), "-"], prompt, True
     if reviewer == "agy":  # --sandbox: workspace가 읽기 전용이 된다(docs/research/agy.md §2.3). 리뷰에는 맞다
         return [adapters.agy_bin(), "-p", prompt, "--sandbox", "--dangerously-skip-permissions",
-                "--disable-slash-commands", "--settings", adapters.Agy().settings(),
-                "--model", adapters.AGY_MODEL], None, False
+                "--disable-slash-commands", "--settings", adapters.Agy.settings(),
+                "--model", models.agy], None, False
     raise ReviewError(f"reviewer `{reviewer}`를 부르는 법을 모른다")
 
 
@@ -230,17 +230,17 @@ def write_diff(repo: Path, base: str, branch: str, out: Path) -> tuple[str, bool
     return mb, not diff.strip()
 
 
-def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket: Path, spec: Path) -> str:
+def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket: Path, spec: Path, cfg: config.Config) -> str:
     """판단 모델로 지적을 나눈다. 실패하면 모두 report로 두고 그 사실을 돌려준다(아니면 빈 문자열)."""
     path = rdir / "findings.json"
     path.write_text(json.dumps({"findings": [asdict(f) for f in findings]}, ensure_ascii=False, indent=2) + "\n",
                     encoding="utf-8")
     prompt = judge_prompt(path.resolve(), diff, ticket, spec)
     (rdir / "judge-prompt.md").write_text(prompt, encoding="utf-8")
-    argv = [os.environ.get("GS_JUDGE", "claude"), "-p", "--model", "opus", "--permission-mode", "bypassPermissions",
+    argv = [os.environ.get("GS_JUDGE", "claude"), "-p", "--model", cfg.models.judge, "--permission-mode", "bypassPermissions",
             "--tools", "Read"]
     try:
-        text = _call(argv, prompt=prompt, cwd=cwd, env=_env(cwd), log=rdir / "judge.log", timeout=JUDGE_TIMEOUT)
+        text = _call(argv, prompt=prompt, cwd=cwd, env=_env(cwd), log=rdir / "judge.log", timeout=cfg.timeouts.judge_minutes * 60)
         (rdir / "judge.txt").write_text(text, encoding="utf-8")
         apply_decisions(text, findings)
     except (ReviewError, OSError) as e:
@@ -251,7 +251,7 @@ def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket:
 
 
 def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticket: Path, spec: Path, model: str,
-        reviewer: str) -> dict:
+        reviewer: str, cfg: config.Config) -> dict:
     """티켓 하나를 리뷰하고 지적을 나눈다. 돌려주는 기록이 state의 `review`다.
 
     같은 계열이면 Refused(아무것도 부르지 않는다). git 오류는 올린다. 모델 호출 실패는 기록의 note에 남긴다.
@@ -268,9 +268,9 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
     (rdir / "prompt.md").write_text(prompt, encoding="utf-8")
     out = rdir / "review.txt"
     try:
-        argv, stdin, to_file = reviewer_argv(reviewer, worktree, prompt, out.resolve())
+        argv, stdin, to_file = reviewer_argv(reviewer, worktree, prompt, out.resolve(), cfg.models)
         env = {**_env(worktree), "GS_REVIEWER": reviewer}
-        text = _call(argv, prompt=stdin, cwd=worktree, env=env, log=rdir / "reviewer.log", timeout=REVIEW_TIMEOUT)
+        text = _call(argv, prompt=stdin, cwd=worktree, env=env, log=rdir / "reviewer.log", timeout=cfg.timeouts.review_minutes * 60)
         if to_file:
             text = out.read_text(encoding="utf-8") if out.exists() else ""
         else:
@@ -280,7 +280,7 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
         rec["note"] = f"리뷰 실패(리뷰 없음, verify만으로 병합한다): {e}"
         return rec
     if findings:
-        rec["note"] = classify(rdir, worktree, findings, diff, ticket, spec)
+        rec["note"] = classify(rdir, worktree, findings, diff, ticket, spec, cfg)
     rec["findings"] = [asdict(f) for f in findings]
     return rec
 
