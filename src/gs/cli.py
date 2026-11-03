@@ -22,7 +22,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("feature", help=".work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다")
 
+    p = sub.add_parser("status", help="실행 상태(state.json)를 표로 본다(읽기 전용)")
+    p.add_argument("feature", nargs="?", help=".work/<feature>(생략하면 실행 중인 feature 전부)")
+
+    p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
+    p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
+                   help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON)")
+
     args = parser.parse_args(argv)
+    if args.cmd == "hook":  # 레포를 찾지 않는다. 일반 세션에서 아무 디렉터리에서나 불린다
+        if args.event == "agy-pretooluse":
+            from . import hook_agy
+            return hook_agy.main()
+        from . import hook
+        return hook.main([args.event])
     repo = args.repo or featmod.find_repo_root(Path.cwd())
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
@@ -32,6 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "go":
         from .go import go
         return go(repo, args.feature, _ids(args.only))
+    if args.cmd == "status":
+        from .status import status
+        return status(repo, args.feature, sys.stdout)
     return 2  # argparse가 막으므로 오지 않는다
 
 
@@ -43,6 +59,7 @@ def _ids(raw: str | None) -> list[str] | None:
 
 def cmd_check(repo: Path, name: str, only: list[str] | None) -> int:
     feat, lines = check(repo, name, only)
+    feat.problems.extend(guard_problems(repo, feat, only))
     for p in feat.problems:
         print(p, file=sys.stderr)
     errors, warnings = len(feat.errors), len(feat.warnings)
@@ -52,6 +69,19 @@ def cmd_check(repo: Path, name: str, only: list[str] | None) -> int:
     for line in lines:
         print(line)
     return 0
+
+
+def guard_problems(repo: Path, feat: featmod.Feature, only: list[str] | None) -> list[featmod.Problem]:
+    """범위 안에 agy 구현 티켓이 있으면 agy가 gs hook을 실제로 거는지 본다. 안 걸리면 경고(gs go는 거부한다)."""
+    from . import adapters
+    agy = sorted(t.id for t in feat.tickets.values() if t.model == "agy" and (only is None or t.id in only))
+    if not agy:
+        return []
+    problem = adapters.agy_probe()
+    if not problem:
+        return []
+    return [featmod.Problem("경고", "agy", f"차단 장치가 없다: {problem}. agy 티켓({', '.join(agy)})은 "
+                                         "구현 worker로 띄우지 않는다(gs go가 거부한다). agy는 리뷰 전용으로만 쓸 수 있다")]
 
 
 if __name__ == "__main__":

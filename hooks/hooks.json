@@ -1,0 +1,16 @@
+{
+  "description": "goldstack worker 차단. GS_ROLE=worker일 때만 막고, 그 밖에는 아무것도 하지 않는다",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "gs hook pretooluse"
+          }
+        ]
+      }
+    ]
+  }
+}

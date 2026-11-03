@@ -100,6 +100,15 @@ def tab_close(sess: str, tab: str) -> dict:
     return call(sess, ["tab", "close", tab], empty_ok=True)
 
 
+def pane_split(sess: str, pane: str, cwd: Path, direction: str) -> dict:
+    """{pane: {pane_id, …}}: pane을 나눠 새 pane(새 셸)을 연다."""
+    return call(sess, ["pane", "split", pane, "--direction", direction, "--cwd", str(cwd), "--no-focus"])
+
+
+def pane_close(sess: str, pane: str) -> dict:
+    return call(sess, ["pane", "close", pane], empty_ok=True)
+
+
 def pane_run(sess: str, pane: str, command: str) -> dict:
     """pane의 셸에 명령 한 줄을 넣고 실행한다."""
     return call(sess, ["pane", "run", pane, command], empty_ok=True)
