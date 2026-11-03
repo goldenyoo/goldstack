@@ -88,15 +88,44 @@ PR https://github.com/you/tally/pull/7
 | skill | 무엇 | 언제 쓰나 | 예시 | 호출 |
 |---|---|---|---|---|
 | `/grill` | 라운드 질문으로 결정을 모두 받아 spec·티켓·범위 밖을 쓰고 `gs check`를 통과시킨다. 열린 아이디어가 있으면 라운드 1 첫 질문이 "이번 feature에 넣을 후보"이고, 고른 것은 `taken`이 된다 | 새 feature를 시작할 때, 이어서 정할 것이 남았을 때 | `/grill csv-export` → 첫 질문 `1. 이번 feature에 넣을 후보: 1) codex-worker-hook 2) status-review-count` 에 `1. 2`로 답 | 사용자 |
-| `/go` | `gs go`로 티켓 실행부터 main 병합·재검증까지 돌리고 세 줄 요약과 PR을 보인다 | grill이 끝나 커밋된 feature를 실행할 때 | `/go csv-export` | 사용자 |
+| `/go` | `gs go`로 티켓 실행부터 main 병합·재검증까지 돌리고 세 줄 요약과 PR을 보인다. feature를 여러 개 주면 앞 것이 `verified`일 때만 다음을 돌린다 | grill이 끝나 커밋된 feature를 실행할 때, 밤새 둘 이상을 이어 돌릴 때 | `/go csv-export`, `/go csv-export csv-import` | 사용자 |
 | `/idea` | 생각 하나를 `.goldstack/ideas/<slug>.md` 아이디어 파일로 쓴다. 비슷한 열린 아이디어가 있으면 거기 덧붙일지 묻는다. 커밋 안 함 | 실행·대화 중 다음에 할 일이 떠올랐을 때 | `/idea gs status가 끝난 티켓의 리뷰 지적 수를 보이면 좋겠다` | 사용자 |
 | `/wait-what` | 방금 설명을 맥락부터, 쉬운 말로, 선택지마다 예시를 붙여 다시 하게 한다 | Claude의 말을 못 따라갔을 때(grill 질문 포함) | `/wait-what` | 사용자 |
 | `/handoff` | 지금 대화를 다른 agent가 이어받을 인계 문서로 줄여 임시 디렉터리에 쓴다 | 세션을 바꾸거나 곁가지 일을 떼어 줄 때 | `/handoff 03 실패 원인을 이어서 찾는다` | 사용자 |
-| `/retro` | feature 실행 기록(report.md, state.json, worker 로그·리뷰, 다른 feature 보고서와의 반복)이나 세션 하나를 돌아보고 agent 환경(검사, 포인터, 리뷰 기준, 도구, goldstack 자체)을 고칠 후보를 심각한 순으로 제안한다. feature면 고른 후보를 아이디어 함에 쓴다. 고르기 전에는 아무것도 바꾸지 않는다 | `/go`가 끝난 뒤, 실행이 꼬였거나 같은 실수가 반복될 때 | `/retro csv-export`(feature), `/retro`(지금 세션) | 사용자 |
+| `/retro` | feature 실행 기록(report.md, state.json, worker 로그·리뷰, 다른 feature 보고서와의 반복)이나 세션 하나를 돌아보고 agent 환경(검사, 포인터, 리뷰 기준, 도구, goldstack 자체)을 고칠 후보를 심각한 순으로 제안한다. worker 로그 합계가 200KB 이상이면 먼저 한 줄로 알리고 Gemini(agy)에게 로그 요약을 맡긴다. feature면 고른 후보를 아이디어 함에 쓴다. 고르기 전에는 아무것도 바꾸지 않는다 | `/go`가 끝난 뒤, 실행이 꼬였거나 같은 실수가 반복될 때 | `/retro csv-export`(feature), `/retro`(지금 세션) | 사용자 |
 | `/writing-for-agents` | agent가 읽는 문서(skill, `CLAUDE.md`·`AGENTS.md`)의 글쓰기 기준을 문맥에 싣는다 | skill이나 `CLAUDE.md`를 새로 쓰거나 고칠 때 | `/writing-for-agents` 뒤 "이 skill description을 다듬어 줘" | 사용자 |
 | `diagnosing-bugs` | 실패 신호(피드백 루프)를 먼저 만들고 재현 → 가설 → 계측 → 수정 → 회귀 시험으로 버그를 잡는다 | 무언가 깨졌다·실패한다·느리다고 말할 때 | "`gs status`가 끝난 실행을 실행 중으로 보여. 진단해" | 모델 |
 
 `/wait-what`부터 아래 다섯은 [mattpocock/skills](https://github.com/mattpocock/skills)(MIT)를 한국어로 옮겨 goldstack에 맞춘 것이다([skills/NOTICE-mattpocock.md](skills/NOTICE-mattpocock.md)). 장면별 예시는 [docs/guide.md](docs/guide.md#skill-사용-장면).
+
+## 명령
+
+`gs --help`가 보이는 명령 전부. skill이 대신 부르는 것도 있지만 터미널에서 직접 쳐도 된다.
+
+| 명령 | 무엇 | 언제 쓰나 |
+|---|---|---|
+| `gs init` | `.goldstack/config.toml`, `local.env.example`, `.gitignore` 줄을 만든다(있는 파일은 그대로) | 레포마다 한 번 |
+| `gs config <섹션.키>` | 설정 값 한 줄(`gs config git.base` → `main`) | 값 확인, skill이 base를 읽을 때 |
+| `gs check <f> [--only 01,02]` | spec·티켓 그래프·config·CLI 검사. `touches` 겹침, agy 배정이 상한을 넘으면 경고 | grill 끝, `gs go` 전 |
+| `gs go <f> [--only 01,02]` | 티켓 실행 → 리뷰 → integration 병합·검증 → PR 병합 → main 재검증(실패하면 revert) | `/go`가 부른다 |
+| `gs go <a> <b> …` | 여러 feature를 차례로. 앞 것이 `verified`가 아니면 거기서 멈춘다. `--only`와 함께 못 쓴다 | 이어 돌릴 feature가 여럿일 때 |
+| `gs clean <f> [--force]` | 그 feature의 worktree(`run/wt/*`)와 `gs/<f>/*` 브랜치(로컬·원격)를 지운다. 실행 기록은 남긴다 | 끝난 feature의 남은 흔적(실패 worktree, 옛 integration 브랜치)을 치울 때 |
+| `gs status [<f>]` | 실행 상태 표와 진행 줄(읽기 전용) | 실행 중 언제든 |
+| `gs backlog [--all]` | 열린 아이디어와 범위 밖의 다시 볼 조건(읽기 전용) | 다음 feature를 고르기 전 |
+| `gs migrate` | 옛 위치(`.work/` 등)를 `.goldstack/` 아래로 옮긴다 | v2 전 레포를 옮길 때 한 번 |
+| `gs hook <pretooluse\|agy-pretooluse>` | worker 차단 hook 진입점 | 직접 치지 않는다(plugin·agy가 부른다) |
+
+```console
+$ gs go csv-export csv-import
+…(csv-export의 실행 출력과 ■ 요약)
+■ csv-export: verified → csv-import 시작
+…(csv-import의 실행 출력과 ■ 요약)
+$ gs clean csv-export
+지움: worktree /home/you/tally/.goldstack/work/csv-export/run/wt/03 (미커밋 변경도 지움)
+지움: worktree /home/you/tally/.goldstack/work/csv-export/run/wt/03-retry-1 (미커밋 변경도 지움)
+지움: worktree 2, 로컬 브랜치 2, 원격 브랜치 0 · 실행 기록은 남김
+```
+verified로 끝난 feature의 integration worktree·브랜치는 `gs go`가 스스로 지운다. 앞 feature가 gs 자체를 고쳐도 같은 `gs go a b` 안의 다음 feature는 옛 gs로 돈다(재설치하지 않는다). 자세히는 [docs/guide.md](docs/guide.md#여러-feature-이어-돌리기gs-go-a-b)·[`gs clean`](docs/guide.md#끝난-feature-치우기gs-clean).
 
 **`gs backlog`**(명령, skill 아님) — 열린 아이디어를 심각도→날짜 순 표로, 그 아래 `.goldstack/out-of-scope/`의 "다시 볼 조건"을 보인다. 읽기 전용. 다음 feature를 고르기 전에 친다. `--all`은 taken·dropped도 보인다.
 ```console
@@ -115,19 +144,20 @@ gitlab-support  GitHub 밖 레포에 goldstack을 쓰려 할 때.
 ## 추천 흐름
 
 1. 레포마다 한 번: `gs init` → config 확인 → 커밋(텔레그램을 쓰면 `local.env`).
-2. feature마다: `gs backlog`로 후보를 본다 → `/grill <f>`(첫 질문에서 넣을 아이디어를 고른다) → `/go <f>` → 진행 바나 `gs status <f>`로 지켜본다 → 세 줄 요약·PR·텔레그램 → `/retro <f>`로 돌아보고 고른 후보를 아이디어 함에.
-3. 실패하면 `report.md`를 읽고, 고칠 것이 있으면 `/grill <f>`로 spec·티켓을 고친 뒤 다시 `/go <f>`(병합된 티켓은 건너뛴다).
-4. 곁에서: 떠오른 생각은 `/idea <한 줄>`, 말을 놓치면 `/wait-what`, 버그는 "진단해"(`diagnosing-bugs`), 세션을 넘길 때 `/handoff`, 세션을 돌아볼 때 `/retro`, skill·`CLAUDE.md`를 쓸 때 `/writing-for-agents`.
+2. feature마다: `gs backlog`로 후보를 본다 → `/grill <f>`(첫 질문에서 넣을 아이디어를 고른다) → `/go <f>`(여럿이면 `/go <a> <b>`) → 진행 바나 `gs status <f>`로 지켜본다 → 세 줄 요약·PR·텔레그램 → `/retro <f>`로 돌아보고 고른 후보를 아이디어 함에.
+3. 끝난 feature에 실패 worktree나 옛 브랜치가 남았으면 `gs clean <f>`(verified면 integration 흔적은 이미 지워져 있다).
+4. 실패하면 `report.md`를 읽고, 고칠 것이 있으면 `/grill <f>`로 spec·티켓을 고친 뒤 다시 `/go <f>`(병합된 티켓은 건너뛴다).
+5. 곁에서: 떠오른 생각은 `/idea <한 줄>`, 말을 놓치면 `/wait-what`, 버그는 "진단해"(`diagnosing-bugs`), 세션을 넘길 때 `/handoff`, 세션을 돌아볼 때 `/retro`, skill·`CLAUDE.md`를 쓸 때 `/writing-for-agents`.
 
 ## 문서 지도
 
 | 문서 | 내용 |
 |---|---|
-| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 새 feature, 다른 레포에 들이기, 실행 중 보기, 실패했을 때, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
-| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, 상태, 병렬, 실패 처리, 리뷰, 마무리, 진행 계산, 알림, 아이디어 함, 모델 어댑터, plugin·hook·mod, 시험 seam |
+| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 새 feature, 티켓 선택 키(`touches`, `second_reviewer`)와 agy 한도, 다른 레포에 들이기, 실행 중 보기, 실패했을 때, 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
+| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, 상태, 병렬, 실패 처리, 리뷰(두 리뷰 합치기, agy 횟수), 마무리와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
 | [.goldstack/ideas/README.md](.goldstack/ideas/README.md) | 아이디어 파일 형식 |
 | [skills/grill/templates/](skills/grill/templates/) | spec·티켓·범위 밖 파일 형식 |
 | [docs/ORIGINS.md](docs/ORIGINS.md) | 시작 배경과 요구사항, 지난 실패 목록 |
-| [docs/research/](docs/research/) | 참고한 kit 분석(pstack, mattpocock/skills, 비교표), agy·어댑터 조사 |
+| [docs/research/](docs/research/) | 참고한 kit 분석(pstack, mattpocock/skills, 비교표), agy·어댑터 조사, worker 플러그인 격리·codex hook 실험 기록 |
 | [docs/trials/](docs/trials/) | skill 시험 기록 |
 | [LICENSE](LICENSE) | MIT |
