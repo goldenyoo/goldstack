@@ -19,6 +19,8 @@
 동시에 본다). 한쪽이 실패·거부여도 다른 쪽 결과로 진행한다. 한쪽이 끊긴 채 대기 상한을 넘기면 실행이 중단된다. 기록은 리뷰마다 따로(state의 review, second_review) 남고 보고서에도 리뷰마다 나온다.
 agy 리뷰·재리뷰는 이번 실행의 agy 호출 상한에 닿았으면 띄우지 않는다. 리뷰는 "건너뜀(한도)", 재리뷰는
 unchecked(한도)로 적는다(spec 1-4, 1-9, go.py가 센다).
+첫 리뷰는 tiers.review, 재리뷰는 tiers.rereview 등급의 모델·effort를 쓴다. 계열 표가 없으면 models의 기존
+리뷰 모델과 CLI 기본 effort를 쓴다. 호출 때의 tier·actual_model·effort는 각 리뷰·재리뷰 기록에 남긴다.
 
 reviewer·재리뷰·판단 모델 호출이 실패해도(답의 형식이 틀려도) 티켓을 실패시키지 않는다. 병합 관문은 언제나 verify다
 (spec 2-1). 실패는 state의 리뷰 기록(note: "리뷰 실패…")에 남아 보고서(08)에 나온다. 판단 모델이 실패하면
@@ -359,23 +361,39 @@ def call_waiting(call: Callable[[], T], cfg: config.Config, on_wait=None, family
             (on_wait or _sleep)(str(e), backoff.count, seconds, family)
 
 
+def reviewer_selection(reviewer: str, cfg: config.Config, *, rereview: bool = False) -> tuple[str, config.ModelEffort]:
+    """첫 리뷰·재리뷰 등급을 고른다. 계열 표가 없으면 기존 리뷰 모델과 CLI 기본 effort를 쓴다."""
+    tiers = getattr(cfg, "tiers", config.TiersConfig())
+    tier, selection = tiers.worker(reviewer, tiers.rereview if rereview else tiers.review)
+    if selection is None:
+        model = cfg.models.claude_review if reviewer == "claude" else getattr(cfg.models, reviewer)
+        selection = config.ModelEffort(model)
+    return tier, selection
+
+
 def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path,
-                  models: config.ModelsConfig) -> tuple[list[str], str | None, bool]:
+                  models: config.ModelsConfig, selection: config.ModelEffort | None = None) -> tuple[list[str], str | None, bool]:
     """(명령, stdin 프롬프트, 답이 out 파일에 남는가). 모두 읽기 전용으로 띄운다."""
     custom = os.environ.get("GS_REVIEWER_CMD")
     if custom:
         return ["bash", "-c", custom], prompt, False
+    if selection is None:
+        model = models.claude_review if reviewer == "claude" else getattr(models, reviewer, "")
+        selection = config.ModelEffort(model)
+    options = ["--model", selection.model] if selection.model else []
+    if selection.effort:
+        options += (["-c", "model_reasoning_effort=" + selection.effort] if reviewer == "codex"
+                    else ["--effort", selection.effort])
     if reviewer == "claude":
-        return ["claude", "-p", "--model", models.claude_review, "--output-format", "json",
+        return ["claude", "-p", *options, "--output-format", "json",
                 "--permission-mode", "bypassPermissions", "--tools", "Read,Grep,Glob"], prompt, False
     if reviewer == "codex":
-        model = ["--model", models.codex] if models.codex else []
-        return ["codex", "exec", "--json", *model, "-s", "read-only", "--skip-git-repo-check", "-C", str(worktree),
+        return ["codex", "exec", "--json", *options, "-s", "read-only", "--skip-git-repo-check", "-C", str(worktree),
                 "--output-last-message", str(out), "-"], prompt, True
     if reviewer == "agy":  # --sandbox: workspace가 읽기 전용이 된다(docs/research/agy.md §2.3). 리뷰에는 맞다
         return [adapters.agy_bin(), "-p", prompt, "--sandbox", "--dangerously-skip-permissions",
                 "--disable-slash-commands", "--settings", adapters.Agy.settings(),
-                "--model", models.agy], None, False
+                *options], None, False
     raise ReviewError(f"reviewer `{reviewer}`를 부르는 법을 모른다")
 
 
@@ -447,9 +465,9 @@ def write_diff(repo: Path, base: str, branch: str, out: Path) -> tuple[str, bool
     return mb, not diff.strip()
 
 
-def judge_argv(cfg: config.Config) -> list[str]:
-    """판단 모델 호출(지적 분류, 보고서 Summary, 실패 요약). 파일 경로만 넘기므로 읽기 도구만 준다."""
-    return [os.environ.get("GS_JUDGE", "claude"), "-p", "--model", cfg.models.judge, "--output-format", "json",
+def judge_argv(cfg: config.Config, *, model: str | None = None) -> list[str]:
+    """판단 호출은 기본 models.judge, 실패 요약만 별도 모델이다. 파일 경로만 넘기므로 읽기 도구만 준다."""
+    return [os.environ.get("GS_JUDGE", "claude"), "-p", "--model", cfg.models.judge if model is None else model, "--output-format", "json",
             "--permission-mode", "bypassPermissions", "--tools", "Read"]
 
 
@@ -474,16 +492,17 @@ def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket:
     return ""
 
 
-def _ask_reviewer(reviewer: str, worktree: Path, prompt: str, rdir: Path, timeout: int, cfg: config.Config, on_wait) -> str:
+def _ask_reviewer(reviewer: str, worktree: Path, prompt: str, rdir: Path, timeout: int, cfg: config.Config, on_wait,
+                  selection: config.ModelEffort) -> str:
     """reviewer를 부르고 답을 rdir/review.txt에도 남긴다. 끊기면 기다렸다 다시 부른다(call_waiting)."""
     out = rdir / "review.txt"
-    argv, stdin, to_file = reviewer_argv(reviewer, worktree, prompt, out.resolve(), cfg.models)
+    argv, stdin, to_file = reviewer_argv(reviewer, worktree, prompt, out.resolve(), cfg.models, selection)
     env = {**_env(worktree), "GS_REVIEWER": reviewer}
 
     def once() -> str:
         out.unlink(missing_ok=True)  # 앞 시도·지난 실행의 답을 이번 답으로 읽지 않게
         text = _call(argv, prompt=stdin, cwd=worktree, env=env, log=rdir / "reviewer.log", timeout=timeout, family=reviewer,
-                     model=cfg.models.agy if reviewer == "agy" else "")
+                     model=selection.model if reviewer == "agy" else "")
         if to_file:
             return out.read_text(encoding="utf-8") if out.exists() else ""
         out.write_text(text, encoding="utf-8")
@@ -508,8 +527,11 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
         return rec
     prompt = review_prompt(diff, ticket, spec, worktree)
     (rdir / "prompt.md").write_text(prompt, encoding="utf-8")
+    tier, selection = reviewer_selection(reviewer, cfg)
+    rec.update(tier=tier, actual_model=selection.model, effort=selection.effort)
     try:
-        findings = parse_findings(_ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.review_minutes * 60, cfg, on_wait))
+        findings = parse_findings(_ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.review_minutes * 60,
+                                               cfg, on_wait, selection))
     except (ReviewError, OSError) as e:
         rec["note"] = f"리뷰 실패(리뷰 없음, verify만으로 병합한다): {e}"
         return rec
@@ -542,8 +564,10 @@ def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, fo
                                  ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     prompt = rereview_prompt(diff, listed, ticket, spec, worktree)
     (rdir / "prompt.md").write_text(prompt, encoding="utf-8")
+    tier, selection = reviewer_selection(reviewer, cfg, rereview=True)
+    res.update(tier=tier, actual_model=selection.model, effort=selection.effort)
     try:
-        text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.rereview_minutes * 60, cfg, on_wait)
+        text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.rereview_minutes * 60, cfg, on_wait, selection)
         res["verdicts"] = parse_verdicts(text)
         new = parse_findings(text)
     except (ReviewError, OSError) as e:
@@ -569,7 +593,9 @@ def apply_rereview(rec: dict, found: list[dict], res: dict, nth: int) -> None:
 
     재리뷰를 못 했으면 모두 unchecked다. 판정이 없거나 근거가 빈 지적도 확인된 것이 아니라 unchecked(재리뷰 실패)다.
     """
-    rec.setdefault("rereviews", []).append({"round": nth, **{k: res[k] for k in ("dir", "base", "head", "note", "failed")}})
+    rec.setdefault("rereviews", []).append({"round": nth,
+                                          **{k: res[k] for k in ("dir", "base", "head", "note", "failed")},
+                                          **{k: res.get(k, "") for k in ("tier", "actual_model", "effort")}})
     if res["failed"]:
         mark_rereview(found, nth, UNCHECKED, res["failed"], res["note"])
         return
