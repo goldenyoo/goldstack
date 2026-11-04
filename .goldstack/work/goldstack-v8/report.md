@@ -41,7 +41,7 @@ low 13건은 대부분 드문 경계 조건이다.
 - `/overnight`는 지침의 존재만 시험했고, 실제 동작은 첫 사용에서 확인해야 한다.
 - Linux 시험은 CI에서 돌지만 병합을 막지 않는다. 이번 검증 기록은 모두 이 맥에서 나온 것이다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/11 병합 · main 검증 통과
 리뷰 지적: 수정됨 15 · 보고만 21
 
 ## Evidence
@@ -202,15 +202,22 @@ gs 검증별 측정
 | ticket-12/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | c2ca2843d9a0ab4e046bf69cd4a7ed84836545ff | 249.821746 | passed |
 | ticket-07/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | c6085ab792f9436d0c9e9c5fb62a8da48efd01b2 | 256.872008 | passed |
 | integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | a417dd37a89b7a73e3692808c8c39bacbcb7eb09 | 253.768537 | passed |
+| main/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | c0b197fa098a5bdeee7c428bbfdd2812ea46309f | 256.528872 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 360.0 |
-| verify | 253.828 |
+| total | 630.0 |
+| verify | 510.429 |
 | summary | 105.422 |
-| report | 0 |
+| report | 0.067 |
+| push | 2.085 |
+| publish | 4.393 |
+| merge-pr | 3.904 |
+| confirm-merge | 0.007 |
+| postmerge | 257.816 |
+| restore-reverts | 0.019 |
 
 ### 티켓별 결과
 
@@ -372,18 +379,6 @@ gs 검증별 측정
 
 #### 08/1/fix/verify.log
 
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/08/1/fix/verify.log`
-
-#### 09/1/fix/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/09/1/fix/verify.log`
-
-#### 10/1/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/10/1/verify.log`
-
-#### 14/1/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/14/1
+전체 로그: `/Users/go
 
 …(보고서가 길어 잘랐다. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run`)
