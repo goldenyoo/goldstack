@@ -12,7 +12,9 @@ from . import git, version
 from .feature import FAMILIES, TIERS, Problem
 
 CONFIG_PATH = ".goldstack/config.toml"
-IGNORE_LINES = (".goldstack/local.env", ".goldstack/work/*/run/")
+IGNORE_LINES = (".goldstack/local.env", ".goldstack/work/*/run/", ".goldstack/feedback/", ".goldstack/overnight/")
+FEEDBACK_MODES = ("off", "draft", "auto")
+FEEDBACK_DETAILS = ("errors", "minimal")
 DEFAULT_CONFIG = '''[git]
 remote = "origin"
 base = {base}
@@ -64,6 +66,12 @@ network_wait_minutes = 60
 
 [notify]
 telegram = false
+
+[feedback]
+mode = "draft"
+detail = "errors"
+repo = "goldenyoo/goldstack"
+max_per_day = 5
 '''
 LOCAL_ENV_EXAMPLE = """# 이 파일을 .goldstack/local.env로 복사한 뒤 값을 채운다.
 # Telegram BotFather에서 받은 토큰과 알림 받을 채팅 ID를 따옴표 없이 적는다.
@@ -153,6 +161,15 @@ class GoldstackConfig:
 
 
 @dataclass(frozen=True)
+class FeedbackConfig:
+    """절이 없는 옛 config는 off다. 켜는 것은 `gs init` 템플릿이나 /adopt의 답이다."""
+    mode: str = "off"
+    detail: str = "errors"
+    repo: str = "goldenyoo/goldstack"
+    max_per_day: int = 5
+
+
+@dataclass(frozen=True)
 class Config:
     git: GitConfig
     models: ModelsConfig
@@ -162,6 +179,7 @@ class Config:
     worktree: WorktreeConfig = WorktreeConfig()
     tiers: TiersConfig = TiersConfig()
     goldstack: GoldstackConfig = GoldstackConfig()
+    feedback: FeedbackConfig = FeedbackConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -184,7 +202,7 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
         if section == "tiers":
             sections[section] = _load_tiers(data.get(section, {}), problems)
             continue
-        if section not in data and section not in ("agy", "worktree", "goldstack"):
+        if section not in data and section not in ("agy", "worktree", "goldstack", "feedback"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
             continue
         raw = data.get(section, {})
@@ -213,6 +231,8 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, "`git.merge_method`는 merge 또는 squash이어야 한다"))
             elif section == "agy" and raw[key] < 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0 이상이어야 한다"))
+            elif section == "feedback" and (message := _feedback_problem(key, raw[key])):
+                problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`{message}"))
             elif (section == "models" and key != "codex" and not raw[key].strip()
                   and (key != "failure_summary" or key in data[section])):
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 비어 있으면 안 된다"))
@@ -223,6 +243,19 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
     if any(p.level == "오류" for p in problems):
         return None, problems
     return Config(**sections), problems
+
+
+def _feedback_problem(key: str, value: str | int) -> str | None:
+    """형이 맞는 값의 범위만 본다."""
+    if key == "mode" and value not in FEEDBACK_MODES:
+        return "는 " + "|".join(FEEDBACK_MODES) + " 중 하나여야 한다"
+    if key == "detail" and value not in FEEDBACK_DETAILS:
+        return "는 " + "|".join(FEEDBACK_DETAILS) + " 중 하나여야 한다"
+    if key == "max_per_day" and value <= 0:
+        return "는 0보다 커야 한다"
+    if key == "repo" and not re.fullmatch(r"[A-Za-z0-9][\w.-]*/(?!\.{1,2}$)[\w.][\w.-]*", value, re.ASCII):
+        return '는 "owner/name" 형식이어야 한다'
+    return None
 
 
 def _load_tiers(raw, problems: list[Problem]) -> TiersConfig:
