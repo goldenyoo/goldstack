@@ -21,7 +21,7 @@
 올리는 것: `cli.main`까지 온 gs 내부 예외, 마무리 이상(재개 phase에 갇힘, 예상 밖 revert, 마무리 오류),
 `ADAPTER_PATTERNS`에 이름이 붙은 어댑터 실패와 모르는 어댑터 오류(`unknown`).
 올리지 않는 것: 티켓 구현 실패, 패턴에 안 걸린 "커밋 없음", 시험 실패, 리뷰 지적, 일시 오류(`transient.py`),
-대상 환경의 오류(인증·권한·보호 규칙). 수집·전송의 오류는 `gs go`의 결과를 바꾸지 못한다(`cli.py`가 막는다).
+대상 환경의 오류(인증·사용량 한도·권한·보호 규칙). 수집·전송의 오류는 `gs go`의 결과를 바꾸지 못한다(`cli.py`가 막는다).
 """
 from __future__ import annotations
 
@@ -791,12 +791,12 @@ ADAPTER_PATTERNS = (
 # 이름은 없지만 어댑터가 낸 오류의 모양: `agy: …`(종료 코드 뒤 괄호 안 포함), 어댑터 없음, worker를 띄우다 난 예기치 않은 예외.
 # "agy 차단 장치가 없다"는 넣지 않는다. worker를 띄우기 전의 의도된 거부이고 `gs check`가 미리 경고하는 이 머신의 설정 문제다.
 _ADAPTER_ERROR = re.compile(r"(?:^|\()(?:agy|codex|claude): |어댑터가 없다|^`claude plugin list|^worker를 (?:다시 )?띄우지 못했다")
-# 일시 오류 판별(transient)에 없는 대상 환경의 오류: 인증·권한·보호 규칙, git의 연결 실패, worker나 검증이 바꾼 push 설정.
+# 일시 오류 판별(transient)에 없는 대상 환경의 오류: 인증·권한·보호 규칙, git의 연결 실패, worker나 검증이 바꾼 push 설정, 없는 모델.
 _ENVIRONMENTAL = re.compile(
     r"authentication|auth(?:orization)? failed|not logged in|gh auth|permission denied|not authorized|"
     r"could not resolve to|\bHTTP (?:401|403|404)\b|protected branch|required status check|review required|"
     r"사람 승인|repository rule|could not resolve host|could not read from remote repository|remote end hung up|"
-    r"i/o timeout|dial tcp|tls handshake|push 설정이", re.I)
+    r"i/o timeout|dial tcp|tls handshake|push 설정이|invalid model selection", re.I)
 
 
 def _environmental(error: str) -> bool:
@@ -813,15 +813,53 @@ def _transient_log(log: str) -> bool:
         return any(transient.reason(family, log, cwd=Path(empty)) for family in _FAMILIES)
 
 
+def _cli_errors(log: str) -> list[dict]:
+    """CLI마다 마지막 오류 이벤트의 오류 필드. 뒤따른 성공이 지운다. claude는 오류로 표시된 result만 본다."""
+    from . import transient
+    events = transient._events(log)
+    codex, claude = {}, {}
+    for event in events:
+        kind = event.get("type")
+        if kind in ("error", "turn.failed"):
+            codex = transient._fields(event)
+        elif kind == "turn.completed":
+            codex = {}
+        elif kind == "result":
+            claude = (transient._fields(event, "api_error", "terminal_reason", "result")
+                      if event.get("is_error") is True else {})
+    return [transient._agy_error(events), codex, claude]
+
+
+def _last_stderr(log: str) -> str:
+    """마지막 이벤트 뒤의 stderr. 이벤트가 아닌 줄이 stderr다(`warning:`은 빼고). 앞의 줄은 다시 띄운 worker가 넘어선 오류다."""
+    lines: list[str] = []
+    for line in log.splitlines():
+        if line.lstrip().startswith("{"):
+            lines = []
+        elif not line.lstrip().lower().startswith("warning:"):
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _environmental_log(log: str) -> bool:
+    """worker를 끝낸 CLI 오류가 대상 환경 때문인가. 도구 출력과 모델 응답은 worker가 읽은 내용이라 보지 않는다."""
+    from . import transient
+    if _environmental(_last_stderr(log)):
+        return True
+    return any(_environmental(transient._strings(error)) or {401, 403} & set(transient._statuses(error))
+               for error in _cli_errors(log))
+
+
 def classify_adapter_failure(reason: str, log: str) -> tuple[str, list[str]] | None:
     """worker 실패 이유와 worker 로그로 (오류 종류, 오류 줄)을 돌려준다. 올리지 않을 실패는 None.
 
-    일시 오류를 먼저 뺀다. 이름 붙은 패턴이 그다음이고, 아니면 어댑터가 낸 오류 모양일 때만 `unknown`이다.
+    로그가 말하는 일시·환경 오류를 먼저 뺀다. 인증·한도로 죽은 agy는 `result 이벤트가 없다`로 끝나 이유만으로는 구별되지 않는다.
+    이름 붙은 패턴이 그다음이고, 아니면 어댑터가 낸 오류 모양일 때만 `unknown`이다.
     그 밖의 실패(구현 실패, 패턴에 안 걸린 "커밋 없음", 검증·병합 실패)는 대상 프로젝트의 일이다.
     오류 줄에는 이유 첫 줄과 로그에서 맞은 부분만 싣는다. 로그의 한 줄은 worker가 읽은 내용일 수 있다.
     """
     reason = reason.strip()
-    if not reason or _transient_log(log):
+    if not reason or _transient_log(log) or _environmental_log(log):
         return None
     first = reason.splitlines()[0]
     for pattern in ADAPTER_PATTERNS:

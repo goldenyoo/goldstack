@@ -401,6 +401,62 @@ class AdapterFailureTest(CollectTest):
             with self.subTest(reason=reason):
                 self.assertEqual(self.collect(reason, LOCK_REF + "\n" + STREAM_ERROR + "\n"), [])
 
+    def test_environment_errors_the_cli_reports_in_the_log_are_not_reported(self):
+        no_result = "worker 종료 코드 1 (agy: result 이벤트가 없다)"
+        step = json.dumps({"event": "step_update", "step_update": {"state": "RUNNING"}})
+        for reason, worker in (
+                (no_result, "error: authentication failed\n"),  # 시작 실패: 이벤트 없이 stderr만
+                (no_result, "error: usage limit reached\n"),
+                (no_result, "usage limit reached\n"),
+                (no_result, "permission_denied\n"),
+                (no_result, "error: not logged in\n"),
+                (no_result, f"{step}\nerror: you have reached your limit\nwarning: x\n"),  # 도중에 죽음
+                (no_result, f"{step}\n" + json.dumps({"event": "error", "message": "authentication failed"}) + "\n"),
+                (no_result, json.dumps({"event": "error", "status": 401}) + "\n"),
+                ("worker 종료 코드 1 (agy: result status ERROR)",
+                 json.dumps({"event": "result", "result": {"status": "ERROR", "error": "quota exceeded"}}) + "\n"),
+                ("worker 실행기가 사라졌다", "error: authentication failed\n"),
+                ("커밋 없음", LOCK_REF + "\n" + json.dumps({"type": "turn.failed", "error": {"message": "401 Unauthorized"}})),
+                ("커밋 없음", LOCK_REF + "\n" + json.dumps({"type": "error", "message": "x", "status": 403})),
+                ("커밋 없음", LOCK_REF + "\n" + json.dumps({"type": "result", "is_error": True, "result": "Invalid API key"}))):
+            with self.subTest(reason=reason, worker=worker):
+                self.assertEqual(self.collect(reason, worker), [])
+
+    def test_real_agy_outcome_for_an_environment_error_is_not_classified(self):
+        log = self.repo / "agy.log"
+        inp = adapters.WorkerInput(brief=self.repo / "brief.md", worktree=self.repo, log=log)
+        for text in ("error: authentication failed\n", "error: usage limit reached\n", "permission_denied\n"):
+            with self.subTest(text=text):
+                log.write_text(text)
+                code, note = adapters.Agy(self.cfg.models).outcome(1, inp)
+                self.assertIn("agy: result 이벤트가 없다", note)
+                self.assertIsNone(feedback.classify_adapter_failure(f"worker 종료 코드 {code} ({note})", text))
+
+    def test_a_missing_model_in_the_agy_log_is_not_reported(self):
+        fake = self.repo / "fake-agy"
+        fake.write_text("#!/bin/sh\necho other-model\n")
+        fake.chmod(0o755)
+        with mock.patch.dict(os.environ, GS_AGY=str(fake)):
+            self.assertEqual(self.collect("worker 종료 코드 1 (agy: result 이벤트가 없다)",
+                                          "error: invalid model selection --model 'x'\n"), [])
+
+    def test_environment_words_outside_cli_errors_do_not_hide_a_pattern(self):
+        no_result = "worker 종료 코드 1 (agy: result 이벤트가 없다)"
+        step = json.dumps({"event": "step_update", "step_update": {"output": "error: authentication failed 401"}})
+        tool = json.dumps({"type": "item.completed", "item": {"aggregated_output": "permission denied: usage limit"}})
+        answer = json.dumps({"type": "result", "is_error": False, "result": "authentication failed를 고쳤다"})
+        recovered = json.dumps({"event": "error", "message": "authentication failed"})
+        success = json.dumps({"event": "result", "result": {"status": "SUCCESS"}})
+        for reason, worker, kind in (
+                (no_result, step + "\n", "agy-no-result"),  # worker가 읽은 내용
+                (no_result, "warning: permission denied for a tool\n", "agy-no-result"),
+                (no_result, f"error: authentication failed\n{step}\n", "agy-no-result"),  # 다시 띄운 worker가 넘어섰다
+                ("커밋 없음", f"{LOCK_REF}\n{tool}\n", "codex-cannot-lock-ref"),
+                ("커밋 없음", f"{LOCK_REF}\n{answer}\n", "codex-cannot-lock-ref"),
+                ("worker 실행기가 사라졌다", f"{recovered}\n{success}\n", "worker-runner-lost")):
+            with self.subTest(reason=reason, worker=worker):
+                self.assertEqual(self.collect(reason, worker), [kind])
+
     def test_only_logs_written_during_this_run_count(self):
         self.failure("worker 실행기가 사라졌다")
         self.go()
