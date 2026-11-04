@@ -5,7 +5,7 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 from typing import TextIO
@@ -17,6 +17,7 @@ class Installation:
     commit: str | None = None
     url: str | None = None
     plugin_version: str | None = None
+    local: bool = field(default=False, compare=False)
 
 
 def installation(repo: Path) -> Installation:
@@ -25,6 +26,7 @@ def installation(repo: Path) -> Installation:
 
     gs_version = metadata.version("goldstack")
     commit = url = None
+    local = False
     try:
         dist = metadata.distribution("goldstack")
         data = json.loads(dist.read_text("direct_url.json") or "null")
@@ -34,6 +36,8 @@ def installation(repo: Path) -> Installation:
                 commit, url = vcs.get("commit_id"), data.get("url")
                 commit = commit if isinstance(commit, str) and commit else None
                 url = url if isinstance(url, str) and url else None
+        elif isinstance(data, dict) and isinstance(data.get("dir_info"), dict):
+            local = True
     except (OSError, ValueError, metadata.PackageNotFoundError):
         pass
     plugin_version = None
@@ -46,7 +50,7 @@ def installation(repo: Path) -> Installation:
                     break
     except adapters.AdapterError:
         pass
-    return Installation(gs_version, commit, url, plugin_version)
+    return Installation(gs_version, commit, url, plugin_version, local)
 
 
 def warn(repo: Path, out: TextIO) -> None:
@@ -55,6 +59,8 @@ def warn(repo: Path, out: TextIO) -> None:
         info = installation(repo)
     except (OSError, ValueError, metadata.PackageNotFoundError):
         return
+    if info.local:
+        print("경고: 설치 commit 모름(로컬 설치): 뒤처짐을 비교할 수 없다", file=out)
     if info.commit and info.url:
         try:
             env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="false",
