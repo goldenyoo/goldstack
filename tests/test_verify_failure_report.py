@@ -69,8 +69,43 @@ class FailureEvidenceTest(unittest.TestCase):
         self.assertIn("후보 티켓(추정): 후보 없음", text)
 
     def test_filename_substrings_do_not_match(self):
-        self.log.write_text("ERROR other_foo.py and unrelated.pyc\n")
+        self.log.write_text("ERROR other_foo.py and unrelated.pyc and foo.py.extra\n")
         self.assertIn("후보 없음", report.verification_failure(self.r))
+
+    def test_sentence_period_after_paths_and_names_still_matches(self):
+        self.merge_ticket("02", "lib/actual.test.js")
+        for failure, candidate in (("ERROR failed in src/foo.py.", "01"),
+                                   ("ERROR actual.test.js.", "02"),
+                                   ("not ok 3 /tmp/project/test/foo.test.js.", "03")):
+            with self.subTest(failure=failure):
+                self.log.write_text(failure + "\n")
+                self.assertIn(f"후보 티켓(추정): {candidate}\n", report.verification_failure(self.r))
+
+    def test_long_failure_lines_preserve_report_sections_and_candidates(self):
+        failure = "ERROR " + "x" * 70000 + " src/foo.py"
+        self.log.write_text("\n".join([failure] * 10) + "\n")
+        text = report.write(self.r, "요약").read_text()
+        self.assertLessEqual(len(text), report.MAX_BODY)
+        self.assertIn("ERROR ", text)
+        self.assertIn("줄 일부 생략", text)
+        self.assertIn(str(self.log.resolve()), text)
+        self.assertIn("후보 티켓(추정): 01\n", text)
+        for section in ("### 티켓별 결과", "## Merge Danger", "### 되돌리는 법"):
+            self.assertIn(section, text)
+
+    def test_command_header_is_excluded_even_with_multiline_command(self):
+        self.r.feat.spec.verify = "check src/foo.py || echo FAILED\necho 'not ok 1 test/foo.test.js'"
+        header = f"$ {self.r.feat.spec.verify}\nHEAD: abc123\n"
+        self.log.write_text(header + "수집 중 중단\n종료 코드: 1\n")
+        text = report.verification_failure(self.r)
+        self.assertIn("해당 실패 줄 없음", text)
+        self.assertIn("후보 티켓(추정): 후보 없음", text)
+        self.assertNotIn("FAILED", text)
+        self.log.write_text(header + "\n".join(f"not ok {i} unknown.js" for i in range(1, 11)))
+        text = report.verification_failure(self.r)
+        self.assertEqual(text.count("not ok "), 10)
+        self.assertIn("not ok 10 unknown.js", text)
+        self.assertIn("후보 티켓(추정): 후보 없음", text)
 
     def test_candidate_exception_does_not_prevent_writing_report(self):
         self.log.write_text("not ok 3 test/foo.test.js\n")
@@ -124,7 +159,9 @@ class FinishFailureReportTest(support.GoTest):
         self.assertFalse(any(line.startswith("pr merge ") for line in self.lines("gh.log")))
 
     def test_integration_failure_reports_changed_file_after_branch_cleanup(self):
-        self.configure("echo 'not ok 3 file_01'; exit 1")
+        script = self.bin / "verify.sh"
+        script.write_text("echo 'not ok 3 file_01'; exit 1\n")
+        self.configure(f"bash {script}")
         # 옛 integration-final 로그가 있어도 이번에 실패한 integration 로그를 고른다.
         (self.rundir / "finish").mkdir(parents=True)
         (self.rundir / "finish/integration-final-verify.log").write_text("ERROR stale.js\n")

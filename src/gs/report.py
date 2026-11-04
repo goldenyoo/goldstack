@@ -19,6 +19,7 @@ from .feature import WORK
 
 LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
 MAX_BODY = 60000  # GitHub PR 본문 상한(65,536자)보다 넉넉히 작게
+FAILURE_LINE_LIMIT = 1000  # 긴 실패 줄도 후보·티켓 결과·되돌리는 법을 밀어내지 않게 표시만 줄인다
 FINDING_STATUSES = ("수정됨", "미해결", "보고만", "수정 못 함", "확인 못 함")
 
 
@@ -219,7 +220,7 @@ def _failure_candidates(r, lines: list[str]) -> list[str]:
     """touches와 티켓 병합의 첫 부모 대비 변경 파일을 실패 줄의 경로·이름과 대조한다.
     병합 뒤 티켓 브랜치가 지워져도 integration의 gs-ticket 표시로 찾는다.
     """
-    references = re.findall(r"[\w./-]+", "\n".join(lines))
+    references = [ref.rstrip(".") for ref in re.findall(r"[\w./-]+", "\n".join(lines))]
     candidates = []
     for tid, ts in sorted(r.st.tickets.items()):
         if ts.status != state.MERGED or tid not in r.feat.tickets:
@@ -235,7 +236,7 @@ def _failure_candidates(r, lines: list[str]) -> list[str]:
             # 이름만 출력하는 러너도 있다. 단어 일부(foo.py와 other_foo.py)는 겹침으로 보지 않는다.
             name = re.escape(Path(path).name)
             if (not any(c in path for c in "*?[")
-                    and any(re.search(rf"(?<![\w.-]){name}(?![\w.-])", line) for line in lines)):
+                    and any(re.search(rf"(?<![\w.-]){name}(?=\.*(?:[^\w.-]|$))", line) for line in lines)):
                 candidates.append(tid)
                 break
             if any(fnmatchcase(ref, path) or fnmatchcase(ref, f"*/{path}")
@@ -255,12 +256,18 @@ def verification_failure(r) -> str:
     lines = []
     try:
         with log.open(encoding="utf-8", errors="replace") as stream:
+            # finish._verify가 쓴 명령은 여러 줄이어도 실제 검증 출력에서 뺀다.
+            command = f"$ {r.feat.spec.verify}\n"
+            if stream.read(len(command)) != command:
+                stream.seek(0)
             for line in stream:
                 if any(word in line for word in ("FAIL", "ERROR", "failed", "not ok")):
                     lines.append(line.rstrip("\n"))
                     if len(lines) == 10:
                         break
-        text += block("\n".join(lines)) if lines else "해당 실패 줄 없음. 전체 로그를 확인하라.\n"
+        excerpts = [line if len(line) <= FAILURE_LINE_LIMIT
+                    else line[:FAILURE_LINE_LIMIT] + " …(줄 일부 생략)" for line in lines]
+        text += block("\n".join(excerpts)) if lines else "해당 실패 줄 없음. 전체 로그를 확인하라.\n"
     except OSError as e:
         text += f"로그를 읽지 못함: {e}\n"
     try:
