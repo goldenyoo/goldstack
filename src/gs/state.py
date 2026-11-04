@@ -177,7 +177,8 @@ def network_label(st: State, at: str) -> str:
         return ""
     if not wait.get("due_at"):
         return f"네트워크 회복 확인({wait['count']}회)"
-    left = math.ceil(seconds_between(at, wait["due_at"]) / transient.minute_seconds())
+    # 두 시각은 초 단위로 잘려 있어 실제보다 1초까지 벌어진다. 1분이 1초보다 짧으면(GS_NETWORK_MINUTE) 그 1초가 몇십 분으로 보인다
+    left = math.ceil(max(0, seconds_between(at, wait["due_at"]) - 1) / transient.minute_seconds())
     return f"네트워크 대기({wait['count']}회, {max(1, left)}분 뒤)"
 
 
