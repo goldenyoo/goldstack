@@ -19,7 +19,7 @@
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
-| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글, `gs feedback` |
+| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글, `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
 | `notify.py` | 텔레그램 전송 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
@@ -417,6 +417,16 @@ same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이
 - 범위 밖 줄: `.goldstack/out-of-scope/*.md`마다 `<slug>  <**다시 볼 조건**: 뒤 문장>`. 조건 줄이 없거나 비면 `(조건 없음)`.
 
 `backlog.py`는 설정된 원격의 GitHub 저장소가 `feedback.repo`와 같을 때만 열린 `field-report` issue를 조회한다. 번호·제목·횟수(본문과 횟수 댓글의 최댓값)를 보이며 gh 실패는 한 줄 경고로 끝낸다. 기존 아이디어·범위 밖 출력과 종료 코드는 그대로다.
+
+## 피드백 수집 (`feedback.py`, `cli.py`)
+
+gs 결함만 규칙으로 골라 초안(`record`)으로 넘긴다. 판단 모델은 없다. 대상 프로젝트의 실패(티켓 구현 실패, 패턴에 안 걸린 "커밋 없음", 시험 실패, 리뷰 지적, `transient.py`가 가리는 일시 오류)는 올리지 않는다. `mode = "off"`이거나 `GS_ROLE=worker`면 아무것도 하지 않는다.
+
+- **내부 예외**: `cli.main`이 처리되지 않은 `Exception`을 `collect_exception`으로 넘긴 뒤 그대로 다시 던진다. 단계는 명령 이름이다. `gs go`의 예외는 `cmd_go`가 요약 전에 먼저 수집한다. 끊긴 파이프, 네트워크 중단, 메시지가 일시·환경 오류인 외부 오류(`OSError`, `GitError` 등)는 만들지 않는다.
+- **마무리 이상**(단계 `finish`): `cmd_go`가 `go()` 전후로 state를 읽는다. `finish.run`이 이번에 돌았을 때(`metrics`의 `total` 단계가 늘었을 때)만 본다. 그래서 검사 오류·잠금 실패·준비 실패로 보존된 재개 phase는 갇힘이 아니다. `finish-error`(새 오류와 outcome `마무리 실패: …`), `unexpected-revert`(reverted인데 integration 통과·base 실패 기록이 없다), `stuck-phase`(`merge_requested`·`merged`·`main_failed`로 들어가 그대로 나왔다) 중 하나를 올린다. base 검증이 실패해 되돌린 것은 설계된 동작이자 시험 실패라 올리지 않는다. `finish.run`이 예외로 끝난 실행, 네트워크 중단, 일시·환경 오류, 사람·CI를 기다리는 phase도 보지 않는다. 보고서 커밋·push처럼 `finish.error`를 남기지 않는 단계의 git 오류는 환경 탓과 구별할 글이 state에 없어 보이지 않는다.
+- **어댑터 실패**(단계 `worker`): `go()` 전후로 새로 쓰인 `run/<티켓>/<시도>/failure.log`만 본다. 이유와 `worker.log` 끝으로 `ADAPTER_PATTERNS`를 앞에서부터 맞춘다: `codex-cannot-lock-ref`, `agy-no-result`, `worker-runner-lost`. 표에 없어도 어댑터가 낸 오류 모양이면 `unknown`이다. 오류 줄은 `detail`을 따른다. 수정 worker의 실패는 `failure.log`를 남기지 않아 보이지 않는다.
+- **전송과 요약**: `cmd_go`가 시작에 `send`로 쌓인 초안을 다시 보내고, 끝에 새 초안을 보낸 뒤 `■ goldstack 피드백: 보냄 N · 대기 M`을 낸다. 둘 다 0이거나 `off`면 줄이 없다. `draft`는 쌓기만 한다.
+- **격리**: 수집의 오류는 `cli._quiet`에서 경고 한 줄이 되고 종료 코드·결과는 그대로다. 초안에 넣는 CLI 버전 확인은 빈 임시 디렉터리에서 돌아 레포와 검증 중인 worktree에 닿지 않는다.
 
 ## 텔레그램 알림
 
