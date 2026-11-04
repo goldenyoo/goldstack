@@ -1,10 +1,11 @@
 """모델 어댑터: 티켓의 `model`(claude | codex | agy)에 맞춰 worker 실행 명령을 만들고 종료 코드를 판정한다.
 
-입력은 모두 같다(WorkerInput: brief 경로, worktree, 로그 경로). 어댑터가 하는 일은 넷이다.
+입력은 모두 같다(WorkerInput: brief 경로, worktree, 로그 경로). 어댑터가 하는 일은 다섯이다.
 - prepare: 띄우기 전 준비와 확인. 차단 장치를 걸 수 없으면 AdapterError로 거부한다.
 - env: worker 환경. 모든 어댑터가 `GS_ROLE=worker`를 넣는다(09 hook이 이 값을 본다).
 - command: worktree에서 돌릴 셸 명령. 실행 스크립트(worker.write_script)가 이것을 감싸 로그와 exit 파일을 남긴다.
 - outcome: 프로세스 종료 코드와 로그로 최종 종료 코드를 정한다. agy는 종료 0이 성공이 아니다(docs/research/agy.md §3.1).
+- transient_reason: 로그에서 일시 오류 이유를 찾는다. 없으면 빈 문자열이며 outcome과는 별개다.
 
 차단 장치(spec 3-1): claude는 plugin hook + 도구 차단 옵션(goldstack 밖 플러그인·skill·MCP는 끈다), codex는 `workspace-write` sandbox,
 agy는 deny 규칙 + `gs hook agy-pretooluse`(worktree의 `.agents/hooks.json`) 두 겹. agy hook이 걸리지 않으면 거부한다.
@@ -20,7 +21,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, git
+from . import config, git, transient
 
 q = shlex.quote
 
@@ -55,6 +56,15 @@ class Adapter:
     def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
         """(최종 종료 코드, 사람이 읽을 메모). 메모는 실패 이유나 조용한 강등 경고다."""
         return code, ""
+
+    def transient_reason(self, inp: WorkerInput) -> str:
+        """계열을 몰라도 일시 오류를 묻는 경로. 로그가 아직 없으면 근거도 없다."""
+        try:
+            text = inp.log.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            return ""
+        model = self.models.agy if self.name == "agy" else ""
+        return transient.reason(self.name, text, model=model, cwd=inp.worktree)
 
 
 # ---------------------------------------------------------------- claude

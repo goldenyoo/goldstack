@@ -370,6 +370,8 @@ PR <url>
 
 `adapters.py`. 어댑터마다 같은 입력(brief, worktree, 로그 경로)을 받아 준비(`prepare`), 환경(`env`, 모두 `GS_ROLE=worker`, `GS_BRIEF`, `GS_WORKTREE`), 셸 명령(`command`), 종료 판정(`outcome`)을 한다. 실행 스크립트(`run.sh`)가 명령을 감싸 `worker.log`에 남기고 종료 코드를 `exit` 파일에 원자적으로 쓴다. 끝은 이 파일로 안다(화면을 읽어 추측하지 않는다).
 
+`transient_reason(inp)`은 종료 판정과 별개로 `transient.reason(family, text, model=..., cwd=...)`에 로그를 넘겨 일시 오류 이유를 돌려준다(없으면 빈 문자열). 연결·DNS·5xx·429만 인정하고 인증·구독 한도·모르는 오류는 제외한다. claude는 마지막 result, codex는 error·turn.failed 이벤트를 읽어 도구 출력 속 문자열을 무시한다. agy의 `invalid model selection`은 `agy models`(`GS_AGY` seam, 15초 제한)가 실패하거나 선택한 모델이 목록에 있을 때 일시 오류다. 목록에 모델이 없으면 설정 오류다. 이 판별 자체는 대기나 재시작을 하지 않는다.
+
 | model | 명령 | 차단 장치 |
 |---|---|---|
 | claude | `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools "Bash(git push *)" "Bash(gh *)" --settings '{"enabledPlugins":{<goldstack 밖 플러그인>:false,…}}' --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands < brief` | plugin hook + 도구 차단 |
