@@ -383,7 +383,7 @@ def _graph(r: Run) -> dict[str, list[str]]:
 
 
 def _already_merged(r: Run, tid: str) -> bool:
-    return bool(git.out(r.iwt, "log", "-1", "--format=%H", "--fixed-strings", f"--grep={trailer(r.name, tid)}"))
+    return tid in git.ticket_trailers(r.iwt, r.name)
 
 
 def _resume_merged(r: Run) -> None:

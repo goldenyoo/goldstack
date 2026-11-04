@@ -22,6 +22,17 @@ def out(cwd: Path, *args: str) -> str:
     return run(cwd, *args).stdout.strip()
 
 
+def ticket_trailers(cwd: Path, feature: str, *revs: str, merges_only: bool = False) -> set[str]:
+    """커밋 본문의 독립된 gs-ticket 줄에서 feature가 정확히 같은 티켓 id를 읽는다.
+
+    squash 본문의 줄도 읽는다. 새 integration 병합만 찾을 때는 merges_only를 쓴다.
+    """
+    options = ("--min-parents=2",) if merges_only else ()
+    body = run(cwd, "log", "--format=%b", *options, *revs).stdout
+    pattern = re.compile(rf"gs-ticket: {re.escape(feature)}/(\S+)[ \t]*")
+    return {match.group(1) for line in body.splitlines() if (match := pattern.fullmatch(line))}
+
+
 def _github_repo_url(url: str) -> str | None:
     match = re.fullmatch(r"(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)"
                          r"([A-Za-z0-9-]+)/([A-Za-z0-9_.-]+)", url, re.IGNORECASE)
