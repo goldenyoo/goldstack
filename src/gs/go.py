@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import adapters, clean, config, failure, finish, git, graph, herdr, notify, report, review, setup, state, transient, verify, worker
+from . import adapters, clean, config, failure, finish, git, graph, herdr, metrics, notify, report, review, setup, state, transient, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -236,6 +236,7 @@ def _begin(r: Run) -> None:
     st.network.pop("wait", None)
     st.network.pop("aborted", None)
     r.st = st
+    metrics.runtime(r)
     r.history_median_s = state.load_eta_history(r.repo, r.name)
     r.save()
 
@@ -287,8 +288,7 @@ def _worker_adapter(r: Run, t: Ticket) -> adapters.Adapter:
     adapter = adapters.for_model(t.model, r.cfg.models, selection)
     # model은 진행·계열별 소요 통계가 쓰므로 계열로 유지한다. 빈 값은 CLI 사용자 기본값이다.
     chosen = getattr(adapter, "selection", None)
-    ts.phases[-1].update(tier=tier, actual_model=chosen.model if chosen else "",
-                         effort=chosen.effort if chosen else "")
+    metrics.worker_selection(ts, tier, chosen)
     # 호출 경로의 다음 _set(pane) 또는 실패 저장이 이 선택도 함께 쓴다.
     return adapter
 
@@ -884,6 +884,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         worker.write_script(job, adapter)
         _isolation_warning(r, t.id, adapter)
         _count_agy(r, t.model)
+        metrics.worker_started(r, job)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:{rundir.name}", adapter)
         _set(r, t.id, pane=proc.where)
     except adapters.AdapterError as e:
@@ -951,6 +952,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
         worker.write_script(job, adapter)
         _isolation_warning(r, t.id, adapter)  # 종료·시간 초과·재개 여부와 무관하게 실행 전에 보존한다
         _count_agy(r, t.model)
+        metrics.worker_started(r, job)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
         _set(r, t.id, pane=proc.where)
     except adapters.AdapterError as e:
@@ -975,6 +977,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
     error는 수정 worker를 확인하다 난 오류(시간 초과 등)다.
     일시 오류로 끝났으면 실패로 세지 않고 세워 둔다(None, _net_tick이 다시 띄운다). 네트워크 끊김 중이면 리뷰·재리뷰를 미룬다.
     """
+    metrics.worker_finished(r, a.proc.job)
     t, wt, branch = a.t, a.wt, a.branch
     commits = git.count(r.repo, f"{a.base}..{branch}")
     note = a.proc.note
@@ -1244,6 +1247,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         base = git.sha(r.repo, a.branch)
         _set(r, t.id, log=str(job.log), pane="")  # 재실행 때 살아 남은 수정 worker를 run.sh로 찾게
         _count_agy(r, t.model)
+        metrics.worker_started(r, job)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:{step}", adapter)
         _set(r, t.id, pane=proc.where)
     except Exception as e:  # noqa: BLE001 — 수정은 덤이다. 지금 브랜치의 구현은 그대로 병합한다
@@ -1479,6 +1483,8 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
             verify.flaky(res, f"ticket-{t.id}", f)
     if res.timed_out:
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
+    metrics.validation(r, f"ticket-{t.id}", command, before[0], res, changed,
+                       tree_sha=before[3], merge_head=before[2])
     return res, log, changed
 
 

@@ -101,6 +101,9 @@ class State:
     # 네트워크 끊김: errors(일시 오류 수), waited_seconds(기다린 시간, 둘 다 실행을 넘어 누적),
     # wait(지금의 대기: count, due_at. due_at이 비면 다시 띄운 worker로 회복을 확인하는 중), aborted(중단 이유)
     network: dict = field(default_factory=dict)
+    # 선택 측정 이력. 재개·재시도·새 마무리에서도 덮어쓰지 않는다. 옛 state에는 없어도 된다.
+    # runtime, workers, validations, reviewers, review_calls, finish_stages의 목록(metrics.py).
+    metrics: dict = field(default_factory=dict)
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
