@@ -134,14 +134,24 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 3. `fix`가 있으면 같은 구현 모델로 수정 worker를 같은 브랜치·worktree에 띄운다(지적을 brief 끝에 붙인다). 커밋하면 재리뷰로 간다(아래). 수정 worker가 실패하면(종료 코드, 멈춤, 커밋 없음, 이전 커밋을 지움) 이번 수정 커밋만 버리고 수정 전 head로 되돌려 병합·검증한다. 재리뷰하지 않고 티켓 실패로 세지 않는다.
 4. reviewer·재리뷰·판단 모델 호출이 실패하거나 답의 형식이 틀려도 티켓은 그대로 간다(병합 관문은 verify). 그 사실은 리뷰 기록의 `note`나 지적의 `rereview_reason`에 남는다. 일시 오류·시간 초과는 실패가 아니다: 기다렸다 다시 부르고, 대기 상한을 넘기면 `중단(네트워크)`다("리뷰·판단 호출의 대기").
 
-기록은 state의 `review`(`reviewer`, `dir`, `merge_base`, `note`, `fix`, `rereviews`, `findings`, 호출 때의 `tier`·`actual_model`·`effort`), 두 번째 리뷰는 `second_review`, 그리고 시도 디렉터리의 `review/`(두 번째 리뷰는 `review-<계열>/`, 예 `review-agy/`)(`diff.patch`, `prompt.md`, `review.txt`, `reviewer.log`, `findings.json`, `judge-prompt.md`, `judge.txt`, `judge.log`), `fix/`·`fix2/`(수정 worker), `rereview<회차>-<계열>/`(재리뷰).
+기록은 state의 `review`(`reviewer`, `dir`, `merge_base`, `reviewed_head`, `note`, `fix`, `rereviews`, `findings`, 호출 때의 `tier`·`actual_model`·`effort`), 두 번째 리뷰는 `second_review`, 그리고 시도 디렉터리의 `review/`(두 번째 리뷰는 `review-<계열>/`, 예 `review-agy/`)(`diff.patch`, `prompt.md`, `review.txt`, `reviewer.log`, `findings.json`, `judge-prompt.md`, `judge.txt`, `judge.log`), `fix/`·`fix2/`(수정 worker), `rereview<회차>-<계열>/`(재리뷰). 병합 전 대조로 다시 부르면 디렉터리 이름에 `-again`이 붙어 앞 증거가 남는다.
+
+**읽는 트리**(`go._review_tree`) — 첫 리뷰와 재리뷰가 같은 규칙을 쓴다. 티켓 worktree가 대상 head 그대로이고 깨끗하면(setup 산출물 제외) 그곳이다. 미커밋 변경이 있거나 다른 곳으로 옮겨 갔으면 임시 worktree `run/gs-review-*/wt`(재리뷰는 `run/gs-rereview-*/wt`)다. 판단 모델도 같은 트리에서 돈다. 병합되지 않을 코드를 근거로 지적을 기각하거나 `resolved`로 확인하지 않게 한다. 티켓 worktree의 변경은 지우지 않는다. 트리를 못 만들면 아무도 부르지 않는다(agy 호출로 세지 않는다): 첫 리뷰는 리뷰 실패(`note`)로 적고 verify만으로 병합하고, 재리뷰는 `unchecked`(`재리뷰 실패`)다. 치우기 실패는 경고뿐이다.
+
+**병합 전 대조**(`go._review_to_head`, `go._moved_head`) — 리뷰·재리뷰가 끝날 때마다 티켓 head를 리뷰 기록의 `reviewed_head`와 비교한다. 살아 남은 자손이 리뷰 중에 커밋한 경우 같은, 아무 리뷰어도 보지 않은 head가 병합되지 않게 한다.
+- `reviewed_head`: 이 리뷰어를 부른 마지막 리뷰·재리뷰의 대상 head. 호출이 실패해도 옮긴다(실패는 `note`·`failed`가 말한다). 수정 커밋 diff가 비어 부르지 않은 재리뷰도 그 head로 옮긴다. 부르지 못했으면(거부, 한도, 트리 실패) 옮기지 않는다. 옛 state의 기록에는 없고, 값이 하나도 없으면 대조하지 않는다.
+- 리뷰가 둘이면 어느 한쪽이 본 head면 같다(재리뷰는 지적을 낸 리뷰어만 부른다).
+- 다르면 한 번 다시 부른다. 수정 전이면 `_review`(티켓 diff 전체, 새 기록이 앞 기록을 대신한다. 답을 못 받았으면 앞 지적을 남기고 `note`에 덧붙인다), 수정 뒤면 그 회차의 `_rereview`(수정 worker가 받은 지적, `a.base..head`)다. 고칠 지적이 나오면 평소처럼 수정 worker로 가고 수정 횟수 상한은 그대로다.
+- 또 다르면 경고와 기록(`fix`)만 남기고 간다. 리뷰를 깨끗해질 때까지 돌리지 않는다.
+- 수정 worker가 실패해 그 수정을 버렸으면 대조하지 않는다. 띄우기 전에 대조한 head로 돌아왔고, 실패한 수정은 재리뷰 없이 병합·검증으로 간다.
+- catch-up은 이 뒤라 합친 최신 integration은 worker 변경으로 세지 않는다. 대기 상한을 넘기면 `중단(네트워크)`로 멈추고 `done` 표시로 다음 `gs go`가 잇는다.
 
 **재리뷰**(`go._rereview`, `review.rereview`) — 순서는 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → catch-up·verify → 병합이고 verify는 마지막에 한 번이다. 수정은 티켓당 최대 2회, 리뷰를 깨끗해질 때까지 돌리지 않는다.
 - **대상**(`review.fix_targets`): 1차는 `fix` 지적 전부. 2차는 1차 재리뷰의 `unresolved`와 1차 재리뷰가 새로 낸 `fix` 지적. `resolved`·`unchecked`는 다시 고치지 않는다. 대상이 있는 리뷰 기록의 리뷰어만 부르고, 둘이면 `review.run_together`로 동시에 띄운다. 각자 자기 지적을 확인하고 새 문제는 부른 리뷰어 모두가 본다.
 - **입력**: 수정 커밋 diff `fix.patch`(수정 전 브랜치 head..수정 뒤 head), 그 리뷰어의 지적 `fix-findings.json`, 티켓, spec. 제한은 `timeouts.rereview_minutes`. 답은 고정 JSON `{"verdicts": [{"id", "status": "resolved|unresolved", "evidence"}], "findings": […]}`. 디렉터리에는 `prompt.md`, `review.txt`, `reviewer.log`도 남고, 새 지적을 분류했으면 판단 모델 파일도 남는다.
 - **판정**: 답을 못 받으면 그 리뷰어의 지적이 모두 `unchecked`(`재리뷰 실패`)다. 시간 초과와 일시 오류는 다시 부르고, 대기 상한을 넘기면 `중단(네트워크)`다(아래 "리뷰·판단 호출의 대기"). 옛 state에는 이유 `시간 초과`가 남아 있을 수 있다. 판정이 빠졌거나 근거가 빈 지적도 `unchecked`(`재리뷰 실패`)다. 수정 커밋 diff가 비면 부르지 않고 `unresolved`다. 재리뷰 중 어떤 오류도 병합을 막지 않는다.
 - **새 지적**: 기록의 `findings` 뒤에 번호를 이어 `found_round`를 적는다. 1차면 판단 모델이 나누고(`fix`면 2차 수정 대상), 2차면 판단 모델을 부르지 않고 `report`다.
-- **읽는 트리**(`go._rereview_tree`): 티켓 worktree가 수정 head 그대로이고 깨끗하면(setup 산출물 제외) 그곳, 미커밋 변경이 있거나 다른 곳으로 옮겨 갔으면 임시 worktree `run/gs-rereview-*/wt`다. 병합되지 않을 변경을 `resolved`로 확인하지 않게 한다.
+- **읽는 트리**: 위 "읽는 트리"의 규칙으로 수정 head를 읽는다.
 - **2차 수정을 못 하면**: 띄우지 못했으면(한도 포함) 그대로, 실패하면 이번 수정 커밋만 버리고 1차 수정까지를 병합·검증한다. 2차 재리뷰는 없다.
 
 재리뷰 state 필드:
@@ -476,6 +486,7 @@ integration/<시도>/   setup.log
 wt/integration        integration worktree(gs만 쓴다, verified면 자동 정리)
 wt/<NN>, wt/<NN>-retry-<k>   티켓 worktree(병합되면 정리, 실패면 보존 → gs clean)
 gs-main-*/base        base 검증 임시 worktree(끝나면 지운다)
+gs-review-*/wt        첫 리뷰 임시 worktree(티켓 worktree가 head와 다를 때만, 끝나면 지운다)
 gs-rereview-*/wt      재리뷰 임시 worktree(티켓 worktree가 수정 head와 다를 때만, 끝나면 지운다)
 finish/               summary.md, report-input.md, diff-stat.txt, report-judge.log, setup.log(base 준비),
                       integration-verify.log, integration-final-verify.log, integration-recheck-verify.log,
