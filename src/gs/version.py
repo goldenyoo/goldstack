@@ -5,7 +5,7 @@ import json
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 from typing import TextIO
@@ -17,7 +17,7 @@ class Installation:
     commit: str | None = None
     url: str | None = None
     plugin_version: str | None = None
-    local: bool = False
+    local: bool = field(default=False, compare=False)
 
 
 def installation(repo: Path) -> Installation:
