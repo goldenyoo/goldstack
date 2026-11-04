@@ -6,14 +6,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import test_go
+import support
 from gs import cli, git, state
-from test_go import sh
+from support import sh
 
 
 class CleanTest(unittest.TestCase):
     BASE, REMOTE = "trunk", "upstream"
-    G = test_go.GoTest
+    G = support.GoTest
     setUp, tearDown, go, rundir, parallel = G.setUp, G.tearDown, G.go, G.rundir, G.parallel
 
     def clean(self, *args, repo=None):

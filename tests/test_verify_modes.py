@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import test_check
-import test_go
+import support
 from gs import feature, finish, report, state, verify
 
 
@@ -71,7 +71,7 @@ class VerifyRetriesTest(unittest.TestCase):
 
 class VerifyModesTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     setUp, tearDown, go, calls = G.setUp, G.tearDown, G.go, G.calls
     rundir, integration, final_report, lines = G.rundir, G.integration, G.final_report, G.lines
 
@@ -79,9 +79,9 @@ class VerifyModesTest(unittest.TestCase):
         path = self.repo / ".goldstack/work/demo/spec.md"
         path.write_text('---\nfeature: demo\nmax_workers: 1\n' + ''.join(
             f'{key}: {json.dumps(value)}\n' for key, value in settings.items()) + '---\n')
-        test_go.sh(self.repo, "git", "add", "-A")
-        test_go.sh(self.repo, "git", "commit", "-qm", "verify modes")
-        test_go.sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
+        support.sh(self.repo, "git", "add", "-A")
+        support.sh(self.repo, "git", "commit", "-qm", "verify modes")
+        support.sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
 
     def test_ticket_command_runs_in_ticket_worktree_and_is_in_brief(self):
         full = f'echo "$PWD" >> {self.bin / "full"}'
@@ -106,8 +106,8 @@ class VerifyModesTest(unittest.TestCase):
             if not changed:
                 changed.append(True)
                 (r.iwt / "extra").write_text("code change\n")
-                test_go.sh(r.iwt, "git", "add", "extra")
-                test_go.sh(r.iwt, "git", "commit", "-qm", "extra code")
+                support.sh(r.iwt, "git", "add", "extra")
+                support.sh(r.iwt, "git", "commit", "-qm", "extra code")
             return path
         return mock.patch("gs.finish._commit_report", side_effect=commit)
 

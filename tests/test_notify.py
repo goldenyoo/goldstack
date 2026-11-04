@@ -8,7 +8,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
-import test_go
+import support
 from gs import config, notify, state
 
 TOKEN = "123456:SECRET-token_value"
@@ -149,16 +149,16 @@ class SendTest(FakeServerMixin, unittest.TestCase):
 class GoNotifyTest(FakeServerMixin, unittest.TestCase):
     """가짜 worker `gs go` + 가짜 Bot API 서버로 실행 끝 알림 본문을 본다."""
     BASE, REMOTE = "main", "origin"
-    tearDown, go = test_go.GoTest.tearDown, test_go.GoTest.go
-    rundir, parallel, integration = test_go.GoTest.rundir, test_go.GoTest.parallel, test_go.GoTest.integration
-    final_report = test_go.GoTest.final_report
+    tearDown, go = support.GoTest.tearDown, support.GoTest.go
+    rundir, parallel, integration = support.GoTest.rundir, support.GoTest.parallel, support.GoTest.integration
+    final_report = support.GoTest.final_report
 
     def setUp(self):
-        test_go.GoTest.setUp(self)
+        support.GoTest.setUp(self)
         os.environ.pop("GS_ROLE", None)  # gs go는 코디네이터로 돈다(GoTest의 환경 패치가 끝나면 되돌아온다)
 
     def enable(self, env=f"TG_TOKEN={TOKEN}\nTG_CHAT_ID=42\n"):
-        sh = test_go.sh
+        sh = support.sh
         sh(self.repo, "git", "pull", "-q", "--ff-only", self.REMOTE, self.BASE)
         cfg = self.repo / config.CONFIG_PATH
         cfg.write_text(cfg.read_text().replace("telegram = false", "telegram = true"))

@@ -19,7 +19,7 @@ from gs.adapters import AdapterError, WorkerInput
 from gs.feature import Ticket
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_go import FAKE_GH, SPEC, sh  # noqa: E402
+from support import FAKE_GH, SPEC, sh  # noqa: E402
 from support import isolate_git_env
 
 MODELS = config.ModelsConfig("judge-test", "review-test", "agy-test", "")

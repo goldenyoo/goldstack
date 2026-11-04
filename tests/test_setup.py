@@ -8,9 +8,9 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-import test_go
+import support
 from gs import config, finish, setup, state, verify
-from test_go import sh
+from support import sh
 from test_verify import wait_dead
 
 
@@ -77,7 +77,7 @@ class SetupCommandTest(unittest.TestCase):
 
 class WorktreeSetupTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     tearDown, go, calls, rundir = G.tearDown, G.go, G.calls, G.rundir
     integration, final_report, lines, remote_files = G.integration, G.final_report, G.lines, G.remote_files
 

@@ -3,9 +3,9 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import test_go
+import support
 from gs import git, report, state
-from test_go import sh
+from support import sh
 
 REPORT = ".goldstack/work/demo/report.md"
 SUBJECT = "gs: demo 최종 보고서(병합 후)"
@@ -47,7 +47,7 @@ class StatusLineTest(unittest.TestCase):
 
 class FinalReportOnBaseTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     setUp, tearDown, go = G.setUp, G.tearDown, G.go
     rundir, integration, parallel, lines, final_report = G.rundir, G.integration, G.parallel, G.lines, G.final_report
     someone, remote_files, under_report = G.someone, G.remote_files, G.under_report

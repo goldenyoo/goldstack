@@ -11,9 +11,9 @@ import textwrap
 import unittest
 from unittest import mock
 
-import test_go
+import support
 from gs import config, git, state
-from test_go import sh
+from support import sh
 
 URL = "https://example.test/pr/{}"
 REPORT = ".goldstack/work/demo/report.md"
@@ -132,7 +132,7 @@ done
 
 class ProtectedBaseTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     tearDown, calls, rundir, integration, lines = G.tearDown, G.calls, G.rundir, G.integration, G.lines
     final_report, remote_files = G.final_report, G.remote_files
 

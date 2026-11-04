@@ -7,9 +7,9 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest import mock
 
-import test_go
+import support
 from gs import config, finish, go, state
-from test_go import sh
+from support import sh
 
 
 CHECKS_GH = '''\
@@ -25,13 +25,13 @@ CHECKS_GH = '''\
 
 class WaitChecksTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     tearDown, go, calls = G.tearDown, G.go, G.calls
     rundir, integration, lines = G.rundir, G.integration, G.lines
 
     def setUp(self):
         self.G.setUp(self)
-        script = test_go.FAKE_GH.replace('  "pr merge")', CHECKS_GH + '  "pr merge")')
+        script = support.FAKE_GH.replace('  "pr merge")', CHECKS_GH + '  "pr merge")')
         script = script.replace("else echo '{\"state\":\"OPEN\"}'; fi", '''else
       head=$(git ls-remote "$R" refs/heads/gs/demo/integration | cut -f1)
       echo '{"state":"OPEN","headRefOid":"'$head'","baseRefName":"'$B'"}'; fi''')

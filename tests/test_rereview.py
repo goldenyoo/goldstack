@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_config
-import test_go
+import support
 import test_second_review
 from test_second_review import finding
 
@@ -329,7 +329,7 @@ class RereviewTreeTest(Base):
 
     def seen(self, who="codex", n=1):
         path, head, *status = self.lines(f"rereview.tree.{who}.{n}")
-        return path, test_go.sh(self.repo, "git", "log", "-1", "--format=%s", head).strip(), status
+        return path, support.sh(self.repo, "git", "log", "-1", "--format=%s", head).strip(), status
 
     def dirty_fix(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
@@ -338,7 +338,7 @@ class RereviewTreeTest(Base):
 
     def assert_no_snapshot_left(self):
         self.assertEqual(list(self.rundir.glob("gs-rereview-*")), [])
-        self.assertNotIn("gs-rereview-", test_go.sh(self.repo, "git", "worktree", "list"))
+        self.assertNotIn("gs-rereview-", support.sh(self.repo, "git", "worktree", "list"))
 
     def test_clean_worktree_is_rereviewed_in_place(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
