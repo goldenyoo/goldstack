@@ -19,6 +19,8 @@ class SetupCommandTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.wt = Path(tmp.name)
+        sh(self.wt, "git", "init", "-q")
+        sh(self.wt, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init", "--allow-empty")
         self.log = self.wt / "attempt/setup.log"
         self.cfg = config.Config(config.GitConfig("origin", "main"), config.ModelsConfig("opus", "opus", "agy", ""),
                                  config.TimeoutsConfig(30, 10, 60), config.NotifyConfig(False))

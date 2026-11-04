@@ -387,7 +387,7 @@ def _drop_kept(r: Run, tid: str, path: Path) -> bool:
         if not valid or wt not in current or wt == r.iwt.resolve():
             say(f"[{tid}] 경고: 남긴 경로가 이 티켓의 worktree가 아니라 정리하지 않는다: {path}")
             return False
-        if not git.is_clean(wt):
+        if not setup.is_clean(wt):
             say(f"[{tid}] 경고: 남긴 worktree: {wt} (미커밋 변경)")
             return False
         branch = ticket_branch(r.name, tid) + suffix
@@ -395,6 +395,7 @@ def _drop_kept(r: Run, tid: str, path: Path) -> bool:
             # 분리 HEAD나 다른 브랜치의 커밋은 이 worktree만 가리킬 수 있다. 지우면 잃으니 남긴다.
             say(f"[{tid}] 경고: 남긴 worktree의 브랜치가 {branch}가 아니라 정리하지 않는다: {wt}")
             return False
+        setup.discard_artifacts(wt)
         git.run(r.repo, "worktree", "remove", str(wt))  # --force 없이: 검사 뒤 생긴 변경은 git이 지킨다
         say(f"[{tid}] 남긴 worktree 정리: {wt}")
         if git.branch_exists(r.repo, branch):
@@ -433,13 +434,14 @@ def _cleanup_merged(r: Run, tid: str) -> None:
             if wt not in current or current[wt] != ts.branch:
                 say(f"[{tid}] 경고: worktree의 브랜치가 달라 정리를 건너뛴다: {wt}")
                 return
-            if not git.is_clean(wt):
+            if not setup.is_clean(wt):
                 if ts.worktree not in ts.kept_worktrees:
                     _set(r, tid, kept_worktrees=[*ts.kept_worktrees, ts.worktree])
                 say(f"[{tid}] 경고: 남긴 worktree: {wt} (미커밋 변경)")
                 return
         if wt and wt in current:
             # 검사 뒤 생긴 변경도 git이 지키도록 --force는 쓰지 않는다.
+            setup.discard_artifacts(wt)
             git.run(r.repo, "worktree", "remove", str(wt))
             say(f"[{tid}] worktree 정리: {wt}")
         if ts.worktree in ts.kept_worktrees:
@@ -630,6 +632,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
             if not setup.run(r.cfg, wt, rundir / "setup.log").ok:
                 _fail(r, t, "준비 실패", retry=False)
                 return None
+            setup.remember(wt)
             _phase(r, t.id, "worker", t.model)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
         adapter = adapters.for_model(t.model, r.cfg.models)
@@ -696,7 +699,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
             return fail(why + (f" ({note})" if note else ""))
         if commits == 0:
             return fail("커밋 없음")
-        if not git.is_clean(wt):
+        if not setup.is_clean(wt):
             say(f"[{t.id}] 경고: worktree에 커밋 안 된 변경이 남았다(병합에 들어가지 않는다)")
         try:
             todo = _review(r, a)
@@ -926,7 +929,7 @@ def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> l
     why = error or ("" if code == 0 else f"종료 코드 {code}") or ("" if kept else "이전 커밋을 지웠다") \
         or ("" if commits else "커밋 없음")
     if not why:
-        if not git.is_clean(wt):
+        if not setup.is_clean(wt):
             say(f"[{t.id}] 경고: 수정 worker가 커밋 안 된 변경을 남겼다(병합에 들어가지 않는다)")
         _mark_fixes(r, t, nth, review.ATTEMPTED)
         ids = ", ".join(str(f["id"]) for f in _todo(r, t, nth))

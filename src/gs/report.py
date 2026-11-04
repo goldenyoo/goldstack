@@ -11,7 +11,7 @@ import shlex
 from collections import Counter
 from pathlib import Path
 
-from . import config, git, review, state
+from . import config, git, review, setup, state
 from .feature import WORK
 
 LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
@@ -88,6 +88,8 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
                      if phase in durations and (n := state.minutes(durations[phase]))]
             timings.append(f"- {tid} 단계별 소요: " + (" · ".join(spent) or "모두 1분 미만"))
         reason += kept(ts)
+        for warning in setup.warnings((r.rundir / tid).glob("*/setup.log")):
+            reason += "\n" + warning
         for warning in ts.isolation_warnings:
             if warning not in reason:
                 reason += "\n" + warning
@@ -258,6 +260,10 @@ def _render(r, summary: str, tail: int) -> str:
                  f"revert를 다시 되돌렸다(`{x['commit']}`). {r.base}로 가는 다음 PR이 feature 코드를 다시 들인다.\n\n")
     if f.get("error"):
         text += block(f["error"][-LOG_TAIL:]) + "\n"
+    for label, logs in (("integration", (r.rundir / "integration").glob("*/setup.log")),
+                        (r.base, (r.rundir / "finish").glob("setup.log"))):
+        for warning in setup.warnings(logs):
+            text += f"{label}: {warning}\n\n"
     remote, base = shlex.quote(r.remote), shlex.quote(r.base)
     text += (f"### 되돌리는 법\n\n{r.base}의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert한다. "
              f"병합 커밋의 첫 부모({r.base})를 유지한다. 한 부모 커밋이면 `-m 1`을 생략한다. "

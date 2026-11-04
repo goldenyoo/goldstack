@@ -257,6 +257,11 @@ def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
         else:
             row("필수 검사", "없음")
     _verify_rows(repo, out)
+    if any(re.search(r"\bnpm\s+(?:install|i)\b", command)
+           or re.search(r"\byarn(?=\s*(?:$|--|install\b))", command)
+           and not re.search(r"--(?:frozen-lockfile|immutable)(?![\w-])", command)
+           for command in re.split(r"[;&|\n]", cfg.worktree.setup)):
+        row("setup", "lockfile을 바꾸지 않는 명령 권장: npm ci · yarn --frozen-lockfile · uv sync --locked")
     if write:
         try:
             _write(repo, cfg, proposals, out)
