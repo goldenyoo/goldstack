@@ -21,7 +21,7 @@ def _is_go(command: str) -> bool:
         return False
     if not argv:
         return False
-    if Path(argv[0]).name.startswith("python"):
+    if Path(argv[0]).name.lower().startswith("python"):
         if argv[1:3] == ["-m", "gs.cli"]:
             args = argv[3:]
         elif len(argv) > 1 and Path(argv[1]).name == "gs":

@@ -150,11 +150,28 @@ class SelfUpdateTest(unittest.TestCase):
 class ProcessTest(unittest.TestCase):
     def test_go_command_shapes_and_unrelated_arguments(self):
         for command in ('/bin/gs go feature', '/bin/python /bin/gs --repo /tmp go f',
-                        '/bin/python3.12 -m gs.cli --repo=/tmp go f'):
+                        '/bin/python3.12 -m gs.cli --repo=/tmp go f',
+                        '/Library/Frameworks/Python.framework/Resources/Python.app/Contents/MacOS/Python /bin/gs go f',
+                        '/Library/Frameworks/Python.framework/Resources/Python.app/Contents/MacOS/Python -m gs.cli go f'):
             self.assertTrue(selfupdate._is_go(command), command)
         for command in ('bash -c "gs go f"', 'gs self-update', 'gs --repo go doctor',
-                        'python worker.py gs go', 'gs --version', 'ps -axo pid=,args='):
+                        'python worker.py gs go', 'Python worker.py gs go',
+                        'gs --version', 'ps -axo pid=,args='):
             self.assertFalse(selfupdate._is_go(command), command)
+
+    def test_framework_python_go_refuses_before_any_installation(self):
+        pid = os.getpid() + 1
+        command = '/opt/homebrew/Frameworks/Python.framework/Resources/Python.app/Contents/MacOS/Python /bin/gs go f'
+        cp = subprocess.CompletedProcess([], 0, f'{pid} {command}\n', '')
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch('gs.selfupdate.subprocess.run', return_value=cp) as run, \
+                mock.patch('gs.selfupdate.version.installation') as installation:
+            code = selfupdate.self_update(Path.cwd(), None, 'main', out, err)
+        self.assertEqual(code, 1)
+        self.assertIn(f'PID {pid}', err.getvalue())
+        installation.assert_not_called()
+        run.assert_called_once_with(['ps', '-axo', 'pid=,args='], capture_output=True,
+                                    text=True, timeout=10, stdin=subprocess.DEVNULL)
 
     def test_ps_excludes_self_and_checks_other_machine_repos(self):
         cp = subprocess.CompletedProcess([], 0, f'{os.getpid()} gs go own\n42 /bin/gs --repo /other go f\n43 gs status\n', '')
