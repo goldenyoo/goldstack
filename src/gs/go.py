@@ -4,10 +4,12 @@
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
 띄운다(06, review.py). 티켓에 second_reviewer가 있으면 두 리뷰를 동시에 띄우고 지적을 합쳐 수정 worker는 하나다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
-worker를 한 번 더 띄우고 다시 재리뷰한다. 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
+worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 보고, 그 지적을 낸 리뷰어도 부른다.
+수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
 순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(마지막에 한 번) → 병합.
 리뷰·재리뷰는 병합될 커밋의 트리를 읽고(_review_tree) 그 head를 기록에 남긴다(reviewed_head). 리뷰 뒤에 티켓 head가 그것과 다르면 한 번 더
-리뷰한다(_review_to_head). catch-up은 그 뒤라 합친 최신 integration은 worker 변경으로 세지 않는다.
+리뷰한다(_review_to_head). 2차 재리뷰가 그러고도 최종 커밋을 못 보면 resolved 판정을 unchecked로 내린다.
+catch-up은 그 뒤라 합친 최신 integration은 worker 변경으로 세지 않는다.
 gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 state에 세고 config `[agy] max_calls_per_run`에 닿으면 더 띄우지 않는다.
 끝에는 보고서·PR·base 검증·revert를 한다(08). 지난 마무리가 남았으면 그것만 끝내고 멈춘다. 남은 티켓은 다음 gs go가 한다.
 worker를 띄우기 전에 push 설정을 state에 기록한다(_begin). 재개해도 유지하고, gs의 push마다 대조한다(git.push).
@@ -1236,7 +1238,7 @@ def _keep_findings(prev: dict, new: dict) -> dict:
 def _moved_head(r: Run, a: Active) -> str:
     """티켓 head가 마지막으로 리뷰·재리뷰한 head와 다르면 그 head, 같으면 빈 문자열.
 
-    재리뷰는 지적을 낸 리뷰어만 부르므로 리뷰가 둘이면 어느 한쪽이 본 head면 같다.
+    재리뷰는 볼 지적이 있는 리뷰어만 부르므로 리뷰가 둘이면 어느 한쪽이 본 head면 같다.
     대조할 head가 없으면(아무도 부르지 않았거나 옛 state의 기록이면) 다시 리뷰하지 않는다.
     """
     seen = state.reviewed_heads(r.st.ticket(a.t.id))
@@ -1252,6 +1254,7 @@ def _review_to_head(r: Run, a: Active, call: Callable[[Run, Active], list[dict]]
     실패해 버린 수정은 여기를 지나지 않는다(_end_fix): 띄우기 전에 대조한 head로 돌아갔고, 재리뷰 없이 병합·검증으로 간다.
     병합은 이 뒤의 catch-up을 거치므로 합친 최신 integration은 worker 변경으로 세지 않는다.
     한 번만 더 본다(리뷰를 깨끗해질 때까지 돌리지 않는다). 또 다르면 경고와 기록만 남긴다: 리뷰는 병합을 막지 않는다.
+    2차 재리뷰였으면 최종 커밋을 못 본 resolved도 unchecked로 내린다(_uncheck_unseen). 2차 수정이 없었던 티켓의 판정은 그대로다.
     끊김 상태는 이 스레드의 _finish·_net_tick만 바꾸므로 리뷰하는 동안 그대로다. 앞서 미루지 않았으면(_net_park) 여기서도 미룰 일이 없다.
     """
     t = a.t
@@ -1265,12 +1268,26 @@ def _review_to_head(r: Run, a: Active, call: Callable[[Run, Active], list[dict]]
     if left:
         msg = f"병합 전 대조: head {left[:8]}는 리뷰하지 못했다"
         say(f"[{t.id}] 경고: {msg}")
+        if a.fix == 2:
+            _uncheck_unseen(r, a, left)
     else:
         msg = f"병합 전 대조: 리뷰 뒤 커밋이 더 생겨 head {moved[:8]}에서 다시 리뷰를 띄웠다"
     for rec in state.reviews(r.st.ticket(t.id)):
         _append_fix(rec, msg)
     r.save()
     return todo
+
+
+def _uncheck_unseen(r: Run, a: Active, left: str) -> None:
+    """2차 재리뷰가 병합될 head(left)를 보지 못했다. 앞 head에서 낸 resolved는 최종 커밋의 확인이 아니니 unchecked(재리뷰 실패)로 내린다.
+
+    재리뷰를 더 부르지 않는다. unresolved·unchecked는 그대로다: 어느 쪽도 수정됨으로 세지 않는다. 앞 판정의 근거는 evidence에 이어 남긴다.
+    """
+    for _, found in _to_rereview(r, a.t, a.fix):
+        for f in found:
+            if f.get("rereview") == review.RESOLVED:
+                review.mark_rereview([f], a.fix, review.UNCHECKED, review.REASON_FAILED,
+                                     f"최종 커밋 {left[:8]}를 재리뷰하지 못했다. 앞 head의 판정은 resolved: {f.get('rereview_evidence', '')}")
 
 
 def _call_wait(r: Run, tid: str) -> review.CallWait:
@@ -1320,6 +1337,12 @@ def _received(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
     """(리뷰 기록, 그 기록 안의 nth번째 수정 worker가 받은 지적). _targets와 달리 재리뷰 결과가 적힌 뒤에도 그대로다."""
     pairs = [(rec, [f for f in rec.get("findings", []) if f.get("fix_round") == nth])
              for rec in state.reviews(r.st.ticket(t.id))]
+    return [(rec, found) for rec, found in pairs if found]
+
+
+def _to_rereview(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
+    """(리뷰 기록, 그 기록 안의 nth번째 재리뷰가 판정할 지적). 받은 지적에 더해 2차면 앞서 resolved인 지적도 있다. 그 지적만 낸 리뷰어도 든다."""
+    pairs = [(rec, review.rereview_targets(rec, nth)) for rec in state.reviews(r.st.ticket(t.id))]
     return [(rec, found) for rec, found in pairs if found]
 
 
@@ -1436,10 +1459,12 @@ def _rereview(r: Run, a: Active) -> list[dict]:
 
     병합·검증처럼 루프 안에서 돈다. 여기서 난 오류는 병합을 막지 않는다: 이 head의 결과가 없는 지적은 unchecked(재리뷰 실패)다.
     중단 예외(NetworkAbort)만 올린다. 다음 gs go가 재리뷰부터 잇는다.
-    병합 전 대조로 다시 불려도 수정 worker가 받은 지적을 본다(a.base..head이므로 수정 뒤에 생긴 커밋도 diff에 든다).
+    병합 전 대조로 다시 불려도 같은 지적을 본다(a.base..head이므로 수정 뒤에 생긴 커밋도 diff에 든다).
+    2차면 수정 worker가 받은 지적에 더해 앞서 resolved인 지적도 최종 커밋에서 본다. 수정 커밋의 diff가 비면 받은 지적만 unresolved다:
+    트리가 앞 재리뷰가 본 그대로이니 앞 판정은 그대로 맞다.
     """
     t, nth = a.t, a.fix
-    targets = _received(r, t, nth)
+    targets = _to_rereview(r, t, nth)
     head = ""
     try:
         head = git.sha(r.repo, a.branch)
@@ -1447,7 +1472,7 @@ def _rereview(r: Run, a: Active) -> list[dict]:
             with _review_tree(r, a, head, rereview=True) as tree:
                 _run_rereviews(r, a, targets, head, tree)
         else:  # 부를 것도 없다: 바뀐 것이 없으니 고쳐졌을 수 없다
-            for rec, found in targets:
+            for rec, found in _received(r, t, nth):
                 rec["reviewed_head"] = head
                 review.mark_rereview(found, nth, review.UNRESOLVED, "", "수정 커밋의 diff가 비었다")
                 _append_fix(rec, f"재리뷰 {nth}차: 수정 커밋의 diff가 비어 부르지 않았다(unresolved)")

@@ -205,7 +205,7 @@ class SecondFixTest(Base):
     def test_unresolved_gets_second_fix_then_resolved(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"), finding("FIX C: 다른 값", "medium"))
         self.answer("codex", 1, [(1, "unresolved", "A는 그대로다"), (2, "resolved", "C 고침")])
-        self.answer("codex", 2, [(1, "resolved", "A도 고침")])
+        self.answer("codex", 2, [(1, "resolved", "A도 고침"), (2, "resolved", "C는 그대로 고쳐져 있다")])
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
@@ -222,19 +222,22 @@ class SecondFixTest(Base):
         self.assertIn("A는 그대로다", brief)
         self.assertIn("마지막 수정", brief)
         self.assertNotIn("FIX C", brief)
-        # 2차 재리뷰의 입력은 2차 수정 커밋의 diff와 2차 대상 지적이다
+        # 2차 재리뷰의 입력은 2차 수정 커밋의 diff, 2차 대상 지적, 앞서 resolved인 지적이다
         diff = (self.bin / "rereview.diff.codex.2").read_text()
         self.assertIn("fix2_01", diff)
         self.assertNotIn("fix1_01", diff)
         listed = json.loads((self.bin / "rereview.findings.codex.2").read_text())["findings"]
-        self.assertEqual([f["id"] for f in listed], [1])
-        self.assertEqual(listed[0]["rereview_evidence"], "A는 그대로다")
+        self.assertEqual([(f["id"], f["rereview_evidence"], f.get("recheck", False)) for f in listed],
+                         [(1, "A는 그대로다", False), (2, "C 고침", True)])
+        self.assertIn("`recheck`", (self.bin / "rereview.prompt.codex.2").read_text())
+        self.assertNotIn("`recheck`", (self.bin / "rereview.prompt.codex.1").read_text())
 
         a, c = self.ts().review["findings"]
         self.assertEqual((a["fix_attempt"], a["fix_round"], a["rereview"], a["rereview_round"], a["rereview_evidence"]),
                          (review.ATTEMPTED, 2, review.RESOLVED, 2, "A도 고침"))
-        self.assertEqual((c["fix_attempt"], c["fix_round"], c["rereview"], c["rereview_round"]),
-                         (review.ATTEMPTED, 1, review.RESOLVED, 1))
+        # 1차 resolved는 그대로 믿지 않는다: 최종 커밋에서 다시 본 판정이 남는다. 받은 수정은 1차 그대로다
+        self.assertEqual((c["fix_attempt"], c["fix_round"], c["rereview"], c["rereview_round"], c["rereview_evidence"]),
+                         (review.ATTEMPTED, 1, review.RESOLVED, 2, "C는 그대로 고쳐져 있다"))
         self.assertEqual(review.remaining(self.ts().review), [])
         self.assertIn("남은 리뷰 지적 0", out)
         self.assertEqual([x["round"] for x in self.ts().review["rereviews"]], [1, 2])
@@ -258,7 +261,8 @@ class SecondFixTest(Base):
     def test_new_fix_finding_of_first_rereview_goes_to_second_fix(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         self.answer("codex", 1, [(1, "resolved", "고침")], [finding("FIX N: 수정이 낳은 버그"), finding("이름이 길다", "low")])
-        self.answer("codex", 2, [(2, "resolved", "N 고침")], [finding("FIX Z: 또 새 문제")])
+        self.answer("codex", 2, [(1, "resolved", "A는 그대로 고쳐져 있다"), (2, "resolved", "N 고침")],
+                    [finding("FIX Z: 또 새 문제")])
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
@@ -275,20 +279,29 @@ class SecondFixTest(Base):
         self.assertTrue((self.rundir / "01/1/rereview1-codex/findings.json").exists())
         self.assertIn("수정 커밋 diff", (self.rundir / "01/1/rereview1-codex/judge-prompt.md").read_text())
 
-    def test_second_rereview_only_by_reviewer_with_targets(self):
+    def test_second_rereview_also_calls_reviewer_of_resolved_findings(self):
         self.two_reviewers()
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         self.findings("agy", finding("FIX B: 경계값 누락"))
         self.answer("codex", 1, [(1, "resolved", "고침")])
         self.answer("agy", 1, [(1, "unresolved", "그대로다")])
         self.answer("agy", 2, [(1, "resolved", "고침")])
+        self.answer("codex", 2, [(1, "resolved", "그대로 고쳐져 있다")], [finding("FIX Z: 다시 보다 찾은 문제")])
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(sorted(self.lines("rereview.calls")), ["agy 1", "agy 2", "codex 1"])
-        self.assertIn("### agy-1.", (self.rundir / "01/1/fix2/brief.md").read_text())
+        self.assertEqual(sorted(self.lines("rereview.calls")), ["agy 1", "agy 2", "codex 1", "codex 2"])
+        brief = (self.rundir / "01/1/fix2/brief.md").read_text()
+        self.assertIn("### agy-1.", brief)
+        self.assertNotIn("### codex-1.", brief)  # 2차 수정 worker가 받는 대상은 그대로다
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
         self.assertEqual(self.run_state().agy_calls, 3)
         ts = self.ts()
         self.assertEqual((ts.review["findings"][0]["fix_round"], ts.second_review["findings"][0]["fix_round"]), (1, 2))
+        self.assertEqual((ts.review["findings"][0]["rereview"], ts.review["findings"][0]["rereview_round"]),
+                         (review.RESOLVED, 2))
+        self.assertEqual([x["round"] for x in ts.review["rereviews"]], [1, 2])
+        # 다시 보러 부른 리뷰어의 새 지적도 2차 재리뷰의 새 지적이다: 보고만 한다
+        self.assertEqual((ts.review["findings"][1]["action"], ts.review["findings"][1]["found_round"]), (review.REPORT, 2))
 
     def test_empty_fix_diff_is_unresolved_without_calling_reviewer(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
