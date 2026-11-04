@@ -189,7 +189,7 @@ class IdeaFlowTest(unittest.TestCase):
     def test_adopt_asks_feedback_once(self):
         body = self.read("adopt")
         for text in ("[feedback]", "`mode`", "`detail`", "`auto`", "`draft`", "`off`", "`errors`", "`minimal`",
-                     "다시 묻지 않는다", "개인 프로젝트는 `auto` + `errors`", "회사 레포는 `off` 또는 `minimal`"):
+                     "다시 묻지 않는다", "gs feedback send", "사람이 고른 것이 아니니 묻는다", "개인 프로젝트는 `auto` + `errors`", "회사 레포는 `off` 또는 `minimal`"):
             self.assertIn(text, body)
 
     def test_retro_can_file_issue(self):

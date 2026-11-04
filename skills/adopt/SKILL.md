@@ -17,8 +17,8 @@ goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profil
 2. **설정이 없으면 만든다.** `.goldstack/config.toml`이 없으면 `gs init`(끝에 `gs doctor`가 한 번 돈다). 있으면 그대로 둔다.
 3. **doctor를 보인다.** `gs doctor` 출력을 그대로 보이고(init에서 이미 봤으면 다시 돌리지 않는다) "제안대로 config에 쓸까(`gs doctor --write`)"를 묻는다. 원하면 돌리고 `<키>: <전> → <후> (<이유>)` 줄을 보인다.
 
-   **피드백 설정.** `.goldstack/config.toml`에 `[feedback]` 절이 이미 있으면 다시 묻지 않는다(`gs init`이 만든 기본 `draft`도 이미 있는 것으로 본다). 없을 때만 한 번 묻는다. 옛 config라 절이 없으면 `off`로 읽힌다.
-   - `mode`: `auto`(오류가 나면 gs가 자동으로 GitHub issue를 올린다) / `draft`(초안만 `.goldstack/feedback/`에 남기고 사람이 `gs feedback`으로 보낸다) / `off`(보내지 않는다).
+   **피드백 설정.** 2단계를 하기 전 `.goldstack/config.toml`에 `[feedback]` 절이 있었으면 다시 묻지 않는다. 없었으면 한 번 묻는다. 2단계에서 `gs init`이 방금 만든 config의 기본값(`draft`·`errors`)은 사람이 고른 것이 아니니 묻는다. 옛 config라 절이 없으면 `off`로 읽힌다.
+   - `mode`: `auto`(오류가 나면 gs가 자동으로 GitHub issue를 올린다) / `draft`(초안만 `.goldstack/feedback/`에 남기고 사람이 `gs feedback send`로 보낸다) / `off`(보내지 않는다).
    - `detail`: `errors`(정해진 항목에 실패한 명령의 오류 줄 최대 20줄을 더한다) / `minimal`(정해진 항목만, 오류 줄 없음).
    - 예를 보이고 고르게 한다: 개인 프로젝트는 `auto` + `errors`, 회사 레포는 `off` 또는 `minimal`. 오류 줄에 회사 코드가 섞일 수 있으니 회사 레포는 `off`를 먼저 권한다.
    - 답을 `.goldstack/config.toml`의 `[feedback]`에 `mode = "..."`, `detail = "..."`로 쓴다. 다른 키(`repo`, `max_per_day`)는 건드리지 않는다.
