@@ -8,7 +8,7 @@ from dataclasses import MISSING, dataclass, fields as dataclass_fields
 from pathlib import Path
 from typing import TextIO, get_type_hints
 
-from . import git
+from . import git, version
 from .feature import FAMILIES, TIERS, Problem
 
 CONFIG_PATH = ".goldstack/config.toml"
@@ -148,6 +148,11 @@ class AgyConfig:
 
 
 @dataclass(frozen=True)
+class GoldstackConfig:
+    requires: str = ""
+
+
+@dataclass(frozen=True)
 class Config:
     git: GitConfig
     models: ModelsConfig
@@ -156,6 +161,7 @@ class Config:
     agy: AgyConfig = AgyConfig()
     worktree: WorktreeConfig = WorktreeConfig()
     tiers: TiersConfig = TiersConfig()
+    goldstack: GoldstackConfig = GoldstackConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -178,7 +184,7 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
         if section == "tiers":
             sections[section] = _load_tiers(data.get(section, {}), problems)
             continue
-        if section not in data and section not in ("agy", "worktree"):
+        if section not in data and section not in ("agy", "worktree", "goldstack"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
             continue
         raw = data.get(section, {})
@@ -197,6 +203,8 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`가 없다"))
             elif type(raw[key]) is not kind:  # bool은 int의 하위형이지만 정수 설정으로 받지 않는다
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 {names[kind]}이어야 한다"))
+            elif section == "goldstack" and key in data.get(section, {}) and not version.valid_requirement(raw[key]):
+                problems.append(Problem("오류", CONFIG_PATH, '`goldstack.requires`는 ">=0.1" 같은 최소 버전이어야 한다'))
             elif section == "timeouts" and key == "checks_grace_seconds" and raw[key] < 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0 이상이어야 한다"))
             elif section == "timeouts" and key != "checks_grace_seconds" and raw[key] <= 0:
