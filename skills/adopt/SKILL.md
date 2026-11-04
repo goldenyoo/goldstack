@@ -7,7 +7,7 @@ disable-model-invocation: true
 
 goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profile.md`다. `/grill`이 1단계에서 가장 먼저 읽고, worker brief가 "먼저 읽어라"로 가리킨다. 레포 루트(`git rev-parse --show-toplevel`)에서 돈다. 사람에게는 3단계의 `--write` 여부와 피드백 설정(`mode`·`detail`)만 묻는다.
 
-1. **레포를 훑는다.** 넓으면 subagent에게 맡긴다. 찾은 것은 근거 파일과 함께 적어 둔다.
+1. **레포를 훑는다.** 넓으면 subagent에게 맡긴다. 찾은 것은 근거 파일과 함께 적는다.
    - README와 docs, 기여 안내(`CONTRIBUTING` 등)
    - 빌드·시험 설정: 패키지 파일(`pyproject.toml`, `package.json`, `Cargo.toml`, `Makefile` 등), 시험 디렉터리, lint·format 설정
    - CI workflow(`.github/workflows/*.yml` 등): 어떤 job이 무엇을 돌리는지
@@ -17,7 +17,7 @@ goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profil
 2. **설정이 없으면 만든다.** `.goldstack/config.toml`이 없으면 `gs init`(끝에 `gs doctor`가 한 번 돈다). 있으면 그대로 둔다.
 3. **doctor를 보인다.** `gs doctor` 출력을 그대로 보이고(init에서 이미 봤으면 다시 돌리지 않는다) "제안대로 config에 쓸까(`gs doctor --write`)"를 묻는다. 원하면 돌리고 `<키>: <전> → <후> (<이유>)` 줄을 보인다.
 
-   **피드백 설정.** 2단계를 하기 전 `.goldstack/config.toml`에 `[feedback]` 절이 있었으면 다시 묻지 않는다. 없었으면 한 번 묻는다. 2단계에서 `gs init`이 방금 만든 config의 기본값(`draft`·`errors`)은 사람이 고른 것이 아니니 묻는다. 옛 config라 절이 없으면 `off`로 읽힌다.
+   **피드백 설정.** 2단계 전 `.goldstack/config.toml`에 `[feedback]` 절이 있었으면 다시 묻지 않는다. 없었으면 한 번 묻는다. `gs init`이 쓴 기본값(`draft`·`errors`)은 사람이 고른 것이 아니니 묻는다. 옛 config라 절이 없으면 `off`로 읽힌다.
    - `mode`: `auto`(오류가 나면 gs가 자동으로 GitHub issue를 올린다) / `draft`(초안만 `.goldstack/feedback/`에 남기고 사람이 `gs feedback send`로 보낸다) / `off`(보내지 않는다).
    - `detail`: `errors`(정해진 항목에 실패한 명령의 오류 줄 최대 20줄을 더한다) / `minimal`(정해진 항목만, 오류 줄 없음).
    - 예를 보이고 고르게 한다: 개인 프로젝트는 `auto` + `errors`, 회사 레포는 `off` 또는 `minimal`. 오류 줄에 회사 코드가 섞일 수 있으니 회사 레포는 `off`를 먼저 권한다.
