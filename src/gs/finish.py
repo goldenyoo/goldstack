@@ -104,7 +104,7 @@ def _checks(r, *, required: bool, deadline: float, url: str | None = None) -> li
 
 
 def _required_checks(r, deadline: float) -> set[str]:
-    """base 보호·rulesets에서 아직 등록되지 않은 필수 검사 이름도 읽는다. 조회 불가면 gh 판정을 쓴다."""
+    """base 보호·rulesets의 필수 이름을 읽는다. 한쪽이라도 조회 불가면 gh 판정을 쓴다."""
     repository = git.github_repo(r.repo, r.remote)
     branch = quote(r.base, safe="")
     names = set()
@@ -117,10 +117,11 @@ def _required_checks(r, deadline: float) -> set[str]:
             cp = subprocess.run([os.environ.get("GS_GH", "gh"), "api", f"repos/{repository}/{endpoint}"],
                                 cwd=r.repo, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                 timeout=min(20, remaining))
-            if cp.returncode == 0:
-                names.update(parse(json.loads(cp.stdout))[2] or [])
+            if cp.returncode:
+                return set()  # 부분 목록을 전체 필수 검사로 취급하지 않는다.
+            names.update(parse(json.loads(cp.stdout))[2] or [])
         except (OSError, ValueError, subprocess.TimeoutExpired):
-            continue
+            return set()
     return names
 
 
