@@ -155,6 +155,7 @@ class MetricsTest(unittest.TestCase):
             text = report.measurements(r)
         self.assertIn('| total | 45.0 |', text)
         self.assertIn('| checks | 20.0 |', text)
+        self.assertIn('| checks | 20.0 |\n\n중단된 마무리 단계는 ', text)
         self.assertIn('실제 소요의 하한', text)
 
     def test_old_state_status_and_report_without_metrics(self):

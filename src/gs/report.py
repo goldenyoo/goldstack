@@ -191,6 +191,7 @@ def measurements(r) -> str:
     table("마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)", ["단계", "소요(초)"],
           [(label, round(seconds, 3)) for label, seconds in totals.items()])
     if any(rec.get("interrupted") for rec in data.get("finish_stages", [])):
+        lines.append("")
         lines.append("중단된 마무리 단계는 마지막 상태 저장까지의 시간만 포함한다(실제 소요의 하한).")
     return "\n".join(lines) + "\n\n"
 
