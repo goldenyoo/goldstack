@@ -734,12 +734,14 @@ def _loop(r: Run) -> None:
         raise
     finally:
         # 예상 못 한 오류나 사람의 중단으로 루프를 떠나도 띄운 리뷰어·worker를 남기지 않는다.
-        _stop_reviews(r)
-        for a in active.values():
-            say(f"[{a.t.id}] gs가 멈춰 worker를 끝낸다")
-            a.proc.stop()
-        for rv in r.reviews.tickets.values():
-            rv.a.proc.stop()
+        try:
+            _stop_reviews(r)  # 리뷰어를 기다리는 중에 또 중단돼도 worker는 끝낸다
+        finally:
+            for a in active.values():
+                say(f"[{a.t.id}] gs가 멈춰 worker를 끝낸다")
+                a.proc.stop()
+            for rv in r.reviews.tickets.values():
+                rv.a.proc.stop()
 
 
 def _ticket_error(r: Run, a: Active, e: Exception) -> None:
@@ -887,10 +889,10 @@ def _stop_reviews(r: Run) -> None:
     여러 번 불러도 된다. 티켓의 상태는 그대로다: 리뷰 단계의 network_resume으로 다음 gs go가 리뷰를 다시 한다.
     """
     reviews = r.reviews
-    for tid, rv in reviews.tickets.items():
-        if rv.future is not None and not rv.future.done():
-            say(f"[{tid}] gs가 멈춰 리뷰어를 끝낸다")
-    reviews.cancel.set()
+    running = [tid for tid, rv in reviews.tickets.items() if rv.future is not None and not rv.future.done()]
+    reviews.cancel.set()  # 맨 앞이다: 여기서 두 번째 Ctrl-C가 와도 리뷰어는 스스로 끝난다
+    for tid in running:
+        say(f"[{tid}] gs가 멈춰 리뷰어를 끝낸다")
     reviews.executor.shutdown(wait=True)
     _drain(r)
     for tid, rv in reviews.tickets.items():

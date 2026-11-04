@@ -12,6 +12,7 @@ import textwrap
 import threading
 import time
 import unittest
+from concurrent.futures import Future
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -410,11 +411,12 @@ class LeavingTheLoopTest(Base):
         self.resume_does_only_the_review()
 
     def test_sigterm_is_a_human_stop_too(self):
-        before = signal.getsignal(signal.SIGTERM)
+        # 시험을 띄운 쪽이 무시하게 해 뒀어도 같은 조건으로 본다
+        self.addCleanup(signal.signal, signal.SIGTERM, signal.signal(signal.SIGTERM, signal.SIG_DFL))
         kill = lambda: os.kill(os.getpid(), signal.SIGTERM)  # noqa: E731
         with self.leave_when(self.bin / "reviewing_11", then=kill), self.assertRaises(KeyboardInterrupt):
             self.go(*self.only("11"))
-        self.assertIs(signal.getsignal(signal.SIGTERM), before)
+        self.assertEqual(signal.getsignal(signal.SIGTERM), signal.SIG_DFL)
         self.assert_reviewer_gone("11")
         self.resume_does_only_the_review()
 
@@ -461,6 +463,28 @@ class LeavingTheLoopTest(Base):
             proc.wait()
         self.kill_reviewer_leftovers("11")
         self.resume_does_only_the_review()
+
+    def test_workers_stop_even_if_stopping_the_reviews_is_interrupted(self):
+        """리뷰어를 기다리는 동안 또 Ctrl-C가 와도 도는 worker를 남기지 않는다."""
+        self.setup_tickets(2, "11", "12")
+        self.hook("start_12", 'echo $$ > "$here/worker_12"\nsleep 300\n')
+        worker = self.bin / "worker_12"
+        self.addCleanup(lambda: worker.exists() and support.kill_quietly(int(worker.read_text())))
+        real_wait = go._wait_any
+
+        def wait_any(r, active, runner, *, once=False):
+            if (self.bin / "reviewing_11").exists() and worker.exists():
+                raise KeyboardInterrupt("첫 번째")
+            return real_wait(r, active, runner, once=once)
+
+        def interrupted(r):
+            r.reviews.cancel.set()  # 진짜도 맨 앞에서 세운다(StopReviewsTest). 그래서 리뷰어는 스스로 끝난다
+            raise KeyboardInterrupt("두 번째")
+
+        with mock.patch.object(go, "_wait_any", wait_any), mock.patch.object(go, "_stop_reviews", interrupted), \
+                self.assertRaises(KeyboardInterrupt):
+            self.go(*self.only("11", "12"))
+        self.assertFalse(alive(int(worker.read_text())), "worker가 살아 있다")
 
     def test_snapshot_worktree_of_the_stopped_review_is_removed(self):
         (self.bin / "dirty_11").touch()  # 미커밋 변경이 남아 리뷰는 임시 worktree에서 돈다
@@ -511,6 +535,16 @@ class LeavingTheLoopTest(Base):
         self.assertEqual(sorted(self.calls()), ["11", "12"])
         self.assertEqual(self.merged(), ["11", "12"])
         self.assertEqual(self.ts("12").attempts, 1)
+
+
+class StopReviewsTest(unittest.TestCase):
+    def test_cancel_is_up_before_anything_else_can_be_interrupted(self):
+        reviews = go.Reviews(1)
+        self.addCleanup(reviews.executor.shutdown)
+        reviews.tickets["11"] = go.Reviewing(None, future=Future())
+        with mock.patch.object(go, "say", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            go._stop_reviews(SimpleNamespace(reviews=reviews))
+        self.assertTrue(reviews.cancel.is_set())
 
 
 class StopSignalsTest(unittest.TestCase):
