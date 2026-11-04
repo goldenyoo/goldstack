@@ -570,6 +570,8 @@ def record(repo: Path, cfg: config.Config, *, phase: str, kind: str, frames: Ite
 
 def record_manual(repo: Path, cfg: config.Config, message: str) -> Path | None:
     """사람이 명시적으로 보낸 글. 자동 수집과 달리 자유 글을 그대로 싣는다."""
+    if os.environ.get("GS_ROLE") == "worker":
+        raise ValueError("worker는 사람이 쓴 피드백을 저장할 수 없습니다")
     if cfg.feedback.mode == "off":
         return None
     if not message.strip() or LOCAL_MARKER in message:
@@ -611,11 +613,13 @@ def _save_send_state(path: Path, data: dict) -> None:
         raise
 
 
-def send(repo: Path, cfg: config.Config, *, force: bool = False, err=None) -> int:
+def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path | None = None, err=None) -> int:
     """쌓인 초안을 보내고 성공한 issue/댓글 수를 돌려준다. draft는 명시적 force만 보낸다.
 
     실패는 한 줄로 알리고 초안을 보존한다. 시작 때 재전송할 호출 지점은 수집 쪽에서 맡는다.
     성공한 횟수는 초안에, 일일 한도와 issue별 댓글 날짜는 전송 장부에 남긴다.
+    only_path가 있으면 그 초안만 보낸다. 손상된 초안은 보존하고 다음 초안으로 넘어간다.
+    장부가 손상되면 당일 잔여 한도를 알 수 없으므로 다음 날까지 전송을 미룬다.
     """
     import fcntl
     import sys
@@ -629,6 +633,7 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, err=None) -> in
     if not root.exists():
         return 0
     sent = 0
+    failed = False
     try:
         with (root / ".send-lock").open("a") as lock:
             try:
@@ -636,16 +641,33 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, err=None) -> in
             except BlockingIOError:
                 return 0
             state_path = root / ".send-state.json"
-            state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
             today = date.today().isoformat()
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {
+                    "day": today, "count": 0, "issues": {}}
+                if (not isinstance(state, dict) or not isinstance(state.get("day"), str)
+                        or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", state["day"])
+                        or type(state.get("count")) is not int or state["count"] < 0
+                        or not isinstance(state.get("issues"), dict)
+                        or any(not isinstance(key, str) or value is not True
+                               for key, value in state["issues"].items())):
+                    raise ValueError("전송 장부 형식이 올바르지 않다")
+            except (ValueError, TypeError):
+                state = {"day": today, "count": cfg.feedback.max_per_day, "issues": {}}
+                _save_send_state(state_path, state)
+                failed = True
             if state.get("day") != today:
                 state = {"day": today, "count": 0, "issues": {}}
             target = cfg.feedback.repo
-            for path in sorted(root.glob("*.md")):
+            for path in ([only_path] if only_path is not None else sorted(root.glob("*.md"))):
                 if state["count"] >= cfg.feedback.max_per_day:
                     break
-                draft = read_draft(path, cfg)
-                already = int(str(draft.meta.get("sent_count", "0"))) if draft.meta.get("sent_repo") == target else 0
+                try:
+                    draft = read_draft(path, cfg)
+                    already = int(str(draft.meta.get("sent_count", "0"))) if draft.meta.get("sent_repo") == target else 0
+                except (OSError, ValueError, KeyError, TypeError):
+                    failed = True
+                    continue
                 if draft.count <= already:
                     continue
                 matches = json.loads(_gh(repo, target, "issue", "list", "--state", "open", "--search",
@@ -684,6 +706,8 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, err=None) -> in
                 _write_draft(path, {**meta, "sent_count": str(draft.count), "sent_repo": target,
                                     "sent_day": today, "issue": str(number)}, body, local)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        failed = True
+    if failed:
         print("gs feedback: 전송하지 못한 초안은 남겨 두고 다음 실행 때 다시 보냅니다.", file=err or sys.stderr)
     return sent
 
@@ -708,14 +732,18 @@ def command(repo: Path, args: list[str], out, err) -> int:
     if cfg.feedback.mode == "off":
         print('gs feedback: feedback.mode = "off"라 저장·전송하지 않습니다.', file=err)
         return 1
+    if os.environ.get("GS_ROLE") == "worker":
+        print("gs feedback: worker는 수동 피드백을 저장·전송할 수 없습니다.", file=err)
+        return 1
     if not args:
         print('사용: gs feedback "한 줄" | list | send', file=err)
         return 2
+    only_path = None
     if args != ["send"]:
         try:
-            record_manual(repo, cfg, " ".join(args))
+            only_path = record_manual(repo, cfg, " ".join(args))
         except (OSError, ValueError) as exc:
             print(f"gs feedback: 초안을 저장하지 못했습니다: {exc}", file=err)
             return 1
-    print(f"gs feedback: {send(repo, cfg, force=True, err=err)}건 전송", file=out)
+    print(f"gs feedback: {send(repo, cfg, force=True, only_path=only_path, err=err)}건 전송", file=out)
     return 0

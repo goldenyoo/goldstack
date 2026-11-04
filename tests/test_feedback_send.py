@@ -202,6 +202,45 @@ class FeedbackSendTest(unittest.TestCase):
             self.assertEqual(self.send(force=True), 0)
         self.assertEqual(self.calls(), [])
 
+    def test_invalid_drafts_do_not_block_other_drafts_or_repeat_sends(self):
+        path = self.record()
+        root = path.parent
+        for name, body in (('00.md', 'broken'),
+                           ('01.md', '---\ncount: 1\n---\nbody\n' + feedback.LOCAL_MARKER + '\n')):
+            (root / name).write_text(body)
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(len(self.err.getvalue().splitlines()), 1)
+        self.assertTrue((root / '00.md').exists())
+        self.assertEqual(self.send(), 0)
+        self.assertEqual(len(self.calls('issue', 'create')), 1)
+
+    def test_invalid_sent_count_does_not_block_other_drafts(self):
+        path = self.record()
+        draft = feedback.read_draft(path, self.cfg)
+        feedback._write_draft(path.parent / '00.md',
+                              {**draft.meta, 'sent_repo': self.cfg.feedback.repo, 'sent_count': 'bad'},
+                              draft.body, '')
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(len(self.err.getvalue().splitlines()), 1)
+
+    def test_corrupt_ledger_defers_today_and_recovers_tomorrow(self):
+        path = self.record()
+        ledger = path.parent / '.send-state.json'
+        for broken in ('{', '[]', 'null', '{"day":"2099-01-01"}',
+                       json.dumps({'day': real_date.today().isoformat(), 'count': '1', 'issues': {}}),
+                       json.dumps({'day': real_date.today().isoformat(), 'count': 0, 'issues': []})):
+            with self.subTest(broken=broken):
+                ledger.write_text(broken)
+                self.err.seek(0)
+                self.err.truncate()
+                self.assertEqual(self.send(), 0)
+                self.assertEqual(len(self.err.getvalue().splitlines()), 1)
+                self.assertEqual(self.send(), 0)
+                self.assertEqual(json.loads(ledger.read_text())['count'], self.cfg.feedback.max_per_day)
+        self.assertEqual(self.calls(), [])
+        self.tomorrow()
+        self.assertEqual(self.send(), 1)
+
     def run_cli(self, *args, mode='draft'):
         (self.repo / ".goldstack").mkdir(exist_ok=True)
         (self.repo / config.CONFIG_PATH).write_text(test_config.CONFIG + '\n[feedback]\nmode = "' + mode + '"\nrepo = "owner/inbox"\n')
@@ -220,6 +259,30 @@ class FeedbackSendTest(unittest.TestCase):
             self.assertIn('- ' + field + ':', body)
         self.assertFalse((self.repo / 'nope').exists())
         self.assertIn('sent 1/1', self.run_cli('list')[1])
+
+    def test_manual_cli_only_sends_its_own_draft_with_one_slot_left(self):
+        automatic = self.record()
+        before = automatic.read_bytes()
+        # 자동 초안이 정렬상 앞서도 수동 글의 한도를 먼저 쓰지 못한다.
+        (automatic.parent / '00.md').write_bytes(before)
+        (automatic.parent / '.send-state.json').write_text(json.dumps({
+            'day': real_date.today().isoformat(), 'count': 4, 'issues': {}}))
+        self.assertEqual(self.run_cli('사람의 제안'), (0, 'gs feedback: 1건 전송\n', ''))
+        create, = self.calls('issue', 'create')
+        self.assertIn('사람의 제안', create[create.index('--body') + 1])
+        self.assertEqual(automatic.read_bytes(), before)
+        self.assertEqual((automatic.parent / '00.md').read_bytes(), before)
+
+    def test_worker_cannot_queue_manual_feedback_even_with_explicit_repo(self):
+        with mock.patch.dict(os.environ, {'GS_ROLE': 'worker'}):
+            for mode in ('auto', 'draft'):
+                code, _, err = self.run_cli('모델이 쓴 글', mode=mode)
+                self.assertEqual(code, 1)
+                self.assertIn('worker', err)
+            with self.assertRaisesRegex(ValueError, 'worker'):
+                feedback.record_manual(self.repo, self.cfg, '모델이 쓴 글')
+        self.assertFalse((self.repo / feedback.FEEDBACK_DIR).exists())
+        self.assertEqual(self.calls(), [])
 
     def test_cli_send_forces_drafts_and_off_explains_refusal(self):
         self.record()
