@@ -16,6 +16,12 @@
 
 가리기 전 줄은 `.goldstack/feedback/<지문>.md`의 로컬 전용 부분에만 남는다.
 보낼 내용은 `read_draft`로만 읽는다. 로컬 전용 부분을 돌려주지 않고 지금의 `detail`을 따른다.
+
+수집(맨 아래 절)은 규칙으로만 gs 결함을 골라 `record`에 넘긴다. 판단 모델은 없다.
+올리는 것: `cli.main`까지 온 gs 내부 예외, 마무리 이상(재개 phase에 갇힘, 예상 밖 revert, 마무리 오류),
+`ADAPTER_PATTERNS`에 이름이 붙은 어댑터 실패와 모르는 어댑터 오류(`unknown`).
+올리지 않는 것: 티켓 구현 실패, 패턴에 안 걸린 "커밋 없음", 시험 실패, 리뷰 지적, 일시 오류(`transient.py`),
+대상 환경의 오류(인증·사용량 한도·권한·보호 규칙). 수집·전송의 오류는 `gs go`의 결과를 바꾸지 못한다(`cli.py`가 막는다).
 """
 from __future__ import annotations
 
@@ -27,6 +33,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import traceback
 from collections.abc import Iterable, Mapping
@@ -474,14 +481,18 @@ def _apply_detail(body: str, detail: str) -> str:
 
 
 def _cli_version(name: str) -> str:
-    """버전 숫자만 돌려준다. 출력의 다른 내용(경로 등)은 버린다."""
+    """버전 숫자만 돌려준다. 출력의 다른 내용(경로 등)은 버린다.
+
+    빈 임시 디렉터리에서 부른다. 수집은 `gs go` 안에서 돌므로 이 확인이 지금 디렉터리(레포, 검증 중인 worktree)에 닿으면 안 된다.
+    """
     command = os.environ.get(_CLIS[name]) if _CLIS[name] else None
-    command = command or name
-    if shutil.which(command) is None:
+    path = shutil.which(command or name)
+    if path is None:
         return "없음"
     try:
-        cp = subprocess.run([command, "--version"], capture_output=True, text=True, encoding="utf-8",
-                            errors="replace", stdin=subprocess.DEVNULL, timeout=5)
+        with tempfile.TemporaryDirectory(prefix="gs-version-", ignore_cleanup_errors=True) as empty:
+            cp = subprocess.run([os.path.abspath(path), "--version"], cwd=empty, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return "모름"
     found = _VERSION_IN_OUTPUT.search(cp.stdout + cp.stderr) if cp.returncode == 0 else None
@@ -623,7 +634,6 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path
     장부가 손상되면 당일 잔여 한도를 알 수 없으므로 다음 날까지 전송을 미룬다.
     """
     import fcntl
-    import sys
     from datetime import date
 
     if cfg.feedback.mode == "off" or (cfg.feedback.mode != "auto" and not force):
@@ -748,3 +758,274 @@ def command(repo: Path, args: list[str], out, err) -> int:
             return 1
     print(f"gs feedback: {send(repo, cfg, force=True, only_path=only_path, err=err)}건 전송", file=out)
     return 0
+
+
+# ---------------------------------------------------------------- 수집
+# gs 결함만 규칙으로 고른다. 호출은 `cli.py`가 오류를 삼키는 자리에서 한다.
+
+# 재개했으면 gs가 스스로 앞으로 가야 하는 phase. CI·사람을 기다리는 phase와 준비 실패(base_unverified)는 gs 밖의 일이라 뺀다.
+STUCK_PHASES = frozenset({"merge_requested", "merged", "main_failed"})
+# 오류 줄은 가림을 거쳐 일반 낱말만 남으므로 phase 이름을 낱말로 푼다.
+_PHASE_WORDS = {"merge_requested": "merge requested", "merged": "merged", "main_failed": "base failed"}
+_FINISH_FAILED = "마무리 실패"
+_FAMILIES = ("claude", "codex", "agy")
+_TAIL_BYTES = 64 * 1024
+_WORKER_END = re.compile(r"^(?:커밋 없음|worker 종료 코드 -?\d+)")
+
+
+@dataclass(frozen=True)
+class AdapterPattern:
+    """이름 붙은 어댑터 실패. reason은 티켓의 실패 이유, log는 worker 로그에 맞아야 한다(준 것만 본다)."""
+    name: str
+    reason: re.Pattern
+    log: re.Pattern | None = None
+
+
+# 앞에서부터 맞춘다. 새 패턴은 여기 한 줄을 더한다. 이름은 `_KIND_WORDS`의 낱말로만 짓는다(아니면 `unknown`이 된다).
+ADAPTER_PATTERNS = (
+    AdapterPattern("codex-cannot-lock-ref", _WORKER_END,
+                   re.compile(r"cannot lock ref '[^'\n]{1,300}': unable to create directory")),
+    AdapterPattern("agy-no-result", re.compile(r"agy: result 이벤트가 없다")),
+    AdapterPattern("worker-runner-lost", re.compile(r"^worker 실행기가 사라졌다")),
+)
+# 이름은 없지만 어댑터가 낸 오류의 모양: `agy: …`(종료 코드 뒤 괄호 안 포함), 어댑터 없음, worker를 띄우다 난 예기치 않은 예외.
+# "agy 차단 장치가 없다"는 넣지 않는다. worker를 띄우기 전의 의도된 거부이고 `gs check`가 미리 경고하는 이 머신의 설정 문제다.
+_ADAPTER_ERROR = re.compile(r"(?:^|\()(?:agy|codex|claude): |어댑터가 없다|^`claude plugin list|^worker를 (?:다시 )?띄우지 못했다")
+# 일시 오류 판별(transient)에 없는 대상 환경의 오류: 인증·권한·보호 규칙, git의 연결 실패, worker나 검증이 바꾼 push 설정, 없는 모델.
+_ENVIRONMENTAL = re.compile(
+    r"authentication|auth(?:orization)? failed|not logged in|gh auth|permission denied|not authorized|"
+    r"could not resolve to|\bHTTP (?:401|403|404)\b|protected branch|required status check|review required|"
+    r"사람 승인|repository rule|could not resolve host|could not read from remote repository|remote end hung up|"
+    r"i/o timeout|dial tcp|tls handshake|push 설정이|invalid model selection", re.I)
+
+
+def _environmental(error: str) -> bool:
+    """일시 오류(v7 `transient`)이거나 대상 환경 때문인가."""
+    from . import transient
+    event = json.dumps({"type": "error", "message": error})
+    return bool(_ENVIRONMENTAL.search(error) or transient._PERMANENT.search(error) or transient.reason("codex", event))
+
+
+def _transient_log(log: str) -> bool:
+    """어느 CLI의 판별에든 걸리면 일시 오류다. 그 안에서 부르는 `agy models`도 레포·검증 worktree 밖에서 돈다."""
+    from . import transient
+    with tempfile.TemporaryDirectory(prefix="gs-feedback-", ignore_cleanup_errors=True) as empty:
+        return any(transient.reason(family, log, cwd=Path(empty)) for family in _FAMILIES)
+
+
+def _cli_errors(log: str) -> list[dict]:
+    """CLI마다 마지막 오류 이벤트의 오류 필드. 뒤따른 성공이 지운다. claude는 오류로 표시된 result만 본다."""
+    from . import transient
+    events = transient._events(log)
+    codex, claude = {}, {}
+    for event in events:
+        kind = event.get("type")
+        if kind in ("error", "turn.failed"):
+            codex = transient._fields(event)
+        elif kind == "turn.completed":
+            codex = {}
+        elif kind == "result":
+            claude = (transient._fields(event, "api_error", "terminal_reason", "result")
+                      if event.get("is_error") is True else {})
+    return [transient._agy_error(events), codex, claude]
+
+
+def _last_stderr(log: str) -> str:
+    """마지막 이벤트 뒤의 stderr. 이벤트가 아닌 줄이 stderr다(`warning:`은 빼고). 앞의 줄은 다시 띄운 worker가 넘어선 오류다."""
+    lines: list[str] = []
+    for line in log.splitlines():
+        if line.lstrip().startswith("{"):
+            lines = []
+        elif not line.lstrip().lower().startswith("warning:"):
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def _environmental_log(log: str) -> bool:
+    """worker를 끝낸 CLI 오류가 대상 환경 때문인가. 도구 출력과 모델 응답은 worker가 읽은 내용이라 보지 않는다."""
+    from . import transient
+    if _environmental(_last_stderr(log)):
+        return True
+    return any(_environmental(transient._strings(error)) or {401, 403} & set(transient._statuses(error))
+               for error in _cli_errors(log))
+
+
+def classify_adapter_failure(reason: str, log: str) -> tuple[str, list[str]] | None:
+    """worker 실패 이유와 worker 로그로 (오류 종류, 오류 줄)을 돌려준다. 올리지 않을 실패는 None.
+
+    로그가 말하는 일시·환경 오류를 먼저 뺀다. 인증·한도로 죽은 agy는 `result 이벤트가 없다`로 끝나 이유만으로는 구별되지 않는다.
+    이름 붙은 패턴이 그다음이고, 아니면 어댑터가 낸 오류 모양일 때만 `unknown`이다.
+    그 밖의 실패(구현 실패, 패턴에 안 걸린 "커밋 없음", 검증·병합 실패)는 대상 프로젝트의 일이다.
+    오류 줄에는 이유 첫 줄과 로그에서 맞은 부분만 싣는다. 로그의 한 줄은 worker가 읽은 내용일 수 있다.
+    """
+    reason = reason.strip()
+    if not reason or _transient_log(log) or _environmental_log(log):
+        return None
+    first = reason.splitlines()[0]
+    for pattern in ADAPTER_PATTERNS:
+        if not pattern.reason.search(reason):
+            continue
+        if pattern.log is None:
+            return pattern.name, [first]
+        if found := pattern.log.search(log):
+            return pattern.name, [first, found.group()]
+    if _ADAPTER_ERROR.search(reason) and not _environmental(reason):
+        return UNKNOWN, [first]
+    return None
+
+
+def failure_logs(rundir: Path) -> dict[Path, int]:
+    """티켓 시도마다 `_fail`이 남긴 failure.log와 그 수정 시각. 수정 worker의 실패는 이 파일을 남기지 않아 보이지 않는다."""
+    logs: dict[Path, int] = {}
+    for log in rundir.glob("*/*/failure.log"):
+        if log.relative_to(rundir).parts[0] != "wt":  # worktree 안의 파일은 대상 프로젝트의 것이다
+            logs[log] = log.stat().st_mtime_ns
+    return logs
+
+
+def _tail(path: Path) -> str:
+    with path.open("rb") as f:
+        f.seek(0, 2)
+        f.seek(max(0, f.tell() - _TAIL_BYTES))
+        return f.read().decode("utf-8", errors="replace")
+
+
+def adapter_failures(rundir: Path, before: Mapping[Path, int]) -> list[tuple[str, list[str]]]:
+    """`before` 뒤로 새로 쓰인 failure.log에서 올릴 어댑터 실패를 모은다. 읽지 못한 로그는 건너뛴다."""
+    found = []
+    for log, stamp in sorted(failure_logs(rundir).items()):
+        if before.get(log) == stamp:
+            continue
+        try:
+            text = log.read_text(encoding="utf-8", errors="replace")
+            worker = log.with_name("worker.log")
+            tail = _tail(worker) if worker.is_file() else ""
+        except OSError:
+            continue
+        if text.startswith("실패 이유: "):
+            reason = text.removeprefix("실패 이유: ").partition("\n\n## ")[0]
+            if hit := classify_adapter_failure(reason, tail):
+                found.append(hit)
+    return found
+
+
+def _finish_runs(st) -> int:
+    """`finish.run`이 돈 횟수(`metrics.stage("total")`). `go()`가 검사·잠금·준비에서 멈추면 늘지 않는다."""
+    return sum(rec.get("label") == "total" for rec in st.metrics.get("finish_stages", []))
+
+
+def finish_anomaly(before: Mapping, after: Mapping) -> tuple[str, list[str]] | None:
+    """마무리를 실제로 돈 실행의 전후 `finish`로 이상 하나를 고른다: (오류 종류, 오류 줄). 없으면 None.
+
+    - finish-error: `마무리 실패`로 끝났고 새 오류다. 같은 원인을 갇힘으로 또 올리지 않게 먼저 본다.
+    - unexpected-revert: 이번 실행에서 reverted가 됐는데 "integration 통과, base 검증 실패"라는 기록이 없다.
+      그 기록이 있으면 설계된 동작이고 대상 프로젝트의 시험 실패다. 없는 경우는 다른 곳에서 되돌렸거나 gs가 검증 없이 되돌린 것이다.
+    - stuck-phase: `STUCK_PHASES`로 들어가 같은 phase로 나왔다.
+    일시·환경 오류가 원인이면 finish-error와 stuck-phase로 보지 않는다.
+    """
+    phase, was = after.get("phase"), before.get("phase")
+    error = str(after.get("error") or "")
+    environmental = bool(error) and _environmental(error)
+    if (error and not environmental and error != str(before.get("error") or "")
+            and str(after.get("outcome") or "").startswith(_FINISH_FAILED)):
+        return "finish-error", error.splitlines()
+    if phase == "reverted" and was != "reverted" and not (
+            after.get("integration_ok") is True and after.get("main_ok") is False):
+        return "unexpected-revert", [f"unexpected revert: merged check passed: {after.get('integration_ok')}, "
+                                     f"base check passed: {after.get('main_ok')}"]
+    if phase in STUCK_PHASES and phase == was and not environmental:
+        return "stuck-phase", [f"stuck in resume phase: {_PHASE_WORDS[phase]}"]
+    return None
+
+
+def pending_count(repo: Path, cfg: config.Config) -> int:
+    """아직 못 보낸(또는 횟수가 늘어난) 초안 수. 읽을 수 없는 초안은 세지 않는다."""
+    pending = 0
+    for path in (repo / FEEDBACK_DIR).glob("*.md"):
+        try:
+            draft = read_draft(path, cfg)
+            sent = int(str(draft.meta.get("sent_count", "0"))) if draft.meta.get("sent_repo") == cfg.feedback.repo else 0
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        pending += draft.count > sent
+    return pending
+
+
+def collect_exception(repo: Path, cmd: str, exc: BaseException) -> Path | None:
+    """`cli.main`까지 온 gs 내부 예외의 초안. 프레임은 gs 것만 들어간다(`compose`가 거른다). 전송은 `gs go`가 맡는다.
+
+    끊긴 파이프와 네트워크 중단, 일시·환경 오류가 그대로 올라온 외부 오류(끊긴 네트워크의 `GitError` 등)는 gs 결함이 아니다.
+    메시지로 가리는 것은 메시지가 외부 명령·OS의 출력인 예외뿐이다. `KeyError('authentication')`은 gs 결함이다.
+    """
+    from . import adapters, herdr, review, transient
+    if os.environ.get("GS_ROLE") == "worker" or isinstance(exc, (BrokenPipeError, transient.NetworkAbort)):
+        return None
+    cfg, _ = config.load(repo)
+    if cfg is None:
+        return None
+    lines = [line for chunk in traceback.format_exception_only(type(exc), exc) for line in chunk.splitlines()]
+    if (isinstance(exc, (OSError, git.GitError, herdr.HerdrError, adapters.AdapterError, review.ReviewError))
+            and _environmental("\n".join(lines))):
+        return None
+    return record(repo, cfg, phase=cmd, kind=type(exc).__name__, frames=frames_of(exc), error_lines=lines)
+
+
+@dataclass(frozen=True)
+class _Before:
+    """`go()` 전의 값. `go()`가 끝난 뒤 이것과 달라진 것만 이번 실행의 일이다."""
+    finish: dict
+    finish_runs: int
+    logs: dict[Path, int]
+
+
+class Session:
+    """`gs go` 둘레의 수집. `cli.cmd_go`가 시작에 start, feature마다 before·after, 끝에 report를 부른다.
+
+    `mode = "off"`이거나 worker면 아무것도 하지 않는다. 메서드의 오류는 `cli.py`가 삼킨다.
+    """
+
+    def __init__(self, repo: Path, cfg: config.Config | None):
+        enabled = cfg is not None and cfg.feedback.mode != "off" and os.environ.get("GS_ROLE") != "worker"
+        self.repo, self.cfg = repo, cfg if enabled else None
+        self.sent = 0
+        self._before: dict[str, _Before] = {}
+
+    def _rundir(self, name: str) -> Path:
+        from . import feature
+        return feature.work_dir(self.repo, name) / "run"
+
+    def start(self) -> None:
+        """쌓인 초안을 다시 보내 본다(`send`는 `auto`일 때만 보낸다)."""
+        if self.cfg is not None:
+            self.sent += send(self.repo, self.cfg)
+
+    def before(self, name: str) -> None:
+        if self.cfg is None:
+            return
+        from . import state
+        rundir = self._rundir(name)
+        st = state.load(rundir, name)
+        self._before[name] = _Before(dict(st.finish), _finish_runs(st), failure_logs(rundir))
+
+    def after(self, name: str, raised: bool = False) -> None:
+        """새 초안을 쓴다. `go()`가 예외로 끝났으면 그 예외가 곧 보고이므로 마무리 이상은 보지 않는다."""
+        before = self._before.pop(name, None)
+        if self.cfg is None or before is None:
+            return
+        from . import state
+        rundir = self._rundir(name)
+        for kind, lines in adapter_failures(rundir, before.logs):
+            record(self.repo, self.cfg, phase="worker", kind=kind, frames=[], error_lines=lines)
+        st = state.load(rundir, name)
+        if (not raised and not st.network.get("aborted") and _finish_runs(st) > before.finish_runs
+                and (anomaly := finish_anomaly(before.finish, st.finish))):
+            record(self.repo, self.cfg, phase="finish", kind=anomaly[0], frames=[], error_lines=anomaly[1])
+
+    def report(self) -> None:
+        """새 초안을 보내 보고 `■ goldstack 피드백: 보냄 N · 대기 M`을 낸다. 둘 다 0이면 줄이 없다."""
+        if self.cfg is None:
+            return
+        self.sent += send(self.repo, self.cfg)
+        pending = pending_count(self.repo, self.cfg)
+        if self.sent or pending:
+            print(f"■ goldstack 피드백: 보냄 {self.sent} · 대기 {pending}", flush=True)

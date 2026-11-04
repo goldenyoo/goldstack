@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -9,6 +10,8 @@ from pathlib import Path
 from . import feature as featmod
 from . import config, version
 from .check import check
+
+_COLLECTED = "_gs_feedback_collected"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -57,6 +60,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "go" and len(args.feature) > 1 and args.only is not None:
         parser.error("여러 feature와 --only는 함께 쓸 수 없다")
+    try:
+        return _run(args)
+    except Exception as exc:
+        # 처리되지 않고 여기까지 온 gs 내부 예외: 초안을 남긴 뒤 원래대로 오류로 끝낸다
+        _collect_exception(_quiet(lambda: args.repo or featmod.find_repo_root(Path.cwd())), args.cmd, exc)
+        raise
+
+
+def _run(args: argparse.Namespace) -> int:
     if args.cmd == "hook":  # 레포를 찾지 않는다. 일반 세션에서 아무 디렉터리에서나 불린다
         if args.event == "agy-pretooluse":
             from . import hook_agy
@@ -106,24 +118,88 @@ def _ids(raw: str | None) -> list[str] | None:
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
-def cmd_go(repo: Path, names: list[str], only: list[str] | None) -> int:
-    from .go import NETWORK_ABORT, go
-    from . import state
+def _quiet(call, *args):
+    """피드백 수집·전송의 어떤 오류도 gs 명령의 결과를 바꾸지 않는다. 오류는 경고 한 줄로만 남긴다(그 경고가 실패해도 그대로다)."""
+    try:
+        return call(*args)
+    except Exception as e:  # noqa: BLE001
+        with contextlib.suppress(Exception):
+            print(f"경고: 피드백 처리를 건너뛰었다({type(e).__name__})", file=sys.stderr)
+        return None
 
+
+def _collect_exception(repo: Path | None, cmd: str, exc: Exception) -> None:
+    """예외 하나에 초안 하나다. `cmd_go`가 요약 전에 수집했으면 `main`은 다시 수집하지 않는다.
+
+    import까지 `_quiet` 안에서 한다. 재설치 직후의 import 실패 같은 수집 쪽 오류가 원래 예외를 가리면 안 된다.
+    """
+    if repo is None or getattr(exc, _COLLECTED, False):
+        return
+
+    def collect():
+        from .feedback import collect_exception
+        collect_exception(repo, cmd, exc)
+    _quiet(collect)
+    with contextlib.suppress(Exception):
+        setattr(exc, _COLLECTED, True)
+
+
+def _new_session(repo: Path, cfg):
+    from .feedback import Session
+    return Session(repo, cfg)
+
+
+def _watch(session, method: str, *args) -> None:
+    if session is not None:
+        _quiet(getattr(session, method), *args)
+
+
+def cmd_go(repo: Path, names: list[str], only: list[str] | None) -> int:
     version.warn(repo, sys.stderr)
     cfg, _ = config.load(repo)
     if cfg is not None and (error := version.requirement_error(cfg.goldstack.requires)):
         print(f"오류: {error}", file=sys.stderr)
         return 1
 
+    # 시작 때 쌓인 초안을 다시 보내고, 끝날 때 새 초안을 처리한다. Ctrl-C 뒤에는 보내지 않는다.
+    session = _quiet(_new_session, repo, cfg)
+    _watch(session, "start")
+    try:
+        code = _go_features(repo, names, only, session)
+    except Exception as exc:
+        _collect_exception(repo, "go", exc)  # 이 초안도 이번 전송과 요약에 든다
+        _watch(session, "report")
+        raise
+    _watch(session, "report")
+    return code
+
+
+def _go_one(repo: Path, name: str, session, *args) -> int:
+    """`go()`와 그 전후의 수집. 수집은 `go()`의 결과를 바꾸지 않는다."""
+    from .go import go
+
+    _watch(session, "before", name)
+    try:
+        code = go(repo, name, *args)
+    except Exception:
+        _watch(session, "after", name, True)
+        raise
+    _watch(session, "after", name)
+    return code
+
+
+def _go_features(repo: Path, names: list[str], only: list[str] | None, session) -> int:
+    from .go import NETWORK_ABORT
+    from . import state
+
     if len(names) == 1:
-        return go(repo, names[0], only)
+        return _go_one(repo, names[0], session, only)
     # 뒤 feature의 오류 때문에 앞 feature만 실행되는 일을 막는다. 전부 검사한 뒤 시작한다.
     checks = [cmd_check(repo, name, None) for name in names]
     if any(checks):
         return 1
     for i, name in enumerate(names):
-        code = go(repo, name)
+        code = _go_one(repo, name, session)
         try:
             st = state.load(featmod.work_dir(repo, name) / "run", name)
             # 중단(네트워크)이면 지난 실행의 마무리 phase가 남아 있어도 이번 결과는 중단이다
