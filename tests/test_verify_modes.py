@@ -83,13 +83,13 @@ class VerifyModesTest(unittest.TestCase):
         support.sh(self.repo, "git", "commit", "-qm", "verify modes")
         support.sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
 
-    def test_ticket_command_runs_in_ticket_worktree_and_is_in_brief(self):
+    def test_ticket_command_runs_in_merge_tree_and_is_in_brief(self):
         full = f'echo "$PWD" >> {self.bin / "full"}'
-        fast = f'test "${{PWD##*/}}" = 01 && echo "$PWD" >> {self.bin / "fast"}'
+        fast = f'git rev-parse -q --verify MERGE_HEAD && echo "$PWD" >> {self.bin / "fast"}'
         self.configure(verify=full, verify_ticket=fast)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual([Path(p).name for p in self.lines("fast")], ["01"])
+        self.assertEqual([Path(p).name for p in self.lines("fast")], ["integration"])
         self.assertEqual([Path(p).name for p in self.lines("full")], ["integration", "base"])
         brief = (self.rundir / "01/1/brief.md").read_text()
         self.assertIn(f'검증 명령 `{fast}`', brief)
@@ -126,7 +126,7 @@ class VerifyModesTest(unittest.TestCase):
         script.write_text(f'''\
 here={self.bin}
 if [ "${{PWD##*/}}" = base ]; then point=main
-elif [ "${{PWD##*/}}" = 01 ]; then point=ticket-01
+elif git rev-parse -q --verify MERGE_HEAD >/dev/null; then point=ticket-01
 elif [ -f extra ]; then point=integration-final
 else point=integration; fi
 echo "$point" >> "$here/verifies"

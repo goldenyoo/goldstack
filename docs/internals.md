@@ -47,6 +47,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 
 **티켓 frontmatter** — `id`, `title`, `blocked_by`(목록, 없으면 `[]`), `model`, `reviewer`가 모두 필요. 파일 이름은 `<id>-`로 시작한다. `model`·`reviewer`는 `claude|codex|agy` 중 하나이고 서로 달라야 한다. `gs check`는 없는 id 참조, 순환, 겹치는 id를 오류로 본다. 그 밖의 키는 경고다. 선택 키 둘(`feature.TICKET_OPTIONAL`):
 - `touches`: 문자열 목록, 레포 루트 기준 경로(glob 허용). 목록이 아니거나, 빈 값·절대 경로·`..`가 든 값은 오류. 없으면 `[]`이고 겹침 검사에서 빠진다. `/grill`의 티켓 분해 라운드가 적는다(템플릿 `skills/grill/templates/ticket.md`에 `touches: []`).
+- `verify`: 비어 있지 않은 한 줄 셸 명령. 아니면 오류. 이 티켓의 검증 명령을 spec의 것 대신 정한다. 마무리는 영향을 받지 않는다. 템플릿에는 없다(필요한 티켓에만).
 - `second_reviewer`: `claude|codex|agy` 중 `model`·`reviewer`와 모두 다른 것. 같으면 오류(`리뷰는 다른 계열이어야 한다: reviewer과 second_reviewer가 둘 다 …`). 템플릿에는 없다(필요한 티켓에만).
 
 **`touches` 겹침 검사**(`check.touches_problems`) — 범위 안에서 `touches`가 있는 티켓 쌍마다 본다. 경로를 `/`로 나눠 부분끼리 맞춘다: `*`·`?`·`[…]`는 한 부분, `**`는 0개 이상의 부분. 두 패턴이 함께 맞는 경로가 하나라도 있으면 겹침이다(같은 경로 포함). 순서는 전체 그래프(`--only` 범위 밖 포함)에서 `blocked_by`를 따라간 조상 집합으로 본다: 한쪽이 다른 쪽의 조상이면 순서가 있다. 겹치는데 순서가 없으면 쌍마다 겹친 경로 하나로 경고 `<a>·<b>가 <경로>를 함께 건드리는데 순서가 없다`. 경고라 `gs go`를 막지 않는다.
@@ -93,7 +94,7 @@ frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max
 - worker마다 최신 integration 끝에서 브랜치 `gs/<f>/<NN>`과 worktree `run/wt/<NN>`을 만들고, `[worktree] setup`이 있으면 worker 전에 돌린다. 재시도는 `gs/<f>/<NN>-retry-<k>`, `run/wt/<NN>-retry-<k>`. 번호는 시도 디렉터리 `run/<NN>/<시도>`로 정한다.
 - herdr 안이면(`HERDR_SOCKET_PATH`·`HERDR_SESSION`) 지금 workspace(없으면 새 workspace `gs:<f>`)의 탭 `gs:<f>`에 worker마다 새 pane을 연다. 성공한 pane은 닫고 실패한 pane은 남긴다. herdr 밖이면 subprocess로 돈다.
 - 루프는 스레드 하나다. 리뷰·병합·검증은 이 루프에서 한 번에 하나씩 한다(다른 worker는 그동안 각자 돈다).
-- 병합: 먼저 최신 integration 끝을 티켓 브랜치에 합쳐 본다(충돌이면 이유 `conflict`). 그다음 integration에 `--no-ff --no-commit`으로 합치고(충돌이면 `integration 병합 충돌`) 티켓 검증을 돌려(`verify_ticket`이 있으면 티켓 worktree, 없으면 이 미완 병합 트리에서 `verify`), 통과하고 그 사이 integration이 바뀌지 않았을 때만 `Merge <NN>: <title>` + 트레일러 `gs-ticket: <f>/<NN>` 커밋을 만든다. 중간에 죽으면 표시 없는 미완 병합만 남고 다음 실행이 버린다.
+- 병합: 먼저 최신 integration 끝을 티켓 브랜치에 합쳐 본다(충돌이면 이유 `conflict`). 그다음 integration에 `--no-ff --no-commit`으로 합치고(충돌이면 `integration 병합 충돌`) 이 미완 병합 트리에서 티켓 검증을 돌려(명령은 티켓 `verify` → spec `verify_ticket` → spec `verify`), 통과하고 검증이 트리를 바꾸지 않았고 그 사이 integration이 바뀌지 않았을 때만 `Merge <NN>: <title>` + 트레일러 `gs-ticket: <f>/<NN>` 커밋을 만든다. 중간에 죽으면 표시 없는 미완 병합만 남고 다음 실행이 버린다.
 - worker가 integration worktree를 건드렸으면 되돌린다. 그때 돌던 worker가 그것 하나면 그 티켓의 실패, 여럿이면 누구 짓인지 몰라 경고만 한다.
 
 ## 실패 처리
@@ -291,7 +292,7 @@ gs는 base에 아무것도 push하지 않는다. base로 갈 gs 커밋(revert, �
 
 ### 검증 명령 고르기와 재시도
 
-spec `verify_ticket`, `verify_retries`. `verify_ticket`이 있으면 티켓 검증은 그 명령을 티켓 worktree에서 돌리고(티켓 브랜치에 최신 integration을 합친 뒤), worker brief의 검증 명령도 그것이다. 로그 앞에 `$ <명령>`과 `cwd:`를 쓴다. 없으면 `verify`를 integration의 미완 병합 트리에서 돌린다. `integration`, `integration-final`, `integration-recheck`, `main`, `main-recheck`은 늘 `verify`다. `verify_retries`는 어느 지점이든 실패한 명령(시간 초과, 시작 실패 포함)을 그 횟수만큼 다시 돌린다(`verify.run`). 재시도마다 로그에 `검증 재시도 <n>`, 시간 제한은 같고, 통과하면 끝에 `flaky: <지점> 재시도 <n>번 만에 통과`(`verify.flaky`, 지점은 `ticket-<NN>`이나 위 이름)를 적는다. 보고서는 로그를 줄여도 이 줄을 Evidence에 남긴다. 검증이 worktree를 바꾸면 재시도 통과여도 실패다.
+spec `verify_ticket`, `verify_retries`. 티켓 검증 명령은 티켓 `verify` → spec `verify_ticket` → spec `verify` 순서로 고르고(`Spec.verify_for`), worker·수정 worker brief의 검증 명령도 그것이다. 어느 명령이든 integration의 미완 병합 트리에서 돈다. 그래서 티켓 worktree의 커밋 안 된 파일은 검증을 통과시키지 못한다. 로그 앞에 `$ <명령>`과 `cwd:`를 쓴다. 검증 뒤 HEAD·브랜치·MERGE_HEAD·index가 달라졌거나 `setup.is_clean(staged_ok=True)`가 거짓이면(index와 다른 파일, 준비 산출물이 아닌 untracked) 로그에 `검증 중 worktree가 바뀌었다`를 남기고 실패다. 다른 곳에서 index·HEAD가 바뀐 것과 구분하지 못하므로 그 경우 이유는 `검증하는 동안 integration이 바뀌었다`다. `integration`, `integration-final`, `integration-recheck`, `main`, `main-recheck`은 늘 `verify`다. `verify_retries`는 어느 지점이든 실패한 명령(시간 초과, 시작 실패 포함)을 그 횟수만큼 다시 돌린다(`verify.run`). 재시도마다 로그에 `검증 재시도 <n>`, 시간 제한은 같고, 통과하면 끝에 `flaky: <지점> 재시도 <n>번 만에 통과`(`verify.flaky`, 지점은 `ticket-<NN>`이나 위 이름)를 적는다. 보고서는 로그를 줄여도 이 줄을 Evidence에 남긴다. 검증이 worktree를 바꾸면 재시도 통과여도 실패다.
 
 ## `gs clean`
 
@@ -369,6 +370,8 @@ PR <url>
 ## 모델 어댑터
 
 `adapters.py`. 어댑터마다 같은 입력(brief, worktree, 로그 경로)을 받아 준비(`prepare`), 환경(`env`, 모두 `GS_ROLE=worker`, `GS_BRIEF`, `GS_WORKTREE`), 셸 명령(`command`), 종료 판정(`outcome`)을 한다. 실행 스크립트(`run.sh`)가 명령을 감싸 `worker.log`에 남기고 종료 코드를 `exit` 파일에 원자적으로 쓴다. 끝은 이 파일로 안다(화면을 읽어 추측하지 않는다).
+
+`transient_reason(inp)`은 종료 판정과 별개로 `transient.reason(family, text, model=..., cwd=...)`에 로그를 넘겨 일시 오류 이유를 돌려준다(없으면 빈 문자열). 연결·DNS·5xx·429만 인정하고 인증·구독 한도·모르는 오류는 제외한다. claude는 마지막 result, codex는 error·turn.failed 이벤트를 읽어 도구 출력 속 문자열을 무시한다. agy의 `invalid model selection`은 `agy models`(`GS_AGY` seam, 15초 제한)가 실패하거나 선택한 모델이 목록에 있을 때 일시 오류다. 목록에 모델이 없으면 설정 오류다. 이 판별 자체는 대기나 재시작을 하지 않는다.
 
 | model | 명령 | 차단 장치 |
 |---|---|---|
