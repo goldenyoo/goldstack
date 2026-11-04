@@ -132,6 +132,9 @@ class GrillBreakdownTest(unittest.TestCase):
         line = re.search(r"^# (verify: .*)$", ticket, flags=re.M)
         self.assertIsNotNone(line)
         self.assertIsInstance(frontmatter.parse([line[1]])["verify"], str)
+        # 줄을 지운 코드 티켓은 spec verify_ticket을 물려받으므로, 그때는 전체 검증을 적으라고 안내한다
+        for text in ("코드 티켓: 이 줄을 지운다", "`verify_ticket`이 있으면", "spec `verify`(전체 검증)"):
+            self.assertIn(text, line[0])
 
 
 class IdeaFlowTest(unittest.TestCase):
