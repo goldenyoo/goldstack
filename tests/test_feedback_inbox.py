@@ -88,6 +88,29 @@ class ClosingTest(support.GoTest):
         self.assertNotIn('Closes #99', body)
         self.assertFalse(any(line.startswith('issue close') for line in self.lines('gh.log')))
 
+    def test_pr_body_excludes_stale_merged_ticket_absent_from_head(self):
+        self.configure_closes()
+        # 이전 integration의 02는 사라지고 state의 merged 표시만 남았다.
+        support.sh(self.repo, 'git', 'checkout', '-qb', 'ticket-01')
+        support.sh(self.repo, 'git', 'commit', '--allow-empty', '-qm', '티켓 01 구현')
+        support.sh(self.repo, 'git', 'checkout', '-q', self.BASE)
+        support.sh(self.repo, 'git', 'merge', '--no-ff', 'ticket-01', '-qm',
+                   '반영\n\ngs-ticket: demo/01')
+        directory = self.rundir / 'finish'
+        directory.mkdir(parents=True)
+        path = directory / 'report.md'
+        path.write_text('보고서')
+        r = SimpleNamespace(repo=self.repo, iwt=self.repo, name='demo',
+                            base_ref=f'{self.REMOTE}/{self.BASE}', rundir=self.rundir,
+                            feat=feature.load(self.repo, 'demo'),
+                            st=SimpleNamespace(tickets={
+                                '01': SimpleNamespace(status=state.MERGED),
+                                '02': SimpleNamespace(status=state.MERGED)}))
+        body = finish._pr_body(r, path).read_text()
+        self.assertIn('Closes #12', body)
+        self.assertNotIn('Closes #99', body)
+        self.assertTrue(body.startswith('보고서'))
+
     def test_squash_preserves_closing_keywords(self):
         self.configure_closes()
         (self.bin / 'gh').write_text('#!/bin/bash\n' + squash_gh())

@@ -403,8 +403,8 @@ def _closing_lines(r, tids=None) -> str:
 
 
 def _pr_body(r, path: Path) -> Path:
-    """보고서 길이 제한에도 종료 키워드가 잘리지 않게 별도 PR 본문을 만든다."""
-    closing = _closing_lines(r)
+    """PR head에 포함된 티켓의 종료 키워드를 보고서 길이 제한 밖에 보존한다."""
+    closing = _closing_lines(r, _trailers(r, git.sha(r.iwt, "HEAD")))
     if not closing:
         return path
     suffix = "\n\n" + closing
