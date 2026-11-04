@@ -55,8 +55,12 @@ class ParseTest(unittest.TestCase):
                              "action": "fix", "fix_attempt": review.ATTEMPTED},
                             {"id": 2, "severity": "low", "location": "b", "claim": "c2", "evidence": "",
                              "action": "report", "fix_attempt": ""}]}
-        # 리뷰 #2: 재리뷰가 없으니 수정을 시도한 fix 지적도 남은 지적이다
+        # 리뷰 #2: 재리뷰가 확인하지 않았으면 수정을 시도한 fix 지적도 남은 지적이다
         self.assertEqual([f["id"] for f in review.remaining(rec)], [1, 2])
+        for result, left in ((review.UNRESOLVED, [1, 2]), (review.UNCHECKED, [1, 2]), (review.RESOLVED, [2])):
+            rec["findings"][0]["rereview"] = result
+            self.assertEqual([f["id"] for f in review.remaining(rec)], left)
+        del rec["findings"][0]["rereview"]
         self.assertEqual([f["id"] for f in review.fixes(rec)], [1])
         brief = review.fix_brief(review.fixes(rec))
         self.assertIn("## 리뷰 지적(고칠 것)", brief)

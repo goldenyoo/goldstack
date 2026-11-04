@@ -51,9 +51,18 @@ class TicketState:
     failures: int = 0  # 이번 실행의 실패 횟수. 중단 후 이어갈 때도 재시도 한도를 유지한다
     failed_worktrees: list[str] = field(default_factory=list)  # 재시도·재실행 뒤에도 보존
     kept_worktrees: list[str] = field(default_factory=list)  # 병합됐지만 미커밋 변경 때문에 남긴 경로
+    isolation_warnings: list[str] = field(default_factory=list)  # 지난 시도·수정 worker의 격리 실패도 보존
     failure_summary: str = ""  # 재시도 brief에 붙일 판단 모델 요약 파일
     # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
-    # 지적마다 severity·location·claim·evidence·action(fix|report)·why·fix_attempt. 재리뷰가 없어 지적은 모두 남아 보고서(08)에 들어간다
+    # 재리뷰가 있었으면 rereviews(회차마다 round, dir, base, head, note, failed)도 있다.
+    # 지적마다 severity·location·claim·evidence·action(fix|report)·why, 그리고 수정·재리뷰 결과(review.Finding):
+    #   fix_attempt("" | attempted | discarded), fix_round(이 지적을 받은 마지막 수정 worker 회차, 0이면 받은 적 없음),
+    #   fix_reason(수정 못 한 이유: 한도, 띄우지 못함, 수정 worker 실패…),
+    #   rereview("" | resolved | unresolved | unchecked), rereview_reason(unchecked의 이유: 시간 초과 | 한도 | 재리뷰 실패),
+    #   rereview_evidence(판정 근거·실패 내용), rereview_round(그 결과를 낸 재리뷰 회차),
+    #   found_round(0 첫 리뷰, 1·2 그 회차 재리뷰가 새로 낸 지적. 2회차는 늘 report).
+    # 지적 하나의 결말은 이 순서로 읽는다: action이 report면 보고만 → rereview가 있으면 그 값(2차 수정을 못 했거나 버렸어도
+    # 1차 재리뷰의 unresolved는 그대로 미해결이다) → fix_reason이 있으면 수정 못 함.
     review: dict = field(default_factory=dict)
     # 두 번째 리뷰(second_reviewer)의 기록. 모양은 review와 같다. second_reviewer가 없는 티켓은 비어 있다
     second_review: dict = field(default_factory=dict)
@@ -74,7 +83,7 @@ class State:
     finish: dict = field(default_factory=dict)  # 08: PR·병합·main 검증·revert의 재개 지점
     phase: str = ""  # feature 전체 마무리 중이면 finish
     progress: dict = field(default_factory=dict)
-    agy_calls: int = 0  # 이번 실행에서 gs가 띄운 agy 호출 수(worker 1번·리뷰 1번 = 1회, 재시도·수정 포함). 실행마다 0에서
+    agy_calls: int = 0  # 이번 실행에서 gs가 띄운 agy 호출 수(worker 1번·리뷰 1번 = 1회, 재시도·수정·재리뷰 포함). 실행마다 0에서
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
@@ -90,8 +99,8 @@ def agy_reached(st: State, limit: int) -> bool:
     return st.agy_calls >= limit
 
 
-PHASE_LABELS = {"worker": "worker", "review": "리뷰", "fix": "수정", "verify": "검증", "finish": "마무리",
-                "checks": "CI 대기", "setup": "준비"}
+PHASE_LABELS = {"worker": "worker", "review": "리뷰", "fix": "수정", "rereview": "재리뷰", "fix2": "수정 2",
+                "verify": "검증", "finish": "마무리", "checks": "CI 대기", "setup": "준비"}
 
 
 def end_phase(ts: TicketState, at: str | None = None) -> None:

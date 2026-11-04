@@ -98,7 +98,7 @@ class FinishZeroMinutesTest(unittest.TestCase):
     def test_zero_minute_phases_are_left_out(self):
         text = self.evidence([("worker", 0), ("review", 540), ("verify", 780), ("finish", 960)])
         self.assertIn("- 01 단계별 소요: worker 9분 · 리뷰 4분 · 검증 3분\n", text)
-        self.assertNotIn("마무리", text.split("### 남은 리뷰 지적")[0])
+        self.assertNotIn("마무리", text.split("### 리뷰 지적")[0])
 
     def test_all_zero_minutes(self):
         text = self.evidence([("worker", 0), ("verify", 5), ("finish", 10)])
@@ -187,7 +187,7 @@ class KeptWorktreesTest(GoCase):
         self.assertIn(f"범위 밖 티켓의 남긴 worktree:\n\n- 01: 남긴 worktree: {wt} (미커밋 변경)\n", text)
         # 이번 범위의 merged 티켓 줄에는 0분 단계가 없다
         self.assertIn("- 04 단계별 소요: ", text)
-        self.assertNotIn("0분", text.split("### 남은 리뷰 지적")[0])
+        self.assertNotIn("0분", text.split("### 리뷰 지적")[0])
 
 
 if __name__ == "__main__":

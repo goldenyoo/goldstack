@@ -327,7 +327,7 @@ class GoTest(unittest.TestCase):
                     self.assertEqual((active["id"], active["model"]), ("01", "codex"))
             if snapshot["phase"] == "finish":
                 self.assertEqual(p["running"], [{"id": "", "phase": "finish", "model": "claude"}])
-        self.assertEqual(phases, ["worker", "review", "fix", "verify", "finish"])
+        self.assertEqual(phases, ["worker", "review", "fix", "rereview", "verify", "finish"])
         last = snapshots[-1]
         self.assertTrue(last["finished_at"])
         self.assertEqual((last["progress"]["done"], last["progress"]["running"]), (1, []))
@@ -753,13 +753,13 @@ fi
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.calls(), ["01", "04", "04"])  # 구현 worker, 수정 worker 한 번
         self.assertEqual(self.lines("fix.log"), ["fix 04"])
-        self.assertEqual(self.lines("review.calls"), ["codex", "codex"])  # 01·04 한 번씩. 수정 뒤 재리뷰 없음
+        self.assertEqual(self.lines("review.calls"), ["codex", "codex", "codex"])  # 01·04 한 번씩, 04 수정 뒤 재리뷰
         self.assertEqual(self.merged(), ["01", "04"])
         files = self.integration("ls-tree", "--name-only", "gs/demo/integration").split()
         self.assertIn("fixed_04", files)  # 수정 커밋이 병합에 들어갔다
         self.assertIn("수정 worker 시작: 지적 1개", out)
         self.assertIn("[04] 검증 통과", out)
-        self.assertTrue((self.rundir / "04/1/fix/verify.log").exists())  # 재리뷰 대신 verify
+        self.assertTrue((self.rundir / "04/1/fix/verify.log").exists())  # 재리뷰 뒤 verify
 
         # reviewer에게는 merge-base 기준 그 티켓 diff와 티켓·spec 경로를 줬다
         diff = (self.bin / "review.diff").read_text()
@@ -776,18 +776,19 @@ fi
         self.assertEqual([(f["action"], f["fix_attempt"]) for f in rec["findings"]],
                          [("fix", review.ATTEMPTED), ("report", ""), ("report", "")])  # 근거 없는 지적은 report
         self.assertIn("근거 없음", rec["findings"][1]["why"])
-        # 재리뷰가 없으니 수정을 시도한 fix 지적도 고쳐졌다고 치지 않고 남긴다
+        # 가짜 reviewer의 재리뷰 답은 형식이 틀렸다. 수정을 시도한 fix 지적도 고쳐졌다고 치지 않고 남긴다
         self.assertEqual([f["claim"] for f in review.remaining(rec)],
                          ["FIX: 값이 틀렸다", "FIX 이름이 마음에 안 든다", "설명 문서가 없다"])
-        self.assertIn("재리뷰 없음", rec["fix"])
+        self.assertEqual((rec["findings"][0]["rereview"], rec["findings"][0]["rereview_reason"]),
+                         (review.UNCHECKED, review.REASON_FAILED))
         brief = (self.rundir / "04/1/fix/brief.md").read_text()
         self.assertIn("FIX: 값이 틀렸다", brief)
         self.assertNotIn("마음에 안 든다", brief)
         self.assertIn("남은 리뷰 지적 3", out)
 
-    def test_fix_findings_stay_in_report_without_rereview(self):
+    def test_fix_findings_stay_in_report_when_rereview_unchecked(self):
         # 리뷰 #2: 수정 worker가 지적 A만 고치고 B는 거절해도 커밋·종료 코드만으로는 알 수 없다.
-        # 재리뷰가 없으니 둘 다 "수정 시도, 재리뷰 없음"으로 남은 지적에 들어가 보고서에 나와야 한다.
+        # 재리뷰가 확인하지 못했으면 둘 다 unchecked로 남은 지적에 들어가 보고서에 나와야 한다.
         with self.review_with([
             {"severity": "high", "location": "file_01", "claim": "FIX A: 값이 틀렸다", "evidence": "e1"},
             {"severity": "medium", "location": "file_01", "claim": "FIX B: 경계값 누락", "evidence": "e2"},
@@ -797,7 +798,7 @@ fi
         self.assertEqual(self.lines("fix.log"), ["fix 01"])
         rec = self.review_state()
         self.assertEqual([f["claim"] for f in review.remaining(rec)], ["FIX A: 값이 틀렸다", "FIX B: 경계값 누락"])
-        self.assertIn("재리뷰 없음", rec["fix"])
+        self.assertEqual([f["rereview"] for f in rec["findings"]], [review.UNCHECKED, review.UNCHECKED])
         report = self.final_report()
         self.assertIn("FIX A: 값이 틀렸다", report)
         self.assertIn("FIX B: 경계값 누락", report)
@@ -900,6 +901,7 @@ fi
         rec = self.review_state()
         self.assertIn("수정 worker 실패(종료 코드 3)", rec["fix"])
         self.assertEqual(len(review.remaining(rec)), 1)  # 고치지 못한 fix 지적이 남는다
+        self.assertEqual(self.lines("review.calls"), ["codex"])  # 버린 수정은 재리뷰하지 않는다
         self.assertEqual(state.load(self.rundir, "demo").tickets["01"].failures, 0)  # 티켓 실패로 세지 않는다
 
     def test_reviewer_failure_is_recorded_and_ticket_still_merges(self):
