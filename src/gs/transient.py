@@ -2,6 +2,9 @@
 
 작업 중 도구 출력과 모델 응답은 읽지 않는다. claude는 마지막 result, codex는
 error/turn.failed, agy는 오류 이벤트와 시작 실패의 stderr만 본다. 재시도는 호출자가 한다.
+
+대기 일정(Backoff), 그것을 다 쓴 호출이 던지는 중단 예외(NetworkAbort), 죽지 않고 재연결만 하는 codex를 보는
+ReconnectWatch도 여기 있다. 시간 상수는 모두 "분"이고 GS_NETWORK_MINUTE(1분의 초, 시험 seam)로 줄인다.
 """
 from __future__ import annotations
 
@@ -9,10 +12,13 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 
 AGY_MODELS_TIMEOUT = 15
+WAIT_MINUTES = (1, 2, 5, 10)  # 마지막 값을 계속 쓴다
+RECOVERY_MINUTES = 5  # 다시 띄운 worker가 이만큼 일시 오류 없이 돌면 회복이다(claude 자체 재시도가 약 3분 넘게 걸린다)
 
 # 429(rate limit)와 구독 사용량 한도는 다르다. 인증·구독 오류가 섞이면 재시도하지 않는다.
 _PERMANENT = re.compile(
@@ -166,3 +172,78 @@ def reason(family: str, text: str, *, model: str = "", cwd: Path | None = None) 
             return _agy_model_reason(text, model, cwd)
         return _error_reason(error)
     return ""
+
+
+class NetworkAbort(Exception):
+    """대기 합계가 상한을 넘었다. 호출 실패로 삼키지 말고 `go._loop`까지 올린다. 실행이 `중단(네트워크)`로 멈춘다."""
+
+
+def minute_seconds() -> float:
+    """1분의 초. 시험은 GS_NETWORK_MINUTE로 줄인다. 값이 틀리면 60이다."""
+    raw = os.environ.get("GS_NETWORK_MINUTE", "").strip()
+    try:
+        value = float(raw) if raw else 0
+    except ValueError:
+        value = 0
+    return value if value > 0 else 60.0
+
+
+class Backoff:
+    """끊김 하나의 대기 일정: 1→2→5→10→10…분, 합계 상한까지. 마지막 간격은 상한에 맞춰 줄인다."""
+
+    def __init__(self) -> None:
+        self.count = 0  # 지금까지 잡은 대기 수
+        self.waited = 0.0  # 지금까지 잡은 대기 합계(분)
+
+    def next(self, limit_minutes: float) -> float | None:
+        """다음 대기(초). 상한을 다 썼으면 None."""
+        left = limit_minutes - self.waited
+        if left <= 0:
+            return None
+        minutes = min(WAIT_MINUTES[min(self.count, len(WAIT_MINUTES) - 1)], left)
+        self.count += 1
+        self.waited += minutes
+        return minutes * minute_seconds()
+
+
+def _reconnecting(line: bytes) -> bool | None:
+    """이벤트 한 줄: Reconnecting이면 True, 다른 이벤트면 False, 이벤트가 아니면 None."""
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(event, dict):
+        return None
+    return event.get("type") == "error" and "reconnecting" in _strings(event.get("message")).lower()
+
+
+class ReconnectWatch:
+    """codex worker 로그를 이어 읽어 `Reconnecting`만 이어진 시간을 잰다. 다른 이벤트가 나오면 처음부터 다시 잰다."""
+
+    def __init__(self, log: Path):
+        self.log = log
+        self.offset = 0
+        self.since: float | None = None  # 이번 연속의 첫 Reconnecting을 본 시각
+        self.last: float | None = None  # 마지막 Reconnecting을 본 시각(회복 판단용)
+
+    def poll(self) -> None:
+        try:
+            with self.log.open("rb") as f:
+                f.seek(self.offset)
+                data = f.read()
+        except FileNotFoundError:
+            return
+        end = data.rfind(b"\n") + 1  # 아직 다 안 쓴 줄은 다음에 읽는다
+        self.offset += end
+        for line in data[:end].splitlines():
+            kind = _reconnecting(line)
+            if kind:
+                self.last = time.monotonic()
+                self.since = self.since or self.last
+            elif kind is False:
+                self.since = None
+
+    def stalled_for(self) -> float:
+        """Reconnecting만 이어진 초. 지금 이어지고 있지 않으면 0."""
+        self.poll()
+        return time.monotonic() - self.since if self.since is not None else 0.0

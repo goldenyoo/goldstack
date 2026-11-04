@@ -42,6 +42,8 @@ def _show(rundir: Path, name: str, out) -> None:
     now = datetime.now().astimezone()
     if pid:
         head = f"{name}: 실행 중(pid {pid})"
+    elif st.finished_at and st.network.get("aborted"):
+        head = f"{name}: 중단(네트워크)({_clock(state.parse_time(st.finished_at), now)}) · 다음 gs go가 이어 간다"
     elif st.finished_at:
         head = f"{name}: 끝남({_clock(state.parse_time(st.finished_at), now)})"
     else:
