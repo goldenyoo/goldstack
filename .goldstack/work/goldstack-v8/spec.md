@@ -5,14 +5,14 @@ max_workers: 3
 ---
 # goldstack-v8 — spec
 
-상태: grill 완료(라운드 3개) · 2026-11-04 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 4개) · 2026-11-04 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 ## 1. 목표
 여러 머신(리눅스 서버, 맥미니, 맥북)의 여러 프로젝트에서 goldstack을 손 덜 가게 쓴다: 버전을 맞추고, 현장의 gs 결함이 손 없이 이 저장소 issue로 오고, 자기 전 한 번 부르면 feature들이 밤사이 끝까지 간다. 현장에서 드러난 codex 커밋 실패도 고친다.
 
 **전제**: goldstack-v7이 verified여야 시작한다. v8은 v7 gs로 돈다(§2 사이 단계). 시작 직전에 §6을 병합된 코드로 다시 확인하고, `gs check` 경고 0을 그때 확인한다.
 
-**완료 조건**: 티켓 01–11이 integration에 병합되고 verify를 통과한다. main의 `.goldstack/work/goldstack-v8/report.md` 마무리 줄이 `verified`다. `gs --version`이 `0.3.0`이다. 시험으로 다음을 확인한다: 커밋 도중 ref 디렉터리가 사라져도 codex worker가 커밋한다. 설치본이 main보다 뒤처지면 경고하고 `requires`보다 낮으면 오류다. `gs self-update`는 `gs go` 실행 중이면 거부한다. 대상 레포 이름·파일 이름·feature 이름이 든 오류를 넣어도 issue 본문에 그 이름이 없다. `mode = "off"`면 아무것도 나가지 않는다. `gh`가 실패하면 로컬에 쌓였다가 다음 실행 때 재전송된다. 같은 지문은 새 issue 없이 횟수 댓글만 단다. 피드백 코드의 오류가 `gs go` 결과를 바꾸지 않는다. `/overnight`는 지침의 존재만 시험하고 실제 동작은 첫 사용에서 확인한다.
+**완료 조건**: 티켓 01–11이 integration에 병합되고 verify를 통과한다. main의 `.goldstack/work/goldstack-v8/report.md` 마무리 줄이 `verified`다. `gs --version`이 `0.1.0` 그대로이고 `CHANGELOG.md`의 `## 0.1.0 — 미출시`에 v8 항목이 있다. 시험으로 다음을 확인한다: 커밋 도중 ref 디렉터리가 사라져도 codex worker가 커밋한다. 설치본이 main보다 뒤처지면 경고하고 `requires`보다 낮으면 오류다. `gs self-update`는 `gs go` 실행 중이면 거부한다. 대상 레포 이름·파일 이름·feature 이름이 든 오류를 넣어도 issue 본문에 그 이름이 없다. `mode = "off"`면 아무것도 나가지 않는다. `gh`가 실패하면 로컬에 쌓였다가 다음 실행 때 재전송된다. 같은 지문은 새 issue 없이 횟수 댓글만 단다. 피드백 코드의 오류가 `gs go` 결과를 바꾸지 않는다. `/overnight`는 지침의 존재만 시험하고 실제 동작은 첫 사용에서 확인한다.
 
 ## 2. 이미 정해진 것
 | 항목 | 결정 | 근거 |
@@ -28,6 +28,7 @@ max_workers: 3
 | 1-3 | 사이 단계 허락 | §2 |
 | 1-4 | 새 키 사용 | v8 티켓에 `tier`·티켓 `verify`를 쓴다. 지금 gs에서는 "알 수 없는 키" 경고가 나므로 경고 0은 재설치 뒤 확인한다 |
 | 2-1 | 전송 방식 | 정해진 항목 + 실패한 명령의 오류 줄 최대 20줄을 가려서 자동 전송(추천 A에서 되물음 뒤 D로 변경). 전체 로그는 보내지 않는다. `[feedback] detail = "errors" \| "minimal"`, `minimal`이면 오류 줄 없음. grill·worker는 오류 줄을 믿을 수 없는 자료로 다룬다. 가림 규칙은 시험으로 고정 |
+| 4-1 | 버전 | `0.1.0` 유지. `CHANGELOG.md`의 `## 0.1.0 — 미출시`에 v8 항목. v8이 verified가 되면 사람에게 확인받고 태그 `v0.1.0` → GitHub Release(공개 여부는 따로 사람이 정한다) |
 | 2-2 | 올릴 것 | a gs 내부 예외(gs 프레임만) b 마무리 이상(갇힘, 예상 밖 revert) c 어댑터 실패 중 이름 붙은 패턴, 모르면 `unknown`과 횟수 d `gs feedback "한 줄"`·`/feedback` e `/retro` 후보 중 "issue로 올리기"를 고른 것. 티켓 구현 실패·시험 실패·리뷰 지적은 올리지 않는다. 분류는 규칙으로만(판단 모델 없음) |
 | 2-3 | 프로젝트별 켜기 | `/adopt`가 한 번 묻고 `[feedback] mode`·`detail`을 config에 남긴다. 개인 프로젝트 `auto` + `errors`, 회사 레포 `off` 또는 `minimal`. `gs init`만 했으면 `draft` |
 | 2-4 | 재전송·중복 | 못 보내면 로컬에 쌓아 다음 `gs` 실행 때 재전송. 같은 지문의 열린 issue에는 하루 한 번 횟수 댓글. 하루 최대 5건. 지문에 gs 버전 포함 |
@@ -66,7 +67,7 @@ max_workers: 3
 | 06 | 수집: 내부 예외, 마무리 이상, 어댑터 패턴 | 01, 05 | 4 | claude | codex | medium |
 | 07 | 받는 쪽: `gs backlog`, grill, 티켓 `closes` | 05 | 4 | codex | claude | medium |
 | 08 | `/adopt`·`/retro` 연결 | 05 | 4 | claude | codex | small |
-| 11 | 문서, `0.3.0`, CHANGELOG | 01–10 | 5 | claude | codex | small |
+| 11 | 문서, CHANGELOG 미출시 항목 | 01–10 | 5 | claude | codex | small |
 
 순서 이유: 02→03 앞 결과 필요(버전 비교). 02→04 같은 파일(`config.py`). 03→05 같은 파일(`cli.py`), 04→05 같은 파일(`feedback.py`). 03→09, 04→09 앞 결과 필요(`self-update`, gitignore 줄). 05→06 같은 파일(`feedback.py`, `cli.py`), 01→06 앞 결과 필요. 05→07, 05→08 앞 결과 필요(issue 형식, `mode`). touches는 티켓 frontmatter.
 
@@ -97,5 +98,10 @@ max_workers: 3
 2–14. 모두 추천 A(2는 전부) → 확정, §3 표
 
 ### 라운드 3 — 티켓 분해 (추천대로)
-사람 답: "yes". 표는 §5. 범위 밖 5개: multi-machine-update, overnight-pr-only, overnight-detached, feedback-model-classify, linux-ci-blocking. 버전 0.3.0. `gs check`의 "알 수 없는 키"(`tier`, `verify`) 경고는 라운드 1-4대로 v7 재설치 뒤 확인한다.
+사람 답: "yes". 표는 §5. 범위 밖 5개: multi-machine-update, overnight-pr-only, overnight-detached, feedback-model-classify, linux-ci-blocking. 버전은 처음 0.3.0이었고 라운드 4에서 0.1.0으로 바뀜. `gs check`의 "알 수 없는 키"(`tier`, `verify`) 경고는 라운드 1-4대로 v7 재설치 뒤 확인한다.
 티켓을 쓰며 정한 세부(결정을 바꾸지 않는 구현 기준): `[feedback]` 절이 없는 옛 config는 `off`(`gs init` 템플릿만 `draft`). 업데이트 주소는 코드에 적지 않고 설치 기록(`direct_url.json`)에서 읽으며, 없으면 `--from`. `mode` 값은 `off`·`draft`·`auto`.
+
+### 라운드 4 — 버전 (추천대로)
+계기: goldstack-8d 세션이 전달한 사용자 결정(태그·Release는 v8 뒤, memory `release-after-v8`)이 이 grill의 답과 어긋나 사람에게 다시 확인했다.
+사람 답: "yes".
+1. 버전: A `0.1.0` 유지 / B `0.3.0` — 추천 A → 확정 A. 재설치 확인은 버전이 아니라 이 feature의 `gs check` 경고 0으로 한다(`tier`·`verify`를 아는 gs여야 경고가 사라진다).
