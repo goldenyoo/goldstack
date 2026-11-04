@@ -4,7 +4,7 @@
 
 | 파일 | 하는 일 |
 |---|---|
-| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `feedback`, `hook` |
+| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `retro-log`, `feedback`, `hook` |
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
 | `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
@@ -12,7 +12,9 @@
 | `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, agy 배정 수, 환경 검사 |
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 리뷰·수정·재리뷰 띄우기(두 리뷰 동시), agy 호출 세기, 재개 뒤 멈춤, 요약 출력, 알림 |
 | `worker.py`, `herdr.py`, `adapters.py`, `streamfmt.py` | worker 띄우기(brief, 실행 스크립트, push 차단), herdr pane, 모델별 명령·판정, pane 출력 정리 |
-| `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰 |
+| `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰(2차 재리뷰의 재확인) |
+| `retrolog.py` | `gs retro-log`: `/retro`용 로그 파일 하나(`run/retro-log.md`)를 크기 상한 안에 모은다 |
+| `findings.py` | 보고만 high·medium 지적을 `.goldstack/ideas/` 파일로 넘긴다 |
 | `transient.py` | 일시 오류 판별, 대기 일정(`Backoff`), 중단 예외(`NetworkAbort`), codex `Reconnecting` 감시 |
 | `verify.py`, `setup.py`, `failure.py` | verify 명령(시간 제한, 프로세스 그룹, 재시도), worktree 준비 명령, 실패 증거와 요약 |
 | `finish.py`, `report.py` | 보고서, PR, CI 대기, 병합 확인(merge·squash), base 재검증, revert, 보호된 base의 PR |
@@ -26,9 +28,9 @@
 | `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건 |
 | `git.py` | git 호출, 원격 URL에서 GitHub owner/repo 풀기(`github_repo`), push 전 설정 대조(`push_settings`, `check_push`, `push`) |
 
-`gs go`(`cli.cmd_go`)·`gs doctor`는 시작할 때 설치 배포판의 `direct_url.json`에서 git URL·commit을 읽는다. 로컬 디렉터리 설치는 출처가 없다. `git ls-remote <설치 URL> main`(5초 제한)의 main commit이 다르면 `gs self-update` 경고만 내고, 조회 실패·출처 없음은 건너뛴다. `claude plugin list --json`(`GS_CLAUDE`)에서 goldstack 플러그인 버전이 gs 버전과 달라도 경고하며, 목록을 못 읽으면 건너뛴다. 대상 레포의 원격 주소는 설치 출처로 쓰지 않는다.
+`gs go`(`cli.cmd_go`)·`gs doctor`는 시작할 때 설치 배포판의 `direct_url.json`에서 git URL·commit을 읽는다. 로컬 디렉터리 설치(`dir_info`)는 출처가 없어 `경고: 설치 commit 모름(로컬 설치): 뒤처짐을 비교할 수 없다` 한 줄만 낸다(실행을 막지 않는다. 설치 기록이 없을 때와 git 설치의 동작은 그대로다). `git ls-remote <설치 URL> main`(5초 제한)의 main commit이 다르면 `gs self-update` 경고만 내고, 조회 실패·출처 없음은 건너뛴다. `claude plugin list --json`(`GS_CLAUDE`)에서 goldstack 플러그인 버전이 gs 버전과 달라도 경고하며, 목록을 못 읽으면 건너뛴다. 대상 레포의 원격 주소는 설치 출처로 쓰지 않는다.
 
-`gs self-update`는 설치 기록의 git 주소(또는 `--from`)로 main을 재설치한다(`--version`으로 태그 지정). 다른 `gs go` 프로세스가 있거나 프로세스 목록을 읽지 못하면 변경 전에 거부한다. machine-wide-lock은 없으므로 확인 직후 시작되는 `gs go`까지 막지 못한다. CLI 성공 뒤 marketplace와 플러그인을 갱신하며, 플러그인 실패도 CLI 결과와 함께 보고하고 종료 1이다. CHANGELOG는 wheel에 포함해 설치본에서 읽는다.
+`gs self-update`는 설치 기록의 git 주소(또는 `--from`)로 main을 설치 commit이 남게 재설치한다(로컬 설치는 주소가 없어 `--from`이 필요하다. 문서의 재설치 절차는 모두 이 명령이다)(`--version`으로 태그 지정). 다른 `gs go` 프로세스가 있거나 프로세스 목록을 읽지 못하면 변경 전에 거부한다. machine-wide-lock은 없으므로 확인 직후 시작되는 `gs go`까지 막지 못한다. CLI 성공 뒤 marketplace와 플러그인을 갱신하며, 플러그인 실패도 CLI 결과와 함께 보고하고 종료 1이다. CHANGELOG는 wheel에 포함해 설치본에서 읽는다.
 
 
 선택 설정 `[goldstack] requires = ">=0.1"`은 최소 버전 하나(숫자 1–3부분)를 받는다. 형식 오류는 config 오류이며, `gs check`·`gs go`는 설치 버전이 낮으면 실행을 거부하고 `gs self-update`를 안내한다. 생략하면 최소 버전 검사를 하지 않는다. 비교 때 `0.1`과 `0.1.0`은 같다.
@@ -86,7 +88,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 
 종료 코드는 모든 티켓이 병합되고 마무리가 끝났을 때(base 검증 통과, gs PR 대기 없음)만 0이다. 병합 대기, CI 실패·시간 초과, 승인 대기, 준비 실패, base 검증 실패, 재개 뒤 남은 티켓도 1이다. `중단(네트워크)`만 3이다(아래 "네트워크 끊김").
 
-**여러 feature(`gs go a b …`, `cli.cmd_go`)** — 먼저 feature마다 `gs check`를 하고 하나라도 오류면 아무것도 시작하지 않는다(종료 1). 그 뒤 같은 프로세스에서 feature마다 `go.go()`를 차례로 부르고, 끝날 때마다 state.json의 `finish.phase`를 다시 읽는다. 종료 코드가 0이고 phase가 `verified`일 때만 `■ <a>: verified → <b> 시작`을 쓰고 다음으로 간다. 아니면 `■ <a>: <phase> → 여기서 멈춤(남은: <b> …)`을 쓰고 그 종료 코드로 끝난다(state를 못 읽으면 phase `unknown`, 종료 1. `network.aborted`가 있으면 지난 마무리 phase와 상관없이 phase 자리가 `중단(네트워크)`, 종료 3). 시작 전 거부(잠금, 미커밋 spec)는 종료 코드가 1이라 지난 실행의 `verified`가 state에 남아 있어도 멈춘다. `--only`와 함께 쓰면 argparse 오류다. 실행 중 gs를 다시 설치하지 않으므로, 앞 feature가 gs를 고쳐도 뒤 feature는 프로세스가 시작할 때 실린 gs로 돈다(spec 결정: 이어 받을 때 `uv tool install --reinstall .`은 사람·세션이 한다). `/go a b`는 feature마다 check·커밋·push를 한 뒤 이 명령을 한 번 띄운다.
+**여러 feature(`gs go a b …`, `cli.cmd_go`)** — 먼저 feature마다 `gs check`를 하고 하나라도 오류면 아무것도 시작하지 않는다(종료 1). 그 뒤 같은 프로세스에서 feature마다 `go.go()`를 차례로 부르고, 끝날 때마다 state.json의 `finish.phase`를 다시 읽는다. 종료 코드가 0이고 phase가 `verified`일 때만 `■ <a>: verified → <b> 시작`을 쓰고 다음으로 간다. 아니면 `■ <a>: <phase> → 여기서 멈춤(남은: <b> …)`을 쓰고 그 종료 코드로 끝난다(state를 못 읽으면 phase `unknown`, 종료 1. `network.aborted`가 있으면 지난 마무리 phase와 상관없이 phase 자리가 `중단(네트워크)`, 종료 3). 시작 전 거부(잠금, 미커밋 spec)는 종료 코드가 1이라 지난 실행의 `verified`가 state에 남아 있어도 멈춘다. `--only`와 함께 쓰면 argparse 오류다. 실행 중 gs를 다시 설치하지 않으므로, 앞 feature가 gs를 고쳐도 뒤 feature는 프로세스가 시작할 때 실린 gs로 돈다(spec 결정: 이어 받을 때 `gs self-update`는 사람·세션이 한다). `/go a b`는 feature마다 check·커밋·push를 한 뒤 이 명령을 한 번 띄운다.
 
 ## 상태
 
@@ -112,7 +114,12 @@ frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max
 
 - worker마다 최신 integration 끝에서 브랜치 `gs/<f>/<NN>`과 worktree `run/wt/<NN>`을 만들고, `[worktree] setup`이 있으면 worker 전에 돌린다. 재시도는 `gs/<f>/<NN>-retry-<k>`, `run/wt/<NN>-retry-<k>`. 번호는 시도 디렉터리 `run/<NN>/<시도>`로 정한다.
 - herdr 안이면(`HERDR_SOCKET_PATH`·`HERDR_SESSION`) 지금 workspace(없으면 새 workspace `gs:<f>`)의 탭 `gs:<f>`에 worker마다 새 pane을 연다. 성공한 pane은 닫고 실패한 pane은 남긴다. herdr 밖이면 subprocess로 돈다.
-- 루프는 스레드 하나다. 리뷰·병합·검증은 이 루프에서 한 번에 하나씩 한다(다른 worker는 그동안 각자 돈다).
+- 루프는 스레드 하나다. 병합·검증은 이 루프에서 한 번에 하나씩 한다(다른 worker는 그동안 각자 돈다).
+- **리뷰 스레드와 자리**(`go._review_stage`, `go._review_tick`, `go.Reviews`) — 리뷰·판단·재리뷰는 루프 밖 스레드에서 돈다. `_finish`가 worker 결과를 확인하고(`_check_worker`) 리뷰 단계(`_review_stage`, 제너레이터)로 넘기면, 단계는 호출에서 멈추고 호출이 끝났을 때 `_review_tick`이 결과를 넣어 잇는다. 그동안 루프는 다른 worker의 종료를 처리하고 준비된 티켓을 시작한다. 리뷰가 끝난 티켓은 병합 단계(`_merge_stage`)를 기다렸다가 루프에서 하나씩 병합·검증한다.
+- **자리**: 리뷰 중인 티켓은 `max_workers` 자리를 쓰지 않는다. worker는 최대 `max_workers`, 리뷰 중인 티켓도 최대 `max_workers`다. 수정 worker는 worker 자리를 쓰고, 없으면 기다린다(단계 `fix_wait`, 리뷰 자리를 기다린 시간은 `review_wait`).
+- **state 쓰기**: `state.json`은 루프 스레드만 고친다. 리뷰 스레드는 결과를 돌려주고, 호출 도중의 대기·측정은 `Reviews.inbox`·`review.CallWait`로 루프에 넘겨 반영한다. 리뷰 스레드의 뜻밖의 오류는 그 티켓의 지금 실패 처리로 간다. agy 호출 상한 검사와 세기는 호출을 보내기 전에 루프 스레드에서 하므로 동시 리뷰에서도 상한을 넘기지 않는다.
+- **루프를 떠날 때**: `중단(네트워크)`, 사람의 중단(Ctrl-C, SIGTERM, SIGHUP), 뜻밖의 오류 어느 쪽이든 돌던 리뷰어의 프로세스 그룹을 끝낸다(`go._stop_reviews`). 리뷰 단계의 티켓은 `network_resume`이 남아 다음 `gs go`가 끝나지 않은 리뷰를 처음부터 다시 한다.
+- **처리 대기**(`processing_wait_seconds`) — worker가 끝난 뒤 루프가 그 결과를 받기까지(`worker_exited_at` → `processing_started_at`). 리뷰를 루프 밖으로 뺀 뒤에는 다른 티켓의 리뷰가 이 값을 늘리지 않는다. 받은 뒤 리뷰 자리를 기다린 시간은 여기 들지 않는다.
 - 병합: 먼저 최신 integration 끝을 티켓 브랜치에 합쳐 본다(충돌이면 이유 `conflict`). 그다음 integration에 `--no-ff --no-commit`으로 합치고(충돌이면 `integration 병합 충돌`) 이 미완 병합 트리에서 티켓 검증을 돌려(명령은 티켓 `verify` → spec `verify_ticket` → spec `verify`), 통과하고 검증이 트리를 바꾸지 않았고 그 사이 integration이 바뀌지 않았을 때만 `Merge <NN>: <title>` + 트레일러 `gs-ticket: <f>/<NN>` 커밋을 만든다. 중간에 죽으면 표시 없는 미완 병합만 남고 다음 실행이 버린다.
 - worker가 integration worktree를 건드렸으면 되돌린다. 그때 돌던 worker가 그것 하나면 그 티켓의 실패, 여럿이면 누구 짓인지 몰라 경고만 한다.
 
@@ -131,9 +138,10 @@ frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max
 ## 리뷰
 
 worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_reviewer`도)가 그 티켓 diff(최신 integration과의 merge-base 기준)를 읽기 전용으로 리뷰한다. 리뷰가 하나인데 구현 `model`과 같은 계열이면 부르지 않고 그 티켓을 실패시킨다.
-1. reviewer에게 diff·티켓·spec·worktree 경로를 준다. 지시문은 전체 시험 대신 지적을 확인할 좁은 재현만 돌리라고 한다(재리뷰도 같다). 답은 고정 JSON `{"findings": [{"severity": "high|medium|low", "location", "claim", "evidence"}]}`. 시간 제한 `timeouts.review_minutes`.
+1. reviewer에게 diff·티켓·spec·worktree 경로를 준다. 첫 리뷰와 재리뷰 지시문은 worker가 sandbox의 네트워크 차단 때문에 네트워크가 필요한 단계를 못 돌린 것만으로는 지적하지 않게 하고, 다른 실패를 네트워크 탓으로 돌린 것은 지적하게 한다(`worker.write_brief`는 worker에게 그 단계와 이유를 마지막 메시지에 적고 커밋하라고 하며, gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다. 새 config 키 없음). 지시문은 전체 시험 대신 지적을 확인할 좁은 재현만 돌리라고 한다(재리뷰도 같다). 답은 고정 JSON `{"findings": [{"severity": "high|medium|low", "location", "claim", "evidence"}]}`. 시간 제한 `timeouts.review_minutes`.
 2. 새 판단 모델 호출(`models.judge`, 파일 경로만 받는다, 제한 `timeouts.judge_minutes`)이 지적마다 `fix`·`report`를 정한다. 근거(evidence)가 빈 지적은 늘 `report`다(코드 규칙: 취향은 고치지 않는다). 판단 모델이 실패하면 모두 `report`.
 3. `fix`가 있으면 같은 구현 모델로 수정 worker를 같은 브랜치·worktree에 띄운다(지적을 brief 끝에 붙인다). 커밋하면 재리뷰로 간다(아래). 수정 worker가 실패하면(종료 코드, 멈춤, 커밋 없음, 이전 커밋을 지움) 이번 수정 커밋만 버리고 수정 전 head로 되돌려 병합·검증한다. 재리뷰하지 않고 티켓 실패로 세지 않는다.
+   **2차 재리뷰의 재확인**(`review.is_recheck`, `review.fix_targets`) — 2차 수정이 있었던 티켓만, 2차 재리뷰가 2차 수정 대상(`fix_targets`)에 더해 앞서 resolved인 지적도 최종 커밋에서 다시 본다. 그 지적을 낸 리뷰어도 부른다. 다시 본 지적이 고쳐져 있지 않으면 `unresolved`(보고서 `미해결`)다. 최종 커밋을 보지 못하면(재리뷰 실패, 한도, 병합 전 대조 뒤에도 못 봄) `unchecked`와 이유를 남기고 "수정됨"으로 세지 않는다. 2차 수정이 없었던 티켓의 재리뷰 호출 수는 그대로다. 2차 수정 worker가 받는 대상과 수정 상한 2회도 그대로다. 옛 state에는 재확인 표시가 없어도 읽는다.
 4. reviewer·재리뷰·판단 모델 호출이 실패하거나 답의 형식이 틀려도 티켓은 그대로 간다(병합 관문은 verify). 그 사실은 리뷰 기록의 `note`나 지적의 `rereview_reason`에 남는다. 일시 오류·시간 초과는 실패가 아니다: 기다렸다 다시 부르고, 대기 상한을 넘기면 `중단(네트워크)`다("리뷰·판단 호출의 대기").
 
 기록은 state의 `review`(`reviewer`, `dir`, `merge_base`, `reviewed_head`, `note`, `fix`, `rereviews`, `findings`, 호출 때의 `tier`·`actual_model`·`effort`), 두 번째 리뷰는 `second_review`, 그리고 시도 디렉터리의 `review/`(두 번째 리뷰는 `review-<계열>/`, 예 `review-agy/`)(`diff.patch`, `prompt.md`, `review.txt`, `reviewer.log`, `findings.json`, `judge-prompt.md`, `judge.txt`, `judge.log`), `fix/`·`fix2/`(수정 worker), `rereview<회차>-<계열>/`(재리뷰). 병합 전 대조로 다시 부르면 디렉터리 이름에 `-again`이 붙어 앞 증거가 남는다.
@@ -211,7 +219,7 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 
 **다음 `gs go`** — `_begin`이 `network.wait`·`aborted`를 지우고 `_loop`가 `Outage`를 새로 만든다: 대기 합계는 `gs go`마다 새로 센다. `_start`가 `network_resume`을 보고, worktree가 그 브랜치로 그대로 있으면(`_resumable`) `_resume`으로 잇는다. `done`이면 프로세스 없이 리뷰·재리뷰부터다. 아니면 경고하고 새로 시작한다. `gs`가 대기 중에 죽어 `running`으로 남아도 표시가 있으면 같다.
 
-**리뷰·판단 호출의 대기**(`review._call`, `review.call_waiting`, `review.CallWait`) — `review._call`은 새 프로세스 그룹에서 돌고, 끝날 때(시간 초과, 정상 종료, 코디네이터 중단 모두) `verify.stop`으로 그룹에 남은 프로세스를 끝낸다(SIGTERM, 5초 뒤 SIGKILL). 그래서 다시 부르는 호출은 앞 호출의 프로세스가 끝난 뒤 시작한다. 호출이 일시 오류(`transient.reason`)나 시간 초과로 끝나면 `call_waiting`이 worker와 같은 일정(호출마다 새로 센다)으로 기다렸다 다시 부른다. 대기 합계는 대기만 센다. 호출이 시간 초과까지 쓴 시간은 넣지 않으므로, 계속 시간 초과인 리뷰어는 기본값으로 대기 60분에 호출 10번 × 30분을 더 쓴 뒤 중단된다. 상한을 넘기면: 리뷰·재리뷰·지적 분류는 `NetworkAbort`로 `_loop`까지 올라가 `중단(네트워크)`가 되고 다음 `gs go`가 리뷰·재리뷰부터 잇는다. 끊겼다는 이유로 리뷰 없이 병합하지 않는다. 보고서 Summary와 실패 요약은 중단하지 않고 대체 문구로 간다(병합 안전과 무관하다). 일시 오류가 아닌 실패(인증, 구독 한도, 형식 오류, 모르는 오류)는 다시 부르지 않고 지금처럼 `리뷰 실패(리뷰 없음, verify만으로 병합한다)`, `unchecked(재리뷰 실패)`, 모두 report, 대체 문구다. 판별의 입력은 CLI 출력 형식에 달렸다: claude는 `--output-format json`의 result(답도 그 `result`에서 꺼낸다), codex는 `--json`의 이벤트(답은 `--output-last-message` 파일. 시도마다 지우고 시작한다), agy는 stderr다(stdout의 답이 stderr의 연결 오류를 가리지 않지만, stdout의 오류 이벤트가 인증·구독 한도를 말하면 일시 오류가 아니다). 실패한 호출의 stdout은 `reviewer.log`·`judge.log`에 덧붙는다. 다시 부르면 로그는 새로 쓴다. 대기 중에는 `CallWait`가 state의 `network`(`wait`, `errors`, `waited_seconds`)와 티켓의 `transient_errors`·`network_wait_seconds`를 쓰고 60초마다 저장해, 진행 바에 `01 리뷰 중(codex) · 네트워크 대기(2회, 3분 뒤)`가 보인다. 코디네이터 스레드에서 기다리므로 그동안 새 worker를 띄우지 않고 끝난 worker도 처리하지 않는다. 돌던 worker는 각자 돈다.
+**리뷰·판단 호출의 대기**(`review._call`, `review.call_waiting`, `review.CallWait`) — `review._call`은 새 프로세스 그룹에서 돌고, 끝날 때(시간 초과, 정상 종료, 코디네이터 중단 모두) `verify.stop`으로 그룹에 남은 프로세스를 끝낸다(SIGTERM, 5초 뒤 SIGKILL). 그래서 다시 부르는 호출은 앞 호출의 프로세스가 끝난 뒤 시작한다. 호출이 일시 오류(`transient.reason`)나 시간 초과로 끝나면 `call_waiting`이 worker와 같은 일정(호출마다 새로 센다)으로 기다렸다 다시 부른다. 대기 합계는 대기만 센다. 호출이 시간 초과까지 쓴 시간은 넣지 않으므로, 계속 시간 초과인 리뷰어는 기본값으로 대기 60분에 호출 10번 × 30분을 더 쓴 뒤 중단된다. 상한을 넘기면: 리뷰·재리뷰·지적 분류는 `NetworkAbort`로 `_loop`까지 올라가 `중단(네트워크)`가 되고 다음 `gs go`가 리뷰·재리뷰부터 잇는다. 끊겼다는 이유로 리뷰 없이 병합하지 않는다. 보고서 Summary와 실패 요약은 중단하지 않고 대체 문구로 간다(병합 안전과 무관하다). 일시 오류가 아닌 실패(인증, 구독 한도, 형식 오류, 모르는 오류)는 다시 부르지 않고 지금처럼 `리뷰 실패(리뷰 없음, verify만으로 병합한다)`, `unchecked(재리뷰 실패)`, 모두 report, 대체 문구다. 판별의 입력은 CLI 출력 형식에 달렸다: claude는 `--output-format json`의 result(답도 그 `result`에서 꺼낸다), codex는 `--json`의 이벤트(답은 `--output-last-message` 파일. 시도마다 지우고 시작한다), agy는 stderr다(stdout의 답이 stderr의 연결 오류를 가리지 않지만, stdout의 오류 이벤트가 인증·구독 한도를 말하면 일시 오류가 아니다). 실패한 호출의 stdout은 `reviewer.log`·`judge.log`에 덧붙는다. 다시 부르면 로그는 새로 쓴다. 대기 중에는 `CallWait`가 state의 `network`(`wait`, `errors`, `waited_seconds`)와 티켓의 `transient_errors`·`network_wait_seconds`를 쓰고 60초마다 저장해, 진행 바에 `01 리뷰 중(codex) · 네트워크 대기(2회, 3분 뒤)`가 보인다. 대기는 호출한 리뷰 스레드가 하고 `CallWait`가 기록만 루프에 넘기므로, 리뷰 호출이 기다리는 동안에도 루프는 다른 worker 종료를 처리한다. 다만 위의 끊김 대기(`Outage`)가 잡혀 있는 동안에는 새 worker·리뷰와 리뷰 뒤의 수정·병합을 시작하지 않는다. 돌던 worker는 각자 돈다.
 
 **범위 밖** — 마무리 단계의 push·`gh` 오류는 기다리지 않고 지금의 재개 흐름(`finish.RESUME_PHASES`)이다. 리뷰 호출의 스트리밍·idle 상한(`review-idle-timeout`), 세션 이어 가기(`session-resume-worker`)는 없다.
 
@@ -401,7 +409,11 @@ feature: ""               # status가 taken이면 필수(예: goldstack-v3)
 ```
 줄 끝 `#` 설명은 형식을 보이려는 것이다. frontmatter는 spec·티켓과 같은 파서(`frontmatter.py`)로 읽는다: 한 줄 `key: value`, `: `·` # ` 등이 든 값은 따옴표로 감싼다. 날짜는 실제 날짜여야 한다.
 
-쓰는 쪽: `/idea`(새 파일, 또는 비슷한 열린 아이디어 끝에 `- <날짜> <근거> (출처: …)` 줄), `/retro <feature>`(사람이 고른 후보를 `/idea` 형식으로), `/grill`(라운드 1에서 고른 아이디어를 `status: "taken"`, `feature: "<f>"`로). 셋 다 커밋하지 않는다. `/grill` 6단계와 `/go` 2단계의 커밋 경로에 `.goldstack/ideas`가 들어 있다(디렉터리가 없으면 `git add`에서 뺀다. `gs init`은 이 디렉터리를 만들지 않는다).
+**보고만 지적**(`findings.py`, `finish._report_commit`) — 마무리가 보고서를 쓸 때 `report.finding_status`가 "보고만"인 high·medium 지적마다 `.goldstack/ideas/<feature>-<티켓>-<번호>.md`를 쓴다(slug 규칙에 맞춰 이름을 바꾼다). frontmatter는 `severity`, `source: "<feature> 리뷰 <티켓>"`, `status: "open"`이고 본문은 지적 한 줄, `위치:`, `근거:`(길이 제한), `판단:`, `보고서:` 경로다. 번호는 지적의 `idea_number`로 state에 고정해 재개나 다시 쓰기로 같은 지적이 두 번 생기지 않는다. 있는 파일은 다시 쓰지 않아 `taken`·`dropped`와 사람이 고친 내용이 남는다. 파일은 보고서 커밋에 함께 들어간다(직접 push 경로와 보호된 base의 보고서 PR 경로 모두). 보고서와 아이디어 파일만 다르면 `_verify_final`은 최종 검증을 지금처럼 건너뛴다. 파일을 쓰지 못해도 마무리 결과는 그대로이고 경고만 남는다. low와 미해결·수정 못 함·확인 못 함 지적은 보고서에만 남는다.
+
+**`gs retro-log <feature>`**(`retrolog.py`) — `/retro`가 200KB 이상의 `worker.log`를 agy에 맡기기 전에 부른다. `.goldstack/work/<feature>/run/retro-log.md` 하나를 쓰고 경로를 출력한다. 티켓·시도별로 `streamfmt.render`를 거친 로그, 리뷰 답, `state.json`의 단계 시각이 들어간다. `render`가 도구 출력을 버리므로 실패한 시도에는 오류 줄을 길이를 제한해 더한다. 약 21만 자(`LIMIT_CHARS`, 약 8만 토큰)를 넘으면 실패한 시도, 리뷰 답, 나머지 로그 순으로 예산을 주고 같은 순위에서는 긴 것부터 깎으며, 줄인 곳을 파일 맨 위와 그 자리에 적는다. `run/`이 없으면(다른 머신에서 돌렸다) 그 사실을 말하고 종료 1이다. 이 파일만 쓰고 나머지는 읽기만 한다.
+
+쓰는 쪽: `/idea`(새 파일, 또는 비슷한 열린 아이디어 끝에 `- <날짜> <근거> (출처: …)` 줄), `/retro <feature>`(사람이 고른 후보를 `/idea` 형식으로), `/grill`(라운드 1에서 고른 아이디어를 `status: "taken"`, `feature: "<f>"`로). `/idea`·`/retro`·`/grill`은 커밋하지 않는다(마무리가 쓰는 보고만 지적 파일만 보고서 커밋에 들어간다). `/grill` 6단계와 `/go` 2단계의 커밋 경로에 `.goldstack/ideas`가 들어 있다(디렉터리가 없으면 `git add`에서 뺀다. `gs init`은 이 디렉터리를 만들지 않는다).
 
 **`gs backlog [--all]`**(`backlog.py`) — 읽기 전용, 경고가 있어도 종료 0.
 ```
