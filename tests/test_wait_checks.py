@@ -130,13 +130,19 @@ class WaitChecksTest(unittest.TestCase):
         r = SimpleNamespace(st=state.load(self.rundir, "demo"), order=["01"], name="demo", base="main")
         self.assertIn("CI 대기 시간 초과", go._message(r, self.finish()["url"], False))
 
-    def test_no_checks_merges_immediately(self):
-        sleep = mock.Mock()
-        with mock.patch("gs.finish.time", SimpleNamespace(monotonic=time.monotonic, sleep=sleep)):
+    def test_no_checks_merges_after_grace(self):
+        elapsed = [0]
+
+        def sleep(seconds):
+            self.assertEqual(self.merges(), [])
+            elapsed[0] += seconds
+
+        with mock.patch("gs.finish.time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep)):
             code, out, err = self.run_go()
         self.assertEqual(code, 0, out + err)
-        sleep.assert_not_called()
+        self.assertEqual(elapsed[0], 60)
         self.assertIn("CI 검사 대기 중(검사 없음)", out)
+        self.assertIn("검사 없음 → 병합", out)
         self.assertEqual(len(self.merges()), 1)
 
     def assert_same_head_resume(self, phase):

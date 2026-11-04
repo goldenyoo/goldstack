@@ -28,8 +28,9 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import quote
 
-from . import clean, git, report, setup, state, verify
+from . import clean, doctor, git, report, setup, state, verify
 from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
@@ -102,17 +103,51 @@ def _checks(r, *, required: bool, deadline: float, url: str | None = None) -> li
         raise git.GitError(f"gh pr checks 응답 오류: {e}") from e
 
 
+def _required_checks(r, deadline: float) -> set[str]:
+    """base 보호·rulesets에서 아직 등록되지 않은 필수 검사 이름도 읽는다. 조회 불가면 gh 판정을 쓴다."""
+    repository = git.github_repo(r.repo, r.remote)
+    branch = quote(r.base, safe="")
+    names = set()
+    for endpoint, parse in ((f"branches/{branch}/protection", doctor._classic),
+                            (f"rules/branches/{branch}", doctor._rules)):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(["gh", "api"], 0)
+        try:
+            cp = subprocess.run([os.environ.get("GS_GH", "gh"), "api", f"repos/{repository}/{endpoint}"],
+                                cwd=r.repo, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                                timeout=min(20, remaining))
+            if cp.returncode == 0:
+                names.update(parse(json.loads(cp.stdout))[2] or [])
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            continue
+    return names
+
+
 def _poll_checks(r, url: str, head: str, on_poll) -> tuple[str, list[str]]:
     """PR url의 검사를 끝날 때까지 읽는다. ("pass"|"fail"|"timeout", 실패한 검사 이름).
     재실행에는 새 대기 시간을 주고 검사를 다시 읽는다. PR이 닫히거나 head가 바뀌면 GitError."""
-    deadline = time.monotonic() + r.cfg.timeouts.checks_minutes * 60
+    started = time.monotonic()
+    deadline = started + r.cfg.timeouts.checks_minutes * 60
+    grace = started + r.cfg.timeouts.checks_grace_seconds
+    try:
+        required_names = _required_checks(r, deadline)
+    except subprocess.TimeoutExpired:
+        return "timeout", []
     previous = None
     number = url.rstrip("/").rsplit("/", 1)[-1]
     symbols = {"pass": "✓", "skipping": "✓", "pending": "…", "fail": "✗", "cancel": "✗"}
     while True:
         try:
-            checks = (_checks(r, url=url, required=True, deadline=deadline)
-                      or _checks(r, url=url, required=False, deadline=deadline))
+            if required_names:
+                reported = _checks(r, url=url, required=False, deadline=deadline)
+                checks = [c for c in reported if c["name"] in required_names]
+                missing = required_names - {c["name"] for c in checks}
+                checks += [{"name": name, "bucket": "pending"} for name in sorted(missing)]
+                checks.sort(key=lambda c: (c["name"], c["bucket"]))
+            else:
+                checks = (_checks(r, url=url, required=True, deadline=deadline)
+                          or _checks(r, url=url, required=False, deadline=deadline))
             # checks는 현재 PR을 읽으므로 조회 뒤 head를 대조한다. 병합도 --match-head-commit으로 고정한다.
             view = _view(r, url, deadline=deadline)
         except subprocess.TimeoutExpired:
@@ -127,12 +162,16 @@ def _poll_checks(r, url: str, head: str, on_poll) -> tuple[str, list[str]]:
         failed = [c["name"] for c in checks if c["bucket"] in ("fail", "cancel")]
         if failed:
             return "fail", failed
-        if all(c["bucket"] in ("pass", "skipping") for c in checks):
+        if checks and all(c["bucket"] in ("pass", "skipping") for c in checks):
             return "pass", []
-        remaining = deadline - time.monotonic()
+        now = time.monotonic()
+        if not checks and now >= grace:
+            print(f"■ PR #{number}: 검사 없음 → 병합", flush=True)
+            return "pass", []
+        remaining = deadline - now
         if remaining <= 0:
             return "timeout", []
-        time.sleep(min(CHECK_INTERVAL, remaining))
+        time.sleep(min(CHECK_INTERVAL, remaining, grace - now) if not checks else min(CHECK_INTERVAL, remaining))
 
 
 def _wait_checks(r) -> bool:
@@ -356,16 +395,25 @@ def _publish(r, path: Path) -> str:
 
 
 def _squash_message(r) -> tuple[str, str]:
-    """squash 커밋 제목·본문(spec 2-2). 본문: base에 아직 없는 티켓의 `NN 제목` 목록과 티켓별 gs-ticket 줄."""
+    """새 티켓·되살린 티켓과 revert의 revert 식별을 squash 커밋에도 보존한다."""
     f = r.st.finish
     number = re.search(r"/(\d+)/?$", f["url"])
     title = f"{r.name}: gs go" + (f" (#{number.group(1)})" if number else "")
     new = _trailers(r, f["merge_head"]) - _trailers(r, r.base_ref)
+    restored = []
+    for entry in f.get("reintroduced", []):
+        if (_ancestor(r.repo, entry["commit"], f["merge_head"])
+                and not _revert_of(r.repo, entry["revert"], r.base_ref)):
+            new.update(_trailers(r, f"{entry['merge']}^..{entry['merge']}"))
+            restored.append(f"This reverts commit {entry['revert']}.")
     rank = {tid: i for i, tid in enumerate(r.feat.tickets)}
     tids = sorted(new, key=lambda tid: (rank.get(tid, len(rank)), tid))
     listing = [f"{tid} {r.feat.tickets[tid].title}" if tid in r.feat.tickets else tid for tid in tids]
     trailers = [f"gs-ticket: {r.name}/{tid}" for tid in tids]
-    return title, "\n".join(listing) + "\n\n" + "\n".join(trailers)
+    sections = ["\n".join(listing), "\n".join(trailers)]
+    if restored:
+        sections.append("\n".join(dict.fromkeys(restored)))
+    return title, "\n\n".join(sections)
 
 
 def _merge_pr(r) -> None:
