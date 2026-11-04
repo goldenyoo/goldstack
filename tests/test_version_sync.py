@@ -1,6 +1,7 @@
 """설치 출처·동기화 경고와 레포 최소 버전 관문."""
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -79,6 +80,24 @@ class VersionSyncTest(unittest.TestCase):
         text, run = self.warning(version.Installation('0.1.0'))
         self.assertEqual(text, '')
         run.assert_not_called()
+
+    def test_remote_disables_authentication_prompts_without_changing_parent_environment(self):
+        info = version.Installation('0.1.0', 'same', 'ssh://example.test/kit')
+        parent = {'GIT_TERMINAL_PROMPT': '1', 'GIT_ASKPASS': 'askpass',
+                  'SSH_ASKPASS': 'askpass', 'GCM_INTERACTIVE': 'Always',
+                  'GIT_SSH_COMMAND': 'ssh -i /tmp/test-key', 'PATH': '/usr/bin'}
+        with mock.patch.dict(os.environ, parent, clear=True):
+            text, run = self.warning(info, subprocess.CompletedProcess([], 1, ''))
+            self.assertEqual(dict(os.environ), parent)
+        self.assertEqual(text, '')
+        env = run.call_args.kwargs['env']
+        self.assertEqual(env['GIT_TERMINAL_PROMPT'], '0')
+        self.assertEqual(env['GIT_ASKPASS'], 'false')
+        self.assertEqual(env['SSH_ASKPASS'], 'false')
+        self.assertEqual(env['GCM_INTERACTIVE'], 'Never')
+        self.assertEqual(env['GIT_SSH_COMMAND'],
+                         'ssh -i /tmp/test-key -oBatchMode=yes -oStrictHostKeyChecking=yes')
+        self.assertEqual(env['PATH'], '/usr/bin')
 
     def test_plugin_mismatch_warns_even_if_remote_fails(self):
         info = version.Installation('0.1.0', 'old', 'ssh://example.test/kit', '0.2.0')

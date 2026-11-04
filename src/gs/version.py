@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -56,9 +57,13 @@ def warn(repo: Path, out: TextIO) -> None:
         return
     if info.commit and info.url:
         try:
+            env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="false",
+                       SSH_ASKPASS="false", GCM_INTERACTIVE="Never")
+            env["GIT_SSH_COMMAND"] = (env.get("GIT_SSH_COMMAND", "ssh")
+                                      + " -oBatchMode=yes -oStrictHostKeyChecking=yes")
             cp = subprocess.run(["git", "ls-remote", info.url, "main"], cwd=repo,
                                 capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                                encoding="utf-8", errors="replace", timeout=5)
+                                encoding="utf-8", errors="replace", timeout=5, env=env)
             main = next((line.split()[0] for line in cp.stdout.splitlines()
                          if len(line.split()) == 2 and line.split()[1] == "refs/heads/main"), None)
             if cp.returncode == 0 and main and main != info.commit:

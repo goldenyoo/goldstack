@@ -74,6 +74,9 @@ class AdoptCheckTest(unittest.TestCase):
 
 class DoctorTest(unittest.TestCase):
     def setUp(self):
+        patch = mock.patch("gs.version.warn")
+        patch.start()
+        self.addCleanup(patch.stop)
         isolate_git_env(self)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
