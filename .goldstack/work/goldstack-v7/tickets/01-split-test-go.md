@@ -1,0 +1,24 @@
+---
+id: "01"
+title: "test_go.py를 주제별 3개 파일로 쪼개고 공용 fixture를 support.py로"
+blocked_by: []
+touches: ["tests/**"]
+model: codex
+reviewer: claude
+---
+## 목표
+파일별 3프로세스 병렬 시험의 병목(`test_go.py` 234초, 전체의 42%)을 없앤다. 동작은 바꾸지 않는다.
+
+## 완료 조건
+- `tests/test_go.py`의 시험이 주제별 3개 파일로 나뉘어 있고, 시험 이름이 하나도 빠지지 않는다. 쪼개기 전과 후에 `uv run python -m unittest discover -s tests`의 `Ran N tests`가 같다(이 수를 커밋 메시지에 적는다).
+- 공용 fixture(`GoTest`의 준비·도우미, `FAKE_GH`, `SPEC`, `sh`)가 `tests/support.py`에 있고, 시험 메서드 없는 기반 클래스라 import한 파일에서 시험이 두 번 돌지 않는다.
+- `test_go`를 참조하던 파일(`grep -l test_go tests/*.py`로 찾는다. `test_environment.py`의 시험 id 문자열 포함)이 새 위치를 쓴다.
+- 나눈 파일마다 `uv run python -m unittest discover -s tests -p <파일>`이 혼자서 통과한다.
+- spec `verify` 명령이 통과한다. 쪼갠 3개 파일의 소요를 재서 마지막 메시지에 적고, 가장 긴 파일이 가장 짧은 파일의 2배를 넘지 않게 나눈다.
+
+## 범위 밖
+- 시험 내용 변경, 러너 스크립트(2-1에서 뺐다), `src/` 변경.
+
+## 참고
+- spec §3 2-1, §6 시험 병렬 측정값.
+- 다음 티켓들이 옮겨진 fixture를 쓴다. 이 티켓이 먼저 병합된다.
