@@ -182,6 +182,16 @@ class CallTest(Base):
                 self.call(body, family=family)
             self.assertNotIsInstance(caught.exception, review.ReviewTransient)
 
+    def test_agy_json_answer_does_not_hide_stderr(self):
+        answer = f"echo '{NO_FINDINGS}'"
+        with self.assertRaises(review.ReviewTransient):
+            self.call(f"echo '{AGY_DOWN}' >&2; {answer}; exit 1", family="agy")
+        self.assertIn(NO_FINDINGS, (self.rdir / "cli.log").read_text())  # 답도 증거로 남는다
+        for stderr in ("error: authentication failed: connection refused", "boom"):  # 인증·모르는 오류는 그대로 리뷰 실패다
+            with self.subTest(stderr=stderr), self.assertRaises(review.ReviewError) as caught:
+                self.call(f"echo '{stderr}' >&2; {answer}; exit 1", family="agy")
+            self.assertNotIsInstance(caught.exception, review.ReviewTransient)
+
     def test_claude_error_result_with_exit_zero_is_not_an_answer(self):
         with self.assertRaises(review.ReviewTransient):
             self.call(f"echo '{CLAUDE_DOWN}'; exit 0", family="claude")
@@ -248,6 +258,16 @@ class WaitingTest(Base):
     def test_agy_reviewer_real_argv_retries(self):
         self.script("agy", f'''\
             if [ $n = 1 ]; then echo '{AGY_DOWN}' >&2; exit 1; fi
+            echo '{NO_FINDINGS}'
+        ''')
+        os.environ["GS_AGY"] = str(self.bin / "agy")
+        rec = self.run_review("agy")
+        self.assertEqual((rec["note"], rec["findings"]), ("", []))
+        self.assertEqual(self.calls("agy"), 2)
+
+    def test_agy_reviewer_retries_when_json_answer_comes_with_connection_error(self):
+        self.script("agy", f'''\
+            if [ $n = 1 ]; then echo '{AGY_DOWN}' >&2; echo '{ONE_FINDING}'; exit 1; fi
             echo '{NO_FINDINGS}'
         ''')
         os.environ["GS_AGY"] = str(self.bin / "agy")
