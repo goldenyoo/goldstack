@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import shutil
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
@@ -17,6 +17,7 @@ class Removed:
     local: int = 0
     remote: int = 0
     errors: int = 0
+    paths: list[Path] = field(default_factory=list)
 
 
 def _remove(repo: Path, paths: list[Path], branches: list[str], remote: str,
@@ -37,6 +38,7 @@ def _remove(repo: Path, paths: list[Path], branches: list[str], remote: str,
             elif path.exists():
                 shutil.rmtree(path)
             removed.worktrees += 1
+            removed.paths.append(path)
             print(f"지움: worktree {path} (미커밋 변경도 지움)", file=out, flush=True)
         except (git.GitError, OSError) as e:
             warn(e)
@@ -97,7 +99,8 @@ def clean(repo: Path, name: str, force: bool, out: TextIO, err: TextIO) -> int:
     try:
         # 검사와 삭제 전부 같은 잠금 안에서 한다. 검사 직후 go가 시작하는 틈도 막는다.
         with state.Lock(rundir):
-            phase = state.load(rundir, name).finish.get("phase")
+            st = state.load(rundir, name)
+            phase = st.finish.get("phase")
             if phase not in ("verified", "reverted") and not force:
                 print(f"gs clean: 마무리가 verified·reverted가 아니다({phase or '없음'}). --force가 필요하다", file=err)
                 return 1
@@ -106,6 +109,30 @@ def clean(repo: Path, name: str, force: bool, out: TextIO, err: TextIO) -> int:
             paths.update(path for path in git.worktrees(repo) if path.parent == wt)
             prefix = f"gs/{name}/"
             removed = _remove(repo, sorted(paths), _local_branches(repo, prefix), cfg.git.remote, prefix, out, err)
+            # 지우지 못한 경로와 다른 feature의 경로는 남긴다. 이미 사라진 state 경로도 정리한다.
+            # resolve()로 symlink 대상을 따라가면 지운 링크 대신 바깥 worktree 기록을 지울 수 있다.
+            gone = set(removed.paths)
+
+            def dropped(value: str) -> bool:
+                if not value:
+                    return False
+                path = Path(value).absolute()
+                return path in gone or (path.parent == wt and path not in paths
+                                        and not path.exists() and not path.is_symlink())
+
+            changed = False
+            for ts in st.tickets.values():
+                for key in ("kept_worktrees", "failed_worktrees"):
+                    before = getattr(ts, key)
+                    after = [p for p in before if not dropped(p)]
+                    if after != before:
+                        setattr(ts, key, after)
+                        changed = True
+                if dropped(ts.worktree):
+                    ts.worktree = ""
+                    changed = True
+            if changed:
+                state.save(rundir, st)
             print(f"지움: worktree {removed.worktrees}, 로컬 브랜치 {removed.local}, 원격 브랜치 {removed.remote}"
                   " · 실행 기록은 남김", file=out)
             return 1 if removed.errors else 0

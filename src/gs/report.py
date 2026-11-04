@@ -88,6 +88,9 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
                      if phase in durations and (n := state.minutes(durations[phase]))]
             timings.append(f"- {tid} 단계별 소요: " + (" · ".join(spent) or "모두 1분 미만"))
         reason += kept(ts)
+        for warning in ts.isolation_warnings:
+            if warning not in reason:
+                reason += "\n" + warning
         rows.append("| " + " | ".join(cell(s) for s in (tid, r.feat.tickets[tid].title, ts.status, reason)) + " |")
         recs = state.reviews(ts)
         for rec in recs:
@@ -134,7 +137,7 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
         if outcomes:
             text += "\n".join(outcomes) + "\n\n"
         text += _log(r, log, tail)
-    return text + f"\n{agy_usage(r)}\n"
+    return isolation_risks(r) + text + f"\n{agy_usage(r)}\n"
 
 
 def agy_usage(r) -> str:
@@ -142,6 +145,12 @@ def agy_usage(r) -> str:
     cfg = getattr(r, "cfg", None)
     limit = cfg.agy.max_calls_per_run if cfg is not None else config.AgyConfig().max_calls_per_run
     return f"agy 사용: {r.st.agy_calls}/{limit}"
+
+
+def isolation_risks(r) -> str:
+    risks = [f"- {tid}: {warning}" for tid, ts in sorted(r.st.tickets.items())
+             for warning in ts.isolation_warnings]
+    return "### 남은 위험\n\n" + "\n".join(risks) + "\n\n" if risks else ""
 
 
 def summarize(r) -> str:

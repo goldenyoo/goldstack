@@ -51,6 +51,7 @@ class TicketState:
     failures: int = 0  # 이번 실행의 실패 횟수. 중단 후 이어갈 때도 재시도 한도를 유지한다
     failed_worktrees: list[str] = field(default_factory=list)  # 재시도·재실행 뒤에도 보존
     kept_worktrees: list[str] = field(default_factory=list)  # 병합됐지만 미커밋 변경 때문에 남긴 경로
+    isolation_warnings: list[str] = field(default_factory=list)  # 지난 시도·수정 worker의 격리 실패도 보존
     failure_summary: str = ""  # 재시도 brief에 붙일 판단 모델 요약 파일
     # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
     # 재리뷰가 있었으면 rereviews(회차마다 round, dir, base, head, note, failed)도 있다.

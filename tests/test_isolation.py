@@ -7,12 +7,14 @@ docs/research/worker-plugin-isolation.md에 실제 실행으로 적었다.
 import json
 import os
 import shlex
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import adapters, config
+import test_go
+from gs import adapters, config, state
 from gs.adapters import AdapterError, WorkerInput
 
 MODELS = config.ModelsConfig("judge-test", "review-test", "agy-test", "")
@@ -111,7 +113,7 @@ class IsolationCommand(unittest.TestCase):
                 self.assertIn("--disable-slash-commands", cmd)
                 code, note = a.outcome(0, self.inp)
                 self.assertEqual(code, 0)
-                self.assertIn("플러그인 격리 못 함", note)
+                self.assertTrue(note.startswith("플러그인 격리 못 함: "), note)
 
     def test_missing_claude_binary(self):
         os.environ["GS_CLAUDE"] = str(self.root / "no-such-claude")
@@ -129,6 +131,86 @@ class IsolationCommand(unittest.TestCase):
         self.fake_claude("exit 1")
         with self.assertRaises(AdapterError):
             adapters.claude_plugins(self.wt)
+
+
+class IsolationReportTest(unittest.TestCase):
+    BASE, REMOTE = "main", "origin"
+    G = test_go.GoTest
+    tearDown, go, rundir, integration, final_report = G.tearDown, G.go, G.rundir, G.integration, G.final_report
+
+    def setUp(self):
+        self.G.setUp(self)
+        os.environ.pop("GS_WORKER_CMD")  # 명령을 바꾸는 seam 대신 실제 Claude 어댑터 경로를 탄다
+        os.environ["GS_CLAUDE"] = str(self.bin / "claude")
+        (self.bin / "claude").write_text('''#!/bin/bash
+here="$(dirname "$0")"
+if [ "$1" = plugin ]; then
+  if [ -f "$here/list-fails" ]; then echo 'listing denied' >&2; exit 3; fi
+  echo '[]'; exit 0
+fi
+bash "$here/worker.sh"
+''')
+
+    def assert_report_warning(self):
+        expected = "플러그인 격리 못 함: `claude plugin list --json` 종료 3: listing denied"
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual(ts.isolation_warnings, [expected])
+        text = self.final_report()
+        rows = [line for line in text.splitlines() if line.startswith("| 01 |")]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].count(expected), 1)
+        risks = text.split("### 남은 위험\n\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn(f"- 01: {expected}", risks)
+        facts = (self.rundir / "finish/report-input.md").read_text()
+        self.assertIn(f"### 남은 위험\n\n- 01: {expected}", facts)
+
+    def test_listing_failure_still_runs_worker_and_reports_risk(self):
+        (self.bin / "list-fails").touch()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(state.load(self.rundir, "demo").tickets["01"].status, state.MERGED)
+        self.assert_report_warning()
+        # 완료한 실행을 이어가도 경고가 사라지지 않는다.
+        self.assertEqual(self.go("--only", "01")[0], 0)
+        self.assert_report_warning()
+
+    def test_failed_worker_keeps_isolation_warning_in_result_and_risks(self):
+        (self.bin / "list-fails").touch()
+        (self.bin / "worker.sh").write_text("exit 7\n")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(state.load(self.rundir, "demo").tickets["01"].status, state.FAILED)
+        self.assert_report_warning()
+
+    def test_successful_retry_preserves_first_attempt_warning(self):
+        (self.bin / "list-fails").touch()
+        (self.bin / "worker.sh").write_text('''here="$(dirname "$0")"
+if [ -f "$here/list-fails" ]; then rm "$here/list-fails"; exit 7; fi
+''' + test_go.FAKE_WORKER)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(state.load(self.rundir, "demo").tickets["01"].attempts, 2)
+        self.assert_report_warning()
+
+    def test_fix_worker_isolation_failure_is_reported(self):
+        # 구현은 격리에 성공하고, 리뷰 뒤 수정 worker만 목록 읽기에 실패한다.
+        (self.bin / "worker.sh").write_text(test_go.FAKE_WORKER + '\ntouch "$here/list-fails"\n')
+        (self.bin / "judge").write_text("#!/bin/bash\n" + test_go.FAKE_REVIEW_JUDGE)
+        (self.bin / "findings.json").write_text(json.dumps({"findings": [{
+            "severity": "high", "location": "file_01:1", "claim": "FIX value", "evidence": "test",
+        }]}))
+        with mock.patch.dict(os.environ, {"PY": sys.executable}):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue((self.bin / "fix.log").exists())
+        self.assert_report_warning()
+
+    def test_successful_isolation_has_no_warning_or_risk_section(self):
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(state.load(self.rundir, "demo").tickets["01"].isolation_warnings, [])
+        self.assertNotIn("플러그인 격리 못 함", self.final_report())
+        self.assertNotIn("### 남은 위험", self.final_report())
 
 
 if __name__ == "__main__":

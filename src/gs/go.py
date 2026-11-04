@@ -237,6 +237,13 @@ def _phase(r: Run, tid: str, phase: str, model: str, *, attempt: int | None = No
     r.save()
 
 
+def _isolation_warning(r: Run, tid: str, adapter: adapters.Adapter) -> None:
+    warning = adapter.isolation_warning
+    warnings = r.st.ticket(tid).isolation_warnings
+    if warning and warning not in warnings:
+        _set(r, tid, isolation_warnings=[*warnings, warning])
+
+
 def _require_committed(r: Run) -> None:
     rel = work_rel(r.name)
     # report.md는 gs가 integration에서 쓴다. 호출 worktree의 보고서가 뒤처져도 티켓 재개를 막지 않는다.
@@ -609,6 +616,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
         adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
+        _isolation_warning(r, t.id, adapter)  # 종료·시간 초과·재개 여부와 무관하게 실행 전에 보존한다
         _count_agy(r, t.model)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
         _set(r, t.id, pane=proc.where)
@@ -846,6 +854,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         adapter = adapters.for_model(t.model, r.cfg.models)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
+        _isolation_warning(r, t.id, adapter)
         base = git.sha(r.repo, a.branch)
         _set(r, t.id, log=str(job.log), pane="")  # 재실행 때 살아 남은 수정 worker를 run.sh로 찾게
         _count_agy(r, t.model)
