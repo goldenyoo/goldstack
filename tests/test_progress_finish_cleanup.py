@@ -6,9 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-import test_go
+import support
 import test_notify
-from test_go import FAKE_WORKER, sh
+from support import FAKE_WORKER, sh
 
 from gs import git, herdr, report, state
 
@@ -26,7 +26,7 @@ def clock(seconds):
 
 class GoCase(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     setUp, tearDown, go = G.setUp, G.tearDown, G.go
     rundir, integration, final_report = G.rundir, G.integration, G.final_report
 

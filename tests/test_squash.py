@@ -4,9 +4,9 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import test_go
+import support
 from gs import config, finish, git, state
-from test_go import sh
+from support import sh
 
 REPORT = ".goldstack/work/demo/report.md"
 URL = "https://example.test/pr/1"
@@ -49,13 +49,13 @@ esac
 
 
 def squash_gh():
-    start = test_go.FAKE_GH.index('  "pr merge")')
-    return test_go.FAKE_GH[:start] + SQUASH_MERGE
+    start = support.FAKE_GH.index('  "pr merge")')
+    return support.FAKE_GH[:start] + SQUASH_MERGE
 
 
 class SquashTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     tearDown, go, calls, add_ticket = G.tearDown, G.go, G.calls, G.add_ticket
     rundir, integration, parallel, lines, final_report = G.rundir, G.integration, G.parallel, G.lines, G.final_report
     someone, remote_files, under_report, break_main = G.someone, G.remote_files, G.under_report, G.break_main

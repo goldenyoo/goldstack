@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import test_check
-import test_go
+import support
 from gs import cli, config, finish, git
 
 
@@ -106,8 +106,8 @@ class PrRepoTest(unittest.TestCase):
 
 class UpstreamGoTest(unittest.TestCase):
     BASE, REMOTE = "main", "upstream"
-    setUp, tearDown, go = test_go.GoTest.setUp, test_go.GoTest.tearDown, test_go.GoTest.go
-    rundir = test_go.GoTest.rundir
+    setUp, tearDown, go = support.GoTest.setUp, support.GoTest.tearDown, support.GoTest.go
+    rundir = support.GoTest.rundir
 
     def test_full_finish_uses_upstream_with_two_remotes_and_local_mirror(self):
         git.run(self.repo, "remote", "add", "origin", "https://github.com/other/origin.git")

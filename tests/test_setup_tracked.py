@@ -5,11 +5,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import test_go
+import support
 import test_setup
 from gs import setup, state
 from gs.go import _drop_kept
-from test_go import sh
+from support import sh
 
 
 class SetupRestoreTest(unittest.TestCase):
@@ -68,7 +68,7 @@ class SetupRestoreTest(unittest.TestCase):
 
 class SetupTrackedTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     setUp, tearDown, go, calls, rundir = G.setUp, G.tearDown, G.go, G.calls, G.rundir
     integration, final_report, lines, remote_files = G.integration, G.final_report, G.lines, G.remote_files
     configure = test_setup.WorktreeSetupTest.configure
@@ -130,7 +130,7 @@ if grep -q '^## 리뷰 지적(고칠 것)' "$GS_BRIEF"; then
   echo fixed > fixed_01; git add fixed_01; git commit -qm 'fix 01'; exit 0
 fi
 echo done > file_01"""))
-        with test_go.GoTest.review_with(self, [
+        with support.GoTest.review_with(self, [
             {"severity": "high", "location": "file_01", "claim": "FIX: 값이 틀렸다", "evidence": "e"},
         ]):
             code, out, err = self.go("--only", "01")

@@ -2,7 +2,7 @@
 import unittest
 
 import test_squash
-from test_go import sh
+from support import sh
 
 
 class SquashReintroduceTest(unittest.TestCase):

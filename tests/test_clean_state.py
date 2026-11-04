@@ -3,13 +3,13 @@ import unittest
 from unittest import mock
 
 import test_clean
-import test_go
+import support
 from gs import git, state
 
 
 class CleanStateTest(unittest.TestCase):
     BASE, REMOTE = "trunk", "upstream"
-    G = test_go.GoTest
+    G = support.GoTest
     setUp, tearDown, go, rundir, parallel = G.setUp, G.tearDown, G.go, G.rundir, G.parallel
     clean = test_clean.CleanTest.clean
     prepare = test_clean.CleanTest.prepare
@@ -18,7 +18,7 @@ class CleanStateTest(unittest.TestCase):
     def clean_kept_feature(self, phase):
         if phase == "reverted":
             self.parallel(1, verify='test "$(git log -1 --format=%s)" != "Merge feature"')
-        (self.bin / "worker.sh").write_text(test_go.FAKE_WORKER + '\necho dirty > pending.txt\n')
+        (self.bin / "worker.sh").write_text(support.FAKE_WORKER + '\necho dirty > pending.txt\n')
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0 if phase == "verified" else 1, out + err)
         st = state.load(self.rundir, "demo")

@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import test_go
+import support
 from gs import adapters, config, state
 from gs.adapters import AdapterError, WorkerInput
 
@@ -135,7 +135,7 @@ class IsolationCommand(unittest.TestCase):
 
 class IsolationReportTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     tearDown, go, rundir, integration, final_report = G.tearDown, G.go, G.rundir, G.integration, G.final_report
 
     def setUp(self):
@@ -186,7 +186,7 @@ bash "$here/worker.sh"
         (self.bin / "list-fails").touch()
         (self.bin / "worker.sh").write_text('''here="$(dirname "$0")"
 if [ -f "$here/list-fails" ]; then rm "$here/list-fails"; exit 7; fi
-''' + test_go.FAKE_WORKER)
+''' + support.FAKE_WORKER)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(state.load(self.rundir, "demo").tickets["01"].attempts, 2)
@@ -194,8 +194,8 @@ if [ -f "$here/list-fails" ]; then rm "$here/list-fails"; exit 7; fi
 
     def test_fix_worker_isolation_failure_is_reported(self):
         # 구현은 격리에 성공하고, 리뷰 뒤 수정 worker만 목록 읽기에 실패한다.
-        (self.bin / "worker.sh").write_text(test_go.FAKE_WORKER + '\ntouch "$here/list-fails"\n')
-        (self.bin / "judge").write_text("#!/bin/bash\n" + test_go.FAKE_REVIEW_JUDGE)
+        (self.bin / "worker.sh").write_text(support.FAKE_WORKER + '\ntouch "$here/list-fails"\n')
+        (self.bin / "judge").write_text("#!/bin/bash\n" + support.FAKE_REVIEW_JUDGE)
         (self.bin / "findings.json").write_text(json.dumps({"findings": [{
             "severity": "high", "location": "file_01:1", "claim": "FIX value", "evidence": "test",
         }]}))

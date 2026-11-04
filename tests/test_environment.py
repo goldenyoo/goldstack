@@ -39,8 +39,8 @@ class TestEnvironmentTest(unittest.TestCase):
         env["PYTHONPATH"] = os.pathsep.join([str(REPO / "src"), str(REPO / "tests"),
                                             env.get("PYTHONPATH", "")])
         tests = [
-            "test_go.GoTest.test_worker_cannot_push",
-            "test_go.GoTest.test_worker_cannot_push_with_pushurl",
+            "test_go_execution.GoExecutionTest.test_worker_cannot_push",
+            "test_go_execution.GoExecutionTest.test_worker_cannot_push_with_pushurl",
             "test_adapters.AgyGoAndCheckTest.test_go_runs_agy_through_adapter",
             "test_migrate.MigrateTest.test_moves_with_git_mv_creates_config_and_replaces_ignore_line",
             "test_check.CheckTest.test_ok",

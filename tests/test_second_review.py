@@ -7,8 +7,8 @@ import sys
 import unittest
 from unittest import mock
 
-import test_go
-from test_go import sh
+import support
+from support import sh
 
 from gs import cli, config, review, state
 
@@ -60,12 +60,12 @@ def finding(claim, severity="high", evidence="e"):
 
 class SecondReviewTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     tearDown, go, rundir, integration, final_report, merged, calls, lines = (
         G.tearDown, G.go, G.rundir, G.integration, G.final_report, G.merged, G.calls, G.lines)
 
     def setUp(self):
-        test_go.GoTest.setUp(self)
+        support.GoTest.setUp(self)
         (self.bin / "reviewer.sh").write_text(REVIEWER)
         (self.bin / "judge").write_text("#!/bin/bash\n" + JUDGE)
         agy = self.bin / "agy"  # gs check가 PATH에서 찾는다. 리뷰는 GS_REVIEWER_CMD로 바꿔 끼운다
