@@ -15,7 +15,7 @@ SPEC_REQUIRED = ("feature", "verify")
 SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20, "verify_retries": 0}
 SPEC_OPTIONAL = ("verify_ticket",)
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
-TICKET_OPTIONAL = ("touches", "second_reviewer")
+TICKET_OPTIONAL = ("touches", "second_reviewer", "verify")
 WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
 
 
@@ -54,6 +54,10 @@ class Spec:
     def ticket_verify(self) -> str:
         return self.verify_ticket if self.verify_ticket is not None else self.verify
 
+    def verify_for(self, ticket: Ticket) -> str:
+        """이 티켓의 검증 명령. 티켓 `verify` → spec `verify_ticket` → spec `verify`. 마무리는 늘 spec `verify`다."""
+        return ticket.verify if ticket.verify is not None else self.ticket_verify
+
 
 @dataclass
 class Ticket:
@@ -66,6 +70,7 @@ class Ticket:
     body: str = ""
     touches: list[str] = field(default_factory=list)
     second_reviewer: str | None = None
+    verify: str | None = None
 
 
 @dataclass
@@ -136,6 +141,11 @@ def _read(path: Path, repo: Path, problems: list[Problem]):
     return None
 
 
+def _valid_command(command) -> bool:
+    # 빈 명령은 `sh -c ""`로 늘 성공해서 검증이 조용히 사라진다
+    return isinstance(command, str) and bool(command.strip()) and "\n" not in command and "\r" not in command
+
+
 def _load_spec(path: Path, name: str, repo: Path, problems: list[Problem]) -> Spec | None:
     got = _read(path, repo, problems)
     if got is None:
@@ -153,9 +163,7 @@ def _load_spec(path: Path, name: str, repo: Path, problems: list[Problem]) -> Sp
     for key in ("verify", "verify_ticket"):
         if key not in data:
             continue
-        command = data[key]
-        if not isinstance(command, str) or not command.strip() or "\n" in command or "\r" in command:
-            # 빈 명령은 `sh -c ""`로 늘 성공해서 검증이 조용히 사라진다
+        if not _valid_command(data[key]):
             problems.append(Problem("오류", where, f"`{key}`는 비어 있지 않은 한 줄 셸 명령이어야 한다"))
             ok = False
     ints = {}
@@ -226,7 +234,10 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
             err(f"`touches`는 비어 있지 않은 레포 루트 기준 경로여야 한다(절대 경로·.. 금지): {value!r}")
         else:
             valid_touches.append(value)
+    if "verify" in data and not _valid_command(data["verify"]):
+        err("`verify`는 비어 있지 않은 한 줄 셸 명령이어야 한다")
     # 값 오류가 있어도 그래프에는 넣는다. 빼면 이 티켓을 참조하는 티켓마다 "없는 id" 오류가 덧붙는다.
     return Ticket(id=tid, title=data["title"], blocked_by=list(deps), model=data["model"],
                   reviewer=data["reviewer"], path=path, body=body, touches=valid_touches,
-                  second_reviewer=second_reviewer)
+                  second_reviewer=second_reviewer,
+                  verify=data["verify"] if _valid_command(data.get("verify")) else None)
