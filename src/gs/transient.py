@@ -23,7 +23,7 @@ _PERMANENT = re.compile(
 _NETWORK = re.compile(
     r"\b(?:connection_failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|ETIMEDOUT)\b|"
     r"\bconnection (?:failed|error|refused|reset|timed out)\b|"
-    r"\b(?:failed|unable|could not) to connect\b|can't reach the api server|"
+    r"\b(?:(?:failed|unable) to|could not) connect\b|can't reach the api server|"
     r"\bnetwork (?:error|is unreachable)\b|temporary failure in name resolution|"
     r"\bDNS (?:resolution |lookup )?(?:failed|failure|error)\b|\bgetaddrinfo\b|"
     r"reconnecting.*waiting for network|stream disconnected before completion|error sending request", re.I)
@@ -126,7 +126,8 @@ def reason(family: str, text: str, *, model: str = "", cwd: Path | None = None) 
         if not results:
             return ""
         last = results[-1]
-        if last.get("is_error") is False or last.get("subtype") == "success":
+        if last.get("is_error") is False or (last.get("subtype") == "success"
+                                            and last.get("is_error") is not True):
             return ""
         if not (last.get("is_error") is True or last.get("api_error")
                 or last.get("terminal_reason") == "api_error"

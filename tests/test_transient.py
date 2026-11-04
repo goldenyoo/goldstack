@@ -31,10 +31,20 @@ INVALID_MODEL = (f'Error: invalid model selection (--model "{MODEL}" ...): '
 
 class StructuredErrorsTest(unittest.TestCase):
     def test_claude_connection_failed_from_spec(self):
-        text = log({"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 9},
-                   claude(api_error="connection_failed", terminal_reason="api_error",
-                          result="API Error: Connection refused (ECONNREFUSED)"))
-        self.assertTrue(transient.reason("claude", text))
+        for subtype in ("success", "error_during_execution"):
+            with self.subTest(subtype=subtype):
+                text = log({"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 9},
+                           claude(subtype=subtype, api_error="connection_failed", terminal_reason="api_error",
+                                  result="API Error: Connection refused (ECONNREFUSED)"))
+                self.assertTrue(transient.reason("claude", text))
+
+    def test_connection_failure_phrases(self):
+        for message in ("failed to connect to server", "unable to connect to server",
+                        "could not connect to server"):
+            for family, event in (("claude", claude(errors=[message])), ("codex", codex(message)),
+                                  ("agy", {"event": "error", "message": message})):
+                with self.subTest(family=family, message=message):
+                    self.assertTrue(transient.reason(family, log(event)))
 
     def test_claude_only_last_result_counts(self):
         error = claude(api_error="connection_failed", terminal_reason="api_error")
