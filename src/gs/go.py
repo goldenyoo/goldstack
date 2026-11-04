@@ -819,7 +819,7 @@ def _failure_summary(r: Run, ts: state.TicketState) -> str:
         return ""
     path = Path(ts.failure_summary)
     if not path.exists():  # 요약 호출 중 코디네이터가 죽었으면 새 호출로 마무리한다
-        failure.summarize(r.repo, path.with_name("failure.log"), r.cfg)
+        failure.summarize(r.repo, path.with_name("failure.log"), r.cfg, _call_wait(r, ""))
     return path.read_text(encoding="utf-8")
 
 
@@ -1103,7 +1103,8 @@ def _review(r: Run, a: Active) -> list[dict]:
 
     병합·검증처럼 루프 안에서 하나씩 돈다(다른 worker는 그동안 각자 돈다). 오래 걸리는 수정은 worker로 따로 띄운다.
     second_reviewer가 있으면 두 리뷰를 동시에 띄우고, 둘 다 끝나면 fix 지적을 합쳐 돌려준다(수정 worker는 하나).
-    그때는 한쪽이 거부·실패·시간 초과여도 다른 쪽으로 간다. 둘 다 거부면 하나일 때처럼 티켓 실패다.
+    그때는 한쪽이 거부·실패여도 다른 쪽으로 간다. 둘 다 거부면 하나일 때처럼 티켓 실패다.
+    일시 오류·시간 초과는 실패가 아니다: review가 이 스레드(둘이면 그 스레드들)에서 기다렸다 다시 부른다.
     agy 리뷰는 이번 실행의 상한에 닿았으면 띄우지 않고 "건너뜀(한도)"으로 적는다.
     중단 예외(NetworkAbort)는 리뷰 실패로 적지 않고 올린다: 끊겼다는 이유로 리뷰 없이 병합하지 않는다.
     """
@@ -1135,8 +1136,10 @@ def _review(r: Run, a: Active) -> list[dict]:
     names = "+".join(who for _, who, _ in launch) or "+".join(who for _, who, _ in slots)
     _phase(r, t.id, "review", names)
     say(f"[{t.id}] 리뷰: {names}")
+    wait = _call_wait(r, t.id)
     jobs = [dict(repo=r.repo, worktree=a.wt.resolve(), rdir=rdir, base=r.ihead, branch=a.branch,
-                 ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg)
+                 ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg,
+                 on_wait=wait)
             for _, who, rdir in launch]
     if len(jobs) == 1:  # 하나면 이 스레드에서 부른다(second_reviewer가 없는 티켓의 흐름 그대로)
         try:
@@ -1164,6 +1167,11 @@ def _review(r: Run, a: Active) -> list[dict]:
         who = f"({rec['reviewer']})" if len(slots) > 1 else ""
         say(f"[{t.id}] 리뷰 끝{who}: {review.counts(rec)}" + (f" — {rec['note']}" if rec["note"] else ""))
     return _todo(r, t, 1)
+
+
+def _call_wait(r: Run, tid: str) -> review.CallWait:
+    """리뷰·판단 호출의 대기를 진행 바에 보인다. 이 스레드가 그 호출을 기다리는 동안 다른 worker는 각자 돈다."""
+    return review.CallWait(r.st, r.save, tid, say)
 
 
 def _raise_network_abort(results: list) -> None:
@@ -1382,9 +1390,10 @@ def _run_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]], he
     names = "+".join(rec["reviewer"] for rec, _ in launch)
     _phase(r, t.id, "rereview", names)
     say(f"[{t.id}] 재리뷰 {nth}차: {names}")
+    wait = _call_wait(r, t.id)
     jobs = [dict(repo=r.repo, worktree=tree, rdir=_attempt_dir(a) / f"rereview{nth}-{rec['reviewer']}",
                  base=a.base, head=head, found=found, ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(),
-                 reviewer=rec["reviewer"], cfg=r.cfg, nth=nth) for rec, found in launch]
+                 reviewer=rec["reviewer"], cfg=r.cfg, nth=nth, on_wait=wait) for rec, found in launch]
     results = review.run_together(jobs, review.rereview)
     _raise_network_abort(results)
     for (rec, found), res in zip(launch, results):
@@ -1443,7 +1452,7 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
     _set(r, t.id, status=state.PENDING if retry else state.FAILED, reason=reason, ended_at=state.now(),
          failures=failures, failed_worktrees=paths, failure_summary=summary, network_resume={})
     if retry:
-        failure.summarize(r.repo, log, r.cfg)
+        failure.summarize(r.repo, log, r.cfg, _call_wait(r, t.id))
     say(f"[{t.id}] 실패: {reason}")
     if retry:
         say(f"[{t.id}] 같은 계열({t.model})로 최신 integration에서 한 번 재시도한다")
