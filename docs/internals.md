@@ -4,8 +4,9 @@
 
 | 파일 | 하는 일 |
 |---|---|
-| `cli.py` | `gs` 명령줄: `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `hook` |
+| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `hook` |
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
+| `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
 | `doctor.py` | `gs doctor`: GitHub 병합·보호 설정 읽기, config 제안, `--write` |
 | `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, agy 배정 수, 환경 검사 |
@@ -25,6 +26,9 @@
 | `git.py` | git 호출, 원격 URL에서 GitHub owner/repo 풀기(`github_repo`) |
 
 `gs go`(`cli.cmd_go`)·`gs doctor`는 시작할 때 설치 배포판의 `direct_url.json`에서 git URL·commit을 읽는다. 로컬 디렉터리 설치는 출처가 없다. `git ls-remote <설치 URL> main`(5초 제한)의 main commit이 다르면 `gs self-update` 경고만 내고, 조회 실패·출처 없음은 건너뛴다. `claude plugin list --json`(`GS_CLAUDE`)에서 goldstack 플러그인 버전이 gs 버전과 달라도 경고하며, 목록을 못 읽으면 건너뛴다. 대상 레포의 원격 주소는 설치 출처로 쓰지 않는다.
+
+`gs self-update`는 설치 기록의 git 주소(또는 `--from`)로 main을 재설치한다(`--version`으로 태그 지정). 다른 `gs go` 프로세스가 있거나 프로세스 목록을 읽지 못하면 변경 전에 거부한다. machine-wide-lock은 없으므로 확인 직후 시작되는 `gs go`까지 막지 못한다. CLI 성공 뒤 marketplace와 플러그인을 갱신하며, 플러그인 실패도 CLI 결과와 함께 보고하고 종료 1이다. CHANGELOG는 wheel에 포함해 설치본에서 읽는다.
+
 
 선택 설정 `[goldstack] requires = ">=0.1"`은 최소 버전 하나(숫자 1–3부분)를 받는다. 형식 오류는 config 오류이며, `gs check`·`gs go`는 설치 버전이 낮으면 실행을 거부하고 `gs self-update`를 안내한다. 생략하면 최소 버전 검사를 하지 않는다. 비교 때 `0.1`과 `0.1.0`은 같다.
 
@@ -491,6 +495,7 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
 | `GS_GH` | `gh` 경로 |
 | `GS_AGY` | `agy` 경로 |
 | `GS_CLAUDE` | claude worker의 플러그인 목록(`claude plugin list --json`)을 읽을 Claude CLI 경로 |
+| `GS_UV` | self-update의 uv 실행 파일(기본 `uv`). 시험에서 가짜 설치 명령으로 바꾼다 |
 | `GS_VERIFY_TIMEOUT` | verify 시간 제한(초). spec `verify_minutes`를 덮는다 |
 | `GS_NETWORK_MINUTE` | 네트워크 대기·회복 판단의 1분(초). 틀린 값이면 60 |
 | `GS_TELEGRAM_API` | 텔레그램 Bot API 주소(기본 `https://api.telegram.org`). 시험은 localhost 가짜 서버 |
