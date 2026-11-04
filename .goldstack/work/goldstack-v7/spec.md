@@ -25,7 +25,7 @@ feature 한 번의 전체 시간을 줄이고(반복되는 시험과 검증 정�
 | 1-1 | 아이디어 | e2e-time-reduction, transient-api-error-retry, model-effort-config, model-tiering(taken). overnight-autopilot은 v8로(v6의 "v7" 계획 변경), codex-worker-hook·version-sync-update는 open 유지 |
 | 1-2 | 시작 순서 | v6 verified → `uv tool install --reinstall .` → 환경 사실 재확인 → `/go goldstack-v7`. 실제 레포 adopt는 따로, 거기서 나온 문제는 `/idea`로 v8 |
 | 1-3 | v7 verify | 파일별 병렬 한 줄(frontmatter), `verify_retries` 0. 프로세스 수는 6-1로 3에서 6으로 바뀜 |
-| 1-4 | profile.md | `/go` 전에 사람이 `/adopt` 한 번(`gs doctor --write`로 config 빠진 키도). 커밋은 `/go` |
+| 1-4 | profile.md | `/go` 전에 사람이 `/adopt` 한 번. 커밋은 `/go`. (`gs doctor --write`는 GitHub 설정에서 나온 제안만 쓰고 빠진 키를 채우지 않는다. 빠진 키는 기본값으로 돈다. 2026-11-04 코드로 확인, 처음 적은 "빠진 키도 채운다"는 틀렸다) |
 | 1-5 | 버전 | **5-1로 바뀜.** 처음 결정은 `0.2.0` + CHANGELOG v7 항목 |
 | 1-6 | 시간 목표 | 130–160분은 v7 완료 조건에 넣지 않고 다음 feature 보고서로 확인(v7은 v6 gs로 돈다) |
 | 2-1 | 전체 시험 | 한 줄 병렬 명령 유지 + `test_go.py`를 주제별 3개 파일로 쪼갬, 공용 fixture는 `tests/support.py`. 근거는 6-1에서 고침 |
