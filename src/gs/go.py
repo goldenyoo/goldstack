@@ -1446,7 +1446,7 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
         failure.summarize(r.repo, log, r.cfg)
     say(f"[{t.id}] 실패: {reason}")
     if retry:
-        say(f"[{t.id}] 같은 모델({t.model})로 최신 integration에서 한 번 재시도한다")
+        say(f"[{t.id}] 같은 계열({t.model})로 최신 integration에서 한 번 재시도한다")
     return False
 
 

@@ -340,7 +340,7 @@ class GoReviewRetryTest(support.GoTest):
         self.assertEqual(self.calls(), ["06", "06"])
         self.assertIn("판단 모델의 실패 요약", (self.rundir / "06/2/brief.md").read_text())
 
-    def test_ticket_verify_timeout_retries_with_same_model(self):
+    def test_ticket_verify_timeout_retries_with_same_family(self):
         self.hang_verify("ticket")
         (self.bin / "worker.sh").write_text(textwrap.dedent('''\
             here="$(dirname "$0")"
@@ -360,7 +360,7 @@ class GoReviewRetryTest(support.GoTest):
         self.assertEqual(self.calls(), ["01", "01"])
         log = self.rundir / "01/1/verify.log"
         self.assertIn(f"[01] 실패: 검증 시간 초과(0.02분, 로그 {log})", out)
-        self.assertIn("같은 모델(claude)로", out)
+        self.assertIn("같은 계열(claude)로", out)
         self.assertTrue(log.read_text().endswith("\n시간 초과: 0.02분\n"))
         self.assertIn("검증 시간 초과(0.02분", (self.rundir / "01/1/failure.log").read_text())
         self.assertNotIn("시간 초과", (self.rundir / "01/2/verify.log").read_text())
