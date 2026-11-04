@@ -55,6 +55,9 @@ GIT_CONFIG_WRITE_VERBS = {"set", "unset", "rename-section", "remove-section", "e
 GIT_CONFIG_WRITE = ("`git config` 쓰기는 공용 git 설정(gs의 push 목적지, 실행될 git hook)을 바꾼다. "
                     "명령 하나에만 필요하면 `git -c 키=값 <명령>`을 쓴다")
 GIT_LOCATION_ENV = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_CONFIG")  # 명령 앞에 붙으면 git이 볼 곳이 바뀐다
+# xargs가 stdin에서 붙이는 단어의 자리표시. `$X`처럼 몇 단어인지 모르는 값으로 판정한다
+XARGS_INPUT = "$XARGS_INPUT"
+XARGS_OPTS_WITH_VALUE = {"-I", "-J", "-L", "-R", "-S", "-a", "-d", "-E", "-n", "-P", "-s"}
 
 # gh 읽기 전용 명령. 여기 없는 것은 쓰기로 본다(되돌릴 수 없는 쪽으로 기울인다)
 GH_READ = {
@@ -353,6 +356,10 @@ def segments(text: str, cwd: str, ctx: Ctx) -> Iterator[tuple[list[str], list[tu
     yield from flush()
 
 
+def _is_xargs(word: str) -> bool:
+    return os.path.basename(word).lstrip("\\") == "xargs"
+
+
 def strip_prefix(argv: list[str]) -> list[str]:
     """`FOO=1 sudo env -i nohup git push`에서 `git push`만 남긴다."""
     i = 0
@@ -363,9 +370,10 @@ def strip_prefix(argv: list[str]) -> list[str]:
         elif re.match(r"^[A-Za-z_]\w*=", a):
             i += 1
         elif os.path.basename(a).lstrip("\\") in WRAPPERS:
+            valued = XARGS_OPTS_WITH_VALUE if _is_xargs(a) else ()  # `xargs -I {} git …`의 `{}`는 명령이 아니다
             i += 1
             while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i] or re.match(r"^\d+[smhd]?$", argv[i])):
-                i += 1
+                i += 2 if argv[i] in valued else 1
         else:
             break
     return argv[i:]
@@ -390,7 +398,9 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
         return check_bash(" ".join(args), seg, depth + 1)
 
     if name == "git":
-        reason = check_git(args, seg)
+        # xargs 뒤의 git은 글에 없는 단어를 더 받는다. `xargs git config core.hooksPath`는 읽기처럼 보이는 쓰기다
+        via_xargs = any(_is_xargs(a) for a in argv[:len(argv) - len(rest)])
+        reason = check_git([*args, XARGS_INPUT] if via_xargs else args, seg)
         if reason:
             return reason
     if name == "gh":
@@ -560,6 +570,8 @@ def check_git(args: list[str], ctx: Ctx) -> str | None:
             i += 1
     sub = args[i] if i < len(args) else ""
     rest = args[i + 1:]
+    if sub == XARGS_INPUT:
+        return "`xargs git`은 어떤 git 명령을 돌리는지 볼 수 없다"
     force = any(a in FORCE_FLAGS or a.startswith("--force-with-lease=") for a in rest)
     if sub == "push":
         force = force or any(a == "-f" or re.match(r"^-[a-z]*f", a) or a.startswith("+") for a in rest)
@@ -721,7 +733,7 @@ def _branch_write(rest: list[str], ctx: Ctx, here: bool) -> str | None:
     """-f와 삭제·이름 바꾸기·복사. 새 브랜치를 만드는 일과 목록은 통과한다."""
     short = _short_flags(rest)
     moves = set(short) & set("dDmMcC") or any(_is_long(a, "--delete", "--move", "--copy") for a in rest)
-    if not moves and "f" not in short and not any(_is_long(a, "--force") for a in rest):
+    if not moves and "f" not in short and not any(_is_long(a, "--force") for a in rest) and XARGS_INPUT not in rest:
         return None
     names = [a for a in rest if not a.startswith("-")]  # 여기의 `-m`은 이유가 아니라 이름 바꾸기다
     own = own_branch(ctx) if here else ""
@@ -735,8 +747,10 @@ def _symbolic_ref_write(rest: list[str], ctx: Ctx, here: bool) -> str | None:
     if "d" in _short_flags(rest) or any(_is_long(a, "--delete") for a in rest):
         return f"`git symbolic-ref {' '.join(rest)}`는 ref를 지운다"
     words = _ref_operands(rest)
-    if len(words) < 2 or (here and words[0] == "HEAD" and words[1] == own_branch(ctx)):
-        return None  # 이름 하나는 읽기다
+    if len(words) < 2 and not (words and words[0].startswith("$")):
+        return None  # 이름 하나는 읽기다. `$X`는 몇 단어로 풀릴지 모른다
+    if here and words[:2] == ["HEAD", own_branch(ctx)]:
+        return None
     return f"`git symbolic-ref {' '.join(words)}`는 자기 브랜치 밖의 ref를 옮긴다"
 
 

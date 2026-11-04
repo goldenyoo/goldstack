@@ -133,6 +133,31 @@ class SharedGitBlocksTest(unittest.TestCase):
         self.assertEqual(argv("echo 'x 2>y'"), [["echo", "x 2>y"]])
         self.assertEqual(argv('echo "x 2>y"'), [["echo", "x 2>y"]])
 
+    def test_xargs_input_can_complete_a_write(self):  # 값이 stdin에서 와 명령 글에는 읽기처럼 보인다
+        self.assertBlocked("echo /tmp/evil | xargs git config core.hooksPath", "xargs git config remote.origin.url",
+                           "xargs -n1 git config core.hooksPath", "xargs -0 git config core.hooksPath",
+                           "xargs git config --global core.hooksPath", "echo 'a.b c' | xargs git config",
+                           "env xargs git config a.b", "xargs env git config a.b", "/usr/bin/xargs git config a.b",
+                           "echo 'set-url origin x' | xargs git remote", "echo 'HEAD refs/heads/main' | xargs git symbolic-ref",
+                           "echo refs/heads/main | xargs git symbolic-ref HEAD", "echo 'refs/heads/main HEAD' | xargs git update-ref",
+                           "echo main | xargs git branch -f", "echo '-f main HEAD' | xargs git branch",
+                           "echo 'config a.b c' | xargs git", "echo push | xargs git")
+        self.assertAllowed("git config --get a.b | xargs echo", "git config --list | xargs -n1 echo",
+                           "echo a.b | xargs git config --get", "echo x | xargs git status", "echo f | xargs git add",
+                           "echo f | xargs git diff", "echo f | xargs git log", "echo origin | xargs git remote get-url",
+                           f"cd {self.scratch} && xargs git config a.b")  # 버리는 레포는 공유하지 않는다
+
+    def test_xargs_option_value_is_not_the_command(self):
+        for form in ("xargs -I {{}} git {}", "xargs -I % git {}", "xargs -I{{}} git {}", "xargs -L 1 git {}", "xargs -d x git {}",
+                     "xargs -n 1 -P 4 git {}", "xargs -P 4 -I {{}} git {}", "xargs -E END git {}", "xargs -a f git {}"):
+            self.assertBlocked(form.format("push"), form.format("config core.hooksPath x"), form.format("config core.hooksPath"))
+        self.assertAllowed("xargs -I {} git status {}", "xargs -I {} echo {}", "xargs -n 1 echo", "xargs -P 4 -n 1 uv run python x")
+        self.assertBlocked("xargs -I {} cat ~/.ssh/id_rsa")  # 명령 이름을 찾으면 나머지 판정도 듣는다
+
+    def test_unknown_word_alone_may_be_a_symbolic_ref_write(self):
+        self.assertBlocked("git symbolic-ref $X", "git symbolic-ref \"$X\"", "git symbolic-ref -m why $X")
+        self.assertAllowed("git symbolic-ref --short refs/remotes/$REMOTE/HEAD")
+
     def test_one_shot_config_is_not_a_write(self):  # 그 명령에서만 듣고 공용 설정에 남지 않는다
         self.assertAllowed("git -c user.name=t -c user.email=t@t commit -m x", "git -c core.hooksPath=/dev/null commit -m x")
 
@@ -309,7 +334,8 @@ class AgyHookTest(WorktreeFixture):
                         "bash -c 'git config core.hooksPath x'"]:
             self.assertEqual(self.verdict(command)["decision"], "deny", command)
         for command in [f"GIT_DIR={self.repo}/.git git update-ref HEAD HEAD~1", f"export GIT_DIR={self.repo}/.git; git update-ref HEAD HEAD~1",
-                        f"git -C {self.repo} symbolic-ref HEAD refs/heads/gs/f/12", "git config core.hooksPath 2 >/dev/null"]:
+                        f"git -C {self.repo} symbolic-ref HEAD refs/heads/gs/f/12", "git config core.hooksPath 2 >/dev/null",
+                        "echo /tmp/evil | xargs git config core.hooksPath", "xargs -I {} git config core.hooksPath {}"]:
             self.assertEqual(self.verdict(command)["decision"], "deny", command)
         for command in [*OWN_BRANCH_OK, "git config --get remote.origin.url", "git config --list", "git remote -v"]:
             self.assertEqual(self.verdict(command)["decision"], "allow", command)
