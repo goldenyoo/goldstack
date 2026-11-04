@@ -130,8 +130,7 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             + "\n\n### 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
             + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n"
             + f"티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `{r.rundir.resolve()}/<티켓>/`\n\n")
-    if (ticket_command := getattr(r.feat.spec, "verify_ticket", None)) is not None:
-        text += f"티켓 검증 명령: `{ticket_command}`\n\n"
+    text += ticket_commands(r)
     for log in logs:
         # 본문 상한 때문에 원본 로그를 줄여도 재시도 성공·건너뜀은 남긴다.
         outcomes = [line for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -140,6 +139,21 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             text += "\n".join(outcomes) + "\n\n"
         text += _log(r, log, tail)
     return isolation_risks(r) + text + f"\n{agy_usage(r)}\n"
+
+
+def ticket_commands(r) -> str:
+    """spec `verify`와 다른 티켓 검증 명령. 티켓 `verify`는 쓴 티켓 id와 함께 보인다. 안 보이는 티켓은 위의 spec `verify`다."""
+    own: dict[str, list[str]] = {}
+    for tid in r.order:
+        ticket = getattr(r.feat, "tickets", {}).get(tid)
+        if (command := getattr(ticket, "verify", None)) is not None:
+            own.setdefault(command, []).append(tid)
+    lines = []
+    fast = getattr(r.feat.spec, "verify_ticket", None)
+    if fast is not None and sum(map(len, own.values())) < len(r.order):
+        lines.append(f"티켓 검증 명령: `{fast}`\n\n")
+    lines.extend(f"티켓 검증 명령({', '.join(tids)}): `{command}`\n\n" for command, tids in own.items())
+    return "".join(lines)
 
 
 def agy_usage(r) -> str:

@@ -73,10 +73,13 @@ def discard_artifacts(wt: Path) -> None:
         git.run(wt, "--literal-pathspecs", "clean", "-f", "--", *paths)
 
 
-def is_clean(wt: Path) -> bool:
+def is_clean(wt: Path, *, staged_ok: bool = False) -> bool:
+    """staged_ok: 미완 병합의 트리를 볼 때. index의 변경은 괜찮고, index와 다른 파일·untracked만 더럽다고 본다."""
     artifacts = set(_artifacts(wt))
-    entries = git.run(wt, "status", "--porcelain", "--untracked-files=all", "-z").stdout.split("\0")
-    return all(not entry or (entry.startswith("?? ") and entry[3:] in artifacts) for entry in entries)
+    # --no-renames: -z의 이름 변경 항목은 옛 이름이 따로 붙어 항목을 하나씩 읽을 수 없다
+    entries = git.run(wt, "status", "--porcelain", "--no-renames", "--untracked-files=all", "-z").stdout.split("\0")
+    return all(not entry or (entry.startswith("?? ") and entry[3:] in artifacts) or (staged_ok and entry[1] == " ")
+               for entry in entries)
 
 
 def run(cfg, wt: Path, log: Path) -> verify.Result:
