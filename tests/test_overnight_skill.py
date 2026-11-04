@@ -2,7 +2,7 @@
 import unittest
 from pathlib import Path
 
-from gs import config, go
+from gs import config, go, selfupdate
 from test_skills import SKILLS, skill_frontmatter
 
 SRC = Path(go.__file__).resolve().parent
@@ -97,6 +97,19 @@ class OvernightSkillTest(unittest.TestCase):
                              "claude plugin marketplace update goldstack", "claude plugin update goldstack@goldstack",
                              "환경 사실", "`gs check <다음>`", "push", "다음 `gs go`")
         self.assertIn("pyproject.toml", between)  # gs 자신을 고친 레포를 가리는 법
+
+    def test_reinstall_checks_running_go_like_self_update(self):
+        """문자열 패턴은 전역 --repo와 python -m으로 뜬 gs go를 놓쳐 실행 중인 설치본을 바꾼다."""
+        between = self.parts["6. 잇기"].partition("**사이 단계.**")[2]
+        self.assert_in_order(between, "uv run python -c 'from gs.selfupdate import running_go; print(*running_go())'",
+                             "uv tool install --reinstall .")
+        self.assertNotIn("pgrep", self.body)
+        self.assertIn("6단계의 실행 확인", self.parts["3. 사전 점검"])  # 새 명령 모양도 밤 전에 쳐 본다
+        self.assertTrue(callable(selfupdate.running_go))
+        for command in ("gs go demo", "/venv/bin/python /venv/bin/gs --repo /tmp/other go demo",
+                        "/venv/bin/python -m gs.cli go demo"):
+            with self.subTest(command):
+                self.assertTrue(selfupdate._is_go(command))
 
     def test_verdict_table(self):
         section = self.parts["6. 잇기"]
