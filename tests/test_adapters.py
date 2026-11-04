@@ -109,8 +109,8 @@ class CommandTest(Base):
         self.assertEqual(argv[argv.index("-C") + 1], str(self.wt))
         adds = [argv[i + 1] for i, a in enumerate(argv) if a == "--add-dir"]
         common = os.path.realpath(self.repo / ".git")
-        self.assertEqual(adds, [f"{common}/worktrees/wt", f"{common}/objects", f"{common}/refs/heads/gs/demo",
-                                f"{common}/logs/refs/heads/gs/demo"])
+        self.assertEqual(adds, [f"{common}/worktrees/wt", f"{common}/objects", f"{common}/refs/heads/gs",
+                                f"{common}/logs/refs/heads/gs"])
         self.assertTrue(all(Path(d).is_dir() for d in adds))
         self.assertNotIn(common, [os.path.realpath(d) for d in adds])  # .git 전체는 열지 않는다
         self.assertIn(adapters.Codex.NOTE, argv)  # sandbox에서 못 돈 검증은 gs가 다시 돈다

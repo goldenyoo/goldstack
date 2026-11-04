@@ -82,7 +82,9 @@ worktree의 `.git`은 파일이고 실제 git 디렉터리는 주 레포 `.git/w
 | `codex exec --json -s workspace-write` | `git add` 실패: `fatal: Unable to create '…/repo/.git/worktrees/wt/index.lock': Operation not permitted`. **종료 0** |
 | 위 + `--add-dir <repo>/.git` | 같은 실패. codex는 `.git` 디렉터리를 add-dir해도 쓰기를 막는다 |
 | 위 + `--add-dir` `.git/worktrees/wt`, `.git/objects`, `.git/refs`, `.git/logs` | 커밋 됨 |
-| `--add-dir` `.git/worktrees/wt`, `.git/objects`, `.git/refs/heads/gs/x`, `.git/logs/refs/heads/gs/x` + `network_access=false` | 커밋 됨 → 어댑터가 쓰는 형태 |
+| `--add-dir` `.git/worktrees/wt`, `.git/objects`, `.git/refs/heads/gs/x`, `.git/logs/refs/heads/gs/x` + `network_access=false` | 커밋 됨 → v7까지 어댑터가 쓴 형태 |
+
+v8 01: 위 마지막 형태는 `git pack-refs --all --prune`이나 같은 feature 브랜치 삭제 뒤 `refs/heads/gs` 자체가 사라지면 ref 디렉터리를 sandbox 안에서 다시 못 만든다(v6 02 실제 로그: `cannot lock ref 'HEAD': unable to create directory`). 지금은 `refs/heads/gs`와 `logs/refs/heads/gs`를 연다(`tests/test_codex_refs.py`).
 
 codex는 커밋을 못 해도 종료 0이다. gs는 원래 "새 커밋 0 = 실패"로 본다.
 
