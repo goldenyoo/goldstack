@@ -4,7 +4,7 @@
 
 | 파일 | 하는 일 |
 |---|---|
-| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `hook` |
+| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `feedback`, `hook` |
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
 | `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
@@ -19,6 +19,7 @@
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
+| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글, `gs feedback` |
 | `notify.py` | 텔레그램 전송 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |

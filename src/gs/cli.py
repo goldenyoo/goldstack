@@ -47,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("backlog", help="아이디어와 범위 밖의 다시 볼 조건을 본다(읽기 전용)")
     p.add_argument("--all", action="store_true", help="taken·dropped를 포함하고 status 열을 보인다")
 
+    p = sub.add_parser("feedback", help="피드백을 보내거나 초안·전송 상태를 본다")
+    p.add_argument("feedback_args", nargs="*", help="한 줄 또는 list | send")
+
     p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
     p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
                    help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON)")
@@ -67,6 +70,9 @@ def main(argv: list[str] | None = None) -> int:
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
         return 2
+    if args.cmd == "feedback":
+        from .feedback import command
+        return command(repo, args.feedback_args, sys.stdout, sys.stderr)
     if args.cmd == "init":
         config.init(repo, sys.stdout)
         return 0
