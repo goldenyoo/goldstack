@@ -2,8 +2,8 @@
 date: 2026-11-04
 severity: medium
 source: v6 실행 중 대화(릴리스 뒤 다른 레포에서 설치·업데이트하는 방식)
-status: open
-feature: ""
+status: "taken"
+feature: "goldstack-v8"
 ---
 릴리스 뒤 여러 머신·레포에서 쓸 때를 위한 버전 맞추기와 업데이트: `gs` CLI와 플러그인 버전 어긋남 경고, 레포가 요구하는 최소 버전, 한 번에 올리는 `gs self-update`.
 

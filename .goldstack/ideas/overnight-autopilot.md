@@ -2,8 +2,8 @@
 date: 2026-11-03
 severity: medium
 source: v3 실행 중 대화(자러 가기 전 v3→v4→v5 이어 돌리기 준비) + 사용자가 붙인 pstack `/poteto-mode` 정리
-status: open
-feature: ""
+status: "taken"
+feature: "goldstack-v8"
 ---
 자러 가기 전에 한 번 부르면, 밤사이 사람을 기다리며 멈추는 일 없이 이어 돌릴 feature들을 끝까지 몰고 가는 skill(가칭 `/overnight`). 멈출 만한 질문은 시작할 때 한 번에 다 묻고, 받은 허락은 파일로 남기며, 막히면 멈추는 대신 할 수 있는 다른 일로 넘어가고, 아침에 한 장으로 보고한다.
 
