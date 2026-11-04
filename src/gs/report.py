@@ -2,13 +2,16 @@
 
 모델에는 파일 경로만 넘긴다. 모델의 문장은 판단이고, 상태·원본 검증 출력·revert 명령은
 스크립트가 보존한다. 모델 호출 실패도 보고서에 남기며 검증 결과를 대신하지 않는다.
+마무리 전체 검증 실패에는 실패 줄·로그 경로와 파일이 겹치는 후보 티켓(추정)을 붙인다.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 from collections import Counter
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 from . import config, git, review, setup, state
@@ -212,6 +215,62 @@ def write(r, summary: str) -> Path:
     return path
 
 
+def _failure_candidates(r, lines: list[str]) -> list[str]:
+    """touches와 티켓 병합의 첫 부모 대비 변경 파일을 실패 줄의 경로·이름과 대조한다.
+    병합 뒤 티켓 브랜치가 지워져도 integration의 gs-ticket 표시로 찾는다.
+    """
+    references = re.findall(r"[\w./-]+", "\n".join(lines))
+    candidates = []
+    for tid, ts in sorted(r.st.tickets.items()):
+        if ts.status != state.MERGED or tid not in r.feat.tickets:
+            continue
+        paths = set(r.feat.tickets[tid].touches)
+        marker = re.escape(f"gs-ticket: {r.name}/{tid}")
+        commits = git.out(r.iwt, "log", "--first-parent", "--min-parents=2", "--format=%H",
+                          "--extended-regexp", f"--grep=^{marker}$", "HEAD").splitlines()
+        for commit in commits:
+            paths.update(git.out(r.iwt, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
+                                 f"{commit}^1", commit).split("\0"))
+        for path in paths - {""}:
+            # 이름만 출력하는 러너도 있다. 단어 일부(foo.py와 other_foo.py)는 겹침으로 보지 않는다.
+            name = re.escape(Path(path).name)
+            if (not any(c in path for c in "*?[")
+                    and any(re.search(rf"(?<![\w.-]){name}(?![\w.-])", line) for line in lines)):
+                candidates.append(tid)
+                break
+            if any(fnmatchcase(ref, path) or fnmatchcase(ref, f"*/{path}")
+                   or ref.startswith(path.rstrip("/") + "/") for ref in references):
+                candidates.append(tid)
+                break
+    return candidates
+
+
+def verification_failure(r) -> str:
+    """실패 증거는 원본 로그에서 최대 10줄. 후보 추정 오류는 보고서 쓰기를 막지 않는다."""
+    label = r.st.finish.get("failed_verify")
+    if r.st.finish.get("phase") != "not_merged" or label not in ("integration", "integration-final"):
+        return ""
+    log = r.rundir / "finish" / f"{label}-verify.log"
+    text = f"### 검증 실패\n\n검증: `{label}` · 로그: `{log.resolve()}`\n\n"
+    lines = []
+    try:
+        with log.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                if any(word in line for word in ("FAIL", "ERROR", "failed", "not ok")):
+                    lines.append(line.rstrip("\n"))
+                    if len(lines) == 10:
+                        break
+        text += block("\n".join(lines)) if lines else "해당 실패 줄 없음. 전체 로그를 확인하라.\n"
+    except OSError as e:
+        text += f"로그를 읽지 못함: {e}\n"
+    try:
+        candidates = _failure_candidates(r, lines) if lines else []
+        text += "\n후보 티켓(추정): " + (", ".join(candidates) or "후보 없음") + "\n\n"
+    except Exception as e:  # noqa: BLE001 — 후보 탐색은 최선. 실패 증거·보고서는 남긴다
+        text += f"\n후보 티켓(추정): 확인 못 함(후보 탐색 오류: {e})\n\n"
+    return text
+
+
 def status_line(r) -> str:
     """spec §4 보고서 마무리 상태 줄. judge의 Summary가 아니라 r.st.finish에서 만든다."""
     f = r.st.finish
@@ -256,7 +315,7 @@ def _render(r, summary: str, tail: int) -> str:
     if counts := finding_counts(r):
         summary_status += f"\n{counts}"
     text = (f"# {r.name} 결과\n\n## Summary\n\n{summary}\n\n{summary_status}\n\n"
-            f"## Evidence\n\n{evidence(r, tail)}\n"
+            f"## Evidence\n\n{verification_failure(r)}{evidence(r, tail)}\n"
             f"## Merge Danger\n\n결과: {f.get('outcome', f.get('phase', '준비'))}\n\n"
             f"PR: {f.get('url') or '아직 없음'}\n\n"
             f"integration verify: {f.get('integration_ok')}\n\n"
