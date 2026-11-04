@@ -39,6 +39,7 @@ summary_seconds = 60
 checks_minutes = 60
 checks_grace_seconds = 60
 setup_minutes = 15
+network_wait_minutes = 60
 
 [notify]
 telegram = false
@@ -82,6 +83,7 @@ class TimeoutsConfig:
     setup_minutes: int = 15
     rereview_minutes: int = 10
     checks_grace_seconds: int = 60
+    network_wait_minutes: int = 60
 
 
 @dataclass(frozen=True)

@@ -93,7 +93,7 @@ def _ids(raw: str | None) -> list[str] | None:
 
 
 def cmd_go(repo: Path, names: list[str], only: list[str] | None) -> int:
-    from .go import go
+    from .go import NETWORK_ABORT, go
     from . import state
 
     if len(names) == 1:
@@ -105,7 +105,9 @@ def cmd_go(repo: Path, names: list[str], only: list[str] | None) -> int:
     for i, name in enumerate(names):
         code = go(repo, name)
         try:
-            phase = state.load(featmod.work_dir(repo, name) / "run", name).finish.get("phase") or "unknown"
+            st = state.load(featmod.work_dir(repo, name) / "run", name)
+            # 중단(네트워크)이면 지난 실행의 마무리 phase가 남아 있어도 이번 결과는 중단이다
+            phase = NETWORK_ABORT if st.network.get("aborted") else st.finish.get("phase") or "unknown"
         except (OSError, ValueError) as e:
             print(f"gs go: {name}의 state.json을 읽을 수 없다: {e}", file=sys.stderr)
             phase = "unknown"
