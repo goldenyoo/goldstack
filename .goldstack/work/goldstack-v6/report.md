@@ -22,7 +22,7 @@ v6은 gs를 실제 레포에 들이기 전에 알려진 high 위험 두 개와 "
 - **리뷰 범위:** spec은 agy 리뷰를 3회 계획했지만 사용 집계는 1/3이다. 01·03·06 중 일부는 계획한 리뷰가 빠졌을 수 있으나, 입력만으로는 원인을 알 수 없다.
 - **diff 범위:** diff-stat 17개 파일에는 03·04·05·08의 변경만 보이고 `state.py`, `clean.py`, `CHANGELOG.md` 등 01·02·06·07의 파일은 없다. 이 diff만으로는 v6 전체를 검토할 수 없다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/9 병합 · main 검증 통과
 
 ## Evidence
 
@@ -519,36 +519,36 @@ The directory also runs a safety scan and a policy review that this command does
 
 ```text
 $ uv run python -m unittest discover -s tests && claude plugin validate . && uv build -q -o "$(mktemp -d)"
-HEAD: 102428b4b9addc959bfc277608fd57587b3c09fa
+HEAD: 74e352ff9b8ad428573b1a31c6a9c6b669abf142
 Using CPython 3.12.15
 Creating virtual environment at: .venv
-   Building goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base
-      Built goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base
+   Building goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-3fmwkzr5/base
+      Built goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-3fmwkzr5/base
 Installed 1 package in 1ms
-..................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+..............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
 ----------------------------------------------------------------------
-Ran 530 tests in 586.614s
+Ran 574 tests in 747.813s
 
 OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base/.claude-plugin/marketplace.json
+Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-3fmwkzr5/base/.claude-plugin/marketplace.json
 
 ⚠ Found 1 warning:
 
   ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
 
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base/.claude-plugin/plugin.json
+Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-3fmwkzr5/base/.claude-plugin/plugin.json
 
   ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
   ❯ types ./types/index.d.ts declares state: goldstack.line
 
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base/hooks/hooks.json
+Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-3fmwkzr5/base/hooks/hooks.json
 
   ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
   ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
   ❯ ./register.tsx state writes: goldstack.line
   ❯ ./register.tsx state reads: goldstack.line
 
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
+Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-3fmwkzr5/base. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
 
 ⚠ Found 1 plugin directory warning:
 
@@ -574,13 +574,15 @@ agy 사용: 1/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/9
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `74e352ff9b8ad428573b1a31c6a9c6b669abf142`
 
 ### 되돌리는 법
 
@@ -590,7 +592,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 74e352ff9b8ad428573b1a31c6a9c6b669abf142
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v6/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
