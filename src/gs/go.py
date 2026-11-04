@@ -278,7 +278,12 @@ def _reset_integration(r: Run, to: str = "HEAD") -> bool:
     if git.run(r.iwt, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
         git.run(r.iwt, "merge", "--abort", check=False)
         dirty = True
-    moved = git.sha(r.iwt, "HEAD") != git.sha(r.iwt, to)
+    head = git.sha(r.iwt, "HEAD")
+    branch = integration_branch(r.name)
+    on_branch = git.run(r.iwt, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip() == f"refs/heads/{branch}"
+    if not on_branch:  # 검증 명령이 브랜치를 옮겼을 수 있다. 그대로 reset하면 엉뚱한 브랜치가 움직인다
+        git.run(r.iwt, "checkout", "-q", "--force", branch, check=False)
+    moved = not on_branch or head != git.sha(r.iwt, to)
     git.run(r.iwt, "reset", "-q", "--hard", to)
     setup.clean(r.iwt, "-q", "-fd")
     return dirty or moved
@@ -724,7 +729,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         _reset_integration(r, r.ihead)
         return fail("integration 병합 충돌")
     merged = _merge_state(r)  # 검증할 것: 병합 결과 트리
-    res, log = _verify(r, t)
+    res, log, changed = _verify(r, t)
     if not res.ok:
         _reset_integration(r, r.ihead)
         return fail(f"검증 시간 초과({res.minutes}분, 로그 {log})" if res.timed_out else f"검증 실패(로그 {log})")
@@ -733,6 +738,9 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
     if _merge_state(r) != merged or merged[:2] != expected or not all(merged):
         _reset_integration(r, r.ihead)
         return fail("검증하는 동안 integration이 바뀌었다(되돌림): 검증한 것과 커밋할 것이 다르다")
+    if changed:  # 검증이 파일을 남겼다. 그 파일은 병합에 들어가지 않으니 통과를 믿을 수 없다
+        _reset_integration(r, r.ihead)
+        return fail(f"검증 중 worktree가 바뀌었다(로그 {log})")
     # 커밋은 검증한 트리로 직접 만들고, 브랜치는 r.ihead에 있을 때만 옮긴다(그 사이 바뀌어도 섞이지 않게)
     _phase(r, t.id, "finish", t.model)
     msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
@@ -741,7 +749,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
     if moved.returncode:
         _reset_integration(r, r.ihead)
         return fail("검증하는 동안 integration이 바뀌었다(되돌림): 브랜치가 움직였다")
-    git.run(r.iwt, "reset", "-q", "--hard", new)  # 병합 상태와 검증이 남긴 파일은 버린다
+    git.run(r.iwt, "reset", "-q", "--hard", new)  # 병합 상태를 끝내고 worktree를 새 커밋에 맞춘다
     setup.clean(r.iwt, "-q", "-fd")
     r.ihead = new
     a.proc.finish(True)
@@ -1087,21 +1095,27 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
     return False
 
 
-def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path]:
+def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
+    """티켓 검증은 명령과 상관없이 커밋될 트리, 곧 integration의 미완 병합에서 돈다(티켓 worktree의 커밋 안 된 파일은 못 본다).
+
+    (결과, 로그, 트리가 바뀌었나). 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
+    더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다."""
     log = Path(r.st.ticket(t.id).log).parent / "verify.log"
     spec = r.feat.spec
-    # 별도 명령이 없으면 기존처럼 integration의 미완 병합 트리를 검증한다.
-    wt = Path(r.st.ticket(t.id).worktree) if spec.verify_ticket is not None else r.iwt
-    command = spec.ticket_verify
+    command = spec.verify_for(t)
+    before = _merge_state(r)
     say(f"[{t.id}] 검증: {command}")
     with log.open("w", encoding="utf-8") as f:
-        if spec.verify_ticket is not None:
-            f.write(f"$ {command}\ncwd: {wt}\n")
-        res = verify.run(replace(spec, verify=command), wt, f)
-        verify.flaky(res, f"ticket-{t.id}", f)
+        f.write(f"$ {command}\ncwd: {r.iwt}\n")
+        res = verify.run(replace(spec, verify=command), r.iwt, f)
+        changed = not res.timed_out and (_merge_state(r) != before or not setup.is_clean(r.iwt, staged_ok=True))
+        if changed:
+            f.write("\n검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
+        elif res.ok:
+            verify.flaky(res, f"ticket-{t.id}", f)
     if res.timed_out:
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
-    return res, log
+    return res, log, changed
 
 
 LABEL = {"merged": "병합", "already": "이미 병합", "failed": "실패", "skipped": "건너뜀", "pending": "대기",
