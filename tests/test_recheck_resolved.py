@@ -221,6 +221,18 @@ class NoRecheckTest(Base):
         self.assertNotIn("recheck", (self.bin / "rereview.prompt.codex.1").read_text())
         self.assertNotIn("recheck", (self.bin / "rereview.findings.codex.1").read_text())
 
+    def test_head_moving_twice_without_second_fix_keeps_verdict(self):
+        """2차 수정이 없었던 티켓은 재확인 규칙 밖이다(spec 1-9). 판정도 호출 수도 그대로다."""
+        self.findings("codex", A)
+        self.plan(1, "touch fixed_A")
+        (self.bin / "late_codex_1.sh").write_text("touch late1\n")
+        (self.bin / "late_codex_2.sh").write_text("touch late2\n")
+        self.run_ok()
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        [a] = self.ts().review["findings"]
+        self.assertEqual(self.result(a), (1, review.RESOLVED, 1))
+
     def test_discarded_second_fix_keeps_first_verdict(self):
         self.findings("codex", A, B)
         self.a_fixed_first("rm fixed_A")
@@ -288,6 +300,53 @@ class FinalCommitTest(Base):
         self.assertEqual(self.result(a), (1, review.UNRESOLVED, 2))
         self.assertEqual(self.result(b), (2, review.RESOLVED, 2))
         self.assertIn(UNFIXED, self.report_line("FIX A"))
+
+    def test_head_moving_again_after_second_rereview_is_unchecked(self):
+        """대조로 다시 본 뒤에도 head가 움직이면 아무도 최종 커밋을 보지 않았다. 마지막 커밋이 A를 되돌려도 수정됨으로 세지 않는다."""
+        self.findings("codex", A, B)
+        self.a_fixed_first()
+        (self.bin / "late_codex_2.sh").write_text("touch late1\n")
+        (self.bin / "late_codex_3.sh").write_text("rm fixed_A\n")
+        out = self.run_ok()
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])  # 더 부르지 않는다
+        self.assert_second_fix_got_only_b()
+        self.assertNotIn("fixed_A", self.files())
+        self.assertIn("경고: 병합 전 대조", out)
+        rec = self.ts().review
+        a, b = rec["findings"]
+        for f in (a, b):
+            self.assertEqual((f["rereview"], f["rereview_reason"], f["rereview_round"]),
+                             (review.UNCHECKED, review.REASON_FAILED, 2))
+        self.assertIn("재리뷰하지 못했다", a["rereview_evidence"])
+        self.assertIn("fixed_A 있음", a["rereview_evidence"])  # 앞 head에서 본 근거도 남는다
+        self.assertEqual(len(review.remaining(rec)), 2)
+        for claim in ("FIX A", "FIX B"):
+            self.assertIn(f"{UNKNOWN}({review.REASON_FAILED})", self.report_line(claim))
+        self.assertNotIn("수정됨", self.final_report().split("리뷰 지적:")[1].splitlines()[0])
+
+    def test_head_moving_again_keeps_unresolved(self):
+        self.findings("codex", A, B)
+        self.a_fixed_first()
+        (self.bin / "late_codex_2.sh").write_text("rm fixed_A\n")
+        (self.bin / "late_codex_3.sh").write_text("touch late2\n")
+        self.run_ok()
+        a, b = self.ts().review["findings"]
+        self.assertEqual(self.result(a), (1, review.UNRESOLVED, 2))
+        self.assertEqual((b["rereview"], b["rereview_reason"]), (review.UNCHECKED, review.REASON_FAILED))
+        self.assertIn(UNFIXED, self.report_line("FIX A"))
+
+    def test_head_moving_again_unchecks_both_reviewers(self):
+        self.limit(4)  # agy: 첫 리뷰 + 재리뷰 3번. 상한에 닿지 않아야 둘 다 resolved를 낸 뒤 내린다
+        self.two_reviewers()
+        self.findings("codex", A)
+        self.findings("agy", B)
+        self.a_fixed_first()
+        (self.bin / "late_codex_2.sh").write_text("touch late1\n")
+        (self.bin / "late_codex_3.sh").write_text("touch late2\n")
+        self.run_ok()
+        ts = self.ts()
+        for f in (ts.review["findings"][0], ts.second_review["findings"][0]):
+            self.assertEqual((f["rereview"], f["rereview_reason"]), (review.UNCHECKED, review.REASON_FAILED))
 
     def test_abort_after_recheck_written_resumes_without_widening_second_fix(self):
         """2차 재리뷰가 A를 unresolved로 적은 뒤 끊겨도, 이어서 A를 2차 수정이 받은 지적으로 적지 않는다."""
