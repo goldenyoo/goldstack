@@ -533,6 +533,8 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 
 수정 worker가 실패하면(종료 코드, 멈춤, 커밋 없음) 그 수정만 버리고 재리뷰를 건너뛰어 병합·검증으로 간다. 2차 수정이 실패해도 1차 수정은 남는다. 어느 경우든 티켓 실패로 세지 않는다.
 
+리뷰어는 병합될 커밋만 읽는다. worker가 미커밋 변경을 남겼으면 그 커밋의 임시 worktree에서 리뷰하고, 남은 변경은 티켓 worktree에 그대로 둔다. 리뷰하는 동안 티켓 브랜치에 커밋이 더 생기면 한 번 다시 리뷰한다(`[04] 병합 전 대조: …`). catch-up으로 합친 최신 integration은 worker 변경이 아니라 세지 않는다.
+
 리뷰어·판단 모델 호출이 끊기거나 시간을 넘기면 실패가 아니다: 기다렸다 다시 부르고, 상한을 넘기면 [`중단(네트워크)`](#네트워크가-끊겼을-때)로 멈춘다. 끊겼다는 이유로 리뷰 없이 병합하지 않는다.
 
 ```
@@ -658,6 +660,26 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `PR …이 병합되지 않고 닫혔다 → 병합 안 함. 다음 gs go가 새 PR을 연다` | 사람이 PR을 닫았다 |
 | `main 검증 실패 → revert <sha>를 main에 push함` | 병합 뒤 main 검증이 실패해 병합 커밋을 되돌렸다(force push 없음). gs는 그 revert를 되돌린 커밋을 integration에 합쳐 둔다. 고칠 티켓을 더해 `gs go`하면 그 PR이 feature 코드를 되살린다 |
 | `중단(네트워크)` | 대기 상한을 넘겨 티켓 단계에서 멈췄다(종료 코드 3). 마무리를 하지 않았다. 네트워크가 돌아오면 `gs go` |
+
+### push 설정이 바뀌어 멈췄을 때
+
+`gs go`는 worker를 띄우기 전에 원격의 URL·pushurl, 실제 push 주소, `core.hooksPath`를 기록하고, push마다 대조한다. 다르면 push하지 않고 종료 1로 멈춘다.
+
+```text
+gs go: git 오류: push 설정이 실행 시작 때와 달라 push하지 않았다(원격 `origin`). worker나 검증 명령이 바꿨을 수 있다.
+- remote.origin.pushurl: (없음) → https://example.test/x.git (local)
+- 실제 push 주소: https://github.com/owner/repo.git → https://example.test/x.git
+되돌리기(레포에서):
+  git config --local --unset-all remote.origin.pushurl
+의도한 변경이면 `.goldstack/work/<feature>/run/state.json`의 `push_record`를 지우고 `gs go`를 다시 돌린다(지금 값을 새로 기록한다).
+```
+
+- 내가 바꾼 것이 아니면 먼저 어느 티켓이 바꿨는지 `run/<티켓>/<시도>/worker.log`에서 찾는다. 그 티켓의 커밋에 설정을 바꾸는 코드가 있을 수 있다.
+- 되돌린 뒤 `gs go`를 다시 돌리면 멈춘 곳부터 잇는다. 병합한 티켓을 다시 돌리지 않는다.
+- 주소에 인증 정보(`https://…@`)가 있으면 메시지에 싣지 않는다. 바뀐 값은 `***`로 가리고, 되돌리는 명령은 원래 값을 실행할 때 `state.json`에서 읽는다. 그대로 실행하면 된다. `url.*` 규칙의 키에 인증 정보가 있으면 명령 대신 고칠 곳을 알려 준다.
+- 저장소를 옮겼거나 `worktree.setup`이 값을 바꾸는 경우(husky의 `core.hooksPath` 등)처럼 의도한 변경이면 메시지의 마지막 줄대로 한다.
+- 바꾸는 쪽을 먼저 막는 것은 worker 차단 hook이다. worker의 `git remote` 변경, `git config` 쓰기, 자기 브랜치 밖의 ref 옮기기는 hook에서 막힌다. 설정이 필요한 명령 하나는 `git -c 키=값 <명령>`으로 하면 된다.
+- `gs clean`도 같은 대조를 한다. 다르면 원격 브랜치는 지우지 않고 경고를 쓴 뒤 종료 1이다.
 
 ### 네트워크가 끊겼을 때
 

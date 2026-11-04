@@ -195,7 +195,8 @@ class InitTest(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertEqual(cfg, config.Config(
             config.GitConfig("origin", "main"), config.ModelsConfig("opus", "opus", "gemini-4-argon-high", "", "haiku"),
-            config.TimeoutsConfig(30, 10, 60), config.NotifyConfig(False), tiers=cfg.tiers))
+            config.TimeoutsConfig(30, 10, 60), config.NotifyConfig(False), tiers=cfg.tiers,
+            feedback=config.FeedbackConfig("draft")))
         example = (self.repo / ".goldstack/local.env.example").read_text()
         self.assertIn("TG_TOKEN=\nTG_CHAT_ID=\n", example)
         self.assertIn("복사", example)
@@ -234,7 +235,8 @@ class InitTest(unittest.TestCase):
         for name, text in existing.items():
             self.assertEqual((self.repo / name).read_text(), text)
         self.assertEqual((self.repo / ".gitignore").read_text(),
-                         "custom/\n.goldstack/local.env\n.goldstack/work/*/run/\n")
+                         "custom/\n.goldstack/local.env\n.goldstack/work/*/run/\n"
+                         ".goldstack/feedback/\n.goldstack/overnight/\n")
         self.init()
         self.assertEqual((self.repo / ".gitignore").read_text().count(".goldstack/local.env"), 1)
 

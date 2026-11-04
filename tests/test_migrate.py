@@ -77,7 +77,8 @@ class MigrateTest(unittest.TestCase):
         cfg, problems = config.load(self.repo)
         self.assertIsNotNone(cfg, problems)
         self.assertEqual((self.repo / ".gitignore").read_text(),
-                         "node_modules/\n.goldstack/work/*/run/\n*.pyc\n.goldstack/local.env\n")
+                         "node_modules/\n.goldstack/work/*/run/\n*.pyc\n.goldstack/local.env\n"
+                         ".goldstack/feedback/\n.goldstack/overnight/\n")
         self.assertEqual(sh(self.repo, "git", "log", "--oneline").count("\n"), 1)  # 커밋하지 않는다
         self.assertIn("git commit", out)
         code, out, err = self.migrate()

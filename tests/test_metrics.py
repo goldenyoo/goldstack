@@ -140,7 +140,7 @@ class MetricsTest(unittest.TestCase):
         raw = json.loads(state.path(self.root).read_text())
         raw['updated_at'] = '2020-01-01T00:00:30+00:00'
         state.path(self.root).write_text(json.dumps(raw))  # finally 없이 종료된 state
-        r = SimpleNamespace(rundir=self.root, repo=self.root, name='demo', only=None)
+        r = SimpleNamespace(rundir=self.root, repo=self.root, name='demo', only=None, remote='origin')
         r.save = lambda: state.save(self.root, r.st)
         with mock.patch.object(go, '_graph', return_value={}):
             go._begin(r)

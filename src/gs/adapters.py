@@ -156,12 +156,19 @@ def plugins_to_disable(plugins: list[dict]) -> list[str]:
 
 # ---------------------------------------------------------------- codex
 
+GS_BRANCH_ROOT = "gs"  # gs가 만드는 브랜치의 최상위 이름 공간(`gs/<feature>/<티켓>`)
+
+
 class Codex(Adapter):
     """`codex exec --json -s workspace-write`. 네트워크는 명시적으로 끈다(사용자 설정이 켜 두었어도 push가 안 되게).
 
     worktree의 `.git`은 파일이고 실제 git 디렉터리는 주 레포의 `.git/` 아래라 sandbox 밖이다. 그대로면 커밋이
     `index.lock: Operation not permitted`로 실패한다(05에서 측정). codex는 `.git` 디렉터리를 통째로 add-dir해도
-    쓰기를 막으므로, 커밋에 필요한 곳만 연다: 이 worktree의 git 디렉터리, objects, 이 브랜치의 ref·reflog 디렉터리.
+    쓰기를 막으므로, 커밋에 필요한 곳만 연다: 이 worktree의 git 디렉터리, objects, `refs/heads/gs`와 `logs/refs/heads/gs`.
+    브랜치 디렉터리(`gs/<feature>`)까지만 열면 안 된다: 같은 feature의 다른 브랜치가 지워지거나 ref가 pack되면
+    git이 빈 `refs/heads/gs`까지 지워 버리고, sandbox 안에서는 그 위 디렉터리를 다시 만들 수 없어
+    `cannot lock ref 'HEAD': unable to create directory`로 커밋이 실패한다(v6 02에서 측정, v8 01).
+    열린 디렉터리 자신과 그 아래는 만들 수 있으므로 `gs`를 열어 둔다. push는 네트워크를 꺼서 막는다.
 
     sandbox 안에서 못 도는 시험(localhost, 홈 디렉터리 쓰기 등: ORIGINS 실패 13)은 gs가 verify로 다시 돌린다.
     그래서 그런 실패로 멈추지 말고 커밋하라는 한 줄을 brief 앞에 붙인다(brief는 stdin으로 들어가 뒤에 붙는다).
@@ -173,8 +180,7 @@ class Codex(Adapter):
     def writable_dirs(self, worktree: Path) -> list[Path]:
         common = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
         own = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-dir"))
-        ref = git.out(worktree, "symbolic-ref", "HEAD")  # refs/heads/gs/<feature>/NN
-        refdir = str(Path(ref).parent)
+        refdir = f"refs/heads/{GS_BRANCH_ROOT}"  # 브랜치는 gs/<feature>/NN. 그 위 gs까지 열어 다시 만들 수 있게 한다
         dirs = [own, common / "objects", common / refdir, common / "logs" / refdir]
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)  # add-dir은 있는 디렉터리여야 한다

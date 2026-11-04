@@ -7,7 +7,7 @@ from importlib import metadata
 from pathlib import Path
 
 from . import feature as featmod
-from . import config
+from . import config, version
 from .check import check
 
 
@@ -16,6 +16,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"%(prog)s {metadata.version('goldstack')}")
     parser.add_argument("--repo", type=Path, help="레포 루트(기본: 현재 디렉터리에서 위로 .git을 찾는다)")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    from .selfupdate import LIMIT
+    p = sub.add_parser("self-update", help="CLI와 플러그인을 갱신한다", epilog=LIMIT)
+    p.add_argument("--from", dest="source", help="설치 기록 대신 사용할 git 주소")
+    p.add_argument("--version", dest="ref", default="main", help="설치할 태그(기본: main)")
 
     sub.add_parser("init", help=".goldstack 설정 파일과 비밀 파일 예제를 만든다")
     p = sub.add_parser("doctor", help="GitHub 병합·base 보호 설정을 읽고 config 값을 제안한다")
@@ -42,6 +47,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("backlog", help="아이디어와 범위 밖의 다시 볼 조건을 본다(읽기 전용)")
     p.add_argument("--all", action="store_true", help="taken·dropped를 포함하고 status 열을 보인다")
 
+    p = sub.add_parser("feedback", help="피드백을 보내거나 초안·전송 상태를 본다")
+    p.add_argument("feedback_args", nargs="*", help="한 줄 또는 list | send")
+
     p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
     p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
                    help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON)")
@@ -55,10 +63,16 @@ def main(argv: list[str] | None = None) -> int:
             return hook_agy.main()
         from . import hook
         return hook.main([args.event])
+    if args.cmd == "self-update":
+        from .selfupdate import self_update
+        return self_update(args.repo or Path.cwd(), args.source, args.ref, sys.stdout, sys.stderr)
     repo = args.repo or featmod.find_repo_root(Path.cwd())
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
         return 2
+    if args.cmd == "feedback":
+        from .feedback import command
+        return command(repo, args.feedback_args, sys.stdout, sys.stderr)
     if args.cmd == "init":
         config.init(repo, sys.stdout)
         return 0
@@ -95,6 +109,12 @@ def _ids(raw: str | None) -> list[str] | None:
 def cmd_go(repo: Path, names: list[str], only: list[str] | None) -> int:
     from .go import NETWORK_ABORT, go
     from . import state
+
+    version.warn(repo, sys.stderr)
+    cfg, _ = config.load(repo)
+    if cfg is not None and (error := version.requirement_error(cfg.goldstack.requires)):
+        print(f"오류: {error}", file=sys.stderr)
+        return 1
 
     if len(names) == 1:
         return go(repo, names[0], only)

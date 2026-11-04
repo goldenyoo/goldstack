@@ -1,7 +1,7 @@
 """티켓 리뷰(06): 다른 계열 reviewer가 티켓 diff를 리뷰하고, 판단 모델이 지적을 fix·report로 나눈다.
 
 흐름(spec 2-3, 2-4, 3-5):
-1. worker가 성공하면 merge-base 기준 diff를 파일로 남기고 reviewer 모델에 diff·티켓·spec 경로를 준다.
+1. worker가 성공하면 merge-base 기준 diff를 파일로 남기고 reviewer 모델에 diff·티켓·spec 경로를 준다. 읽을 트리는 go._review_tree가 고른다(병합될 커밋).
    reviewer는 고정된 JSON으로 답한다: {"findings": [{"severity", "location", "claim", "evidence"}]}.
    reviewer가 구현 모델과 같은 계열이면 부르지 않고 거부한다(Refused). 같은 문맥의 리뷰는 확인 편향일 뿐이다.
 2. 판단 모델(매번 새 `claude -p`, models.judge)이 지적마다 fix(고칠 것)·report(보고만)를 정한다. 파일 경로만 넘긴다.

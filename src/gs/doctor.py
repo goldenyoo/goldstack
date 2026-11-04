@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TextIO
 from urllib.parse import quote
 
-from . import config, frontmatter, git
+from . import config, frontmatter, git, version
 
 
 class ReadError(ValueError):
@@ -205,6 +205,7 @@ def _write(repo: Path, cfg: config.Config, proposals: dict[str, tuple[object, st
 
 
 def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
+    version.warn(repo, out)
     cfg, problems = config.load(repo)
     for problem in problems:
         print(problem, file=out)

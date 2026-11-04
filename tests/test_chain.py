@@ -27,6 +27,9 @@ class ChainTest(unittest.TestCase):
         patch = mock.patch("gs.check.environment_problems", return_value=[])
         patch.start()
         self.addCleanup(patch.stop)
+        patch = mock.patch("gs.version.warn")
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def run_cli(self, *args):
         out, err = io.StringIO(), io.StringIO()

@@ -61,7 +61,9 @@ class TicketState:
     kept_worktrees: list[str] = field(default_factory=list)  # 병합됐지만 미커밋 변경 때문에 남긴 경로
     isolation_warnings: list[str] = field(default_factory=list)  # 지난 시도·수정 worker의 격리 실패도 보존
     failure_summary: str = ""  # 재시도 brief에 붙일 판단 모델 요약 파일
-    # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
+    # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings, reviewed_head.
+    # reviewed_head는 이 리뷰어를 부른 마지막 리뷰·재리뷰의 대상 head다(go가 적는다). 호출이 실패해도 남고 실패는 note·failed가 말한다.
+    # 부르지 못한 리뷰(거부, 한도, 트리 실패)는 옮기지 않는다. 옛 state의 기록에는 없다.
     # 재리뷰가 있었으면 rereviews(회차마다 round, dir, base, head, note, failed)도 있다.
     # 지적마다 severity·location·claim·evidence·action(fix|report)·why, 그리고 수정·재리뷰 결과(review.Finding):
     #   fix_attempt("" | attempted | discarded), fix_round(이 지적을 받은 마지막 수정 worker 회차, 0이면 받은 적 없음),
@@ -104,6 +106,9 @@ class State:
     # 선택 측정 이력. 재개·재시도·새 마무리에서도 덮어쓰지 않는다. 옛 state에는 없어도 된다.
     # runtime, workers, validations, reviewers, review_calls, finish_stages의 목록(metrics.py).
     metrics: dict = field(default_factory=dict)
+    # 실행 시작 때의 push 설정(git.push_settings). 재개해도 덮어쓰지 않고 gs의 push마다 대조한다.
+    # 옛 state에는 없다. 없으면 대조를 건너뛰고, 다음 `gs go`가 시작할 때 그 값을 처음 기록한다.
+    push_record: dict = field(default_factory=dict)
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
@@ -112,6 +117,11 @@ class State:
 def reviews(ts: TicketState) -> list[dict]:
     """티켓의 리뷰 기록들: 첫 리뷰, 있으면 두 번째 리뷰. 빈 기록은 뺀다."""
     return [rec for rec in (ts.review, ts.second_review) if rec]
+
+
+def reviewed_heads(ts: TicketState) -> set[str]:
+    """리뷰 기록들의 reviewed_head. 부르지 못한 리뷰·옛 state의 기록은 값이 없어 빠진다."""
+    return {rec["reviewed_head"] for rec in reviews(ts) if rec.get("reviewed_head")}
 
 
 def agy_reached(st: State, limit: int) -> bool:
@@ -258,7 +268,10 @@ def load(rundir: Path, feature: str) -> State:
         tickets[tid] = TicketState(**known)
     top = {k: v for k, v in raw.items() if k in State.__dataclass_fields__ and k != "tickets"}
     top.setdefault("feature", feature)
-    return State(**top, tickets=tickets)
+    st = State(**top, tickets=tickets)
+    if st.push_record:  # 되돌리기 명령이 값을 읽을 곳. 항목이 없는 기록과 레포를 옮긴 기록도 실제 위치를 가리키게 한다
+        st.push_record["state_file"] = str(p.resolve())
+    return st
 
 
 def save(rundir: Path, st: State) -> None:
