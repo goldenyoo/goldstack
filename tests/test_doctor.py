@@ -130,6 +130,20 @@ else:
             "required_status_checks": {"contexts": ["build"], "checks": [{"context": "test"}, {"context": "build"}]},
         }
 
+    def test_setup_recommends_install_commands_that_preserve_lockfiles(self):
+        for command in ("npm install", "npm i --ignore-scripts", "yarn", "cd app && yarn install"):
+            with self.subTest(command=command):
+                text = self.original.replace('setup = ""', "setup = " + json.dumps(command))
+                self.path.write_text(text)
+                code, out = self.command("doctor")
+                self.assertEqual(code, 0, out)
+                self.assertIn("lockfile을 바꾸지 않는 명령 권장: npm ci · yarn --frozen-lockfile · uv sync --locked", out)
+                self.assertEqual(self.path.read_text(), text)
+        for command in ("", "npm ci", "yarn --frozen-lockfile", "yarn install --immutable", "yarn test", "uv sync --locked"):
+            with self.subTest(command=command):
+                self.path.write_text(self.original.replace('setup = ""', "setup = " + json.dumps(command)))
+                self.assertNotIn("lockfile을 바꾸지 않는 명령 권장", self.command("doctor")[1])
+
     def test_squash_configured_remote_and_encoded_base_read_only(self):
         before = self.path.stat().st_mtime_ns
         code, out = self.command("doctor")

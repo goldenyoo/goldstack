@@ -11,6 +11,7 @@ goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profil
    - README와 docs, 기여 안내(`CONTRIBUTING` 등)
    - 빌드·시험 설정: 패키지 파일(`pyproject.toml`, `package.json`, `Cargo.toml`, `Makefile` 등), 시험 디렉터리, lint·format 설정
    - CI workflow(`.github/workflows/*.yml` 등): 어떤 job이 무엇을 돌리는지
+   - setup에 `npm install`·`yarn` 같은 lock 갱신형 명령이 있으면 lockfile을 바꾸지 않는 `npm ci`·`yarn --frozen-lockfile`·`uv sync --locked`를 권한다.
    - 디렉터리 구조: 주요 디렉터리와 역할, 생성 파일·큰 디렉터리(`node_modules`, `dist` 등)
    - 최근 커밋 메시지 모양(`git log --oneline -20`)과 브랜치 이름
 2. **설정이 없으면 만든다.** `.goldstack/config.toml`이 없으면 `gs init`(끝에 `gs doctor`가 한 번 돈다). 있으면 그대로 둔다.
