@@ -110,7 +110,7 @@ class SquashTest(unittest.TestCase):
         self.assertEqual(f["base_report"], sh(self.remote, "git", "rev-parse", "main"))
         self.assertIn(f"마무리: verified · PR {URL} 병합 · main 검증 통과", self.final_report())
         # base의 squash 커밋은 이 feature의 병합으로 알아본다(finish를 비운 뒤에도: gs-ticket 줄)
-        r = SimpleNamespace(repo=self.repo, name="demo", st=SimpleNamespace(finish={}))
+        r = SimpleNamespace(repo=self.repo, name="demo", base_ref="origin/main", st=SimpleNamespace(finish={}))
         self.assertTrue(finish._feature_merge(r, sha))
         self.assertFalse(finish._feature_merge(r, initial))
         self.assertFalse(finish._feature_merge(SimpleNamespace(**{**vars(r), "name": "other"}), sha))

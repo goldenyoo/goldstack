@@ -220,9 +220,8 @@ def _revert_of(cwd: Path, sha: str, *revs: str) -> str:
 
 
 def _trailers(r, rev: str) -> set[str]:
-    """rev까지의 커밋 메시지에 있는 이 feature의 gs-ticket 티켓 id."""
-    pattern = re.compile(rf"^gs-ticket: {re.escape(r.name)}/(\S+)[ \t]*$", re.M)
-    return set(pattern.findall(git.out(r.repo, "log", "--format=%B", f"--grep=^gs-ticket: {r.name}/", rev)))
+    """rev까지의 integration 병합·base squash에서 이 feature의 정확한 티켓 id."""
+    return git.ticket_trailers(r.repo, r.name, rev, base_ref=r.base_ref)
 
 
 def _feature_merge(r, sha: str) -> bool:
@@ -232,10 +231,8 @@ def _feature_merge(r, sha: str) -> bool:
     parents = git.out(r.repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
     if len(parents) == 1:
         # squash 커밋은 부모가 하나이고 본문에 티켓별 gs-ticket 줄이 있다. integration의 티켓 병합은 늘 부모가 둘이다.
-        return bool(re.search(rf"^gs-ticket: {re.escape(r.name)}/", git.out(r.repo, "log", "-1", "--format=%B", sha),
-                              re.M))
-    return len(parents) > 1 and bool(git.out(r.repo, "log", "-1", "--format=%H", f"--grep=^gs-ticket: {r.name}/",
-                                             f"{parents[0]}..{parents[1]}"))
+        return bool(git.ticket_trailers(r.repo, r.name, "--no-walk", sha, base_ref=r.base_ref))
+    return len(parents) > 1 and bool(git.ticket_trailers(r.repo, r.name, f"{parents[0]}..{parents[1]}"))
 
 
 def _undone_reverts(r) -> list[tuple[str, str]]:
@@ -786,8 +783,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
                       f.get("merge_head"))
     # 새 티켓 병합만 본다(늘 부모가 둘). base에서 합쳐 온 squash 커밋(부모 하나)도 gs-ticket 줄을 갖는다.
     resume = bool(anchor and git.run(r.iwt, "merge-base", "--is-ancestor", anchor, "HEAD", check=False).returncode == 0
-                  and not git.out(r.iwt, "log", "--min-parents=2", f"{anchor}..HEAD", "--format=%H",
-                                  f"--grep=^gs-ticket: {r.name}/"))
+                  and not git.ticket_trailers(r.iwt, r.name, f"{anchor}..HEAD", merges_only=True))
     if resume and f.get("phase") == "report_pending":
         # 보고서 PR만 남았다. integration 보고서는 PR에 올린 그대로 둔다(base 보고서의 마무리 줄과 같게).
         try:
