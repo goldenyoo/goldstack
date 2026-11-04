@@ -14,7 +14,7 @@
 - [여러 feature 이어 돌리기(`gs go a b`)](#여러-feature-이어-돌리기gs-go-a-b)
 - [끝난 feature 치우기(`gs clean`)](#끝난-feature-치우기gs-clean)
 - [아이디어 흐름(`/retro` → `/idea` → `gs backlog` → `/grill`)](#아이디어-흐름)
-- [피드백: gs 결함을 goldstack에 알리기](#피드백gs-결함을-goldstack에-알리기) · [`/overnight`: 자는 동안 이어 돌리기](#overnight-자는-동안-이어-돌리기)
+- [피드백: gs 결함을 goldstack에 알리기](#피드백-gs-결함을-goldstack에-알리기) · [`/overnight`: 자는 동안 이어 돌리기](#overnight-자는-동안-이어-돌리기)
 - [버전 맞추기(`gs self-update`, `requires`)](#버전-맞추기gs-self-update-requires)
 - [리눅스 서버에서 쓰기](#리눅스-서버에서-쓰기)
 - [기존 레포 옮기기(`gs migrate`)](#기존-레포-옮기기gs-migrate)
@@ -300,7 +300,7 @@ verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest dis
 | `timeouts.setup_minutes` | `15` | `worktree.setup` 한 번 |
 | `notify.telegram` | `false` | `gs go`가 끝날 때 한 통, `gs check`(값이 비면 경고) |
 | `goldstack.requires` | 없음(검사 안 함) | `gs check`·`gs go`: 설치한 gs가 이 최소 버전(`">=0.1"`)보다 낮으면 오류로 거부하고 `gs self-update`를 안내한다. 형식이 틀리면 config 오류 |
-| `feedback.mode` | 절이 없으면 `off`, `gs init`이 만든 config는 `draft` | `off` 아무것도 안 쓴다 · `draft` 로컬 초안만 쌓는다 · `auto` GitHub issue로 보낸다. [피드백](#피드백gs-결함을-goldstack에-알리기) |
+| `feedback.mode` | 절이 없으면 `off`, `gs init`이 만든 config는 `draft` | `off` 아무것도 안 쓴다 · `draft` 로컬 초안만 쌓는다 · `auto` GitHub issue로 보낸다. [피드백](#피드백-gs-결함을-goldstack에-알리기) |
 | `feedback.detail` | `errors` | `errors`는 가린 오류 줄 최대 20줄을 보낸다. `minimal`은 오류 줄 없이 항목만 |
 | `feedback.repo` | `gs init`이 `goldenyoo/goldstack`을 적는다 | issue를 올릴 저장소 |
 | `feedback.max_per_day` | `5` | 하루에 새로 올리는 issue 최대 수 |
