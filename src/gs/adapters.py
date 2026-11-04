@@ -41,8 +41,20 @@ class Adapter:
     name = ""
     isolation_warning = ""
 
-    def __init__(self, models: config.ModelsConfig):
+    def __init__(self, models: config.ModelsConfig, selection: config.ModelEffort | None = None):
         self.models = models
+        # 표가 있으면 models.codex·models.agy보다 우선한다. 없으면 기존 선택을 보존한다.
+        legacy = models.codex if self.name == "codex" else models.agy if self.name == "agy" else ""
+        self.selection = selection if selection is not None else config.ModelEffort(legacy)
+
+    def model_options(self) -> str:
+        options = f"--model {q(self.selection.model)} " if self.selection.model else ""
+        if self.selection.effort:
+            if self.name == "codex":
+                options += f"-c {q('model_reasoning_effort=' + self.selection.effort)} "
+            else:
+                options += f"--effort {q(self.selection.effort)} "
+        return options
 
     def prepare(self, inp: WorkerInput) -> None:
         pass
@@ -63,7 +75,7 @@ class Adapter:
             text = inp.log.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
             return ""
-        model = self.models.agy if self.name == "agy" else ""
+        model = self.selection.model if self.name == "agy" else ""
         return transient.reason(self.name, text, model=model, cwd=inp.worktree)
 
 
@@ -98,7 +110,7 @@ class Claude(Adapter):
         return settings + self.ISOLATION
 
     def command(self, inp: WorkerInput) -> str:
-        return f"{self.BASE} {self.isolation(inp)} < {q(str(inp.brief))}"
+        return f"{self.BASE} {self.model_options()}{self.isolation(inp)} < {q(str(inp.brief))}"
 
     def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
         return code, self.isolation_warning
@@ -176,7 +188,7 @@ class Codex(Adapter):
 
     def command(self, inp: WorkerInput) -> str:
         adds = " ".join(f"--add-dir {q(str(d))}" for d in self.writable_dirs(inp.worktree))
-        model = f"--model {q(self.models.codex)} " if self.models.codex else ""
+        model = self.model_options()
         return (f"codex exec --json -s workspace-write {model}-c sandbox_workspace_write.network_access=false "
                 f"--skip-git-repo-check -C {q(str(inp.worktree))} {adds} {q(self.NOTE)} < {q(str(inp.brief))}")
 
@@ -223,7 +235,7 @@ class Agy(Adapter):
     def command(self, inp: WorkerInput) -> str:
         return (f"{q(agy_bin())} -p \"$(cat {q(str(inp.brief))})\" --output-format stream-json "
                 f"--dangerously-skip-permissions --disable-slash-commands "
-                f"--settings {q(self.settings())} --model {q(self.models.agy)}")
+                f"--settings {q(self.settings())} {self.model_options().rstrip()}")
 
     def prepare(self, inp: WorkerInput) -> None:
         install_agy_hook(inp.worktree)
@@ -389,11 +401,11 @@ class Custom(Adapter):
 ADAPTERS: dict[str, type[Adapter]] = {"claude": Claude, "codex": Codex, "agy": Agy}
 
 
-def for_model(model: str, models: config.ModelsConfig) -> Adapter:
+def for_model(model: str, models: config.ModelsConfig, selection: config.ModelEffort | None = None) -> Adapter:
     override = os.environ.get("GS_WORKER_CMD")
     if override:
         return Custom(override)
     try:
-        return ADAPTERS[model](models)
+        return ADAPTERS[model](models, selection)
     except KeyError:
         raise AdapterError(f"model `{model}` 어댑터가 없다({'|'.join(ADAPTERS)})") from None

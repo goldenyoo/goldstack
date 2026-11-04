@@ -1,6 +1,6 @@
 """`gs go`: 시작할 수 있는 티켓을 max_workers개까지 동시에 worker에 맡기고 integration에 모아 PR을 연다.
 
-병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 모델로 한 번 재시도한다(07).
+병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 계열로 한 번 재시도한다(07).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
 띄운다(06, review.py). 티켓에 second_reviewer가 있으면 두 리뷰를 동시에 띄우고 지적을 합쳐 수정 worker는 하나다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
@@ -11,7 +11,8 @@ gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 stat
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 
-worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 않는다. 간격을 늘려 기다렸다가 같은 worktree·브랜치에서 새 시도
+worker는 config 등급표와 티켓 tier(기본 medium)로 모델·effort를 고른다. 첫 실패 뒤에는 한 단계 올리고 수정 worker도 그 등급을 쓴다.
+worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 않고 등급도 올리지 않는다. 간격을 늘려 기다렸다가 같은 worktree·브랜치에서 새 시도
 디렉터리로 다시 띄운다(Outage). 끊김이 이어지는 동안 새 worker·리뷰를 시작하지 않고 도는 worker는 그대로 둔다. 다시 띄운 worker가
 5분 넘게 일시 오류 없이 돌거나 끝나면 회복이다. 대기 합계와 일정은 끊김마다 새로 센다(`Backoff`). 상한을 넘기거나 codex가 Reconnecting만 그만큼
 이어 가거나 다른 호출이 NetworkAbort를 던지면 `중단(네트워크)`다: 돌던 worker를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴
@@ -277,6 +278,19 @@ def _set(r: Run, tid: str, **fields) -> None:
 def _phase(r: Run, tid: str, phase: str, model: str, *, attempt: int | None = None) -> None:
     state.begin_phase(r.st.ticket(tid), phase, model, attempt=attempt)
     r.save()
+
+
+def _worker_adapter(r: Run, t: Ticket) -> adapters.Adapter:
+    """구현·수정·일시 오류 재시작에 같은 선택 규칙을 쓰고 실행마다 실제 옵션을 보존한다."""
+    ts = r.st.ticket(t.id)
+    tier, selection = r.cfg.tiers.worker(t.model, t.tier, failures=ts.failures)
+    adapter = adapters.for_model(t.model, r.cfg.models, selection)
+    # model은 진행·계열별 소요 통계가 쓰므로 계열로 유지한다. 빈 값은 CLI 사용자 기본값이다.
+    chosen = getattr(adapter, "selection", None)
+    ts.phases[-1].update(tier=tier, actual_model=chosen.model if chosen else "",
+                         effort=chosen.effort if chosen else "")
+    # 호출 경로의 다음 _set(pane) 또는 실패 저장이 이 선택도 함께 쓴다.
+    return adapter
 
 
 def _isolation_warning(r: Run, tid: str, adapter: adapters.Adapter) -> None:
@@ -865,7 +879,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         if nth:
             with job.brief.open("a", encoding="utf-8") as f:
                 f.write(review.fix_brief(_todo(r, t, nth), nth))
-        adapter = adapters.for_model(t.model, r.cfg.models)
+        adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
         _isolation_warning(r, t.id, adapter)
@@ -932,7 +946,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
             setup.remember(wt)
             _phase(r, t.id, "worker", t.model)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
-        adapter = adapters.for_model(t.model, r.cfg.models)
+        adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
         _isolation_warning(r, t.id, adapter)  # 종료·시간 초과·재개 여부와 무관하게 실행 전에 보존한다
@@ -1223,7 +1237,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
             f.write(review.fix_brief(todo, nth))
-        adapter = adapters.for_model(t.model, r.cfg.models)
+        adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
         _isolation_warning(r, t.id, adapter)
@@ -1441,7 +1455,7 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
         failure.summarize(r.repo, log, r.cfg, _call_wait(r, t.id))
     say(f"[{t.id}] 실패: {reason}")
     if retry:
-        say(f"[{t.id}] 같은 모델({t.model})로 최신 integration에서 한 번 재시도한다")
+        say(f"[{t.id}] 같은 계열({t.model})로 최신 integration에서 한 번 재시도한다")
     return False
 
 
