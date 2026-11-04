@@ -13,7 +13,7 @@ from collections import Counter
 from fnmatch import fnmatchcase
 from pathlib import Path
 
-from . import config, git, review, setup, state, transient
+from . import config, git, metrics, review, setup, state, transient
 from .feature import WORK
 
 LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
@@ -141,7 +141,59 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
         if outcomes:
             text += "\n".join(outcomes) + "\n\n"
         text += _log(r, log, tail)
-    return isolation_risks(r) + text + f"\n{agy_usage(r)}\n"
+    return isolation_risks(r) + (measurements(r) or "") + text + f"\n{agy_usage(r)}\n"
+
+
+@metrics.best_effort
+def measurements(r) -> str:
+    """선택 측정이 없어도 옛 보고서를 쓴다. 생성 중인 마무리 단계는 그 시점의 경과다."""
+    data = r.st.metrics
+    lines = ["### 실행 측정", ""]
+    for rec in data.get("runtime", []):
+        lines.append(f"- gs {cell(rec['version'])} · 설치 commit: {cell(rec.get('install_commit') or '기록 없음')}"
+                     f" · 시작 {rec['started_at']}")
+    if not data.get("runtime"):
+        lines.append("- gs 버전·설치 commit: 기록 없음")
+    net = r.st.network
+    lines.append(f"- 일시 오류 {net.get('errors', 0)}회 · 대기 {net.get('waited_seconds', 0):.1f}초")
+    for tid in r.order:
+        ts = r.st.ticket(tid)
+        lines.append(f"- {tid}: 일시 오류 {ts.transient_errors}회 · 대기 {ts.network_wait_seconds:.1f}초")
+
+    def table(title, headers, rows):
+        if rows:
+            lines.extend(["", title, "", "| " + " | ".join(headers) + " |",
+                          "|" + "---|" * len(headers)])
+            lines.extend("| " + " | ".join(cell(str(v)) for v in row) + " |" for row in rows)
+
+    def model(rec):
+        return f"{rec.get('actual_model') or 'CLI 기본값'}/{rec.get('effort') or 'CLI 기본값'}"
+
+    table("worker 시도별 실제 모델·effort와 소요", ["티켓/시도/단계", "계열", "모델/effort", "소요(초)", "처리 대기(초)"], [
+        (f"{x['ticket']}/{x['attempt']}/{x['phase']}", x['model'], model(x),
+         x['seconds'] if x.get('seconds') is not None else '기록 없음' if x.get('worker_exited_at') else '미종료',
+         x.get('processing_wait_seconds', '기록 없음')) for x in data.get('workers', [])])
+    reviewers = data.get("reviewers", [])
+    table("리뷰어별 소요와 채택(판단이 fix인 지적, 해결 수와 다름)",
+          ["리뷰어/회차", "티켓", "모델/effort", "소요(초)", "지적", "채택(fix)"], [
+              (f"{x['reviewer']}/{x['round']}", x['ticket'], model(x), x.get('seconds'),
+               x.get('findings_count', 0), x.get('fix_count', 0)) for x in reviewers])
+    # 중단된 호출도 버리지 않는다. 아래 호출 시간에는 판단 모델·네트워크 대기가 들어가지 않는다.
+    table("리뷰 호출별 시간(재호출 포함)", ["리뷰어", "티켓", "모델/effort", "소요(초)", "결과"], [
+        (x['reviewer'], x['ticket'], model(x), x.get('seconds'), x['result']) for x in data.get('review_calls', [])])
+    table("gs 검증별 측정", ["라벨/시도", "명령", "SHA", "소요(초)", "결과"], [
+        (f"{x['label']}/{x['attempt']}", x['command'], x['sha'], x['seconds'], x['result'])
+        for x in data.get('validations', [])])
+    totals = Counter()
+    for rec in data.get("finish_stages", []):
+        seconds = rec.get("seconds")
+        totals[rec['label']] += seconds if seconds is not None else state.seconds_between(rec['started_at'], state.now())
+    table("마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)", ["단계", "소요(초)"],
+          [(label, round(seconds, 3)) for label, seconds in totals.items()])
+    if any(rec.get("interrupted") for rec in data.get("finish_stages", [])):
+        lines.append("")
+        lines.append("중단된 마무리 단계는 마지막 상태 저장까지의 시간만 포함한다(실제 소요의 하한).")
+    return "\n".join(lines) + "\n\n"
 
 
 def ticket_commands(r) -> str:
@@ -172,6 +224,7 @@ def isolation_risks(r) -> str:
     return "### 남은 위험\n\n" + "\n".join(risks) + "\n\n" if risks else ""
 
 
+@metrics.stage("summary")
 def summarize(r, on_wait=None) -> str:
     """끊기면 같은 대기로 다시 부른다. 상한을 넘겨도 중단하지 않고 대체 문구로 간다: 병합 안전과 무관하다."""
     directory = r.rundir / "finish"

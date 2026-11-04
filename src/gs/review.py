@@ -47,7 +47,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable, TypeVar
 
-from . import adapters, config, git, state, transient, verify, worker
+from . import adapters, config, git, metrics, state, transient, verify, worker
 
 T = TypeVar("T")
 
@@ -500,16 +500,18 @@ def _ask_reviewer(reviewer: str, worktree: Path, prompt: str, rdir: Path, timeou
     env = {**_env(worktree), "GS_REVIEWER": reviewer}
 
     def once() -> str:
-        out.unlink(missing_ok=True)  # 앞 시도·지난 실행의 답을 이번 답으로 읽지 않게
-        text = _call(argv, prompt=stdin, cwd=worktree, env=env, log=rdir / "reviewer.log", timeout=timeout, family=reviewer,
-                     model=selection.model if reviewer == "agy" else "")
-        if to_file:
-            return out.read_text(encoding="utf-8") if out.exists() else ""
-        out.write_text(text, encoding="utf-8")
-        return text
+        with metrics.review_call(on_wait, reviewer, selection, rdir):
+            out.unlink(missing_ok=True)  # 앞 시도·지난 실행의 답을 이번 답으로 읽지 않게
+            text = _call(argv, prompt=stdin, cwd=worktree, env=env, log=rdir / "reviewer.log", timeout=timeout, family=reviewer,
+                         model=selection.model if reviewer == "agy" else "")
+            if to_file:
+                return out.read_text(encoding="utf-8") if out.exists() else ""
+            out.write_text(text, encoding="utf-8")
+            return text
     return call_waiting(once, cfg, on_wait, reviewer)
 
 
+@metrics.reviewed
 def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticket: Path, spec: Path, model: str,
         reviewer: str, cfg: config.Config, on_wait=None) -> dict:
     """티켓 하나를 리뷰하고 지적을 나눈다. 돌려주는 기록이 state의 `review`다.
@@ -547,6 +549,7 @@ def record(reviewer: str, note: str, rdir: Path | None = None) -> dict:
             "findings": []}
 
 
+@metrics.reviewed
 def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, found: list[dict], ticket: Path, spec: Path,
              reviewer: str, cfg: config.Config, nth: int, on_wait=None) -> dict:
     """수정 커밋 diff(base..head)와 이 리뷰어의 고칠 지적을 주고 다시 보게 한다. nth는 몇 번째 재리뷰인가.
@@ -596,6 +599,7 @@ def apply_rereview(rec: dict, found: list[dict], res: dict, nth: int) -> None:
     rec.setdefault("rereviews", []).append({"round": nth,
                                           **{k: res[k] for k in ("dir", "base", "head", "note", "failed")},
                                           **{k: res.get(k, "") for k in ("tier", "actual_model", "effort")}})
+    metrics.copy_review_counts(rec["rereviews"][-1], res)
     if res["failed"]:
         mark_rereview(found, nth, UNCHECKED, res["failed"], res["note"])
         return

@@ -14,6 +14,7 @@
 | `verify.py`, `setup.py`, `failure.py` | verify 명령(시간 제한, 프로세스 그룹, 재시도), worktree 준비 명령, 실패 증거와 요약 |
 | `finish.py`, `report.py` | 보고서, PR, CI 대기, 병합 확인(merge·squash), base 재검증, revert, 보호된 base의 PR |
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
+| `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
 | `notify.py` | 텔레그램 전송 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
@@ -80,6 +81,10 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 - 위: `feature`, `pid`(마지막으로 쓴 `gs go`), `only`, `started_at`, `updated_at`(heartbeat로 상태가 그대로여도 60초마다 바뀐다), `finished_at`, `phase`(feature 전체 마무리 중이면 `finish`, integration·base worktree 준비 중이면 `setup`), `finish`(마무리 재개 지점: `phase`, `outcome`, `url`, `merge_head`, `merge_method`, `merge_sha`, `revert_sha`, `integration_ok`, `main_ok`, `checks`, `revert_pr`·`revert_head`·`revert_merge`, `report_pr`·`report_head`·`report_merge`·`report_result`, `base_report_tried`, `base_report`, `reintroduced`, `error`, `head` 등), `progress`, `agy_calls`(이번 실행에서 gs가 띄운 agy 호출 수, 실행 시작마다 0).
 - 티켓마다: `status`(`pending`, `running`, `merged`, `failed`, `skipped`), `attempts`, `branch`, `pane`(`pane <id>` 또는 `pid <n>`), `started_at`·`ended_at`, `log`, `reason`, `worktree`, `failures`, `failed_worktrees`, `kept_worktrees`, `isolation_warnings`(플러그인 격리 실패, 지난 시도·수정 worker 것도 남긴다), `failure_summary`, `review`(재리뷰 필드는 아래 "재리뷰"), `second_review`(`second_reviewer`가 있을 때 두 번째 리뷰 기록, 모양은 `review`와 같다), `phases`.
 - `phases`: 단계 전환마다 `{attempt, phase, model, started_at, ended_at}`를 더한다. phase는 `setup`, `worker`, `review`, `fix`, `rereview`(model은 `codex+agy`처럼 리뷰어들), `fix2`, `verify`, `finish`(티켓을 integration에 커밋하는 순간). ETA 표본은 이 단계들을 포함한 티켓 전체 시간이다. 보고서의 단계별 소요가 이것을 합산한다(지난 시도 포함). 분으로 반올림해 0분인 단계(대개 순간인 `finish`)는 줄에서 빼고, 모두 0분이면 `모두 1분 미만`이다.
+- `metrics`(선택, `metrics.py`): 재개·재시도에도 남기는 목록들이다. `runtime`은 실행별 gs 버전·설치 commit(`direct_url.json`의 VCS 기록이 있을 때만), `workers`는 구현·수정·네트워크 재시작별 실행 디렉터리·실제 모델/effort·`exit` mtime(`worker_exited_at`)·첫 처리 시작(`processing_started_at`)·실행 초·처리 대기 초다. `validations`는 gs가 돌린 검증의 재시도마다 라벨·명령·HEAD SHA·초·종료 코드·시간 초과·결과·트리 변경 여부를 남긴다. 티켓의 미완 병합에는 `merge_head`와 `tree_sha`도 남겨 검증한 병합 트리를 구별한다. 보고서만 바뀌어 건너뛴 검증은 호출 기록을 만들지 않는다.
+- `metrics.reviewers`는 첫 리뷰·재리뷰별 모델/effort·전체 소요(판단·네트워크 대기 포함)·새 지적 수·채택(fix) 수다. 채택 수는 해결 수가 아니며, 재리뷰가 기존 지적을 다시 확인한 것은 새 채택으로 세지 않는다. 각 `review`·`rereviews`에도 `seconds`, `findings_count`, `fix_count`가 있다. `review_calls`는 실제 리뷰어 재호출마다 모델/effort·호출 시간·성공/오류를 남겨 중단된 호출도 보존한다(판단·대기 제외). `finish_stages`는 마무리 단계별 벽시계 시작/끝과 monotonic 초다. `total`, `postmerge`, `sync-integration` 같은 상위 단계는 하위 단계를 포함하므로 모두 더하면 안 된다. 보고서는 생성 시점의 요약이며 진행 중 단계는 그때까지의 경과다. 빈 모델·effort는 CLI 기본값이고, 설치 기록이 없는 commit은 추측하지 않는다.
+- 측정은 판정과 분리한다. 측정 시계·설치 메타데이터·기록·추가 저장·보고서 측정 요약의 오류는 측정만 잃고 원래 작업의 반환값·예외·검증/병합 판단을 유지한다. 이 선택 필드가 없는 옛 state도 `go`·`status`가 그대로 읽는다.
+- 재개할 때 미완 `finish_stages`는 지난 `updated_at`까지의 시간으로 닫고 `interrupted`를 남긴다. 보고서는 이 시간을 실제 소요의 하한으로 표시해 중단 기간을 더하지 않는다. 측정이 없던 옛 worker는 실행 디렉터리에 맞는 `phases`에서 단계·시도·모델을 복구하고, 시작 시각과 실행 초는 알 수 없으므로 보고서에 `기록 없음`으로 표시한다.
 
 다시 실행하면 integration에 병합된 티켓은 건너뛰고, 실패·건너뜀 티켓은 `failures`·요약·이유를 비우고 다시 한다. state는 merged인데 integration에 표시가 없으면 다시 한다. 지난 `gs`가 죽어 `running`으로 남은 티켓은 실패로 세지 않고(`attempts`에서 하나 뺀다) 새로 시작한다. 그 시도의 worker가 살아 있으면(명령줄에 그 시도의 `run.sh`가 있는 프로세스) 먼저 끝내고 herdr pane도 닫는다.
 
