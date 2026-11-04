@@ -1,6 +1,7 @@
 """실행 상태 `.goldstack/work/<f>/run/state.json`과 실행 잠금 `.goldstack/work/<f>/run/lock`.
 
 상태의 원천은 state.json 하나다(ORIGINS 실패 3). `gs go`의 요약·PR 본문과 `gs status`가 모두 이것을 읽는다.
+고치는 것은 go._loop의 스레드뿐이다. 리뷰 스레드는 결과를 돌려주고 호출 도중의 대기·측정은 루프에 넘긴다(review.CallWait).
 쓰기는 같은 디렉터리의 임시 파일에 쓴 뒤 rename한다. 읽는 쪽은 반쯤 쓴 파일을 보지 않는다.
 
 잠금은 lock 파일에 대한 flock이다. 프로세스가 죽으면 커널이 풀어 주므로 죽은 프로세스의 잠금은 저절로 회수된다.
@@ -85,6 +86,7 @@ class TicketState:
     network_wait_seconds: float = 0  # 이 티켓이 네트워크 대기로 보낸 시간(누적)
     # 끊긴 worker를 잇는 표시: branch, worktree, base, fix(수정 worker 회차, 0이면 구현), rundir,
     # done(worker는 끝났고 리뷰부터 하면 된다). 있으면 _start가 새 worktree 대신 여기서 잇는다. 비었으면 없음.
+    # 리뷰 단계 동안에도 done으로 있다: 끝나지 않은 리뷰는 gs가 어떻게 끝나든 다음 gs go가 다시 한다(go._finish).
     network_resume: dict = field(default_factory=dict)
 
 
@@ -130,8 +132,9 @@ def agy_reached(st: State, limit: int) -> bool:
     return st.agy_calls >= limit
 
 
-PHASE_LABELS = {"worker": "worker", "review": "리뷰", "fix": "수정", "rereview": "재리뷰", "fix2": "수정 2",
-                "verify": "검증", "finish": "마무리", "checks": "CI 대기", "setup": "준비", "network": "네트워크 대기"}
+PHASE_LABELS = {"worker": "worker", "review_wait": "리뷰 대기", "review": "리뷰", "fix_wait": "수정 대기", "fix": "수정",
+                "rereview": "재리뷰", "fix2": "수정 2", "verify": "검증", "finish": "마무리", "checks": "CI 대기",
+                "setup": "준비", "network": "네트워크 대기"}
 
 
 def end_phase(ts: TicketState, at: str | None = None) -> None:
@@ -174,7 +177,8 @@ def network_label(st: State, at: str) -> str:
         return ""
     if not wait.get("due_at"):
         return f"네트워크 회복 확인({wait['count']}회)"
-    left = math.ceil(seconds_between(at, wait["due_at"]) / transient.minute_seconds())
+    # 두 시각은 초 단위로 잘려 있어 실제보다 1초까지 벌어진다. 1분이 1초보다 짧으면(GS_NETWORK_MINUTE) 그 1초가 몇십 분으로 보인다
+    left = math.ceil(max(0, seconds_between(at, wait["due_at"]) - 1) / transient.minute_seconds())
     return f"네트워크 대기({wait['count']}회, {max(1, left)}분 뒤)"
 
 

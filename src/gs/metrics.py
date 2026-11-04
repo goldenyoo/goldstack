@@ -2,6 +2,10 @@
 
 시간은 monotonic 초, worker 종료는 exit 파일 mtime이다. 설치 commit은 실행 중인 배포판의
 direct_url.json에 있을 때만 읽는다(작업 대상 레포의 HEAD를 gs 설치 commit으로 쓰지 않는다).
+
+처리 대기(workers의 processing_wait_seconds): worker가 끝난 뒤 go._loop가 그 결과를 받기까지(worker_exited_at → processing_started_at).
+v9부터 리뷰는 루프 밖이라 다른 티켓의 리뷰 시간은 여기 들지 않는다. 병합·검증과 실패 요약처럼 루프 안에서 도는 일을 기다린 시간이다.
+받은 뒤 리뷰 자리를 기다린 시간은 여기 들지 않고 단계 `review_wait`로, 수정 worker 자리는 `fix_wait`로 남는다(state.phases).
 """
 from __future__ import annotations
 
@@ -66,6 +70,7 @@ def worker_started(r, job) -> None:
 
 @best_effort
 def worker_finished(r, job) -> None:
+    """루프가 끝난 worker의 결과를 받았다. 종료 시각과 처리 대기(모듈 docstring)를 적는다."""
     rows = r.st.metrics.setdefault("workers", [])
     rec = next((x for x in reversed(rows) if x["dir"] == str(job.rundir)), None)
     if rec is None:  # 옛 state에서 재개한 worker도 종료·처리 시각은 남긴다
@@ -119,17 +124,29 @@ def copy_review_counts(target, source):
     target.update({k: source[k] for k in ("seconds", "findings_count", "fix_count") if k in source})
 
 
+def on_state(wait, change) -> None:
+    """리뷰·판단 호출이 state를 고친다(change). 루프 밖 호출이면 루프 스레드에 넘기고(wait.post), 아니면 wait의 잠금 안에서 바로 한다."""
+    post = getattr(wait, "post", None)
+    if post is not None:
+        post(change)
+        return
+    with wait.lock:
+        change()
+
+
 @best_effort
 def archive_review(kwargs, rec) -> None:
     wait = kwargs.get("on_wait")
     if wait is None or not hasattr(wait, "st"):
         return
-    with wait.lock:
-        wait.st.metrics.setdefault("reviewers", []).append({
-            "ticket": wait.tid, "reviewer": kwargs["reviewer"], "round": kwargs.get("nth", 0),
-            **{k: rec[k] for k in ("dir", "tier", "actual_model", "effort", "seconds", "findings_count", "fix_count")
-               if k in rec}})
+    row = {"ticket": wait.tid, "reviewer": kwargs["reviewer"], "round": kwargs.get("nth", 0),
+           **{k: rec[k] for k in ("dir", "tier", "actual_model", "effort", "seconds", "findings_count", "fix_count")
+              if k in rec}}
+
+    def change():
+        wait.st.metrics.setdefault("reviewers", []).append(row)
         wait.save()
+    on_state(wait, change)
 
 
 @best_effort
@@ -137,18 +154,20 @@ def begin_review_call(on_wait, reviewer, selection, rdir):
     rec = {"reviewer": reviewer, "actual_model": selection.model, "effort": selection.effort,
            "dir": str(rdir), "started_at": state.now(), "seconds": None, "result": "running"}
     if on_wait is not None and hasattr(on_wait, "st"):
-        with on_wait.lock:
-            on_wait.st.metrics.setdefault("review_calls", []).append({"ticket": on_wait.tid, **rec})
-            rec = on_wait.st.metrics["review_calls"][-1]
+        rec = {"ticket": on_wait.tid, **rec}  # 이 사전이 state의 줄이 된다. 끝날 때 같은 줄을 고친다
+        on_state(on_wait, lambda: on_wait.st.metrics.setdefault("review_calls", []).append(rec))
     return rec
 
 
 @best_effort
 def end_review_call(on_wait, rec, start, result):
     if on_wait is not None and hasattr(on_wait, "st"):
-        with on_wait.lock:
-            rec.update(seconds=elapsed(start), result=result, ended_at=state.now())
+        ended = dict(seconds=elapsed(start), result=result, ended_at=state.now())
+
+        def change():
+            rec.update(ended)
             on_wait.save()
+        on_state(on_wait, change)
 
 
 @contextmanager

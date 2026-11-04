@@ -511,6 +511,16 @@ class UnitTest(unittest.TestCase):
         p = state.calculate_progress(st, ["01", "02"], 2)
         self.assertNotIn("네트워크", p["line"])
 
+    def test_second_truncation_does_not_inflate_the_label(self):
+        """시각은 초 단위로 잘린다. 0.05초 대기가 초 경계를 넘으면 두 시각이 1초 벌어져도 20분(1초 / 0.05초)이 아니다."""
+        st = state.State(feature="demo", network={"wait": {"count": 1, "due_at": "2026-11-04T10:00:01+09:00"}})
+        with mock.patch.dict(os.environ, {"GS_NETWORK_MINUTE": "0.05"}):
+            self.assertEqual(state.network_label(st, "2026-11-04T10:00:00+09:00"), "네트워크 대기(1회, 1분 뒤)")
+        st.network["wait"]["due_at"] = "2026-11-04T10:01:00+09:00"
+        with mock.patch.dict(os.environ, {"GS_NETWORK_MINUTE": "60"}):
+            self.assertEqual(state.network_label(st, "2026-11-04T10:00:00+09:00"), "네트워크 대기(1회, 1분 뒤)")
+            self.assertEqual(state.network_label(st, "2026-11-04T09:58:00+09:00"), "네트워크 대기(1회, 3분 뒤)")
+
     def test_gs_status_shows_wait(self):
         with tempfile.TemporaryDirectory() as d:
             repo = Path(d)

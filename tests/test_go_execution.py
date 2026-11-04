@@ -225,7 +225,7 @@ class GoExecutionTest(support.GoTest):
 
     # --- codex 리뷰(02) 지적 재현 ---
     def test_worker_commit_to_integration_is_undone_and_not_pushed(self):  # 지적 2
-        self.add_ticket("07")
+        self.add_ticket("07", deps='["01"]')  # 01의 병합과 겹치면 누구 짓인지 가릴 수 없다
         code, out, _ = self.go("--only", "01,07")
         self.assertEqual(code, 1)
         self.assertIn("[07] 실패: worker가 integration worktree를 바꿨다", out)
@@ -233,7 +233,7 @@ class GoExecutionTest(support.GoTest):
         self.assertNotIn("evil", sh(self.remote, "git", "ls-tree", "--name-only", "main").split())
 
     def test_dirty_integration_is_cleaned_and_ticket_fails(self):  # 지적 3
-        self.add_ticket("08")
+        self.add_ticket("08", deps='["01"]')  # 01의 병합과 겹치면 누구 짓인지 가릴 수 없다
         code, out, _ = self.go("--only", "08,01")
         self.assertIn("[08] 실패: worker가 integration worktree를 바꿨다", out)
         self.assertIn("[01] 검증 통과", out)  # BROKEN이 지워져 01 검증은 깨끗한 트리에서 돈다
@@ -291,7 +291,7 @@ class GoExecutionTest(support.GoTest):
         self.assertIn("[05] 실패: 검증 실패", out)
         self.assertIn("[06] 실패: 커밋 없음", out)
         self.assertIn("■ PR: https://example.test/pr/1", out)
-        self.assertEqual(self.calls(), ["01", "02", "02", "04", "05", "05", "06", "06"])
+        self.assertEqual(sorted(self.calls()), ["01", "02", "02", "04", "05", "05", "06", "06"])  # 순서는 리뷰가 끝나는 때에 달렸다
 
         log = self.integration("log", "--format=%B", "gs/demo/integration")
         merged = sorted(line.split("/")[-1] for line in log.splitlines() if line.startswith("gs-ticket:"))
@@ -328,7 +328,7 @@ class GoExecutionTest(support.GoTest):
         self.assertEqual(list(self.rundir.glob(".state.*")), [])  # 임시 파일이 남지 않는다
 
     def test_killed_gs_resumes_with_remaining_tickets_only(self):
-        self.add_ticket("11")
+        self.add_ticket("11", deps='["04"]')  # 04가 붙잡힌 동안 11은 대기다. 01이 리뷰 중일 때 먼저 시작하지 않게
         (self.bin / "hang_04").touch()
         log = Path(self.tmp.name) / "first.log"
         with log.open("w") as f:

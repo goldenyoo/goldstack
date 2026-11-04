@@ -36,6 +36,11 @@ reviewer·재리뷰·판단 모델 호출이 실패해도(답의 형식이 틀�
 병합하지 않는다. 다음 gs go가 리뷰·재리뷰부터 잇는다. 호출은 새 프로세스 그룹에서 돌고 끝나면 그룹째 끝낸다(verify.py와 같다).
 답을 고른 형식이 일시 오류의 근거다: claude는 `--output-format json`의 result, codex는 `--json`의 이벤트, agy는 stderr.
 
+루프 밖(v9 06): gs go에서 리뷰어·판단 모델 호출(run, rereview)은 go._loop 밖의 스레드에서 돈다. 호출은 결과만 돌려주고 state를 고치지 않는다.
+대기 표시와 측정처럼 호출 도중에 적어야 하는 것은 on_wait(CallWait)의 post로 루프 스레드에 넘긴다. 루프를 떠나면 CallWait의 cancel이 서고,
+도는 호출은 자기 프로세스 그룹을 끝내고 Cancelled로 끝난다. 대기 중이던 호출도 기다림을 끊는다.
+agy 재시도는 루프가 센 뒤에 나간다(CallWait): 다른 티켓의 상한 판단은 이미 나간 호출을 모두 본다.
+
 시험 seam: `GS_REVIEWER_CMD`(reviewer 셸 명령, stdin = 프롬프트, stdout = 답), `GS_JUDGE`(판단 모델 실행 파일).
 둘 다 답을 그대로 내도 되고, 진짜 CLI의 이벤트를 내도 된다.
 """
@@ -67,6 +72,7 @@ VERDICTS = (RESOLVED, UNRESOLVED)  # 재리뷰 답에 올 수 있는 값
 TICKET_DIFF = "티켓 diff(merge-base 기준)"  # 판단 모델 프롬프트의 diff 설명
 REASON_LIMIT, REASON_FAILED = "한도", "재리뷰 실패"  # unchecked의 이유. REASON_LIMIT은 fix_reason에도. 옛 state에는 "시간 초과"도 있다
 WAIT_TICK = 60  # 대기 중 state를 다시 쓰는 간격(초). 진행 바가 남은 시간을 고치고, 오래된 실행으로 보고 지우지 않게 한다
+CANCEL_TICK = 0.2  # 도는 호출이 취소를 보는 간격(초)
 
 
 class ReviewError(Exception):
@@ -83,6 +89,10 @@ class ReviewTransient(ReviewError):
 
 class Refused(Exception):
     """reviewer가 구현 모델과 같은 계열이다."""
+
+
+class Cancelled(Exception):
+    """gs가 루프를 떠난다. 돌던 호출은 자기 프로세스 그룹을 끝내고 이것으로 끝난다. 리뷰 실패가 아니다: 다음 gs go가 다시 한다."""
 
 
 @dataclass
@@ -260,19 +270,40 @@ def _close(p: subprocess.Popen) -> None:
             pass
 
 
+def _communicate(p: subprocess.Popen, prompt: str | None, timeout: float, cancel: threading.Event | None) -> str:
+    """p가 끝나기를 기다려 stdout을 돌려준다. timeout을 넘기면 TimeoutExpired, cancel이 서면 Cancelled.
+
+    communicate는 시간 초과 뒤 다시 불러도 출력을 잃지 않는다. 입력은 첫 부름에만 준다.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        left = max(0.0, deadline - time.monotonic())
+        try:
+            return p.communicate(prompt, timeout=left if cancel is None else min(left, CANCEL_TICK))[0]
+        except subprocess.TimeoutExpired:
+            prompt = None
+            if cancel is not None and cancel.is_set():
+                raise Cancelled(f"`{p.args[0]}`를 끝낸다: gs가 멈춘다") from None
+            if time.monotonic() >= deadline:
+                raise
+
+
 def _call(argv: list[str], *, prompt: str | None, cwd: Path, env: dict[str, str], log: Path, timeout: float,
-          family: str = "", model: str = "") -> str:
+          family: str = "", model: str = "", cancel: threading.Event | None = None) -> str:
     """argv를 새 프로세스 그룹에서 한 번 부르고 답을 돌려준다. 돌아올 때 그 그룹에는 프로세스가 남지 않는다.
 
     시간을 넘기면 ReviewTimeout, family의 일시 오류면 ReviewTransient, 그 밖의 실패는 ReviewError. 다시 부르는 것은 call_waiting이다.
+    cancel이 서면(gs가 루프를 떠난다) 그룹을 끝내고 Cancelled다.
     """
+    if cancel is not None and cancel.is_set():
+        raise Cancelled(f"`{argv[0]}`를 부르지 않는다: gs가 멈춘다")
     try:
         with log.open("w", encoding="utf-8") as err:
             p = subprocess.Popen(argv, stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                                  cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=err, text=True,
                                  start_new_session=True)
             try:
-                stdout, _ = p.communicate(prompt, timeout=timeout)
+                stdout = _communicate(p, prompt, timeout, cancel)
             except subprocess.TimeoutExpired:
                 raise ReviewTimeout(f"`{argv[0]}`가 {timeout}초 안에 끝나지 않았다(로그 {log})") from None
             finally:  # 정상 종료여도 띄워 둔 자손이 다음 호출·수정 worker와 함께 worktree를 건드리지 못하게. 코디네이터가 죽어도 남기지 않는다
@@ -296,52 +327,112 @@ def _say(msg: str) -> None:
     print(msg, flush=True)
 
 
+class WaitBoard:
+    """지금 기다리는 호출들. gs go 실행에 하나다(go.Outage.calls): 티켓이 여럿이어도 보이는 대기와 실행 합계의 벽시계는 하나다.
+
+    고치는 쪽은 state처럼 하나다: 루프 스레드, 또는 혼자 쓰는 CallWait의 잠금 안.
+    """
+
+    def __init__(self):
+        self.waits: dict[int, dict] = {}  # 호출 스레드 → {count, due_at}
+        self.since = 0.0  # 아무도 기다리지 않다가 첫 호출이 기다리기 시작한 시각
+        self.before: dict = {}  # 호출 대기가 없을 때 보일 대기: worker 끊김(go.Outage)의 것
+
+    def current(self) -> dict:
+        """보일 대기: 가장 먼저 다시 부를 호출, 없으면 worker 끊김의 대기."""
+        return min(self.waits.values(), key=lambda w: w["due_at"]) if self.waits else self.before
+
+
 class CallWait:
     """리뷰·판단 호출의 대기를 state에 적는다(진행 바·`gs status`의 `네트워크 대기`). 대기 일정·합계는 호출마다 따로다.
 
     두 리뷰어는 스레드에서 함께 기다리므로 잠그고, 그중 가장 먼저 다시 부를 대기를 보인다. 기다린 시간은 벽시계로 한 번만 센다.
     끝나면 worker 끊김(go.Outage)이 적어 둔 대기를 되돌린다. agy를 다시 부르면 호출 하나로 센다(재시도 포함, state.agy_calls).
+
+    루프 밖 호출이면 post가 있다: state를 고치는 일을 시각과 함께 루프 스레드로 넘기고 직접 고치지 않는다(metrics.on_state).
+    agy 재시도만은 넘긴 뒤 루프가 반영할 때까지 기다렸다 돌아간다(_until_counted): 세기 전에 나가면 그 사이 다른 티켓의 상한 판단이 이 호출을 못 본다.
+    재시도는 상한을 보지 않는다. 루프가 병합·검증 중이면 그만큼 늦게 나간다.
+    cancel이 서면 기다림을 끊고 Cancelled를 올린다. 그때의 재시도는 나가지 않으니 세지 않는다. board를 함께 쓰는 호출끼리는 티켓이 달라도 위 규칙이 그대로다.
     """
 
-    def __init__(self, st: state.State, save: Callable[[], None], tid: str = "", say: Callable[[str], None] = _say):
+    def __init__(self, st: state.State, save: Callable[[], None], tid: str = "", say: Callable[[str], None] = _say,
+                 *, post: Callable[[Callable[[], None]], None] | None = None, cancel: threading.Event | None = None,
+                 board: WaitBoard | None = None):
         self.st, self.save, self.tid, self.say = st, save, tid, say
+        self.post, self.cancel = post, cancel
+        self.board = board if board is not None else WaitBoard()
         self.lock = threading.Lock()
-        self.waits: dict[int, dict] = {}
+        self.mine: set[int] = set()  # 이 호출에서 기다리는 스레드
         self.since = 0.0
-        self.before: dict = {}
 
     def __call__(self, why: str, count: int, seconds: float, family: str = "") -> None:
         me = threading.get_ident()
-        with self.lock:
-            if not self.waits:
-                self.since, self.before = time.monotonic(), self.st.network.get("wait") or {}
-            self.waits[me] = {"count": count, "due_at": state.after(seconds)}
-            self.st.network["errors"] = self.st.network.get("errors", 0) + 1
-            if self.tid:
-                self.st.ticket(self.tid).transient_errors += 1
-            self._publish()
-            self.say(f"{f'[{self.tid}] ' if self.tid else ''}{why}. {state.network_label(self.st, state.now())}")
-        due = time.monotonic() + seconds
+        start, due_at = time.monotonic(), state.after(seconds)
+        metrics.on_state(self, lambda: self._begin(me, start, why, count, due_at))
+        due = start + seconds
+        retried = ""
+        counted = threading.Event()
+
+        def finish(end: float) -> None:
+            try:
+                self._end(me, end, retried)
+            finally:  # 저장에 실패해도 센 값은 메모리에 있다. 재시도를 영영 붙잡지 않는다
+                counted.set()
+
         try:
             while (left := due - time.monotonic()) > 0:
-                time.sleep(min(left, WAIT_TICK))
-                with self.lock:
-                    self.save()
+                self._pause(min(left, WAIT_TICK))
+                metrics.on_state(self, self.save)
+            retried = family
         finally:
-            with self.lock:
-                self.waits.pop(me, None)
-                if not self.waits:
-                    spent = time.monotonic() - self.since
-                    self.st.network["waited_seconds"] = round(self.st.network.get("waited_seconds", 0) + spent, 1)
-                    if self.tid:
-                        ts = self.st.ticket(self.tid)
-                        ts.network_wait_seconds = round(ts.network_wait_seconds + spent, 1)
-                if family == "agy":
-                    self.st.agy_calls += 1
-                self._publish()
+            end = time.monotonic()
+            metrics.on_state(self, lambda: finish(end))
+        if retried == "agy":
+            self._until_counted(counted)
+
+    def _until_counted(self, counted: threading.Event) -> None:
+        while not counted.wait(CANCEL_TICK):
+            if self._stopping():
+                raise Cancelled("다시 부르지 않는다: gs가 멈춘다")
+
+    def _stopping(self) -> bool:
+        return self.cancel is not None and self.cancel.is_set()
+
+    def _pause(self, seconds: float) -> None:
+        if self.cancel is None:
+            time.sleep(seconds)
+        elif self.cancel.wait(seconds):
+            raise Cancelled("다시 부르지 않는다: gs가 멈춘다")
+
+    def _begin(self, me: int, at: float, why: str, count: int, due_at: str) -> None:
+        board = self.board
+        if not board.waits:
+            board.since, board.before = at, self.st.network.get("wait") or {}
+        if not self.mine:
+            self.since = at
+        self.mine.add(me)
+        board.waits[me] = {"count": count, "due_at": due_at}
+        self.st.network["errors"] = self.st.network.get("errors", 0) + 1
+        if self.tid:
+            self.st.ticket(self.tid).transient_errors += 1
+        self._publish()
+        self.say(f"{f'[{self.tid}] ' if self.tid else ''}{why}. {state.network_label(self.st, state.now())}")
+
+    def _end(self, me: int, at: float, retried: str) -> None:
+        board = self.board
+        self.mine.discard(me)
+        board.waits.pop(me, None)
+        if not board.waits:
+            self.st.network["waited_seconds"] = round(self.st.network.get("waited_seconds", 0) + at - board.since, 1)
+        if not self.mine and self.tid:
+            ts = self.st.ticket(self.tid)
+            ts.network_wait_seconds = round(ts.network_wait_seconds + at - self.since, 1)
+        if retried == "agy" and not self._stopping():
+            self.st.agy_calls += 1
+        self._publish()
 
     def _publish(self) -> None:
-        self.st.network["wait"] = min(self.waits.values(), key=lambda w: w["due_at"]) if self.waits else self.before
+        self.st.network["wait"] = self.board.current()
         self.save()
 
 
@@ -496,7 +587,8 @@ def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket:
     argv = judge_argv(cfg)
     try:
         text = call_waiting(lambda: _call(argv, prompt=prompt, cwd=cwd, env=_env(cwd), log=rdir / "judge.log",
-                                          timeout=cfg.timeouts.judge_minutes * 60, family="claude"), cfg, on_wait)
+                                          timeout=cfg.timeouts.judge_minutes * 60, family="claude",
+                                          cancel=getattr(on_wait, "cancel", None)), cfg, on_wait)
         (rdir / "judge.txt").write_text(text, encoding="utf-8")
         apply_decisions(text, findings)
     except (ReviewError, OSError) as e:
@@ -517,7 +609,7 @@ def _ask_reviewer(reviewer: str, worktree: Path, prompt: str, rdir: Path, timeou
         with metrics.review_call(on_wait, reviewer, selection, rdir):
             out.unlink(missing_ok=True)  # 앞 시도·지난 실행의 답을 이번 답으로 읽지 않게
             text = _call(argv, prompt=stdin, cwd=worktree, env=env, log=rdir / "reviewer.log", timeout=timeout, family=reviewer,
-                         model=selection.model if reviewer == "agy" else "")
+                         model=selection.model if reviewer == "agy" else "", cancel=getattr(on_wait, "cancel", None))
             if to_file:
                 return out.read_text(encoding="utf-8") if out.exists() else ""
             out.write_text(text, encoding="utf-8")
@@ -640,7 +732,7 @@ def rereview_counts(found: list[dict], new: int) -> str:
 def run_together(jobs: list[dict], fn=None) -> list[dict | BaseException]:
     """fn(**job)(기본 run)을 동시에 돌리고 결과를 jobs 순서로 돌려준다. 예외는 그 자리에 예외 객체로 둔다.
 
-    모두 끝날 때까지 기다린다. reviewer·판단 모델 호출은 각자 시간 제한과 대기 상한(timeouts)이 있어 무한히 기다리지 않는다.
+    모두 끝날 때까지 기다린다. reviewer·판단 모델 호출은 각자 시간 제한과 대기 상한(timeouts)이 있어 무한히 기다리지 않고, 취소(Cancelled)도 각자 본다.
     """
     with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
         futures = [pool.submit(fn or run, **job) for job in jobs]

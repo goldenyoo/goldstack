@@ -1,7 +1,8 @@
 """goldstack-v9 05: 끝난 worker 처리의 단계 경계와 순서를 고정한다. 결과 확인 → 리뷰·수정 worker 판단 → catch-up·병합·검증.
 
 순서 시험은 단계 함수를 감싸 부른 순서를 적고 실제 `gs go`를 돌린다. 단계 함수는 들어갈 때 이름, 돌아올 때 `/이름`을 적는다.
-`/이름`이 없으면 그 단계는 예외로 끝났다.
+`/이름`이 없으면 그 단계는 예외로 끝났다. 리뷰 단계(v9 06)는 제너레이터라 루프가 끝까지 돌린 뒤에 `/이름`을 적는다.
+리뷰로 가는 티켓은 리뷰부터 잇는 표시(_mark_resume)를 먼저 남긴다.
 """
 import inspect
 import os
@@ -25,8 +26,9 @@ STEPS = ("_net_hold", "_net_park", "_end_fix", "_review", "_rereview", "_call_re
 
 CHECK = ["_check_worker", "_net_park", "/_check_worker"]
 FIX_CHECK = ["_check_worker", "_net_park", "_end_fix", "/_check_worker"]
-REVIEW = ["_review_stage", "_review", "_call_reviewers", "_moved_head", "/_review_stage"]
-REREVIEW = ["_review_stage", "_rereview", "_call_rereviewers", "_moved_head", "/_review_stage"]
+MARK = ["_mark_resume"]  # 리뷰에 들어가기 전: 어떻게 끝나든 다음 gs go가 리뷰부터 다시 한다
+REVIEW = MARK + ["_review_stage", "_review", "_call_reviewers", "_moved_head", "/_review_stage"]
+REREVIEW = MARK + ["_review_stage", "_rereview", "_call_rereviewers", "_moved_head", "/_review_stage"]
 TO_FIX = ["_next_fix", "_start_fix"]
 NO_FIX = ["_next_fix"]
 MERGE = ["_merge_stage", "_catch_up", "_verify", "_cleanup_merged", "/_merge_stage"]
@@ -48,9 +50,17 @@ def watched(events, name, real):
         events.append((tid, name))
         result = real(*args, **kwargs)
         if name in STAGES:
+            if inspect.isgenerator(result):
+                return finishing(result, events, tid, name)
             events.append((tid, "/" + name))
         return result
     return wrapper
+
+
+def finishing(flow, events, tid, name):
+    value = yield from flow
+    events.append((tid, "/" + name))
+    return value
 
 
 @contextmanager
@@ -118,8 +128,8 @@ class StageOrderTest(test_review_target.Base):
         self.late("review", 1)
         steps, code, log = self.run_go()
         self.assertEqual(code, 0, log)
-        self.assertEqual(steps, CHECK + ["_review_stage", "_review", "_call_reviewers", "_moved_head",
-                                         "_review", "_call_reviewers", "_moved_head", "/_review_stage"] + NO_FIX + MERGE)
+        self.assertEqual(steps, CHECK + MARK + ["_review_stage", "_review", "_call_reviewers", "_moved_head",
+                                                "_review", "_call_reviewers", "_moved_head", "/_review_stage"] + NO_FIX + MERGE)
         self.assertEqual(self.subject(self.ts().review["reviewed_head"]), "late review 1")
 
     def test_head_moved_before_fix_worker_is_seen_first(self):
@@ -137,7 +147,7 @@ class StageOrderTest(test_review_target.Base):
         self.answer("codex", 2, [(1, "resolved", "늦은 커밋까지 확인")])
         steps, code, log = self.run_go()
         self.assertEqual(code, 0, log)
-        self.assertEqual(steps, CHECK + REVIEW + TO_FIX + FIX_CHECK
+        self.assertEqual(steps, CHECK + REVIEW + TO_FIX + FIX_CHECK + MARK
                          + ["_review_stage", "_rereview", "_call_rereviewers", "_moved_head",
                             "_rereview", "_call_rereviewers", "_moved_head", "/_review_stage"] + NO_FIX + MERGE)
 
@@ -151,7 +161,7 @@ class StageOrderTest(test_review_target.Base):
         with mock.patch.object(review, "require_other_family", side_effect=review.Refused("리뷰 거부: 시험")):
             steps, code, log = self.run_go()
         self.assertEqual(code, 1, log)
-        self.assertEqual(steps, (CHECK + ["_review_stage", "_review", "_fail"]) * 2)
+        self.assertEqual(steps, (CHECK + MARK + ["_review_stage", "_review", "_fail"]) * 2)
         self.assertEqual(self.ts().reason, "리뷰 거부: 시험")
 
     def test_merge_stage_catches_up_then_merges_then_verifies(self):
@@ -226,11 +236,11 @@ class StageOrderTest(test_review_target.Base):
 
 
 class NetworkAbortStageTest(test_review_target.Base):
-    def test_abort_in_review_marks_resume_after_the_stage(self):
+    def test_abort_in_review_keeps_the_mark_left_before_the_stage(self):
         with recorded() as events, mock.patch("gs.review.run", side_effect=transient.NetworkAbort("리뷰 끊김")):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, go.EXIT_NETWORK, out + err)
-        self.assertEqual(order(events), CHECK + ["_review_stage", "_review", "_call_reviewers", "_mark_resume"])
+        self.assertEqual(order(events), CHECK + MARK + ["_review_stage", "_review", "_call_reviewers"])
         ts = self.ts()
         self.assertEqual((ts.status, ts.failures, ts.review), (state.PENDING, 0, {}))
         self.assertEqual((ts.network_resume["done"], ts.network_resume["fix"]), (True, 0))
@@ -241,13 +251,13 @@ class NetworkAbortStageTest(test_review_target.Base):
         self.assertEqual(order(events), CHECK + REVIEW + NO_FIX + MERGE)
         self.assertEqual(self.calls(), ["01"])
 
-    def test_abort_in_rereview_marks_resume_after_the_stage(self):
+    def test_abort_in_rereview_keeps_the_mark_left_before_the_stage(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         with recorded() as events, mock.patch("gs.review.rereview", side_effect=transient.NetworkAbort("재리뷰 끊김")):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, go.EXIT_NETWORK, out + err)
-        self.assertEqual(order(events), CHECK + REVIEW + TO_FIX + FIX_CHECK
-                         + ["_review_stage", "_rereview", "_call_rereviewers", "_mark_resume"])
+        self.assertEqual(order(events), CHECK + REVIEW + TO_FIX + FIX_CHECK + MARK
+                         + ["_review_stage", "_rereview", "_call_rereviewers"])
         mark = self.ts().network_resume
         self.assertEqual((mark["done"], mark["fix"]), (True, 1))
         # 다음 gs go는 수정 worker를 다시 띄우지 않고 재리뷰부터 잇는다
