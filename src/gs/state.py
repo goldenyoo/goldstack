@@ -70,7 +70,8 @@ class TicketState:
     #   fix_reason(수정 못 한 이유: 한도, 띄우지 못함, 수정 worker 실패…),
     #   rereview("" | resolved | unresolved | unchecked), rereview_reason(unchecked의 이유: 시간 초과 | 한도 | 재리뷰 실패),
     #   rereview_evidence(판정 근거·실패 내용), rereview_round(그 결과를 낸 재리뷰 회차),
-    #   found_round(0 첫 리뷰, 1·2 그 회차 재리뷰가 새로 낸 지적. 2회차는 늘 report).
+    #   found_round(0 첫 리뷰, 1·2 그 회차 재리뷰가 새로 낸 지적. 2회차는 늘 report),
+    #   idea_number(보고만 high·medium 지적의 아이디어 파일 번호, findings.py. 옛 state와 정하기 전에는 없다).
     # 지적 하나의 결말은 이 순서로 읽는다: action이 report면 보고만 → rereview가 있으면 그 값(2차 수정을 못 했거나 버렸어도
     # 1차 재리뷰의 unresolved는 그대로 미해결이다) → fix_reason이 있으면 수정 못 함.
     review: dict = field(default_factory=dict)
