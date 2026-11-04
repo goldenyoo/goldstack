@@ -110,6 +110,29 @@ class SharedGitBlocksTest(unittest.TestCase):
                            "git branch -f gs/f/02 HEAD >/dev/null 2>&1", "git remote add a b 2>/dev/null",
                            "cp a.txt /etc/outside 2>/dev/null")  # 마지막 인자가 2가 되어 worktree 밖 쓰기를 놓쳤다
 
+    def test_number_apart_from_a_redirect_is_an_argument(self):  # 셸에서 붙어 있는 2만 fd다. `x 2 >f`의 2는 값이다
+        self.assertBlocked("git config core.hooksPath 2 >/dev/null", "git config remote.origin.url 2 >/dev/null",
+                           "git config core.hooksPath 2 2>/dev/null", "git config a.b 1 >&2", "git config a.b 3 </dev/null",
+                           "git config a.b \"2\">/dev/null", "git config a.b '2'>/dev/null", "git config a.b \\2>/dev/null",
+                           "git config a.b x2 >/dev/null", "git config a.b x2>/dev/null",
+                           "bash -c 'git config a.b 2 >/dev/null'", "echo \"$(git config a.b 2 >/dev/null)\"",
+                           "git status; git config a.b 2 >/dev/null")
+        self.assertAllowed("git config a.b 2>/dev/null", "(git config a.b 2>/dev/null)", "git status;2>/dev/null git config a.b",
+                           "echo \"$(git config a.b 2>/dev/null)\"", "bash -c 'git config a.b 2>/dev/null'")
+
+    def test_fd_is_removed_only_at_a_word_start_outside_quotes(self):
+        ctx = hook.Ctx(worktree=str(self.wt), cwd=str(self.wt), env=self.env)
+
+        def argv(command):
+            return [args for args, _, _ in hook.segments(hook.scan(command)[0], str(self.wt), ctx)]
+
+        self.assertEqual(argv("echo 2>/dev/null"), [["echo"]])
+        self.assertEqual(argv("echo 2 >/dev/null"), [["echo", "2"]])
+        self.assertEqual(argv("echo 12>/dev/null 3"), [["echo", "3"]])
+        self.assertEqual(argv("echo a2>/dev/null"), [["echo", "a2"]])
+        self.assertEqual(argv("echo 'x 2>y'"), [["echo", "x 2>y"]])
+        self.assertEqual(argv('echo "x 2>y"'), [["echo", "x 2>y"]])
+
     def test_one_shot_config_is_not_a_write(self):  # 그 명령에서만 듣고 공용 설정에 남지 않는다
         self.assertAllowed("git -c user.name=t -c user.email=t@t commit -m x", "git -c core.hooksPath=/dev/null commit -m x")
 
@@ -139,6 +162,8 @@ class SharedGitBlocksTest(unittest.TestCase):
         scratch = self.scratch
         self.assertAllowed(f"git -C {scratch} config user.email t@t", f"cd {scratch} && git init -q && git config user.name t",
                            f"git -C {scratch} remote add origin https://a.test/x.git", f"git -C {scratch} branch -f main HEAD",
+                           f"git -C {scratch} update-ref HEAD HEAD~1", f"cd {scratch} && GIT_DIR={scratch}/.git git update-ref HEAD HEAD~1",
+                           f"cd {scratch} && export GIT_DIR={scratch}/.git; git config a.b c",
                            f"git -C {scratch} update-ref refs/heads/main HEAD", f"git -C {scratch} symbolic-ref HEAD refs/heads/x",
                            f"git --git-dir={scratch}/.git -C {scratch} config a.b c", f"git -C {scratch} config -f {scratch}/c a.b d")
 
@@ -149,6 +174,10 @@ class SharedGitBlocksTest(unittest.TestCase):
                            f"cd {scratch} && GIT_DIR={main}/.git git config core.hooksPath x",
                            f"cd {scratch} && GIT_COMMON_DIR={main}/.git git config core.hooksPath x",
                            f"cd {scratch} && env GIT_CONFIG={main}/.git/config git config core.hooksPath x",
+                           f"cd {scratch} && export GIT_DIR={main}/.git; git config core.hooksPath x",
+                           f"cd {scratch} && GIT_DIR={main}/.git bash -c 'git config core.hooksPath x'",
+                           f"cd {scratch} && GIT_DIR={main}/.git eval git config core.hooksPath x",
+                           f"export GIT_DIR={main}/.git; git -C {scratch} update-ref HEAD HEAD~1",
                            f"git -C {scratch} --git-dir={main}/.git config core.hooksPath x",
                            f"git -C {scratch} config -f {main}/.git/config core.hooksPath x",
                            f"git -C {scratch} config --file={main}/.git/config core.hooksPath x",
@@ -224,6 +253,37 @@ class OwnBranchTest(WorktreeFixture):
         for command in OWN_BRANCH_BLOCKED:
             self.assertIsNotNone(self.verdict(command), command)
 
+    def test_head_and_own_branch_of_another_repo_are_not_own(self):
+        """`HEAD`와 자기 브랜치라는 말은 git이 이 worktree를 볼 때만 자기 것이다. 아니면 주 레포의 main을 옮긴다."""
+        main, own = self.repo, "refs/heads/gs/f/12"
+        moves = ["update-ref HEAD HEAD~1", f"update-ref {own} HEAD~1", f"symbolic-ref HEAD {own}", "branch -f gs/f/12 HEAD"]
+        for move in moves:
+            for form in (f"GIT_DIR={main}/.git git {move}", f"env GIT_DIR={main}/.git git {move}",
+                         f"GIT_COMMON_DIR={main}/.git git {move}", f"GIT_WORK_TREE={main} git {move}",
+                         f"git --git-dir={main}/.git {move}", f"git --git-dir {main}/.git {move}",
+                         f"git --work-tree={main} {move}", f"git -C {main} {move}", f"cd {main} && git {move}",
+                         f"(cd {main}; git {move})", f"export GIT_DIR={main}/.git; git {move}",
+                         f"export GIT_DIR={main}/.git && echo \"$(git {move})\"", f"declare -x GIT_DIR={main}/.git; git {move}",
+                         f"GIT_DIR={main}/.git bash -c 'git {move}'", f"GIT_DIR={main}/.git eval git {move}",
+                         f"export GIT_DIR={main}/.git; bash -c 'git {move}'", f"GIT_DIR=$X git {move}", f"GIT_DIR=\"$(pwd)/x\" git {move}",
+                         f"git -C \"$REPO\" {move}", f"git --git-dir=\"$X\" {move}", f"cd \"$REPO\" && git {move}",
+                         f"pushd $REPO; git {move}", f"cd `dirname $X` && git {move}", f"cd \"$(git rev-parse --git-common-dir)/..\" && git {move}"):
+                self.assertIsNotNone(self.verdict(form), form)
+
+    def test_head_of_this_worktree_still_passes_with_unrelated_env(self):
+        for command in ("GIT_TRACE=1 git update-ref HEAD HEAD~1", "FOO=1 git symbolic-ref HEAD refs/heads/gs/f/12",
+                        "env FOO=1 git branch -f gs/f/12 HEAD", "git -C sub update-ref HEAD HEAD~1", "cd sub && git update-ref HEAD HEAD~1",
+                        f"git -C {self.wt} update-ref HEAD HEAD~1", f"cd {self.wt} && git symbolic-ref HEAD refs/heads/gs/f/12",
+                        "bash -c 'git update-ref HEAD HEAD~1'", "git commit -m 'set GIT_DIR=x' && git status"):
+            self.assertIsNone(self.verdict(command), command)
+
+    def test_git_dir_assignment_really_moves_the_main_repo(self):
+        """위 시험의 전제: 이 명령은 worker의 브랜치가 아니라 주 레포의 main을 옮긴다."""
+        before = {name: sh(self.repo, "git", "rev-parse", name) for name in ("main", "gs/f/12")}
+        subprocess.run(["bash", "-c", f"GIT_DIR={self.repo}/.git git update-ref HEAD HEAD~1"], cwd=self.wt, check=True)
+        self.assertNotEqual(sh(self.repo, "git", "rev-parse", "main"), before["main"])
+        self.assertEqual(sh(self.repo, "git", "rev-parse", "gs/f/12"), before["gs/f/12"])
+
     def test_detached_head_owns_no_branch(self):
         sh(self.wt, "git", "checkout", "-q", "--detach")
         self.assertIsNotNone(self.verdict("git update-ref refs/heads/gs/f/12 HEAD~1"))
@@ -247,6 +307,9 @@ class AgyHookTest(WorktreeFixture):
     def test_same_judgement_as_claude_hook(self):
         for command in [*IDEA_REPRO, *OWN_BRANCH_BLOCKED, "git remote add a b", "git -C . config a.b c", "FOO=1 git config a.b c",
                         "bash -c 'git config core.hooksPath x'"]:
+            self.assertEqual(self.verdict(command)["decision"], "deny", command)
+        for command in [f"GIT_DIR={self.repo}/.git git update-ref HEAD HEAD~1", f"export GIT_DIR={self.repo}/.git; git update-ref HEAD HEAD~1",
+                        f"git -C {self.repo} symbolic-ref HEAD refs/heads/gs/f/12", "git config core.hooksPath 2 >/dev/null"]:
             self.assertEqual(self.verdict(command)["decision"], "deny", command)
         for command in [*OWN_BRANCH_OK, "git config --get remote.origin.url", "git config --list", "git remote -v"]:
             self.assertEqual(self.verdict(command)["decision"], "allow", command)
@@ -366,6 +429,77 @@ class PushSettingsTest(WorktreeFixture):
         self.assertNotIn("s3cret", message)
         self.assertNotIn("x-token", message)
         self.assertIn("https://***@evil.test/x.git", message)
+
+    def recorded_in_state(self):
+        """`gs go`처럼 기록을 state.json에 두고 그 경로를 함께 남긴다."""
+        rundir = self.repo.parent / "run"
+        record = {**self.record(), "state_file": str(state.path(rundir))}
+        state.save(rundir, state.State(feature="f", push_record=record))
+        return record
+
+    def assert_restored(self, record):
+        got = self.record()
+        self.assertEqual({**got, "state_file": record["state_file"]}, record)
+        git.check_push(self.wt, "origin", record)
+
+    def test_credentials_in_url_are_restored_from_state_without_being_shown(self):
+        self.config("remote.origin.url", "https://user:old-password@example.test/origin.git")
+        record = self.recorded_in_state()
+        self.config("remote.origin.url", "https://evil.test/x.git")
+        message = self.change_message(record)
+        self.assertNotIn("old-password", message)
+        self.assertNotIn("git config --local --add remote.origin.url https://***", message)
+        self.assertIn("https://***@example.test/origin.git", message)  # 무엇이 바뀌었는지는 가린 채 보인다
+        self.assertIn(record["state_file"], message)
+        self.revert_with_message(message)
+        self.assertEqual(sh(self.repo, "git", "config", "remote.origin.url"), "https://user:old-password@example.test/origin.git")
+        self.assert_restored(record)
+
+    def test_credentials_keep_position_among_several_values(self):
+        for url in ("https://a.test/1.git", "https://user:s3cret@a.test/2.git", "https://b.test/3 4.git", "https://other:t0ken@a.test/5.git"):
+            self.config("--add", "remote.origin.pushurl", url)
+        record = self.recorded_in_state()
+        self.config("--unset-all", "remote.origin.pushurl")
+        self.config("--add", "remote.origin.pushurl", "https://evil.test/x.git")
+        message = self.change_message(record)
+        self.assertNotIn("s3cret", message)
+        self.assertNotIn("t0ken", message)
+        self.revert_with_message(message)
+        self.assert_restored(record)
+
+    def test_credentials_restored_in_their_own_scope(self):
+        home = self.repo.parent / "gitconfig"
+        home.write_text("")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(home)}):
+            sh(self.repo, "git", "config", "--global", "remote.origin.pushurl", "https://user:s3cret@a.test/x.git")
+            record = self.recorded_in_state()
+            sh(self.repo, "git", "config", "--global", "remote.origin.pushurl", "https://evil.test/x.git")
+            message = self.change_message(record)
+            self.assertNotIn("s3cret", message)
+            self.assertIn("git config --global --unset-all remote.origin.pushurl", message)
+            self.revert_with_message(message)
+            self.assert_restored(record)
+
+    def test_credentials_in_rule_value_are_restored(self):
+        self.config("--add", f"url.{self.real}.insteadOf", "https://user:s3cret@github.com/")  # fixture의 값 뒤에 붙는다
+        self.config("remote.origin.pushurl", "https://user:s3cret@github.com/test/origin.git")
+        record = self.recorded_in_state()
+        self.config("--unset-all", f"url.{self.real}.insteadOf")
+        message = self.change_message(record)
+        self.assertNotIn("s3cret", message)
+        self.assertIn(f"url.{self.real}.insteadof", message)
+        self.revert_with_message(message)
+        self.assert_restored(record)
+
+    def test_credentials_in_rule_key_get_directions_not_a_wrong_command(self):
+        token_rule = "url.https://x:s3cret@evil.test/.pushInsteadOf"
+        record = self.recorded_in_state()
+        self.config(token_rule, ORIGIN_URL)
+        message = self.change_message(record)
+        self.assertNotIn("s3cret", message)
+        self.assertIn("키에 인증 정보가 있어 명령을 싣지 않는다", message)
+        self.assertIn(record["state_file"], message)
+        self.assertNotRegex(message, r"(?m)^  git config .*\*\*\*")  # 가린 글자가 든 명령은 다른 설정을 가리킨다
 
     def test_worker_push_block_env_is_not_used(self):
         """worker 전용 env(`worker.push_guard`)는 기록에도 대조에도 들어가지 않는다."""
@@ -529,6 +663,27 @@ class PushGuardGoTest(support.GoTest):
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "verified")
         self.assertIn("file_01", self.remote_files())
         self.assert_nothing_pushed_to_evil()
+
+    def test_credentials_stay_out_of_the_report_and_revert_restores_them(self):
+        secret = "https://user:s3cret@github.com/test/origin.git"
+        sh(self.repo, "git", "config", "--add", f"url.{self.remote}.insteadOf", secret)
+        sh(self.repo, "git", "config", "remote.origin.pushurl", secret)
+        self.worker_also_runs(f'git config remote.origin.pushurl "{self.evil}"')
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assertIn(STOPPED, err)
+        self.assertNotIn("s3cret", out + err)
+        self.assertNotIn("s3cret", json.dumps(state.load(self.rundir, "demo").finish))  # finish.error는 보고서로 나간다
+        self.assertEqual(self.record()["state_file"], str(state.path(self.rundir).resolve()))
+        self.assert_nothing_pushed_to_evil()
+
+        self.revert_with(err)  # 메시지의 명령만으로 원래 값이 돌아온다
+        self.assertEqual(sh(self.repo, "git", "config", "remote.origin.pushurl"), secret)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("file_01", self.remote_files())
+        self.assert_nothing_pushed_to_evil()
+        self.assertNotIn("s3cret", sh(self.remote, "git", "log", "-p", "main"))
 
     def test_worker_changes_remote_url(self):
         self.worker_also_runs(f'git config remote.origin.url "{self.evil}"')

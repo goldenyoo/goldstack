@@ -244,7 +244,7 @@ def _begin(r: Run) -> None:
     st.network.pop("wait", None)
     st.network.pop("aborted", None)
     if st.push_record.get("remote") != r.remote:  # 재개는 첫 기록을 유지한다. worker가 바꾼 값을 기준으로 삼지 않게
-        st.push_record = git.push_settings(r.repo, r.remote)
+        st.push_record = {**git.push_settings(r.repo, r.remote), "state_file": str(state.path(r.rundir).resolve())}
     r.st = st
     metrics.runtime(r)
     r.history_median_s = state.load_eta_history(r.repo, r.name)

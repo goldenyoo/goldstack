@@ -10,8 +10,12 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
+
+
+CREDENTIAL = re.compile(r"(https?://)[^/@\s]+@")  # 주소의 인증 정보
 
 
 class GitError(Exception):
@@ -91,6 +95,8 @@ def push_settings(cwd: Path, remote: str) -> dict:
     - settings: 원격의 url·pushurl, core.hooksPath. 키마다 [범위, 값]의 목록(범위는 되돌릴 명령에 쓴다).
     - fetch_urls, push_urls: insteadOf까지 적용한 실제 주소.
     - rules: url.*.insteadOf·pushInsteadOf. 이 원격의 실제 주소가 바뀌었을 때 원인과 되돌릴 명령을 찾는 데만 쓴다.
+
+    `gs go`는 여기에 state_file(이 기록이 있는 state.json)을 더한다. 인증 정보가 든 값을 되돌리는 명령이 거기서 읽는다.
     """
     env = _file_config_env()
     cp = run(cwd, "config", "--show-scope", "-z", "--get-regexp",
@@ -117,26 +123,53 @@ def _values(entries: list[list[str]]) -> str:
     return ", ".join(f"{value} ({scope})" for scope, value in entries) or "(없음)"
 
 
-def _revert_commands(key: str, before: list[list[str]], now: list[list[str]]) -> list[str]:
+def _hide_credentials(text: str) -> str:
+    return CREDENTIAL.sub(r"\1***@", text)
+
+
+def _state_file(record: dict) -> str:
+    return record.get("state_file") or ".goldstack/work/<feature>/run/state.json"
+
+
+def _recorded_word(record: dict, section: str, key: str, n: int, value: str) -> str:
+    """명령에 넣을 시작 때 값. 인증 정보가 있으면 값 대신 실행할 때 state.json에서 읽는 셸 식이다.
+
+    이 글은 보고서·알림으로 나가서 값을 실을 수 없고, 가린 값을 넣으면 원래 값으로 돌아가지 않는다."""
+    if not CREDENTIAL.search(value):
+        return shlex.quote(value)
+    read = ('import json,sys; f,s,k,n=sys.argv[1:]; '
+            'print(json.load(open(f,encoding="utf-8"))["push_record"][s][k][int(n)][1])')
+    return f'"$({shlex.join([sys.executable or "python3", "-c", read, _state_file(record), section, key, str(n)])})"'
+
+
+def _revert_commands(record: dict, section: str, key: str, now: list[list[str]]) -> list[str]:
     """범위마다 지금 값을 지우고 시작 때 값을 다시 넣는 명령."""
+    before = record.get(section, {}).get(key, [])
     commands: list[str] = []
     for scope in dict.fromkeys(entry[0] for entry in [*before, *now]):
-        was = [value for s, value in before if s == scope]
+        was = [(n, value) for n, (s, value) in enumerate(before) if s == scope]
         has = [value for s, value in now if s == scope]
-        if was != has:
-            if has:
-                commands.append(f"git config --{scope} --unset-all {shlex.quote(key)}")
-            commands += [f"git config --{scope} --add {shlex.quote(key)} {shlex.quote(value)}" for value in was]
+        if [value for _, value in was] == has:
+            continue
+        if CREDENTIAL.search(key):  # 키에 인증 정보가 있는 url 규칙. 키를 가리면 다른 설정을 가리키는 명령이 된다
+            commands.append(f"`{_hide_credentials(key)}`({scope})는 키에 인증 정보가 있어 명령을 싣지 않는다. "
+                            f"`git config --{scope} --list`로 찾아 `{_state_file(record)}`의 `push_record.{section}`대로 고친다")
+            continue
+        if has:
+            commands.append(f"git config --{scope} --unset-all {shlex.quote(key)}")
+        commands += [f"git config --{scope} --add {shlex.quote(key)} {_recorded_word(record, section, key, n, value)}"
+                     for n, value in was]
     return commands
 
 
-def _settings_diff(before: dict, now: dict) -> tuple[list[str], list[str]]:
+def _settings_diff(record: dict, section: str, now: dict) -> tuple[list[str], list[str]]:
+    before = record.get(section, {})
     rows, commands = [], []
     for key in dict.fromkeys([*before, *now]):
         was, has = before.get(key, []), now.get(key, [])
         if was != has:
             rows.append(f"- {key}: {_values(was)} → {_values(has)}")
-            commands += _revert_commands(key, was, has)
+            commands += _revert_commands(record, section, key, has)
     return rows, commands
 
 
@@ -144,7 +177,7 @@ def _describe_push_change(record: dict, now: dict) -> str | None:
     """기록과 지금이 다르면 무엇이 바뀌었고 어떻게 되돌리는지. 같으면 None.
 
     주소에 영향이 없는 url 규칙의 변화는 멈출 이유가 아니다. 규칙은 실제 주소가 바뀌었을 때만 본다."""
-    rows, commands = _settings_diff(record.get("settings", {}), now["settings"])
+    rows, commands = _settings_diff(record, "settings", now["settings"])
     moved = False
     for label, name in (("실제 fetch 주소", "fetch_urls"), ("실제 push 주소", "push_urls")):
         was, has = record.get(name, []), now[name]
@@ -152,16 +185,17 @@ def _describe_push_change(record: dict, now: dict) -> str | None:
             moved = True
             rows.append(f"- {label}: {', '.join(was) or '(없음)'} → {', '.join(has) or '(없음)'}")
     if moved:
-        rule_rows, rule_commands = _settings_diff(record.get("rules", {}), now["rules"])
+        rule_rows, rule_commands = _settings_diff(record, "rules", now["rules"])
         rows += rule_rows
         commands += rule_commands
     if not rows:
         return None
     how = "\n".join(f"  {command}" for command in commands) or "  설정에서 원인을 찾지 못했다. `git remote -v`로 보고 고친다"
-    text = (f"push 설정이 실행 시작 때와 달라 push하지 않았다(원격 `{record['remote']}`). worker나 검증 명령이 바꿨을 수 있다.\n"
-            + "\n".join(rows) + f"\n되돌리기(레포에서):\n{how}\n"
+    # 이 글은 보고서·알림으로 나간다. 주소의 인증 정보를 싣지 않는다(명령은 `_revert_commands`가 이미 뺐다)
+    changed = _hide_credentials(f"push 설정이 실행 시작 때와 달라 push하지 않았다(원격 `{record['remote']}`). "
+                                "worker나 검증 명령이 바꿨을 수 있다.\n" + "\n".join(rows))
+    return (f"{changed}\n되돌리기(레포에서):\n{how}\n"
             "의도한 변경이면 `.goldstack/work/<feature>/run/state.json`의 `push_record`를 지우고 `gs go`를 다시 돌린다(지금 값을 새로 기록한다).")
-    return re.sub(r"(https?://)[^/@\s]+@", r"\1***@", text)  # 이 글은 보고서·알림으로 나간다. 주소의 인증 정보를 싣지 않는다
 
 
 def check_push(cwd: Path, remote: str, record: Mapping) -> None:

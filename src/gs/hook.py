@@ -26,8 +26,8 @@ import re
 import shlex
 import subprocess
 import sys
-from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 
 FOOTER = "이 일은 `gs`가 한다(push·PR·병합·인증). worker는 worktree 안에서 커밋까지만 한다."
@@ -96,6 +96,7 @@ class Ctx:
     worktree: str  # realpath
     cwd: str
     env: Mapping[str, str]
+    located: tuple[str, ...] = ()  # 명령 글에서 git이 볼 곳을 바꾸는 말의 값(`_git_locations`)
 
 
 # ---------------------------------------------------------------- 진입점
@@ -176,6 +177,7 @@ def check_bash(command: str, ctx: Ctx, depth: int = 0) -> str | None:
     if depth > 3:
         return None
     text, subs = scan(command.replace("\\\n", " "))
+    ctx = replace(ctx, located=(*ctx.located, *_git_locations(text)))
     for inner in subs:  # $(...)와 `...`도 명령이다(큰따옴표 안이어도 돈다. 작은따옴표 안은 글자일 뿐)
         reason = check_bash(inner, ctx, depth + 1)
         if reason:
@@ -189,6 +191,8 @@ def check_bash(command: str, ctx: Ctx, depth: int = 0) -> str | None:
 
 
 CODE = ("top", "(", "$(", "`")  # 셸이 명령으로 읽는 자리(따옴표 밖)
+WORD_START = " \t\n;&|()"  # 이 글자 뒤에서 셸의 새 단어가 시작한다
+FD_NUMBER = re.compile(r"[0-9]+(?=[<>])")
 
 
 def scan(text: str) -> tuple[str, list[str]]:
@@ -197,6 +201,7 @@ def scan(text: str) -> tuple[str, list[str]]:
     - heredoc 본문(커밋 메시지 등)은 명령이 아니다. 여는 줄만 남긴다. 따옴표 속 `<<EOF`는 heredoc이 아니다.
     - 따옴표 밖, 단어 처음의 `#`부터 줄 끝까지 지운다(주석 속 따옴표가 해석을 깨지 않게).
     - `$(...)`와 `` `...` ``는 따옴표 밖이나 큰따옴표 안에서만 치환이다. 작은따옴표 안은 글자다.
+    - 리다이렉션에 붙은 fd 번호(`2>f`의 2)를 지운다. 토큰으로 나누면 `x 2 >f`의 인자 2와 구별되지 않는다.
     """
     out: list[str] = []
     subs: list[str] = []
@@ -269,9 +274,12 @@ def scan(text: str) -> tuple[str, list[str]]:
                 close_sub()
             else:
                 stack.pop()
-        elif c == "#" and (i == 0 or text[i - 1] in " \t\n;&|()"):
+        elif c == "#" and (i == 0 or text[i - 1] in WORD_START):
             while i < n and text[i] != "\n":
                 i += 1
+            continue
+        elif (i == 0 or text[i - 1] in WORD_START) and (m := FD_NUMBER.match(text, i)):
+            i = m.end()
             continue
         elif c == "<" and text.startswith("<<", i) and not text.startswith("<<<", i) and (i == 0 or text[i - 1] != "<"):
             m = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][\w.-]*)\1").match(text, i)
@@ -327,8 +335,6 @@ def segments(text: str, cwd: str, ctx: Ctx) -> Iterator[tuple[list[str], list[tu
     while i < len(toks):
         tok = toks[i]
         if is_redirect(tok):
-            if argv and argv[-1].isdigit():
-                argv.pop()  # `2>/dev/null`의 2는 인자가 아니다. 토큰으로는 `echo 2 > f`와 구별되지 않지만 인자 하나를 잃는 쪽이 낫다
             target = toks[i + 1] if i + 1 < len(toks) else ""
             redirects.append((tok, target))
             i += 2
@@ -374,7 +380,7 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     rest = strip_prefix(argv)
     name = command_name(argv)
     args = rest[1:]
-    seg = Ctx(worktree=ctx.worktree, cwd=cwd, env=ctx.env)
+    seg = replace(ctx, cwd=cwd)
 
     if name in ("bash", "sh", "zsh", "dash"):
         script = shell_c_script(args)
@@ -384,7 +390,7 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
         return check_bash(" ".join(args), seg, depth + 1)
 
     if name == "git":
-        reason = check_git(args, seg, argv[:len(argv) - len(rest)])
+        reason = check_git(args, seg)
         if reason:
             return reason
     if name == "gh":
@@ -534,8 +540,7 @@ def in_place_files(name: str, args: list[str]) -> list[str]:
     return files if has_script else files[1:]
 
 
-def check_git(args: list[str], ctx: Ctx, prefix: Iterable[str] = ()) -> str | None:
-    """prefix: 명령 앞에 붙은 단어들(`GIT_DIR=x`, `env` 등). 볼 곳을 바꾸는 환경 변수만 읽는다."""
+def check_git(args: list[str], ctx: Ctx) -> str | None:
     gitdir = ctx.cwd
     paths: list[str] = []  # --work-tree, --git-dir: git이 이 경로를 바꾼다
     i = 0
@@ -567,8 +572,7 @@ def check_git(args: list[str], ctx: Ctx, prefix: Iterable[str] = ()) -> str | No
     for p in paths:
         if sub in GIT_WRITES and outside(p, there):
             return f"worktree 밖 `{p}`를 가리켜 `git {sub}`를 한다(worker는 `{ctx.worktree}` 안만 바꾼다)"
-    located = [a.split("=", 1)[1] for a in prefix if a.startswith(tuple(f"{name}=" for name in GIT_LOCATION_ENV))]
-    return check_shared_git(sub, rest, gitdir, [*paths, *located], ctx)
+    return check_shared_git(sub, rest, gitdir, [*paths, *ctx.located], ctx)
 
 
 # ---------------------------------------------------------------- 공용 git 설정·ref
@@ -576,6 +580,7 @@ def check_git(args: list[str], ctx: Ctx, prefix: Iterable[str] = ()) -> str | No
 
 def check_shared_git(sub: str, rest: list[str], gitdir: str, paths: list[str], ctx: Ctx) -> str | None:
     """공용 설정이나 자기 브랜치 밖의 ref를 바꾸는 명령이면 그 이유. 임시 디렉터리의 버리는 레포는 공유하지 않아 통과한다."""
+    here = _at_worktree(gitdir, paths, ctx)
     if sub == "remote":
         reason = _remote_write(rest)
     elif sub == "config":
@@ -584,14 +589,36 @@ def check_shared_git(sub: str, rest: list[str], gitdir: str, paths: list[str], c
             return reason  # 어느 레포에서 해도 레포 밖 설정에 남는다
         paths = [*paths, *_config_files(rest)]
     elif sub == "update-ref":
-        reason = _update_ref_write(rest, ctx)
+        reason = _update_ref_write(rest, ctx, here)
     elif sub == "branch":
-        reason = _branch_write(rest, ctx)
+        reason = _branch_write(rest, ctx, here)
     elif sub == "symbolic-ref":
-        reason = _symbolic_ref_write(rest, ctx)
+        reason = _symbolic_ref_write(rest, ctx, here)
     else:
         return None
     return None if reason is None or _scratch_repo(gitdir, paths, ctx) else reason
+
+
+def _git_locations(text: str) -> tuple[str, ...]:
+    """명령 글에서 git이 볼 곳을 바꾸는 말의 값: `GIT_DIR=x` 같은 대입과 모르는 곳으로 가는 `cd`.
+
+    대입은 앞붙임만이 아니다(`export GIT_DIR=x; git …`, `GIT_DIR=x bash -c 'git …'`). 어느 명령까지 듣는지 따지지 않고
+    글 안의 git 명령 전부에 적용한다. 이 값은 자기 브랜치·임시 레포 예외를 없애는 데만 쓰여, 잘못 세도 그 예외만 잃는다.
+    """
+    names = tuple(f"{name}=" for name in GIT_LOCATION_ENV)
+    toks = tokens(text)
+    found = [tok.split("=", 1)[1] for tok in toks if tok.startswith(names)]
+    found += [tok for before, tok in zip(toks, toks[1:]) if before in ("cd", "pushd") and ("$" in tok or "`" in tok)]
+    return tuple(found)
+
+
+def _at_worktree(gitdir: str, paths: list[str], ctx: Ctx) -> bool:
+    """git이 이 worktree를 보는가. 아니면 `HEAD`와 자기 브랜치가 다른 레포의 것이다.
+
+    위치를 따로 준 명령은 worktree 안을 적어도 아니라고 본다. 그 파일이 어디를 가리키는지 글로는 모른다(`.git`은 파일이다).
+    """
+    real = resolve(gitdir, ctx)
+    return not paths and real is not None and _within(real, ctx.worktree)
 
 
 def _scratch_repo(gitdir: str, paths: list[str], ctx: Ctx) -> bool:
@@ -681,34 +708,34 @@ def _config_files(rest: list[str]) -> list[str]:
     return files
 
 
-def _update_ref_write(rest: list[str], ctx: Ctx) -> str | None:
+def _update_ref_write(rest: list[str], ctx: Ctx, here: bool) -> str | None:
     if any(_is_long(a, "--stdin") for a in rest):
         return "`git update-ref --stdin`은 어떤 ref를 옮기는지 볼 수 없다"
     ref = next(iter(_ref_operands(rest)), "")
-    if not ref or ref == "HEAD" or ref == own_branch(ctx):
+    if not ref or (here and (ref == "HEAD" or ref == own_branch(ctx))):
         return None
     return f"`git update-ref {ref}`는 자기 브랜치 밖의 ref를 옮긴다"
 
 
-def _branch_write(rest: list[str], ctx: Ctx) -> str | None:
+def _branch_write(rest: list[str], ctx: Ctx, here: bool) -> str | None:
     """-f와 삭제·이름 바꾸기·복사. 새 브랜치를 만드는 일과 목록은 통과한다."""
     short = _short_flags(rest)
     moves = set(short) & set("dDmMcC") or any(_is_long(a, "--delete", "--move", "--copy") for a in rest)
     if not moves and "f" not in short and not any(_is_long(a, "--force") for a in rest):
         return None
     names = [a for a in rest if not a.startswith("-")]  # 여기의 `-m`은 이유가 아니라 이름 바꾸기다
-    own = own_branch(ctx)
+    own = own_branch(ctx) if here else ""
     for name in names if moves else names[:1]:  # `-f <브랜치> <시작점>`: 옮기는 것은 첫 단어뿐이다
         if f"refs/heads/{name}" != own:
             return f"`git branch {' '.join(rest)}`는 자기 브랜치 밖의 ref `{name}`을 옮긴다"
     return None
 
 
-def _symbolic_ref_write(rest: list[str], ctx: Ctx) -> str | None:
+def _symbolic_ref_write(rest: list[str], ctx: Ctx, here: bool) -> str | None:
     if "d" in _short_flags(rest) or any(_is_long(a, "--delete") for a in rest):
         return f"`git symbolic-ref {' '.join(rest)}`는 ref를 지운다"
     words = _ref_operands(rest)
-    if len(words) < 2 or (words[0] == "HEAD" and words[1] == own_branch(ctx)):
+    if len(words) < 2 or (here and words[0] == "HEAD" and words[1] == own_branch(ctx)):
         return None  # 이름 하나는 읽기다
     return f"`git symbolic-ref {' '.join(words)}`는 자기 브랜치 밖의 ref를 옮긴다"
 
