@@ -501,6 +501,35 @@ class PushSettingsTest(WorktreeFixture):
         self.assertIn(record["state_file"], message)
         self.assertNotRegex(message, r"(?m)^  git config .*\*\*\*")  # 가린 글자가 든 명령은 다른 설정을 가리킨다
 
+    def test_credentials_without_state_file_get_directions_not_a_failing_command(self):
+        self.config("remote.origin.url", "https://user:old-password@example.test/origin.git")
+        record = self.record()
+        self.assertNotIn("state_file", record)
+        self.config("remote.origin.url", "https://evil.test/x.git")
+        message = self.change_message(record)
+        self.assertNotIn("old-password", message)
+        self.assertIn("시작 때 값에 인증 정보가 있어 명령을 싣지 않는다", message)
+        self.assertIn("push_record.settings", message)
+        self.assertNotRegex(message, r"(?m)^  git config ")  # 읽기가 실패하면 빈 값이 들어가는 명령이다
+
+    def test_load_points_record_at_the_real_state_file(self):
+        secret = "https://user:old-password@example.test/origin.git"
+        self.config("remote.origin.url", secret)
+        rundir = self.repo.parent / "run"
+        real = str(state.path(rundir).resolve())
+        missing = self.record()
+        for name, saved in (("없음", missing), ("옮긴 레포", {**missing, "state_file": "/gone/state.json"})):
+            with self.subTest(name):
+                state.save(rundir, state.State(feature="f", push_record=saved))
+                record = state.load(rundir, "f").push_record
+                self.assertEqual(record["state_file"], real)
+                self.config("remote.origin.url", "https://evil.test/x.git")
+                message = self.change_message(record)
+                self.assertNotIn("old-password", message)
+                self.revert_with_message(message)
+                self.assertEqual(sh(self.repo, "git", "config", "remote.origin.url"), secret)
+                self.assert_restored(record)
+
     def test_worker_push_block_env_is_not_used(self):
         """worker 전용 env(`worker.push_guard`)는 기록에도 대조에도 들어가지 않는다."""
         clean = self.record()
@@ -685,6 +714,29 @@ class PushGuardGoTest(support.GoTest):
         self.assert_nothing_pushed_to_evil()
         self.assertNotIn("s3cret", sh(self.remote, "git", "log", "-p", "main"))
 
+    def test_resume_of_record_without_state_file_restores_credentials(self):
+        secret = "https://user:s3cret@github.com/test/origin.git"
+        sh(self.repo, "git", "config", "--add", f"url.{self.remote}.insteadOf", secret)
+        sh(self.repo, "git", "config", "remote.origin.pushurl", secret)
+        self.worker_also_runs(f'git config remote.origin.pushurl "{self.evil}"')
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        path = state.path(self.rundir)
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        del raw["push_record"]["state_file"]  # state_file이 생기기 전에 시작한 실행의 기록
+        path.write_text(json.dumps(raw), encoding="utf-8")
+
+        code, out, err = self.go("--only", "01")  # 재개
+        self.assertEqual(code, 1, out + err)
+        self.assertIn(STOPPED, err)
+        self.assertNotIn("s3cret", out + err)
+        self.revert_with(err)
+        self.assertEqual(sh(self.repo, "git", "config", "remote.origin.pushurl"), secret)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("file_01", self.remote_files())
+        self.assert_nothing_pushed_to_evil()
+
     def test_worker_changes_remote_url(self):
         self.worker_also_runs(f'git config remote.origin.url "{self.evil}"')
         code, out, err = self.go("--only", "01")
@@ -830,6 +882,24 @@ class PushGuardGoTest(support.GoTest):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.remote_gs_branch(self.remote), "")
         self.assertIn("gs/demo/x", self.remote_gs_branch(self.evil))
+
+    def test_clean_of_record_without_state_file_restores_credentials(self):  # clean은 `_begin`을 지나지 않는다
+        secret = "https://user:s3cret@github.com/test/origin.git"
+        sh(self.repo, "git", "config", "--add", f"url.{self.remote}.insteadOf", secret)
+        sh(self.repo, "git", "config", "remote.origin.pushurl", secret)
+        self.push_gs_branch()
+        record = git.push_settings(self.repo, "origin")
+        state.save(self.rundir, state.State(feature="demo", finish={"phase": "verified"}, push_record=record))
+        sh(self.repo, "git", "config", "remote.origin.pushurl", str(self.evil))
+        code, out, err = self.clean()
+        self.assertEqual(code, 1, out + err)
+        self.assertIn(STOPPED, err)
+        self.assertNotIn("s3cret", out + err)
+        self.revert_with(err)
+        self.assertEqual(sh(self.repo, "git", "config", "remote.origin.pushurl"), secret)
+        code, out, err = self.clean()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.remote_gs_branch(self.remote), "")
 
     def test_clean_does_not_ask_changed_remote(self):  # 지울 브랜치가 없어도 바뀐 주소에 묻지 않고 알린다
         record = git.push_settings(self.repo, "origin")

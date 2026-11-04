@@ -268,7 +268,10 @@ def load(rundir: Path, feature: str) -> State:
         tickets[tid] = TicketState(**known)
     top = {k: v for k, v in raw.items() if k in State.__dataclass_fields__ and k != "tickets"}
     top.setdefault("feature", feature)
-    return State(**top, tickets=tickets)
+    st = State(**top, tickets=tickets)
+    if st.push_record:  # 되돌리기 명령이 값을 읽을 곳. 항목이 없는 기록과 레포를 옮긴 기록도 실제 위치를 가리키게 한다
+        st.push_record["state_file"] = str(p.resolve())
+    return st
 
 
 def save(rundir: Path, st: State) -> None:

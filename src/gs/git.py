@@ -96,7 +96,8 @@ def push_settings(cwd: Path, remote: str) -> dict:
     - fetch_urls, push_urls: insteadOf까지 적용한 실제 주소.
     - rules: url.*.insteadOf·pushInsteadOf. 이 원격의 실제 주소가 바뀌었을 때 원인과 되돌릴 명령을 찾는 데만 쓴다.
 
-    `gs go`는 여기에 state_file(이 기록이 있는 state.json)을 더한다. 인증 정보가 든 값을 되돌리는 명령이 거기서 읽는다.
+    `gs go`는 여기에 state_file(이 기록이 있는 state.json)을 더하고, `state.load`가 읽을 때마다 실제 위치로 채운다.
+    인증 정보가 든 값을 되돌리는 명령이 거기서 읽는다. state_file이 없으면 그 명령을 만들 수 없어 고칠 곳을 적는다.
     """
     env = _file_config_env()
     cp = run(cwd, "config", "--show-scope", "-z", "--get-regexp",
@@ -139,7 +140,7 @@ def _recorded_word(record: dict, section: str, key: str, n: int, value: str) -> 
         return shlex.quote(value)
     read = ('import json,sys; f,s,k,n=sys.argv[1:]; '
             'print(json.load(open(f,encoding="utf-8"))["push_record"][s][k][int(n)][1])')
-    return f'"$({shlex.join([sys.executable or "python3", "-c", read, _state_file(record), section, key, str(n)])})"'
+    return f'"$({shlex.join([sys.executable or "python3", "-c", read, record["state_file"], section, key, str(n)])})"'
 
 
 def _revert_commands(record: dict, section: str, key: str, now: list[list[str]]) -> list[str]:
@@ -151,8 +152,11 @@ def _revert_commands(record: dict, section: str, key: str, now: list[list[str]])
         has = [value for s, value in now if s == scope]
         if [value for _, value in was] == has:
             continue
-        if CREDENTIAL.search(key):  # 키에 인증 정보가 있는 url 규칙. 키를 가리면 다른 설정을 가리키는 명령이 된다
-            commands.append(f"`{_hide_credentials(key)}`({scope})는 키에 인증 정보가 있어 명령을 싣지 않는다. "
+        # 키를 가리면 다른 설정을 가리키는 명령이 되고, 읽을 파일이 없으면 값이 빈 문자열이 된다. 둘 다 고칠 곳만 적는다
+        where = ("키" if CREDENTIAL.search(key) else
+                 "시작 때 값" if not record.get("state_file") and any(CREDENTIAL.search(value) for _, value in was) else "")
+        if where:
+            commands.append(f"`{_hide_credentials(key)}`({scope})는 {where}에 인증 정보가 있어 명령을 싣지 않는다. "
                             f"`git config --{scope} --list`로 찾아 `{_state_file(record)}`의 `push_record.{section}`대로 고친다")
             continue
         if has:
