@@ -25,7 +25,7 @@
   - 메타데이터 없이 소스로 실행하면 `gs hook pretooluse`를 포함한 모든 명령이 죽고, hook 차단이 풀릴 수 있다. 정상 설치에서는 발생하지 않는다.
   - README가 안내하는 `/plugin marketplace update goldstack`로 플러그인까지 갱신되는지도 확인되지 않았다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/8 병합 · main 검증 통과
 
 ## Evidence
 
@@ -249,6 +249,14 @@ The directory also runs a safety scan and a policy review that this command does
 ✔ Validation passed with warnings
 ```
 
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 ```text
@@ -298,18 +306,74 @@ The directory also runs a safety scan and a policy review that this command does
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+```text
+$ uv run python -m unittest discover -s tests && claude plugin validate . && uv build -q -o "$(mktemp -d)"
+HEAD: 102428b4b9addc959bfc277608fd57587b3c09fa
+Using CPython 3.12.15
+Creating virtual environment at: .venv
+   Building goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base
+      Built goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base
+Installed 1 package in 1ms
+..................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................
+----------------------------------------------------------------------
+Ran 530 tests in 586.614s
+
+OK
+Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base/.claude-plugin/marketplace.json
+
+⚠ Found 1 warning:
+
+  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
+
+Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base/.claude-plugin/plugin.json
+
+  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
+  ❯ types ./types/index.d.ts declares state: goldstack.line
+
+Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
+  ❯ ./register.tsx state writes: goldstack.line
+  ❯ ./register.tsx state reads: goldstack.line
+
+Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v6/run/gs-main-kpg_jaef/base. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
+
+⚠ Found 1 plugin directory warning:
+
+  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
+    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
 
 agy 사용: 2/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/8
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `102428b4b9addc959bfc277608fd57587b3c09fa`
 
 ### 되돌리는 법
 
@@ -319,7 +383,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 102428b4b9addc959bfc277608fd57587b3c09fa
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v6/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
