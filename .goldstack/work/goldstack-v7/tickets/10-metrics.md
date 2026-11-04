@@ -25,4 +25,5 @@ reviewer: claude
 - worker 안에서 돌린 시험 측정(gs가 볼 수 없다), 측정으로 스케줄 바꾸기(`async-coordinator`), `/retro` 변경.
 
 ## 참고
+- 이번 실행 규칙: 개발 중에는 관련 시험만 돌리고, 전체 검증은 커밋 직전에 한 번만 돌린다(수정 worker도). gs가 병합 전에 다시 돌린다.
 - spec §3 1-6, 2-8. 아이디어 `.goldstack/ideas/e2e-time-reduction.md` "측정 필드".

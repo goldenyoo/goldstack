@@ -22,6 +22,7 @@ worker 종료와 CLI 출력만 보고 "일시 오류인가"를 답하는 판별�
 - 대기·재시작·중단(06), 리뷰·판단 호출(07), 사용량 한도 처리(out-of-scope `usage-adapters`).
 
 ## 참고
+- 이번 실행 규칙: 개발 중에는 관련 시험만 돌리고, 전체 검증은 커밋 직전에 한 번만 돌린다(수정 worker도). gs가 병합 전에 다시 돌린다.
 - spec §3 2-9, §6 네트워크 끊김 때 출력, `agy models`.
 - 아이디어 `.goldstack/ideas/transient-api-error-retry.md`의 v6 03 사건.
 - 실제 로그 예: `.goldstack/work/goldstack-v6/run/03/1/` (gitignore. 있으면 읽고, 없으면 spec §6을 쓴다).

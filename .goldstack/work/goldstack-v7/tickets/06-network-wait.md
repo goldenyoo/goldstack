@@ -27,6 +27,7 @@ second_reviewer: agy
 - 판별(03), 리뷰·판단 호출의 재호출(07), 등급 승급(08), 마무리 단계 push·gh 오류(`finish-network-retry`), 세션 이어 가기(`session-resume-worker`), 호스트 연결 확인(2-10에서 뺐다).
 
 ## 참고
+- 이번 실행 규칙: 개발 중에는 관련 시험만 돌리고, 전체 검증은 커밋 직전에 한 번만 돌린다(수정 worker도). gs가 병합 전에 다시 돌린다.
 - spec §3 2-10, 2-11, 2-12, 2-13, 2-14. §6 실패 처리, `_loop`.
 - 아이디어 `.goldstack/ideas/transient-api-error-retry.md`.
 - 시간 상수는 시험에서 줄일 수 있게 seam을 둔다(`GS_VERIFY_TIMEOUT`처럼).

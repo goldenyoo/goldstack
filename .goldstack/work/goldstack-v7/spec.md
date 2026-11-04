@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack-v7 — spec
 
-상태: grill 완료(라운드 3개) · 2026-11-04 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 4개) · 2026-11-04 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 ## 1. 목표
 feature 한 번의 전체 시간을 줄이고(반복되는 시험과 검증 정비), 짧은 네트워크 끊김이 티켓을 잃거나 리뷰 없는 병합으로 이어지지 않게 하고, 티켓 크기에 맞춰 모델·effort를 config와 티켓에서 고르게 한다.
@@ -48,6 +48,7 @@ feature 한 번의 전체 시간을 줄이고(반복되는 시험과 검증 정�
 | 2-18 | 리뷰어 등급 | 첫 리뷰 large, 재리뷰 medium, config로 변경 가능 |
 | 2-19 | 실패 재시도 등급 | 한 단계 올림, 보고서에 기록. 일시 오류는 올리지 않음 |
 | 2-20 | 내부 판단 호출 | 실패 요약만 `failure_summary = "haiku"`. 리뷰 분류·보고서 Summary는 `models.judge` 유지 |
+| 4-1 | v7 실행의 시험 반복 | 티켓 11장 본문 `참고`에 "개발 중에는 관련 시험만, 전체 검증은 커밋 직전 한 번만". v7은 v6 gs로 돌아 02의 지시문 변경이 자기 실행에 적용되지 않기 때문이다. 01·02를 떼어 먼저 돌리지 않는다 |
 
 ## 4. 형식
 **등급표 기본값** (`gs init` 템플릿, 이 레포 `.goldstack/config.toml`)
@@ -94,6 +95,7 @@ effort 넘기는 법: claude·agy `--effort <값>`, codex `-c model_reasoning_ef
 - 도구: claude 2.1.318, codex-cli 0.166.0, agy 1.4.12, `gs` 설치본 v5(`gs --help`에 `--version` 없음), 플러그인 goldstack 0.0.1. CPU 12코어.
 - **시험**: `tests/test_*.py` 36개, 약 8,500줄. `uv run python -m unittest discover -s tests` 8분 40초(v6 실행과 함께 돌린 값, 2026-11-04).
 - **시험 병렬(직접 측정, v6 실행과 함께)**: 파일마다 프로세스 하나, 동시 3개 → **4분 10초**, 36개 파일 모두 통과(1회 측정). 파일별 합 563초 중 `test_go.py` 234초(42%)가 병목, 그다음 `test_squash` 57초, `test_wait_checks` 35초, `test_second_review` 32초, `test_protected_base` 28초, `test_setup` 27초. 10초 미만 파일이 대부분이다.
+- **시험 증가(v6 재실행 로그 대조, 2026-11-04 13시경)**: 전체 시험 553–561개, 순차 11–12분(679초, 688초, 726초). 위의 8분 40초·4분 10초는 그 전 값이고 병렬은 재측정하지 않았다(약 5–6분 추정). v6 03 worker는 전체 시험 2번과 부분 시험 여러 번, v6 04는 worker·수정 worker·gs가 전체 시험을 한 번씩 돌렸다(`.goldstack/work/goldstack-v6/run/03/3/worker.log`, `run/04/1/`). 수정 worker brief도 `worker.write_brief`로 만들어 티켓 본문을 포함한다.
 - **검증 지점**: 티켓마다 병합 전(`go._verify`), 마무리 `integration`, `integration-final`(보고서만 바뀌면 건너뜀), 재개 `integration-recheck`, `main-recheck`. 이와 별도로 `worker.write_brief`가 worker·수정 worker에게 커밋 전 `spec.ticket_verify`를 돌리게 한다.
 - **`verify_ticket` 구멍(확인됨)**: `go._verify`는 `verify_ticket`이 있으면 병합 트리(`r.iwt`) 대신 티켓 worktree에서 돌고, 끝난 뒤 깨끗함을 보지 않는다. `finish._verify`는 HEAD·깨끗함·브랜치를 본다. `Spec.verify_ticket`은 feature 단위 문자열 하나다.
 - **integration 전체 검증 실패**: `finish.run`이 `phase=not_merged`, `integration 검증 실패 → 병합 안 함`으로 끝난다. 원인 티켓을 좁히거나 수리하는 흐름은 없다.
@@ -147,3 +149,8 @@ effort 넘기는 법: claude·agy `--effort <값>`, codex `-c model_reasoning_ef
 ### 라운드 3 — 티켓 분해 (추천대로)
 사람 답: "yes". 표는 §5. 범위 밖 7개: review-idle-timeout, finish-network-retry, session-resume-worker, async-coordinator, repair-worker, claude-reviewer-bash, judge-lower-tier.
 티켓을 쓰며 정한 세부(결정을 바꾸지 않는 구현 기준): 06 회복 판단은 "다시 띄운 worker가 5분 넘게 일시 오류 없이 돌거나 끝남"(claude 자체 재시도가 약 3분 넘게 걸리는 것을 고려). 07에서 보고서 Summary·실패 요약은 같은 대기로 다시 부르되 넘기면 중단이 아니라 지금의 대체 문구로 간다(병합 안전과 무관하고 이미 대체 경로가 있다). 분류·리뷰·재리뷰는 넘기면 중단. 06·07이 대기 일정을 `transient.py`에서 함께 쓰므로 06 touches에 `src/gs/transient.py` 추가. 등급을 바꾸는 키는 `[tiers] review`·`rereview`.
+
+### 라운드 4 — v7 자신의 실행 (추천대로)
+계기: v6 재실행 세션(goldstack-8d)이 검증 정비를 v7에 넣자고 근거를 보냄. 수치는 로그로 확인했고, 검증 정비는 이미 01·02에 있어 빈틈은 v7이 v6 gs로 돈다는 점뿐이었다.
+사람 답: "yes".
+1. 시험 반복 줄이기: A 티켓 본문에 한 줄 / B 01·02를 먼저 작은 feature로 / C 그대로 — 추천 A → 확정 A

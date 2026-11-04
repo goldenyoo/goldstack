@@ -25,5 +25,6 @@ grill이 티켓을 나눌 때 전체 시간과 등급을 함께 보게 한다.
 - `/go`(06), `/adopt`.
 
 ## 참고
+- 이번 실행 규칙: 개발 중에는 관련 시험만 돌리고, 전체 검증은 커밋 직전에 한 번만 돌린다(수정 worker도). gs가 병합 전에 다시 돌린다.
 - spec §3 2-3, 2-6 a, 2-7, 2-16.
 - 아이디어 `.goldstack/ideas/e2e-time-reduction.md` "grill 정비". 글쓰기는 `skills/writing-for-agents/SKILL.md`를 따른다.

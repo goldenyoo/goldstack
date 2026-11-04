@@ -22,5 +22,6 @@ reviewer: claude
 - 실패 시험 되짚기, 수리 worker(`repair-worker`). 병합 판단 자체는 바꾸지 않는다.
 
 ## 참고
+- 이번 실행 규칙: 개발 중에는 관련 시험만 돌리고, 전체 검증은 커밋 직전에 한 번만 돌린다(수정 worker도). gs가 병합 전에 다시 돌린다.
 - spec §3 2-5, §6 integration 전체 검증 실패.
 - `finish.run`의 `not_merged` 경로, `finish/integration-verify.log`.

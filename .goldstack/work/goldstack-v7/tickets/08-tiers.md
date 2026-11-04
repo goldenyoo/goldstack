@@ -23,5 +23,6 @@ reviewer: claude
 - 리뷰어 등급과 실패 요약 모델 적용(09), 보고서 표시(10), grill 지침(04), 분류를 작은 모델로(`judge-lower-tier`).
 
 ## 참고
+- 이번 실행 규칙: 개발 중에는 관련 시험만 돌리고, 전체 검증은 커밋 직전에 한 번만 돌린다(수정 worker도). gs가 병합 전에 다시 돌린다.
 - spec §3 2-16, 2-17, 2-19. §4 등급표. §6 CLI 옵션, 모델 이름.
 - 아이디어 `.goldstack/ideas/model-tiering.md`, `.goldstack/ideas/model-effort-config.md`.
