@@ -1,6 +1,7 @@
 """밖으로 나갈 field report의 내용을 정하는 한 곳. 이 코드를 지나지 않은 글은 issue에 들어가지 못한다.
 
-입력은 단계, 오류 종류, gs 프레임, 오류 줄 목록뿐이다. 로그 전체나 자유 글을 받는 인자는 없다.
+자동 수집 입력은 단계, 오류 종류, gs 프레임, 오류 줄 목록뿐이다.
+사람이 명시적으로 보낸 자유 글은 record_manual에서만 받으며 그대로 전송한다.
 오류 줄의 가림은 세 겹이다.
 
 1. 아는 모양을 자리표시로 바꾼다: 비밀 `<secret>`, 원격 URL `<url>`, 이메일 `<email>`, 레포 경로 `<repo>/…`,
@@ -565,3 +566,184 @@ def record(repo: Path, cfg: config.Config, *, phase: str, kind: str, frames: Ite
              "## 오류 줄(가리기 전)", *raw]
     _write_draft(path, meta, issue.body, "\n".join(local))
     return path
+
+
+def record_manual(repo: Path, cfg: config.Config, message: str) -> Path | None:
+    """사람이 명시적으로 보낸 글. 자동 수집과 달리 자유 글을 그대로 싣는다."""
+    if os.environ.get("GS_ROLE") == "worker":
+        raise ValueError("worker는 사람이 쓴 피드백을 저장할 수 없습니다")
+    if cfg.feedback.mode == "off":
+        return None
+    if not message.strip() or LOCAL_MARKER in message:
+        raise ValueError("피드백은 비어 있거나 로컬 전용 표시를 포함할 수 없다")
+    issue = compose(phase="feedback", kind="feedback", frames=[], error_lines=[], cfg=cfg,
+                    redactor=redactor_for(repo), env=environment())
+    fingerprint = hashlib.sha256((issue.fingerprint + "\0" + message).encode()).hexdigest()[:16]
+    path = draft_path(repo, fingerprint)
+    _prepare_dir(repo)
+    try:
+        _bump(path, cfg.feedback.detail)
+        return path
+    except (FileNotFoundError, KeyError, ValueError):
+        pass
+    body = issue.body.replace(issue.fingerprint, fingerprint) + "\n\n## 사람이 쓴 피드백\n" + message
+    _write_draft(path, {"fingerprint": fingerprint, "title": issue.title, "labels": list(issue.labels), "count": "1"},
+                 body, "")
+    return path
+
+
+def _gh(repo: Path, target: str, *args: str) -> str:
+    """인증·네트워크 실패의 원문은 출력하지 않는다. 명령마다 대기 상한이 있다."""
+    cp = subprocess.run([os.environ.get("GS_GH", "gh"), *args, "--repo", target], cwd=repo,
+                        capture_output=True, text=True, encoding="utf-8", errors="replace",
+                        stdin=subprocess.DEVNULL, timeout=20)
+    if cp.returncode:
+        raise OSError("gh 실패")
+    return cp.stdout.strip()
+
+
+def _save_send_state(path: Path, data: dict) -> None:
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump(data, out)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path | None = None, err=None) -> int:
+    """쌓인 초안을 보내고 성공한 issue/댓글 수를 돌려준다. draft는 명시적 force만 보낸다.
+
+    실패는 한 줄로 알리고 초안을 보존한다. 시작 때 재전송할 호출 지점은 수집 쪽에서 맡는다.
+    성공한 횟수는 초안에, 일일 한도와 issue별 댓글 날짜는 전송 장부에 남긴다.
+    only_path가 있으면 그 초안만 보낸다. 손상된 초안은 보존하고 다음 초안으로 넘어간다.
+    장부가 손상되면 당일 잔여 한도를 알 수 없으므로 다음 날까지 전송을 미룬다.
+    """
+    import fcntl
+    import sys
+    from datetime import date
+
+    if cfg.feedback.mode == "off" or (cfg.feedback.mode != "auto" and not force):
+        return 0
+    if os.environ.get("GS_ROLE") == "worker":
+        return 0  # gh는 gs 본체에서만 쓴다
+    root = repo / FEEDBACK_DIR
+    if not root.exists():
+        return 0
+    sent = 0
+    failed = False
+    try:
+        with (root / ".send-lock").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return 0
+            state_path = root / ".send-state.json"
+            today = date.today().isoformat()
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {
+                    "day": today, "count": 0, "issues": {}}
+                if (not isinstance(state, dict) or not isinstance(state.get("day"), str)
+                        or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", state["day"])
+                        or type(state.get("count")) is not int or state["count"] < 0
+                        or not isinstance(state.get("issues"), dict)
+                        or any(not isinstance(key, str) or value is not True
+                               for key, value in state["issues"].items())):
+                    raise ValueError("전송 장부 형식이 올바르지 않다")
+            except (ValueError, TypeError):
+                state = {"day": today, "count": cfg.feedback.max_per_day, "issues": {}}
+                _save_send_state(state_path, state)
+                failed = True
+            if state.get("day") != today:
+                state = {"day": today, "count": 0, "issues": {}}
+            target = cfg.feedback.repo
+            for path in ([only_path] if only_path is not None else sorted(root.glob("*.md"))):
+                if state["count"] >= cfg.feedback.max_per_day:
+                    break
+                try:
+                    draft = read_draft(path, cfg)
+                    already = int(str(draft.meta.get("sent_count", "0"))) if draft.meta.get("sent_repo") == target else 0
+                except (OSError, ValueError, KeyError, TypeError):
+                    failed = True
+                    continue
+                if draft.count <= already:
+                    continue
+                matches = json.loads(_gh(repo, target, "issue", "list", "--state", "open", "--search",
+                                         draft.fingerprint, "--json", "number,body", "--limit", "100"))
+                # 검색은 부분 일치일 수 있다. 본문의 지문 줄까지 대조한다.
+                number = next((item["number"] for item in matches
+                               if f"- 지문: {draft.fingerprint}" in item.get("body", "").splitlines()), None)
+                if number is not None:
+                    key = f"{target}#{number}"
+                    if key in state["issues"]:
+                        continue  # 남은 횟수는 다음 날 댓글에 담는다
+                    _gh(repo, target, "issue", "comment", str(number), "--body",
+                        f"- 지문: {draft.fingerprint}\n- 횟수: {draft.count}\n- 이번 추가: {draft.count - already}")
+                else:
+                    labels = []
+                    try:
+                        existing = {item["name"] for item in json.loads(
+                            _gh(repo, target, "label", "list", "--json", "name", "--limit", "1000"))}
+                        for label in draft.labels:
+                            if label not in existing:
+                                _gh(repo, target, "label", "create", label)
+                        labels = [arg for label in draft.labels for arg in ("--label", label)]
+                    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+                        pass  # 라벨을 만들 권한이 없어도 issue는 보낸다
+                    url = _gh(repo, target, "issue", "create", "--title", draft.title, "--body", draft.body, *labels)
+                    match = re.search(r"/issues/(\d+)$", url)
+                    if not match:
+                        raise ValueError("gh issue 주소를 읽을 수 없다")
+                    number = int(match[1])
+                    key = f"{target}#{number}"
+                sent += 1
+                state["count"] += 1
+                state["issues"][key] = True
+                _save_send_state(state_path, state)
+                meta, body, local = _split_draft(path.read_text(encoding="utf-8"))
+                _write_draft(path, {**meta, "sent_count": str(draft.count), "sent_repo": target,
+                                    "sent_day": today, "issue": str(number)}, body, local)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        failed = True
+    if failed:
+        print("gs feedback: 전송하지 못한 초안은 남겨 두고 다음 실행 때 다시 보냅니다.", file=err or sys.stderr)
+    return sent
+
+
+def command(repo: Path, args: list[str], out, err) -> int:
+    """gs feedback [list|send|사람의 글]. 전송 실패는 다른 gs 실행을 막지 않는다."""
+    cfg, problems = config.load(repo)
+    for problem in problems:
+        print(problem, file=err)
+    if cfg is None:
+        return 1
+    if args == ["list"]:
+        for path in sorted((repo / FEEDBACK_DIR).glob("*.md")):
+            try:
+                draft = read_draft(path, cfg)
+                count = int(str(draft.meta.get("sent_count", "0"))) if draft.meta.get("sent_repo") == cfg.feedback.repo else 0
+                status = "sent" if count >= draft.count else "pending"
+                print(f"{draft.fingerprint} {status} {count}/{draft.count} {draft.title}", file=out)
+            except (OSError, ValueError, KeyError):
+                print(f"{path.name} invalid", file=out)
+        return 0
+    if cfg.feedback.mode == "off":
+        print('gs feedback: feedback.mode = "off"라 저장·전송하지 않습니다.', file=err)
+        return 1
+    if os.environ.get("GS_ROLE") == "worker":
+        print("gs feedback: worker는 수동 피드백을 저장·전송할 수 없습니다.", file=err)
+        return 1
+    if not args:
+        print('사용: gs feedback "한 줄" | list | send', file=err)
+        return 2
+    only_path = None
+    if args != ["send"]:
+        try:
+            only_path = record_manual(repo, cfg, " ".join(args))
+        except (OSError, ValueError) as exc:
+            print(f"gs feedback: 초안을 저장하지 못했습니다: {exc}", file=err)
+            return 1
+    print(f"gs feedback: {send(repo, cfg, force=True, only_path=only_path, err=err)}건 전송", file=out)
+    return 0
