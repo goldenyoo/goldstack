@@ -192,6 +192,22 @@ class CallTest(Base):
                 self.call(f"echo '{stderr}' >&2; {answer}; exit 1", family="agy")
             self.assertNotIsInstance(caught.exception, review.ReviewTransient)
 
+    def test_agy_permanent_error_in_stdout_is_not_turned_transient_by_stderr(self):
+        for event in ({"event": "error", "message": "401 authentication failed"},
+                      {"event": "error", "message": "usage_limit_reached"},
+                      {"event": "error", "status": 403, "message": "boom"},
+                      {"event": "result", "result": {"status": "FAILED", "message": "invalid_api_key"}}):
+            with self.subTest(event=event), self.assertRaises(review.ReviewError) as caught:
+                self.call(f"echo '{AGY_DOWN}' >&2; echo '{json.dumps(event)}'; exit 1", family="agy")
+            self.assertNotIsInstance(caught.exception, review.ReviewTransient)
+
+    def test_agy_stderr_counts_when_stdout_permanent_error_was_followed_by_success(self):
+        lines = "; ".join(f"echo '{json.dumps(e)}'" for e in (
+            {"event": "error", "message": "401 authentication failed"},
+            {"event": "result", "result": {"status": "SUCCESS"}}))
+        with self.assertRaises(review.ReviewTransient):
+            self.call(f"echo '{AGY_DOWN}' >&2; {lines}; exit 1", family="agy")
+
     def test_claude_error_result_with_exit_zero_is_not_an_answer(self):
         with self.assertRaises(review.ReviewTransient):
             self.call(f"echo '{CLAUDE_DOWN}'; exit 0", family="claude")

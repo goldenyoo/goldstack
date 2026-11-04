@@ -229,13 +229,14 @@ def _failure_reason(family: str, model: str, cwd: Path, stdout: str, log: Path) 
     """실패한 호출의 stdout을 로그에 덧붙여 증거로 남기고(claude 오류는 stdout의 result에만 있다), 일시 오류 이유를 찾는다.
 
     agy 판별은 JSON 줄이 하나라도 있으면 일반 stderr를 보지 않는다. stdout의 답(JSON)이 stderr의 연결 오류를 가리지 않게 stderr만 한 번 더 본다.
+    stdout의 오류 이벤트가 영구 오류(인증·구독 한도 등)를 말하면 stderr가 무엇이든 일시 오류가 아니다.
     """
     try:
         stderr = log.read_text(encoding="utf-8", errors="replace")
         with log.open("a", encoding="utf-8") as f:
             f.write(stdout)
         why = transient.reason(family, log.read_text(encoding="utf-8", errors="replace"), model=model, cwd=cwd)
-        if why or family != "agy" or not transient._events(stdout):
+        if why or family != "agy" or not transient._events(stdout) or transient.agy_permanent(stdout):
             return why
         return transient.reason(family, stderr, model=model, cwd=cwd)
     except Exception:  # noqa: BLE001 — 판별 자체의 오류는 일시 오류가 아니라고 본다

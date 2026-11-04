@@ -120,6 +120,27 @@ def _agy_model_reason(text: str, model: str, cwd: Path | None) -> str:
     return ""
 
 
+def _agy_error(events: list[dict]) -> dict:
+    """agy 이벤트의 마지막 오류 필드. 뒤따른 성공 result가 지운다."""
+    error = {}
+    for event in events:
+        if event.get("event") == "error":
+            error = _fields(event)
+        elif event.get("event") == "result":
+            result = event.get("result")
+            error = (_fields(result, "finished_reason") if isinstance(result, dict)
+                     and result.get("status") != "SUCCESS" else {})
+    return error
+
+
+def agy_permanent(text: str) -> bool:
+    """agy 이벤트의 마지막 오류가 다시 불러도 소용없는 오류(인증·구독 한도·401·403·없는 모델)인가."""
+    error = _agy_error(_events(text))
+    message = _strings(error)
+    return bool(_PERMANENT.search(message) or "invalid model selection" in message.lower()
+                or any(s in (401, 403) for s in _statuses(error)))
+
+
 def reason(family: str, text: str, *, model: str = "", cwd: Path | None = None) -> str:
     """일시 오류의 이유. 정상·인증·구독 한도·설정 오류·알 수 없는 오류는 빈 문자열.
 
@@ -149,14 +170,7 @@ def reason(family: str, text: str, *, model: str = "", cwd: Path | None = None) 
                 error = {}
         return _error_reason(error)
     if family == "agy":
-        error = {}
-        for event in events:
-            if event.get("event") == "error":
-                error = _fields(event)
-            elif event.get("event") == "result":
-                result = event.get("result")
-                error = (_fields(result, "finished_reason") if isinstance(result, dict)
-                         and result.get("status") != "SUCCESS" else {})
+        error = _agy_error(events)
         if events:
             text = _strings(error)
         else:
