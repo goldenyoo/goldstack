@@ -1,6 +1,6 @@
 ---
 feature: goldstack-v8
-verify: ls tests | grep '^test_' | xargs -P 3 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
+verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
 max_workers: 3
 ---
 # goldstack-v8 — spec
@@ -105,3 +105,4 @@ max_workers: 3
 계기: goldstack-8d 세션이 전달한 사용자 결정(태그·Release는 v8 뒤, memory `release-after-v8`)이 이 grill의 답과 어긋나 사람에게 다시 확인했다.
 사람 답: "yes".
 1. 버전: A `0.1.0` 유지 / B `0.3.0` — 추천 A → 확정 A. 재설치 확인은 버전이 아니라 이 feature의 `gs check` 경고 0으로 한다(`tier`·`verify`를 아는 gs여야 경고가 사라진다).
+(라운드 4 뒤) verify의 병렬 수를 v7 라운드 6과 같이 3에서 6으로 바꿨다.

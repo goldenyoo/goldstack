@@ -1,11 +1,11 @@
 ---
 feature: goldstack-v7
-verify: ls tests | grep '^test_' | xargs -P 3 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
+verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
 max_workers: 3
 ---
 # goldstack-v7 — spec
 
-상태: grill 완료(라운드 5개) · 2026-11-04 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 6개) · 2026-11-04 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 ## 1. 목표
 feature 한 번의 전체 시간을 줄이고(반복되는 시험과 검증 정비), 짧은 네트워크 끊김이 티켓을 잃거나 리뷰 없는 병합으로 이어지지 않게 하고, 티켓 크기에 맞춰 모델·effort를 config와 티켓에서 고르게 한다.
@@ -24,11 +24,12 @@ feature 한 번의 전체 시간을 줄이고(반복되는 시험과 검증 정�
 |---|---|---|
 | 1-1 | 아이디어 | e2e-time-reduction, transient-api-error-retry, model-effort-config, model-tiering(taken). overnight-autopilot은 v8로(v6의 "v7" 계획 변경), codex-worker-hook·version-sync-update는 open 유지 |
 | 1-2 | 시작 순서 | v6 verified → `uv tool install --reinstall .` → 환경 사실 재확인 → `/go goldstack-v7`. 실제 레포 adopt는 따로, 거기서 나온 문제는 `/idea`로 v8 |
-| 1-3 | v7 verify | 파일별 3프로세스 병렬 한 줄(frontmatter), `verify_retries` 0 |
+| 1-3 | v7 verify | 파일별 병렬 한 줄(frontmatter), `verify_retries` 0. 프로세스 수는 6-1로 3에서 6으로 바뀜 |
 | 1-4 | profile.md | `/go` 전에 사람이 `/adopt` 한 번(`gs doctor --write`로 config 빠진 키도). 커밋은 `/go` |
 | 1-5 | 버전 | **5-1로 바뀜.** 처음 결정은 `0.2.0` + CHANGELOG v7 항목 |
 | 1-6 | 시간 목표 | 130–160분은 v7 완료 조건에 넣지 않고 다음 feature 보고서로 확인(v7은 v6 gs로 돈다) |
-| 2-1 | 전체 시험 | 한 줄 병렬 명령 유지 + `test_go.py`를 주제별 3개 파일로 쪼갬, 공용 fixture는 `tests/support.py` |
+| 2-1 | 전체 시험 | 한 줄 병렬 명령 유지 + `test_go.py`를 주제별 3개 파일로 쪼갬, 공용 fixture는 `tests/support.py`. 근거는 6-1에서 고침 |
+| 6-1 | 병렬 수 | 6프로세스(`xargs -P 6`). 3프로세스에서는 쪼개기 효과가 거의 없고(하한 260초) 6프로세스에서 효과가 난다(3분 56초 → 쪼갠 뒤 약 2.5분 추정). 티켓 01 유지 |
 | 2-2 | `verify_ticket` 구멍 | 빠른 검사도 병합 트리에서, 끝난 뒤 트리가 바뀌었으면 실패(`finish._verify`와 같은 규칙) |
 | 2-3 | 티켓별 검사 | 티켓 frontmatter 선택 키 `verify`. 우선순위 티켓 `verify` → spec `verify_ticket` → spec `verify`. 마무리 integration은 늘 전체. grill 기준: 문서·설정 티켓만 좁게, 코드 티켓은 전체 |
 | 2-4 | worker 지시문 | 개발 중엔 관련 시험만, 커밋 전 티켓 검증 1회(수정 worker도) |
@@ -99,6 +100,7 @@ effort 넘기는 법: claude·agy `--effort <값>`, codex `-c model_reasoning_ef
 - **시험 병렬(직접 측정, v6 실행과 함께)**: 파일마다 프로세스 하나, 동시 3개 → **4분 10초**, 36개 파일 모두 통과(1회 측정). 파일별 합 563초 중 `test_go.py` 234초(42%)가 병목, 그다음 `test_squash` 57초, `test_wait_checks` 35초, `test_second_review` 32초, `test_protected_base` 28초, `test_setup` 27초. 10초 미만 파일이 대부분이다.
 - **시험 증가(v6 재실행 로그 대조, 2026-11-04 13시경)**: 전체 시험 553–561개, 순차 11–12분(679초, 688초, 726초). 위의 8분 40초·4분 10초는 그 전 값이다. v6 03 worker는 전체 시험 2번과 부분 시험 여러 번, v6 04는 worker·수정 worker·gs가 전체 시험을 한 번씩 돌렸다(`.goldstack/work/goldstack-v6/run/03/3/worker.log`, `run/04/1/`). 수정 worker brief도 `worker.write_brief`로 만들어 티켓 본문을 포함한다.
 - **병렬 재측정(v6 병합 뒤, 다른 실행 없음)**: 573개, 파일별 합 780초, 3프로세스 **4분 28초**, 모두 통과. 가장 긴 파일 `test_go.py` 236초, 그다음 110초, 80초, 56초. 3프로세스의 이론 하한이 260초라 `test_go.py`는 3프로세스에서 병목이 아니다(앞의 234초/42% 판단은 그 전 값).
+- **6프로세스(같은 조건, 1회)**: **3분 56초**, 모두 통과, 파일 합 800초(3프로세스 780초와 비슷). 이제는 `test_go.py` 228초가 하한이다. 나누면 가장 긴 파일 110초, 합/6 = 133초라 약 2.5분으로 추정한다(쪼갠 뒤 재지 않음).
 - **검증 지점**: 티켓마다 병합 전(`go._verify`), 마무리 `integration`, `integration-final`(보고서만 바뀌면 건너뜀), 재개 `integration-recheck`, `main-recheck`. 이와 별도로 `worker.write_brief`가 worker·수정 worker에게 커밋 전 `spec.ticket_verify`를 돌리게 한다.
 - **`verify_ticket` 구멍(확인됨)**: `go._verify`는 `verify_ticket`이 있으면 병합 트리(`r.iwt`) 대신 티켓 worktree에서 돌고, 끝난 뒤 깨끗함을 보지 않는다. `finish._verify`는 HEAD·깨끗함·브랜치를 본다. `Spec.verify_ticket`은 feature 단위 문자열 하나다.
 - **integration 전체 검증 실패**: `finish.run`이 `phase=not_merged`, `integration 검증 실패 → 병합 안 함`으로 끝난다. 원인 티켓을 좁히거나 수리하는 흐름은 없다.
@@ -162,3 +164,8 @@ effort 넘기는 법: claude·agy `--effort <값>`, codex `-c model_reasoning_ef
 계기: goldstack-8d 세션이 전달한 사용자 결정(태그·Release는 v8 뒤, memory `release-after-v8`)이 이 grill의 답과 어긋나 사람에게 다시 확인했다.
 사람 답: "yes".
 1. 버전: A 둘 다 `0.1.0` 유지 / B `0.2.0`·`0.3.0` — 추천 A → 확정 A. 부작용: v6·v7·v8 gs가 모두 `0.1.0`이라 측정 필드에 설치 commit을 함께 남긴다(티켓 10), 재설치 확인은 v8 `gs check` 경고 0으로 한다.
+
+### 라운드 6 — 병렬 수 (추천대로)
+계기: v6 병합 뒤 재측정에서 라운드 2의 근거("`test_go.py`가 병목, 쪼개면 약 3분")가 3프로세스에서는 틀렸다고 확인했다. 파일 합이 780초로 늘어 하한이 이미 260초다.
+사람 답: "yes".
+1. 01과 병렬 수: A 01 유지 + 6프로세스 / B 01 빼고 3프로세스 / C 01 빼고 6프로세스 — 추천 A → 확정 A. 위험: 12코어에 worker 셋이 겹치면 최대 18프로세스, 6프로세스 측정은 다른 실행 없이 1회뿐이다. 흔들리면 보고서의 검증 실패로 드러난다.
