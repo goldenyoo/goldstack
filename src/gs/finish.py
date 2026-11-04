@@ -220,8 +220,8 @@ def _revert_of(cwd: Path, sha: str, *revs: str) -> str:
 
 
 def _trailers(r, rev: str) -> set[str]:
-    """rev까지의 커밋 본문에서 정확히 일치하는 이 feature의 gs-ticket 티켓 id."""
-    return git.ticket_trailers(r.repo, r.name, rev)
+    """rev까지의 integration 병합·base squash에서 이 feature의 정확한 티켓 id."""
+    return git.ticket_trailers(r.repo, r.name, rev, base_ref=r.base_ref)
 
 
 def _feature_merge(r, sha: str) -> bool:
@@ -231,7 +231,7 @@ def _feature_merge(r, sha: str) -> bool:
     parents = git.out(r.repo, "rev-list", "--parents", "-n", "1", sha).split()[1:]
     if len(parents) == 1:
         # squash 커밋은 부모가 하나이고 본문에 티켓별 gs-ticket 줄이 있다. integration의 티켓 병합은 늘 부모가 둘이다.
-        return bool(git.ticket_trailers(r.repo, r.name, "--no-walk", sha))
+        return bool(git.ticket_trailers(r.repo, r.name, "--no-walk", sha, base_ref=r.base_ref))
     return len(parents) > 1 and bool(git.ticket_trailers(r.repo, r.name, f"{parents[0]}..{parents[1]}"))
 
 

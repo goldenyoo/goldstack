@@ -284,7 +284,7 @@ git 오류나 herdr 오류(`HerdrError`)로 루프를 떠나도 `gs go: … 오�
 | revert | `git revert -m 1 <병합 커밋>` | `git revert <squash 커밋>`(부모가 하나라 `-m` 없음) |
 | 병합된 티켓 찾기 | integration의 병합 커밋 트레일러 | integration의 트레일러, base에서 합쳐 온 squash 본문의 같은 줄 |
 
-`git.ticket_trailers`가 커밋 본문의 독립된 `gs-ticket: <feature>/<id>` 줄을 읽는다. `go`의 재개와 `finish`의 병합 검색 모두 이 함수를 써 feature와 id 전체를 비교하며, 제목이나 본문 문장에 섞인 표시는 세지 않는다. 새 integration 병합 검색은 부모가 둘 이상인 커밋만 읽는다.
+`git.ticket_trailers`가 커밋 본문의 독립된 `gs-ticket: <feature>/<id>` 줄을 읽는다. `go`의 재개와 `finish`의 병합 검색 모두 이 함수를 써 feature와 id 전체를 비교하며, 제목이나 본문 문장에 섞인 표시는 세지 않는다. integration은 조상에 있는 병합 커밋을 읽고, 부모가 하나인 커밋은 원격 base의 첫 부모 경로에 있을 때만 squash 표시로 읽는다. worker 일반 커밋의 독립된 표시 줄은 세지 않는다. 새 integration 병합 검색은 squash를 제외한다.
 
 - **tree 비교**: squash 커밋은 base 끝에 PR diff를 얹은 것이다. 검증한 integration을 만든 뒤 base가 움직였으면 tree가 달라 검증하지 않은 내용이 base에 들어갔다는 뜻이다. `_postmerge`는 base 검증 전에 이것을 본다. 다르면 `GitError`: phase는 `merged`, `finish.error`와 `마무리 실패: squash 커밋 <sha>의 tree가 검증한 integration <sha>의 tree와 다르다…`를 남기고 base 검증도 revert도 하지 않는다. integration은 실행을 시작할 때만 base를 합치므로 실행 중 base에 들어온 커밋이면 모두 해당한다. 다음 `gs go`도 같은 오류로 멈춘다. 사람이 base를 확인한 뒤 `gs clean <f> --force` → `gs go <f>`로 빠져나온다: 새 integration은 merge_head를 조상으로 갖지 않아 마무리를 처음부터 하고(병합된 티켓은 base의 `gs-ticket` 줄로 회복), 그때 되돌릴 대상은 새 보고서 병합뿐이다.
 - **revert 찾기**: squash 커밋은 parents 하나와 `gs-ticket: <f>/` 본문으로 알아본다(`_feature_merge`. integration의 티켓 병합은 늘 부모가 둘이다). 그래서 finish가 비워진 뒤에도 base의 revert를 찾아 다음 실행이 되살린다. revert·보고서 PR을 squash로 병합할 때는 커밋 메시지를 그대로 넘겨 `This reverts commit <병합>` 줄을 base에 남긴다(`_side_merge`).

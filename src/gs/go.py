@@ -383,7 +383,7 @@ def _graph(r: Run) -> dict[str, list[str]]:
 
 
 def _already_merged(r: Run, tid: str) -> bool:
-    return tid in git.ticket_trailers(r.iwt, r.name)
+    return tid in git.ticket_trailers(r.iwt, r.name, base_ref=r.base_ref)
 
 
 def _resume_merged(r: Run) -> None:

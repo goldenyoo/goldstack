@@ -22,15 +22,22 @@ def out(cwd: Path, *args: str) -> str:
     return run(cwd, *args).stdout.strip()
 
 
-def ticket_trailers(cwd: Path, feature: str, *revs: str, merges_only: bool = False) -> set[str]:
-    """커밋 본문의 독립된 gs-ticket 줄에서 feature가 정확히 같은 티켓 id를 읽는다.
+def ticket_trailers(cwd: Path, feature: str, *revs: str, merges_only: bool = False,
+                    base_ref: str | None = None) -> set[str]:
+    """integration의 병합과 base 첫 부모의 squash에서 정확한 티켓 줄을 읽는다.
 
-    squash 본문의 줄도 읽는다. 새 integration 병합만 찾을 때는 merges_only를 쓴다.
+    worker 일반 커밋은 표시가 있어도 세지 않는다. base_ref가 없거나 merges_only면
+    부모가 둘 이상인 integration 커밋만 읽는다. revs는 squash에도 그대로 적용한다.
     """
-    options = ("--min-parents=2",) if merges_only else ()
-    body = run(cwd, "log", "--format=%b", *options, *revs).stdout
+    revs = revs or ("HEAD",)
+    eligible = set(out(cwd, "rev-list", "--min-parents=2", *revs).split())
+    if base_ref is not None and not merges_only:
+        eligible.update(out(cwd, "rev-list", "--first-parent", "--max-parents=1", base_ref).split())
+    records = run(cwd, "log", "--format=%H%x00%b%x00", *revs).stdout.split("\0")
     pattern = re.compile(rf"gs-ticket: {re.escape(feature)}/(\S+)[ \t]*")
-    return {match.group(1) for line in body.splitlines() if (match := pattern.fullmatch(line))}
+    return {match.group(1)
+            for sha, body in zip(records[::2], records[1::2]) if sha.strip() in eligible
+            for line in body.splitlines() if (match := pattern.fullmatch(line))}
 
 
 def _github_repo_url(url: str) -> str | None:

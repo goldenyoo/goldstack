@@ -18,7 +18,8 @@ class TicketTrailerTest(unittest.TestCase):
         for key, value in (("user.name", "t"), ("user.email", "t@t"), ("commit.gpgsign", "false")):
             self.git("config", key, value)
         self.commit("init")
-        self.r = SimpleNamespace(repo=self.repo, iwt=self.repo, name="f", st=SimpleNamespace(finish={}))
+        self.git("branch", "base")
+        self.r = SimpleNamespace(repo=self.repo, iwt=self.repo, name="f", base_ref="base", st=SimpleNamespace(finish={}))
 
     def git(self, *args):
         return support.sh(self.repo, "git", *args)
@@ -46,6 +47,24 @@ class TicketTrailerTest(unittest.TestCase):
         self.assertFalse(go._already_merged(self.r, "02"))
         self.assertEqual(finish._trailers(self.r, "HEAD"), set())
         self.assertFalse(finish._feature_merge(self.r, sha))
+
+    def test_worker_trailer_is_ignored_after_merge(self):
+        self.git("checkout", "-qb", "worker")
+        worker = self.commit("worker\n\ngs-ticket: f/02")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "-q", "--no-ff", "worker", "-m", "Merge 01\n\ngs-ticket: f/01")
+        self.assertTrue(go._already_merged(self.r, "01"))
+        self.assertFalse(go._already_merged(self.r, "02"))
+        self.assertEqual(finish._trailers(self.r, "HEAD"), {"01"})
+        self.assertFalse(finish._feature_merge(self.r, worker))
+        self.r.st.finish.update(merge_head="HEAD", url="https://example.test/pull/1")
+        self.r.feat = SimpleNamespace(tickets={})
+        self.assertNotIn("gs-ticket: f/02", finish._squash_message(self.r)[1])
+
+    def test_ordinary_standalone_trailer_is_ignored(self):
+        self.commit("worker\n\ngs-ticket: f/02")
+        self.assertFalse(go._already_merged(self.r, "02"))
+        self.assertEqual(finish._trailers(self.r, "HEAD"), set())
 
     def test_subject_is_not_a_body_trailer(self):
         sha = self.commit("gs-ticket: f/02")
@@ -77,6 +96,7 @@ class TicketTrailerTest(unittest.TestCase):
     def test_squash_body_trailers_are_preserved(self):
         sha = self.commit("feature squash\n\n01 구현\n010 구현\n\ngs-ticket: f/01\ngs-ticket: f/010\t \n"
                           "gs-ticket: f2/02")
+        self.git("branch", "-f", "base", sha)
         self.assertTrue(go._already_merged(self.r, "01"))
         self.assertTrue(go._already_merged(self.r, "010"))
         self.assertFalse(go._already_merged(self.r, "02"))
@@ -85,12 +105,32 @@ class TicketTrailerTest(unittest.TestCase):
         self.r.name = "other"
         self.assertFalse(finish._feature_merge(self.r, sha))
 
+    def test_ticket_merge_remains_visible_after_base_merge(self):
+        self.merge("Merge 01\n\ngs-ticket: f/01")
+        self.git("branch", "feature")
+        self.git("checkout", "-q", "base")
+        self.git("merge", "-q", "--no-ff", "feature", "-m", "Merge feature PR")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "-q", "--ff-only", "base")
+        self.assertTrue(go._already_merged(self.r, "01"))
+        self.assertEqual(finish._trailers(self.r, "HEAD"), {"01"})
+
+    def test_squash_imported_from_base_second_parent(self):
+        self.commit("integration")
+        self.git("checkout", "-q", "base")
+        self.commit("feature squash\n\ngs-ticket: f/02")
+        self.git("checkout", "-q", "main")
+        self.git("merge", "-q", "--no-ff", "base", "-m", "Merge base")
+        self.assertTrue(go._already_merged(self.r, "02"))
+        self.assertEqual(finish._trailers(self.r, "HEAD"), {"02"})
+
     def test_feature_metacharacters_are_literal(self):
         self.commit("squash\n\ngs-ticket: fX/01")
         self.r.name = "f."
         self.assertFalse(go._already_merged(self.r, "01"))
         self.assertEqual(finish._trailers(self.r, "HEAD"), set())
         sha = self.commit("squash\n\ngs-ticket: f./02")
+        self.git("branch", "-f", "base", sha)
         self.assertTrue(go._already_merged(self.r, "02"))
         self.assertTrue(finish._feature_merge(self.r, sha))
 
