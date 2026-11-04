@@ -66,7 +66,10 @@ class FinalReportOnBaseTest(unittest.TestCase):
         return sum(x.startswith(prefix) for x in self.lines("gh.log"))
 
     def test_verified_report_lands_on_base_and_next_go_leaves_it(self):
-        code, out, err = self.go("--only", "01")
+        # 설치 환경의 direct_url.json은 테스트 대상 레포와 무관하다.
+        # 로컬 설치 경고는 test_version_local에서 직접 검증한다.
+        with mock.patch("gs.version.warn"):
+            code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         f = state.load(self.rundir, "demo").finish
         self.assertEqual(f["phase"], "verified")
@@ -88,7 +91,8 @@ class FinalReportOnBaseTest(unittest.TestCase):
         self.assertNotIn("gs-report-", self.integration("worktree", "list"))
 
         tip, merges, creates = self.tip(), self.count("pr merge "), self.count("pr create ")
-        code, out, err = self.go("--only", "01")  # 같은 feature에 이어 gs go: 보고서 커밋을 새 일로 보지 않는다
+        with mock.patch("gs.version.warn"):
+            code, out, err = self.go("--only", "01")  # 같은 feature에 이어 gs go: 보고서 커밋을 새 일로 보지 않는다
         self.assertEqual(code, 0, out + err)
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "verified")
         self.assertEqual((self.count("pr merge "), self.count("pr create ")), (merges, creates))
