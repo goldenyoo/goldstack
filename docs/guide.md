@@ -661,6 +661,26 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `main 검증 실패 → revert <sha>를 main에 push함` | 병합 뒤 main 검증이 실패해 병합 커밋을 되돌렸다(force push 없음). gs는 그 revert를 되돌린 커밋을 integration에 합쳐 둔다. 고칠 티켓을 더해 `gs go`하면 그 PR이 feature 코드를 되살린다 |
 | `중단(네트워크)` | 대기 상한을 넘겨 티켓 단계에서 멈췄다(종료 코드 3). 마무리를 하지 않았다. 네트워크가 돌아오면 `gs go` |
 
+### push 설정이 바뀌어 멈췄을 때
+
+`gs go`는 worker를 띄우기 전에 원격의 URL·pushurl, 실제 push 주소, `core.hooksPath`를 기록하고, push마다 대조한다. 다르면 push하지 않고 종료 1로 멈춘다.
+
+```text
+gs go: git 오류: push 설정이 실행 시작 때와 달라 push하지 않았다(원격 `origin`). worker나 검증 명령이 바꿨을 수 있다.
+- remote.origin.pushurl: (없음) → https://example.test/x.git (local)
+- 실제 push 주소: https://github.com/owner/repo.git → https://example.test/x.git
+되돌리기(레포에서):
+  git config --local --unset-all remote.origin.pushurl
+의도한 변경이면 `.goldstack/work/<feature>/run/state.json`의 `push_record`를 지우고 `gs go`를 다시 돌린다(지금 값을 새로 기록한다).
+```
+
+- 내가 바꾼 것이 아니면 먼저 어느 티켓이 바꿨는지 `run/<티켓>/<시도>/worker.log`에서 찾는다. 그 티켓의 커밋에 설정을 바꾸는 코드가 있을 수 있다.
+- 되돌린 뒤 `gs go`를 다시 돌리면 멈춘 곳부터 잇는다. 병합한 티켓을 다시 돌리지 않는다.
+- 주소에 인증 정보(`https://…@`)가 있으면 메시지에 싣지 않는다. 바뀐 값은 `***`로 가리고, 되돌리는 명령은 원래 값을 실행할 때 `state.json`에서 읽는다. 그대로 실행하면 된다. `url.*` 규칙의 키에 인증 정보가 있으면 명령 대신 고칠 곳을 알려 준다.
+- 저장소를 옮겼거나 `worktree.setup`이 값을 바꾸는 경우(husky의 `core.hooksPath` 등)처럼 의도한 변경이면 메시지의 마지막 줄대로 한다.
+- 바꾸는 쪽을 먼저 막는 것은 worker 차단 hook이다. worker의 `git remote` 변경, `git config` 쓰기, 자기 브랜치 밖의 ref 옮기기는 hook에서 막힌다. 설정이 필요한 명령 하나는 `git -c 키=값 <명령>`으로 하면 된다.
+- `gs clean`도 같은 대조를 한다. 다르면 원격 브랜치는 지우지 않고 경고를 쓴 뒤 종료 1이다.
+
 ### 네트워크가 끊겼을 때
 
 **무엇이 끊김인가** — 모델 CLI가 낸 연결 실패, DNS 오류, 5xx, 429다. 인증 오류, 구독 사용량 한도, 없는 모델 이름, 모르는 오류는 평소의 실패다(worker는 재시도, 리뷰는 `리뷰 실패`). 리뷰어·판단 모델의 시간 초과는 끊김으로 본다. worker가 출력 없이 `idle_minutes`를 넘긴 멈춤은 평소의 실패다.

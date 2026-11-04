@@ -16,6 +16,9 @@ squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에�
 verified·reverted의 마무리 순서: integration에 보고서 커밋 → base에 보고서 커밋(직접 push·보고서 PR) → base를
 integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base판과 같다. 그래서 다음 PR이 report.md에서 충돌하지 않는다.
 
+모든 push는 `git.push`로 실행 시작 때의 push 설정과 대조한다. 다르면 push하지 않고 `git.PushSettingsChanged`로 멈춘다.
+보고서 push의 "최선" 처리도 이것은 삼키지 않는다.
+
 finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행은 같은 PR을 다시 병합하지 않고
 base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
 integration 전체 검증 실패로 not_merged가 되면 실패한 검증 단계를 남겨 보고서가 로그·후보 티켓을 붙인다.
@@ -383,7 +386,7 @@ def _commit_report(r, summary: str) -> Path:
 
 @metrics.stage("push")
 def _push(r) -> None:
-    git.run(r.iwt, "push", "-u", r.remote, f"HEAD:refs/heads/gs/{r.name}/integration")
+    git.push(r.iwt, r.remote, r.st.push_record, f"HEAD:refs/heads/gs/{r.name}/integration", flags=("-u",))
 
 
 @metrics.stage("publish")
@@ -515,7 +518,7 @@ def _side_pr(r, kind: str, sha: str, title: str, body: str) -> bool:
     view = _view(r, url) if url else {}
     if view.get("state") not in ("OPEN", "MERGED"):
         # gs 전용 브랜치라 덮어쓴다(옛 시도의 커밋). base 브랜치가 아니다.
-        git.run(r.repo, "push", "--force", r.remote, f"{sha}:refs/heads/{branch}")
+        git.push(r.repo, r.remote, r.st.push_record, f"{sha}:refs/heads/{branch}", flags=("--force",))
         f.pop(f"{kind}_pr", None)  # 옛 시도의 PR이다
         # 여기서 끊겨도(오류·중단) 다음 gs go가 이 phase로 재개해 브랜치의 PR을 찾는다.
         _save(r, phase=f"{kind}_pending", outcome=f"{kind} PR 확인 대기: {branch}", **{f"{kind}_head": sha})
@@ -604,7 +607,7 @@ def _postmerge(r) -> bool:
     if sha and git.sha(r.repo, f"{sha}^") == tip:
         if not r.cfg.git.direct_push:
             return _revert_pr(r, sha)
-        git.run(r.repo, "push", r.remote, f"{sha}:refs/heads/{r.base}")
+        git.push(r.repo, r.remote, r.st.push_record, f"{sha}:refs/heads/{r.base}")
         _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
         return False
     with tempfile.TemporaryDirectory(prefix="gs-main-", dir=r.rundir) as tmp:
@@ -651,7 +654,7 @@ def _postmerge(r) -> bool:
             if not r.cfg.git.direct_push:
                 return _revert_pr(r, sha)
             # 절대로 force하지 않는다. 거부되면(base가 움직임) 다음 실행이 최신 base 위에서 다시 만든다.
-            git.run(wt, "push", r.remote, f"HEAD:refs/heads/{r.base}")
+            git.push(wt, r.remote, r.st.push_record, f"HEAD:refs/heads/{r.base}")
             _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
             return False
         finally:
@@ -683,7 +686,7 @@ def _report_commit(r, rel: str, text: bytes, *, push: bool = True) -> str:
             git.run(wt, "commit", "-q", "-m", f"gs: {r.name} 최종 보고서(병합 후)", "--only", "--", rel)
             if push:
                 # 절대로 force하지 않는다. 거부되면(base가 움직임) 부른 쪽이 최신 base 위에서 다시 만든다.
-                git.run(wt, "push", r.remote, f"HEAD:refs/heads/{r.base}")
+                git.push(wt, r.remote, r.st.push_record, f"HEAD:refs/heads/{r.base}")
             return git.sha(wt, "HEAD")
         finally:
             git.remove_worktree(r.repo, wt)
@@ -702,6 +705,8 @@ def _report_to_base(r) -> None:
     for _ in range(2):
         try:
             sha = _report_commit(r, rel, (r.iwt / rel).read_bytes())
+        except git.PushSettingsChanged:
+            raise  # 시도한 것으로 남기지 않는다. 되돌린 뒤 다음 gs go가 처음으로 시도한다
         except Exception as e:  # noqa: BLE001 — 보고서 push는 최선. 병합·검증 결과를 바꾸지 않는다
             error = e
             continue
@@ -738,6 +743,8 @@ def _report_pr(r, rel: str) -> None:
             return
         _save(r, report_result={"phase": f["phase"], "outcome": f.get("outcome", "")})
         _report_side_pr(r, sha)
+    except git.PushSettingsChanged:
+        raise  # 시도한 것으로 남기지 않는다. 되돌린 뒤 다음 gs go가 처음으로 시도한다
     except Exception as e:  # noqa: BLE001 — 보고서는 최선. 병합·검증 결과를 바꾸지 않는다
         if sha and f.get("report_head") == sha and "report_result" in f:  # report_head는 브랜치를 올린 뒤에 남긴다
             # report_result는 남긴다. 다음 gs go가 PR 병합을 확인하면 기다리던 phase·outcome으로 돌아간다.
@@ -788,6 +795,8 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         # 보고서 PR만 남았다. integration 보고서는 PR에 올린 그대로 둔다(base 보고서의 마무리 줄과 같게).
         try:
             _report_side_pr(r, f["report_head"])
+        except git.PushSettingsChanged:
+            raise
         except (git.GitError, OSError) as e:
             _save(r, error=str(e), outcome=f"마무리 실패: {e}")  # report_pending 그대로. 다음 gs go가 다시 읽는다
             raise git.GitError(str(e)) from e
@@ -859,6 +868,8 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
                     # 큐에 들어간 head를 보고서 커밋으로 바꾸지 않는다.
                     return f.get("url"), False
         ok = f["phase"] != "closed" and _postmerge(r)
+    except git.PushSettingsChanged:
+        raise  # _update도 push에서 멈춘다. 보낼 수 없는 보고서 커밋을 만들지 않는다
     except (git.GitError, OSError) as e:
         _save(r, error=str(e), outcome=f"마무리 실패: {e}")
         if f["phase"] not in (*CHECK_PHASES, "merge_requested", "merge_pending"):

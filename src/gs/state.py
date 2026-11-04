@@ -106,6 +106,9 @@ class State:
     # 선택 측정 이력. 재개·재시도·새 마무리에서도 덮어쓰지 않는다. 옛 state에는 없어도 된다.
     # runtime, workers, validations, reviewers, review_calls, finish_stages의 목록(metrics.py).
     metrics: dict = field(default_factory=dict)
+    # 실행 시작 때의 push 설정(git.push_settings). 재개해도 덮어쓰지 않고 gs의 push마다 대조한다.
+    # 옛 state에는 없다. 없으면 대조를 건너뛰고, 다음 `gs go`가 시작할 때 그 값을 처음 기록한다.
+    push_record: dict = field(default_factory=dict)
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
@@ -265,7 +268,10 @@ def load(rundir: Path, feature: str) -> State:
         tickets[tid] = TicketState(**known)
     top = {k: v for k, v in raw.items() if k in State.__dataclass_fields__ and k != "tickets"}
     top.setdefault("feature", feature)
-    return State(**top, tickets=tickets)
+    st = State(**top, tickets=tickets)
+    if st.push_record:  # 되돌리기 명령이 값을 읽을 곳. 항목이 없는 기록과 레포를 옮긴 기록도 실제 위치를 가리키게 한다
+        st.push_record["state_file"] = str(p.resolve())
+    return st
 
 
 def save(rundir: Path, st: State) -> None:
