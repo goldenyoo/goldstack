@@ -17,5 +17,6 @@ disable-model-invocation: true
    - `git fetch <remote> <base>` 뒤 `<base>`가 `<remote>/<base>`보다 앞서기만 하면 `git push <remote> <base>`(force 아님). 뒤처졌거나 갈라졌으면 그 사실을 말하고 끝낸다. `/go`를 친 것이 이 push의 허락이다.
 3. **돌리고 기다린다.** 보관한 목록 전체로 `gs go <f1> <f2> …`를 **한 번만** Bash 도구의 `run_in_background`로 실행하고 완료 알림을 기다린다(끝 = 프로세스 종료와 종료 코드). feature 하나면 `gs go <f1>`. 앞 feature가 `verified`일 때만 다음이 시작된다. worker는 `gs`가 herdr pane에 띄운다. 기다리는 동안 상태가 궁금하면 feature마다 `gs status <feature>`만 본다.
 4. **결과를 보인다(feature마다).** 종료 코드와 출력의 `■ 요약`·`■ PR:`·연속 실행 전환/멈춤 줄을 본다. 실행된 feature마다 `.goldstack/work/$ARGUMENTS/report.md`를 읽는다(작업 트리에 없으면 `git show <remote>/<base>:.goldstack/work/$ARGUMENTS/report.md`, 그것도 없으면 `git show gs/$ARGUMENTS/integration:.goldstack/work/$ARGUMENTS/report.md`). 요약을 세 줄로, 그리고 PR 링크를 보인다. report.md가 없으면 종료 코드와 출력 끝부분(실패 이유)을 보인다. 멈춰서 실행하지 않은 feature는 미실행으로 표시한다.
+   - **종료 코드 3 = `중단(네트워크)`.** 네트워크가 오래 끊겨 실행을 멈췄다. 티켓은 실패로 세지 않았고 마무리도 하지 않았으며, 다음 feature로 넘어가지 않는다. 출력의 `■ 중단(네트워크): 다음 gs go가 이어 간다` 줄과 `■ 요약`을 보이고 "`gs go`를 다시 돌리면 이어 간다"고 말한다. 다시 돌리면 같은 worktree에서 잇고 대기 합계는 새로 센다. 스스로 다시 돌리지 않는다.
 
 한계: 실행 중 gs를 다시 설치하지 않으므로 앞 feature가 gs 자체를 고치면 다음 feature는 옛 gs로 돈다.

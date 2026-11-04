@@ -1,10 +1,11 @@
 """모델 어댑터: 티켓의 `model`(claude | codex | agy)에 맞춰 worker 실행 명령을 만들고 종료 코드를 판정한다.
 
-입력은 모두 같다(WorkerInput: brief 경로, worktree, 로그 경로). 어댑터가 하는 일은 넷이다.
+입력은 모두 같다(WorkerInput: brief 경로, worktree, 로그 경로). 어댑터가 하는 일은 다섯이다.
 - prepare: 띄우기 전 준비와 확인. 차단 장치를 걸 수 없으면 AdapterError로 거부한다.
 - env: worker 환경. 모든 어댑터가 `GS_ROLE=worker`를 넣는다(09 hook이 이 값을 본다).
 - command: worktree에서 돌릴 셸 명령. 실행 스크립트(worker.write_script)가 이것을 감싸 로그와 exit 파일을 남긴다.
 - outcome: 프로세스 종료 코드와 로그로 최종 종료 코드를 정한다. agy는 종료 0이 성공이 아니다(docs/research/agy.md §3.1).
+- transient_reason: 로그에서 일시 오류 이유를 찾는다. 없으면 빈 문자열이며 outcome과는 별개다.
 
 차단 장치(spec 3-1): claude는 plugin hook + 도구 차단 옵션(goldstack 밖 플러그인·skill·MCP는 끈다), codex는 `workspace-write` sandbox,
 agy는 deny 규칙 + `gs hook agy-pretooluse`(worktree의 `.agents/hooks.json`) 두 겹. agy hook이 걸리지 않으면 거부한다.
@@ -20,7 +21,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, git
+from . import config, git, transient
 
 q = shlex.quote
 
@@ -40,8 +41,20 @@ class Adapter:
     name = ""
     isolation_warning = ""
 
-    def __init__(self, models: config.ModelsConfig):
+    def __init__(self, models: config.ModelsConfig, selection: config.ModelEffort | None = None):
         self.models = models
+        # 표가 있으면 models.codex·models.agy보다 우선한다. 없으면 기존 선택을 보존한다.
+        legacy = models.codex if self.name == "codex" else models.agy if self.name == "agy" else ""
+        self.selection = selection if selection is not None else config.ModelEffort(legacy)
+
+    def model_options(self) -> str:
+        options = f"--model {q(self.selection.model)} " if self.selection.model else ""
+        if self.selection.effort:
+            if self.name == "codex":
+                options += f"-c {q('model_reasoning_effort=' + self.selection.effort)} "
+            else:
+                options += f"--effort {q(self.selection.effort)} "
+        return options
 
     def prepare(self, inp: WorkerInput) -> None:
         pass
@@ -55,6 +68,15 @@ class Adapter:
     def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
         """(최종 종료 코드, 사람이 읽을 메모). 메모는 실패 이유나 조용한 강등 경고다."""
         return code, ""
+
+    def transient_reason(self, inp: WorkerInput) -> str:
+        """계열을 몰라도 일시 오류를 묻는 경로. 로그가 아직 없으면 근거도 없다."""
+        try:
+            text = inp.log.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            return ""
+        model = self.selection.model if self.name == "agy" else ""
+        return transient.reason(self.name, text, model=model, cwd=inp.worktree)
 
 
 # ---------------------------------------------------------------- claude
@@ -88,7 +110,7 @@ class Claude(Adapter):
         return settings + self.ISOLATION
 
     def command(self, inp: WorkerInput) -> str:
-        return f"{self.BASE} {self.isolation(inp)} < {q(str(inp.brief))}"
+        return f"{self.BASE} {self.model_options()}{self.isolation(inp)} < {q(str(inp.brief))}"
 
     def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
         return code, self.isolation_warning
@@ -166,7 +188,7 @@ class Codex(Adapter):
 
     def command(self, inp: WorkerInput) -> str:
         adds = " ".join(f"--add-dir {q(str(d))}" for d in self.writable_dirs(inp.worktree))
-        model = f"--model {q(self.models.codex)} " if self.models.codex else ""
+        model = self.model_options()
         return (f"codex exec --json -s workspace-write {model}-c sandbox_workspace_write.network_access=false "
                 f"--skip-git-repo-check -C {q(str(inp.worktree))} {adds} {q(self.NOTE)} < {q(str(inp.brief))}")
 
@@ -213,7 +235,7 @@ class Agy(Adapter):
     def command(self, inp: WorkerInput) -> str:
         return (f"{q(agy_bin())} -p \"$(cat {q(str(inp.brief))})\" --output-format stream-json "
                 f"--dangerously-skip-permissions --disable-slash-commands "
-                f"--settings {q(self.settings())} --model {q(self.models.agy)}")
+                f"--settings {q(self.settings())} {self.model_options().rstrip()}")
 
     def prepare(self, inp: WorkerInput) -> None:
         install_agy_hook(inp.worktree)
@@ -379,11 +401,11 @@ class Custom(Adapter):
 ADAPTERS: dict[str, type[Adapter]] = {"claude": Claude, "codex": Codex, "agy": Agy}
 
 
-def for_model(model: str, models: config.ModelsConfig) -> Adapter:
+def for_model(model: str, models: config.ModelsConfig, selection: config.ModelEffort | None = None) -> Adapter:
     override = os.environ.get("GS_WORKER_CMD")
     if override:
         return Custom(override)
     try:
-        return ADAPTERS[model](models)
+        return ADAPTERS[model](models, selection)
     except KeyError:
         raise AdapterError(f"model `{model}` 어댑터가 없다({'|'.join(ADAPTERS)})") from None

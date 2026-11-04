@@ -4,13 +4,13 @@
 예시의 feature 이름은 `csv-export`, base 브랜치는 `main`, 원격은 `origin`이다. 실제 값은 `gs config git.base`, `gs config git.remote`가 알려 준다.
 
 - [기존 레포에 들이기(`/adopt`, `gs doctor`, `[worktree] setup`)](#기존-레포에-들이기)
-  - [예시: squash만 허용](#예시-squash만-허용) · [보호된 main + 필수 승인](#예시-보호된-main--필수-승인) · [느린 시험](#예시-느린-시험verify_ticket-verify_retries)
+  - [예시: squash만 허용](#예시-squash만-허용) · [보호된 main + 필수 승인](#예시-보호된-main--필수-승인) · [느린 시험](#예시-느린-시험verify_ticket-verify_retries) · [전체 시험 나누기](#예시-전체-시험을-프로세스로-나누기)
   - [config 키](#config-키) · [spec frontmatter 키](#spec-frontmatter-키) · [한계](#한계)
 - [새 feature](#새-feature)
-- [티켓 선택 키와 agy 한도(`touches`, `second_reviewer`, `[agy] max_calls_per_run`)](#티켓-선택-키와-agy-한도)
+- [티켓 선택 키와 agy 한도(`tier`, `verify`, `touches`, `second_reviewer`, `[agy] max_calls_per_run`)](#티켓-선택-키와-agy-한도)
 - [리뷰와 재리뷰(수정 최대 2회, 보고서의 지적 상태 5가지)](#리뷰와-재리뷰)
 - [실행 중 보기](#실행-중-보기)
-- [실패했을 때](#실패했을-때)
+- [실패했을 때](#실패했을-때) · [네트워크가 끊겼을 때](#네트워크가-끊겼을-때)
 - [여러 feature 이어 돌리기(`gs go a b`)](#여러-feature-이어-돌리기gs-go-a-b)
 - [끝난 feature 치우기(`gs clean`)](#끝난-feature-치우기gs-clean)
 - [아이디어 흐름(`/retro` → `/idea` → `gs backlog` → `/grill`)](#아이디어-흐름)
@@ -87,7 +87,7 @@ setup_minutes = 15            # 준비 명령 한 번의 상한(기본 15)
 
 고쳤으면 커밋한다(`git commit -am "goldstack: worktree 준비 명령"`).
 
-**5. 첫 `/grill`** — 이제 평소처럼 `/grill <feature>` → `/go <feature>`다([새 feature](#새-feature)). spec에 `verify`를 정할 때 `.goldstack/profile.md`의 시험 시간을 보고, 느리면 [느린 시험 예시](#예시-느린-시험verify_ticket-verify_retries)대로 한다. 레포의 조건에 맞는 예시를 아래에서 고른다.
+**5. 첫 `/grill`** — 이제 평소처럼 `/grill <feature>` → `/go <feature>`다([새 feature](#새-feature)). spec에 `verify`를 정할 때 `.goldstack/profile.md`의 시험 시간을 보고, 느리면 먼저 [전체 시험을 나눠](#예시-전체-시험을-프로세스로-나누기) 줄이고, 그래도 느리면 [느린 시험 예시](#예시-느린-시험verify_ticket-verify_retries)대로 한다. 레포의 조건에 맞는 예시를 아래에서 고른다.
 
 ### 예시: squash만 허용
 
@@ -230,7 +230,8 @@ verify_retries: 1
 idle_minutes: 30
 ---
 ```
-- `verify_ticket`: 티켓마다 worker가 커밋 전에 돌리고(brief에 이 명령이 들어간다), gs가 티켓 worktree에서 다시 돌린다.
+- `verify_ticket`: 티켓마다 worker가 커밋 전에 돌리고(brief에 이 명령이 들어간다. 개발 중에는 관련 시험만 돌리라고 함께 적혀 있다), gs가 그 티켓을 integration에 합친 **병합 트리**에서 다시 돌린다. worktree의 커밋 안 된 파일로는 통과할 수 없다. 검증이 트리를 바꾸면(gitignore 밖에 쓰면) `검증 중 worktree가 바뀌었다`로 실패하니 출력은 gitignore 안이나 레포 밖으로 보낸다(`uv build -o "$(mktemp -d)"`).
+- 티켓 하나만 다르게 돌리려면 [티켓 `verify`](#verify--이-티켓만의-검증-명령)를 쓴다.
 - `verify`: integration, 보고서 커밋 뒤 integration-final, 병합 뒤 main에서 돌린다. 바뀐 것이 `report.md`뿐이면 integration-final은 건너뛴다.
 - `verify_retries`: 실패하면(시간 초과 포함) 그만큼 다시 돌린다. 한 번의 상한은 `verify_minutes`라 최악은 (1 + `verify_retries`) × `verify_minutes`다. 모든 검증 지점에 같이 적용된다.
 - `idle_minutes`: worker가 출력 없이 시험을 돌리는 시간보다 길게 둔다.
@@ -250,11 +251,24 @@ integration-final: 보고서만 바뀜, 건너뜀
 
 flaky: main 재시도 1번 만에 통과
 ```
-주의: 빠른 검사가 놓친 실패는 integration의 전체 `verify`에서 잡히는데, 이때는 티켓을 고르지 못해 재시도 없이 feature 전체가 `integration 검증 실패 → 병합 안 함`으로 끝난다. `finish/integration-verify.log`를 읽고 `/grill`로 고칠 티켓을 더해 다시 돌린다. 그래서 `verify_ticket`은 자주 깨지는 쪽을 덮는 검사로 고른다.
+주의: 빠른 검사가 놓친 실패는 integration의 전체 `verify`에서 잡힌다. gs는 원인 티켓을 되짚거나 고치지 않으므로 재시도 없이 feature 전체가 `integration 검증 실패 → 병합 안 함`으로 끝난다. 보고서 Evidence의 "검증 실패"에 로그 경로, 실패 줄(최대 10줄), `후보 티켓(추정)`이 있다. 후보는 실패 줄에 나온 경로·이름과 티켓의 `touches`·변경 파일을 맞춰 본 것이라 틀릴 수 있다. 로그를 읽고 `/grill`로 고칠 티켓을 더해 다시 돌린다. 그래서 `verify_ticket`은 자주 깨지는 쪽을 덮는 검사로 고른다.
+
+### 예시: 전체 시험을 프로세스로 나누기
+
+`verify_ticket`으로 좁히면 놓친 실패가 마무리까지 간다. 시험이 파일별로 독립이면 전체를 나눠 돌리는 쪽이 먼저다. 이 레포의 spec frontmatter:
+```yaml
+verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
+```
+시험 파일마다 프로세스 하나, 동시 6개다. 파일 하나라도 실패하면 `xargs`가 0 아닌 코드로 끝나 `&&` 뒤로 가지 않고 검증 실패가 된다. 이 레포에서 순차 약 11–12분이 약 4분이 됐다(`.goldstack/profile.md`의 측정, 다른 실행 없이 1회).
+- **프로세스로 나눈다.** 시험이 `os.environ`·현재 디렉터리를 바꾸면 스레드로는 나눌 수 없다.
+- **파일끼리 겹치는 자원이 없어야 한다.** 고정 포트, 같은 임시 경로, 공유 DB를 쓰는 시험은 먼저 분리한다. 나눠 돌린 결과를 여러 번 재 보고 쓴다.
+- **가장 느린 파일이 하한이다.** 프로세스를 늘려도 그 밑으로 안 내려간다. 한 파일이 크게 차지하면 그 파일을 쪼갠다.
+- **동시 worker만큼 곱해진다.** `max_workers: 3`이면 worker들의 커밋 전 검증이 겹쳐 최대 18프로세스(`-P 6` × 3)다. `-P`는 코어 수와 `max_workers`를 보고 정한다.
+- 다른 도구는 같은 일을 하는 옵션을 쓴다: `pytest -n 6`(pytest-xdist), `jest --maxWorkers=6`, `go test -p 6 ./...`.
 
 ### config 키
 
-`.goldstack/config.toml`. `gs init`이 전부 기본값으로 쓴다. 값 하나는 `gs config <섹션.키>`(`gs config git.merge_method` → `squash`). `/go` skill은 이것으로 `git.base`·`git.remote`를 읽는다. `gs go`는 시작할 때 한 번 읽는다.
+`.goldstack/config.toml`. `gs init`이 전부 기본값으로 쓴다. 값 하나는 `gs config <섹션.키>`(`gs config git.merge_method` → `squash`, 등급표의 칸은 못 읽으니 파일을 본다). `/go` skill은 이것으로 `git.base`·`git.remote`를 읽는다. `gs go`는 시작할 때 한 번 읽는다.
 
 | 키 | 기본 | 누가 쓰나 |
 |---|---|---|
@@ -264,21 +278,26 @@ flaky: main 재시도 1번 만에 통과
 | `git.direct_push` | `true` | `gs go` 마무리: `false`면 revert·최종 보고서를 PR로. `gs doctor --write`가 고친다 |
 | `git.wait_checks` | `false` | `gs go` 마무리: `true`면 CI를 기다린 뒤 병합. `gs doctor --write`가 고친다 |
 | `worktree.setup` | `""` | `gs go`: worktree마다 worker·verify 전에 돌린다. 비면 안 돈다. 사람이 채운다 |
-| `models.judge` | `"opus"` | 판단 모델 `claude -p --model`: 실패 요약, 리뷰 분류(1차 재리뷰의 새 지적 포함), 보고서 요약 |
-| `models.claude_review` | `"opus"` | reviewer가 claude일 때(재리뷰 포함) `--model` |
-| `models.agy` | `"gemini-4-argon-high"` | agy worker·reviewer `--model`, `/retro`의 로그 요약 |
-| `models.codex` | `""` | codex worker·reviewer `--model`. 비우면 codex 기본 모델 |
+| `models.judge` | `"opus"` | 판단 모델 `claude -p --model`: 리뷰 분류(1차 재리뷰의 새 지적 포함), 보고서 요약 |
+| `models.failure_summary` | `gs init` `"haiku"`, 키가 없으면 `models.judge` | 재시도 brief용 실패 요약의 `claude -p --model` |
+| `models.claude_review` | `"opus"` | `tiers.claude` 표가 없을 때 claude reviewer(재리뷰 포함) `--model` |
+| `models.agy` | `"gemini-4-argon-high"` | `tiers.agy` 표가 없을 때 agy worker·reviewer `--model`. `/retro`의 로그 요약은 표와 상관없이 이 값 |
+| `models.codex` | `""` | `tiers.codex` 표가 없을 때 codex worker·reviewer `--model`. 비우면 codex 기본 모델 |
+| `tiers.claude`·`tiers.codex`·`tiers.agy`의 `small`·`medium`·`large` | `gs init`이 쓴다, 키가 없으면 표 없음 | `"모델/effort"`(effort 생략 가능). worker·reviewer의 `--model`과 effort 인자. 값·없을 때 동작은 [`tier`](#tier--티켓-크기에-맞는-모델effort) |
+| `tiers.review` | `"large"` | 첫 리뷰의 등급. 리뷰어 계열의 표가 있을 때만 |
+| `tiers.rereview` | `"medium"` | 재리뷰의 등급. 리뷰어 계열의 표가 있을 때만 |
 | `agy.max_calls_per_run` | `3` | `gs go`(호출 세기), `gs check`(경고). `0`이면 agy를 띄우지 않는다 |
-| `timeouts.review_minutes` | `30` | 첫 리뷰의 reviewer 호출 한 번 |
-| `timeouts.rereview_minutes` | `10` | 재리뷰의 reviewer 호출 한 번(리뷰어·회차마다). 넘기면 그 리뷰어의 지적은 `확인 못 함(시간 초과)` |
-| `timeouts.judge_minutes` | `10` | 리뷰 분류·보고서 요약 호출 한 번 |
-| `timeouts.summary_seconds` | `60` | 재시도 brief용 실패 요약 호출 한 번 |
+| `timeouts.review_minutes` | `30` | 첫 리뷰의 reviewer 호출 한 번. 넘기면 기다렸다 다시 부른다(`network_wait_minutes`까지) |
+| `timeouts.rereview_minutes` | `10` | 재리뷰의 reviewer 호출 한 번(리뷰어·회차마다). 넘기면 기다렸다 다시 부른다(`network_wait_minutes`까지) |
+| `timeouts.judge_minutes` | `10` | 리뷰 분류·보고서 요약 호출 한 번. 넘기면 기다렸다 다시 부른다(`network_wait_minutes`까지) |
+| `timeouts.summary_seconds` | `60` | 재시도 brief용 실패 요약 호출 한 번. 넘기면 기다렸다 다시 부른다(`network_wait_minutes`까지) |
+| `timeouts.network_wait_minutes` | `60` | 끊김 하나의 대기 합계(분), codex `Reconnecting`을 참는 시간. 넘기면 [`중단(네트워크)`](#네트워크가-끊겼을-때). 시간 초과까지 쓴 호출 시간은 합계에 들지 않는다 |
 | `timeouts.checks_minutes` | `60` | PR 하나의 CI 대기 한 번(`gs go`마다 새로 잰다). `git.wait_checks`일 때만 |
 | `timeouts.checks_grace_seconds` | `60` | CI 대기에서 검사가 하나도 안 보일 때 등록을 기다리는 시간. 지나면 검사 없음으로 보고 병합을 시도한다. `0`이면 기다리지 않는다. 필수 검사 이름을 읽었으면 쓰지 않는다. `git.wait_checks`일 때만 |
 | `timeouts.setup_minutes` | `15` | `worktree.setup` 한 번 |
 | `notify.telegram` | `false` | `gs go`가 끝날 때 한 통, `gs check`(값이 비면 경고) |
 
-검사: 형이 틀린 값, 0 이하인 `timeouts.*`(`checks_grace_seconds`만 `0`을 허용하고 음수는 오류), 음수인 `agy.max_calls_per_run`, 빈 모델 이름(`models.codex`만 빈 값 허용), `merge`·`squash` 밖의 `git.merge_method`는 오류, 모르는 키는 경고다. 빠진 키도 오류지만 옛 config를 위해 `git.merge_method`·`direct_push`·`wait_checks`, `timeouts.checks_minutes`·`setup_minutes`·`rereview_minutes`·`checks_grace_seconds`, `[worktree]`, `[agy]`는 없으면 기본값으로 읽는다.
+검사: 형이 틀린 값, 0 이하인 `timeouts.*`(`checks_grace_seconds`만 `0`을 허용하고 음수는 오류), 음수인 `agy.max_calls_per_run`, 빈 모델 이름(`models.codex`만 빈 값 허용), `merge`·`squash` 밖의 `git.merge_method`, 등급표의 빠진 칸·틀린 형식(공백, 슬래시 둘 이상, 없는 effort), `small`·`medium`·`large` 밖의 `tiers.review`·`rereview`는 오류, 모르는 키는 경고다. effort는 `low`·`medium`·`high`·`xhigh`·`max`이고 codex는 `none`·`minimal`도 받는다. 빠진 키도 오류지만 옛 config를 위해 `git.merge_method`·`direct_push`·`wait_checks`, `models.failure_summary`, `timeouts.checks_minutes`·`setup_minutes`·`rereview_minutes`·`checks_grace_seconds`·`network_wait_minutes`, `[worktree]`, `[agy]`, `[tiers]`는 없으면 기본값으로 읽는다.
 
 ### spec frontmatter 키
 
@@ -287,10 +306,10 @@ feature마다 다른 값은 config가 아니라 `.goldstack/work/<feature>/spec.
 | 키 | 기본 | 누가 쓰나 |
 |---|---|---|
 | `feature` | 필수 | `gs check`: 디렉터리 이름과 같아야 한다 |
-| `verify` | 필수 | `gs go`: integration, integration-final, 병합 뒤 base 검증. `verify_ticket`이 없으면 티켓 검증(병합 중인 integration에서)과 worker brief도. 비어 있지 않은 셸 한 줄 |
-| `verify_ticket` | 없음 | 있으면 `gs go`의 티켓 검증(티켓 worktree에서)과 worker brief가 `verify` 대신 이것을 쓴다. 비어 있지 않은 셸 한 줄 |
+| `verify` | 필수 | `gs go`: integration, integration-final, 병합 뒤 base 검증. 티켓 `verify`도 `verify_ticket`도 없으면 티켓 검증과 worker brief도. 비어 있지 않은 셸 한 줄 |
+| `verify_ticket` | 없음 | 티켓 `verify`가 없는 티켓의 검증과 worker brief가 `verify` 대신 이것을 쓴다. 병합 트리에서 돈다(티켓 worktree가 아니다). 비어 있지 않은 셸 한 줄 |
 | `verify_retries` | `0` | 모든 검증 지점에서 실패 시 다시 돌리는 횟수. 0 이상 정수 |
-| `verify_minutes` | `20` | 검증 명령 한 번의 상한(`verify`, `verify_ticket` 모두). 1 이상 정수 |
+| `verify_minutes` | `20` | 검증 명령 한 번의 상한(`verify`, `verify_ticket`, 티켓 `verify` 모두). 1 이상 정수 |
 | `idle_minutes` | `20` | 로그 출력·새 커밋 없는 worker를 끝내는 시간. 1 이상 정수 |
 | `max_workers` | `3` | 동시 worker 수. 1 이상 정수 |
 
@@ -378,7 +397,63 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 
 ## 티켓 선택 키와 agy 한도
 
-티켓 frontmatter의 필수 키는 `id`, `title`, `blocked_by`, `model`, `reviewer`다([템플릿](../skills/grill/templates/ticket.md)). v4부터 두 선택 키가 있다. 둘 다 없어도 옛 티켓은 그대로 통과한다.
+티켓 frontmatter 키([템플릿](../skills/grill/templates/ticket.md)). 선택 키가 없어도 옛 티켓은 그대로 통과한다. 그 밖의 키는 `gs check` 경고다.
+
+| 키 | 기본 | 누가 쓰나 |
+|---|---|---|
+| `id`, `title`, `blocked_by`, `model`, `reviewer` | 필수 | `gs check`, `gs go`. `model`·`reviewer`는 `claude`·`codex`·`agy` 중 서로 다른 계열 |
+| `tier` | `medium` | worker의 모델·effort를 등급표에서 고른다. `small`·`medium`·`large` |
+| `verify` | spec `verify_ticket` → spec `verify` | 이 티켓의 worker brief와 병합 트리 검증. 비어 있지 않은 셸 한 줄 |
+| `touches` | `[]` | `gs check`의 겹침 경고 |
+| `second_reviewer` | 없음 | 두 번째 리뷰어. `model`·`reviewer`와 다른 계열 |
+
+### `tier` — 티켓 크기에 맞는 모델·effort
+`/grill`이 티켓 표에 등급과 이유 한 줄을 적어 확인받는다. 문서는 `small`, 재개 흐름처럼 틀리면 비싼 티켓은 `large`다. 실제 이름은 티켓이 아니라 config에 둔다. `gs init` 새 config의 값:
+```toml
+[tiers]
+review = "large"      # 첫 리뷰
+rereview = "medium"   # 재리뷰
+
+[tiers.claude]
+small = "sonnet/medium"
+medium = "sonnet/high"
+large = "opus/xhigh"
+
+[tiers.codex]
+small = "gpt-6-luna/medium"
+medium = "gpt-6.1-sol/medium"
+large = "gpt-6.1-sol/high"
+
+[tiers.agy]
+small = "gemini-3.8-flash-medium"   # agy는 모델 이름에 effort가 들어 있어 뒤를 생략했다
+medium = "gemini-4-argon-medium"
+large = "gemini-4-argon-high"
+```
+모델 이름은 계정·CLI 버전에 달렸다(`agy models`, codex 모델 목록). 쓰는 CLI에 있는 이름으로 고친다. 실제 인자는 `--model <모델>`에 claude·agy면 `--effort <effort>`, codex면 `-c model_reasoning_effort=<effort>`다.
+- **worker**: 티켓 `tier`, 없으면 `medium`. 수정 worker도 그 시도의 등급이다.
+- **실패 재시도**: 한 단계 올린다(`small`→`medium`→`large`, `large`는 그대로). 네트워크로 끊겨 다시 띄울 때는 올리지 않는다.
+- **리뷰어**: 티켓 `tier`와 상관없이 첫 리뷰 `tiers.review`, 재리뷰 `tiers.rereview`다.
+- **표가 없는 계열**: `tier`와 승급을 무시하고 옛 선택으로 돈다: claude worker는 CLI 기본값, claude reviewer는 `models.claude_review`, codex·agy는 `models.codex`·`models.agy`, effort는 CLI 기본값. 그 계열이 범위 안 티켓의 `model`이면 `gs check`가 경고한다:
+  ```
+  경고: .goldstack/config.toml: `tiers.codex` 표가 없다. 모델·effort가 사용자 설정을 따른다
+  ```
+실제로 쓴 모델·effort는 보고서 Evidence의 "실행 측정"에 시도·리뷰마다 남는다. 빈 값은 `CLI 기본값`으로 보인다.
+
+### `verify` — 이 티켓만의 검증 명령
+worker brief와 gs의 티켓 검증이 이 명령을 쓴다. 우선순위는 티켓 `verify` → spec `verify_ticket` → spec `verify`이고, 어느 것이든 [병합 트리](#예시-느린-시험verify_ticket-verify_retries)에서 돈다. integration·main 마무리는 늘 spec `verify`다.
+```yaml
+---
+id: "05"
+title: "사용법 문서"
+blocked_by: []
+touches: ["README.md", "docs/**"]
+tier: small
+verify: "npm run lint:docs"
+model: claude
+reviewer: codex
+---
+```
+문서·설정 티켓만 좁힌다. 코드 티켓은 키를 비워 전체 검증을 받는다. 단 spec에 `verify_ticket`이 있으면 코드 티켓도 그 값을 물려받으니, 그 티켓이 전체 검증을 받아야 하면 spec `verify`를 그대로 적는다. 다른 명령을 쓴 티켓은 보고서 verify 출력에 `티켓 검증 명령(05): …`로 보인다.
 
 ### `touches` — 같은 파일을 건드리는 티켓 찾기
 grill의 티켓 분해 라운드 표에 `touches` 열이 보이고, 확정되면 grill이 티켓마다 적는다. 사람이 직접 쓸 일은 대개 없고, 표에서 틀린 경로만 고쳐 답한다.
@@ -423,7 +498,7 @@ reviewer: codex
 second_reviewer: agy
 ---
 ```
-두 리뷰는 동시에 돌고, 지적을 합쳐 수정 worker를 하나만 띄운다. 그 뒤 재리뷰는 지적을 낸 리뷰어가 각자 자기 지적을 확인한다(둘 다 냈으면 동시에, [리뷰와 재리뷰](#리뷰와-재리뷰)). 한쪽이 실패·시간 초과여도 다른 쪽 결과로 간다. `gs go` 출력:
+두 리뷰는 동시에 돌고, 지적을 합쳐 수정 worker를 하나만 띄운다. 그 뒤 재리뷰는 지적을 낸 리뷰어가 각자 자기 지적을 확인한다(둘 다 냈으면 동시에, [리뷰와 재리뷰](#리뷰와-재리뷰)). 한쪽이 실패해도 다른 쪽 결과로 간다(시간 초과·일시 오류는 기다렸다 다시 부른다). `gs go` 출력:
 ```
 [04] 리뷰: codex+agy
 [04] 리뷰 끝(codex): 지적 2개(fix 1, report 1)
@@ -436,7 +511,7 @@ second_reviewer: agy
 [agy]
 max_calls_per_run = 3
 ```
-`gs go` 한 번(feature 하나)에서 gs가 띄우는 agy 호출 수의 상한이다. 1회는 agy worker 한 번(재시도·수정 worker·2차 수정 worker도 각각 1회), agy 리뷰 한 번, agy 재리뷰 한 번(회차마다) 중 하나다. 실행마다 0부터 센다(`gs go a b`면 feature마다 따로). 섹션이 없으면 3, `0`이면 agy를 띄우지 않는다. `/retro`의 agy 요약과 `gs check`의 agy 차단 장치 확인(`agy -p /hooks`, 모델 호출 없음)은 세지 않는다.
+`gs go` 한 번(feature 하나)에서 gs가 띄우는 agy 호출 수의 상한이다. 1회는 agy worker 한 번(재시도·수정 worker·2차 수정 worker·끊겨서 다시 띄운 worker도 각각 1회), agy 리뷰 한 번, agy 재리뷰 한 번(회차마다, 끊겨서 다시 부른 호출도) 중 하나다. 실행마다 0부터 센다(`gs go a b`면 feature마다 따로). 섹션이 없으면 3, `0`이면 agy를 띄우지 않는다. `/retro`의 agy 요약과 `gs check`의 agy 차단 장치 확인(`agy -p /hooks`, 모델 호출 없음)은 세지 않는다.
 - **`gs check`**: 범위 안 티켓의 `model`·`reviewer`·`second_reviewer` 중 agy인 것을 센다(티켓마다 첫 호출만. 재시도·수정·재리뷰는 미리 세지 않는다). 상한을 넘으면 경고:
   ```
   경고: 범위 안 agy 배정 4회가 상한 agy.max_calls_per_run=3회를 넘는다
@@ -448,15 +523,17 @@ max_calls_per_run = 3
 
 ## 리뷰와 재리뷰
 
-worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보고, 판단 모델이 지적마다 `fix`(고친다)·`report`(보고만)를 정한다. `fix`가 있으면 이렇게 간다. `verify`는 마지막에 한 번 돈다.
+worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보고, 판단 모델이 지적마다 `fix`(고친다)·`report`(보고만)를 정한다. 리뷰어는 전체 시험 대신 지적을 확인할 좁은 재현만 돌린다. `fix`가 있으면 이렇게 간다. `verify`는 마지막에 한 번 돈다.
 
 1. **수정** — 같은 구현 모델의 수정 worker가 같은 브랜치에서 `fix` 지적을 고치고 커밋한다.
 2. **재리뷰** — 지적을 낸 리뷰어가 수정 커밋의 diff만 다시 본다: 지적마다 고쳐졌는가(근거와 함께), 수정이 새로 만든 문제가 있는가. `second_reviewer`까지 둘 다 지적했으면 동시에 각자 자기 지적을, 한쪽만 냈으면 그쪽만 본다. 한 번의 상한은 `timeouts.rereview_minutes`(기본 10분)다.
 3. **2차 수정** — 아직 안 고쳐진 지적이 있거나, 새 문제 중 판단 모델이 `fix`로 본 것이 있으면 한 번 더 고친다. 둘 다 없으면 바로 5로 간다.
 4. **2차 재리뷰** — 2차 수정이 받은 지적만 다시 확인한다. 여기서 나온 새 문제는 고치지 않고 `보고만`으로 남긴다.
-5. **병합** — 더 고치지 않는다(수정은 티켓당 최대 2회). 최신 integration을 합쳐 `verify`를 통과하면 남은 지적이 있어도 병합한다.
+5. **병합** — 더 고치지 않는다(수정은 티켓당 최대 2회). 최신 integration을 합쳐 티켓 검증을 통과하면 남은 지적이 있어도 병합한다.
 
 수정 worker가 실패하면(종료 코드, 멈춤, 커밋 없음) 그 수정만 버리고 재리뷰를 건너뛰어 병합·검증으로 간다. 2차 수정이 실패해도 1차 수정은 남는다. 어느 경우든 티켓 실패로 세지 않는다.
+
+리뷰어·판단 모델 호출이 끊기거나 시간을 넘기면 실패가 아니다: 기다렸다 다시 부르고, 상한을 넘기면 [`중단(네트워크)`](#네트워크가-끊겼을-때)로 멈춘다. 끊겼다는 이유로 리뷰 없이 병합하지 않는다.
 
 ```
 [04] 리뷰: codex+agy
@@ -488,7 +565,7 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 | `미해결` | 리뷰어가 아직 안 고쳐졌다고 봤다. 고치지 못한 채 병합됐다 | **가장 먼저 본다.** `재리뷰 근거`를 읽고 맞으면 `/grill`로 고칠 티켓을 더한다 |
 | `보고만` | 고치지 않기로 했다: 판단 모델이 `report`로 봤거나(근거 없음, 범위 밖 등) 2차 재리뷰의 새 문제다 | `판단`을 읽고 동의하는지 본다. 2차 재리뷰의 새 문제는 판단 모델이 보지 않았으니 지적을 직접 읽는다 |
 | `수정 못 함(<이유>)` | 고칠 지적인데 수정이 들어가지 않았다. 이유: `한도`(agy 상한), `띄우지 못함: …`, `수정 worker 실패: …` | 지적이 코드에 그대로 있다고 보고 읽는다. `수정 worker 실패: 커밋 없음`이면 worker가 지적을 틀렸다고 봤을 수 있으니 `run/<NN>/<시도>/fix/worker.log`의 마지막 메시지를 본다. 한도면 `agy.max_calls_per_run`을 올린다 |
-| `확인 못 함(<이유>)` | 수정 커밋은 들어갔지만 고쳐졌는지 모른다. 이유: `시간 초과`, `한도`, `재리뷰 실패`(답 형식 오류, 판정·근거 없음 등) | 지적과 수정 커밋을 직접 대조한다. 로그는 `run/<NN>/<시도>/rereview<회차>-<계열>/reviewer.log`. 시간 초과가 잦으면 `timeouts.rereview_minutes`를 늘린다 |
+| `확인 못 함(<이유>)` | 수정 커밋은 들어갔지만 고쳐졌는지 모른다. 이유: `한도`, `재리뷰 실패`(답 형식 오류, 판정·근거 없음 등). 옛 실행에는 `시간 초과`도 있다 | 지적과 수정 커밋을 직접 대조한다. 로그는 `run/<NN>/<시도>/rereview<회차>-<계열>/reviewer.log` |
 
 `수정됨`이 아닌 넷을 다 합친 수가 `■ 보고서: … · 남은 리뷰 지적 N`과 텔레그램의 `남은 지적 N`이다(`보고만`도 센다). 이 기능이 생기기 전에 돈 실행의 state를 읽으면 `확인 못 함(재리뷰 없음)`, `수정 못 함(수정 버림)`, `수정 못 함(수정 기록 없음)`으로 보일 수 있다.
 
@@ -500,6 +577,7 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 ```
 - `1/3`: 끝난 티켓(병합·실패·건너뜀)/전체. 막대 8칸이 그 비율이다.
 - `02 리뷰 중(codex)`: 돌고 있는 티켓마다 단계(준비, worker, 리뷰, 수정, 재리뷰, 수정 2, 검증, 마무리)와 그 단계의 모델(`03 재리뷰 중(codex+agy)`). feature 전체 마무리(보고서·PR·main 검증) 중이면 `마무리 중(claude)`, CI를 기다리면 `CI 대기 중`, integration이나 base worktree를 준비하면 `준비 중`.
+- `네트워크 대기(2회, 3분 뒤)`: 끊겨서 기다리는 중이고, 두 번째 대기이며 3분 뒤 다시 부른다. `네트워크 회복 확인(2회)`는 다시 띄운 worker가 일시 오류 없이 도는지 보는 중이다. 둘 다 그동안 새 worker·리뷰를 시작하지 않는다([네트워크가 끊겼을 때](#네트워크가-끊겼을-때)).
 - `12분`: 이번 실행의 경과. `약 18분 남음`: 이번 실행에서 끝난 티켓의 평균 소요 × 남은 티켓 ÷ `max_workers`.
 - 이번 실행에서 끝난 티켓이 아직 없으면 이 레포의 **다른 feature** 실행 기록(`.goldstack/work/*/run/state.json`)에서 병합된 티켓의 소요 중앙값으로 처음부터 예측하고, 그 사실을 꼬리표로 단다:
   ```
@@ -518,7 +596,7 @@ csv-export: 실행 중(pid 48211) · 시작 14:02:10
 03    실행 중  2     3m05s   14:19:10 (13s 전)
 ▓▓▓░░░░░ csv-export 1/3 · 02 리뷰 중(codex) · 03 worker 중(claude) · 12분 · 약 18분 남음
 ```
-03의 시도 2는 첫 시도가 실패해 재시도 중이라는 뜻이다(실패 이유는 끝난 시도에만 보인다). `gs status`만 치면 지금 돌고 있는 feature를 모두 보이고, 없으면 지난 실행 기록이 있는 feature 이름을 알려 준다. 첫 줄이 `중단됨(…)`이면 `gs go`가 끝을 남기지 않고 죽은 것이다. 다시 `gs go`를 돌리면 이어 간다.
+03의 시도 2는 첫 시도가 실패해 재시도 중이라는 뜻이다(실패 이유는 끝난 시도에만 보인다). `gs status`만 치면 지금 돌고 있는 feature를 모두 보이고, 없으면 지난 실행 기록이 있는 feature 이름을 알려 준다. 첫 줄이 `중단됨(…)`이면 `gs go`가 끝을 남기지 않고 죽은 것이고, `중단(네트워크)(…) · 다음 gs go가 이어 간다`면 대기 상한을 넘겨 스스로 멈춘 것이다. 둘 다 다시 `gs go`를 돌리면 이어 간다.
 
 **worker 화면과 로그** — herdr 안에서 돌렸으면 지금 workspace의 탭 `gs:csv-export`에 worker마다 pane이 열린다. 성공한 worker의 pane은 닫히고, 실패한 pane은 들여다볼 수 있게 남는다.
 herdr 밖이면 화면 없이 돌고, 로그는 `.goldstack/work/csv-export/run/<티켓>/<시도>/worker.log`에 쌓인다. `gs go` 자신의 출력(`[02] 리뷰: codex`, `[02] 검증 통과 → integration 병합` 같은 줄)은 `/go`가 띄운 백그라운드 출력이다.
@@ -538,6 +616,8 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | 마무리 상태 줄(Summary 바로 아래) | gs가 state에서 쓴 한 줄. 예 `마무리: verified · PR https://github.com/you/tally/pull/7 병합 · main 검증 통과`, `마무리: reverted · main 검증 실패 → revert 1a2b3c4d`, `마무리: not_merged · integration 검증 실패` |
 | 지적 개수 줄(마무리 상태 줄 아래) | `리뷰 지적: 수정됨 1 · 미해결 1 · …`. 상태마다 뜻과 볼 것은 [리뷰와 재리뷰](#리뷰와-재리뷰) |
 | Evidence → 남은 위험(있을 때만, 맨 앞) | `- 01: 플러그인 격리 못 함: …`. claude worker의 플러그인 끄기가 빠진 채 돌았다는 뜻이다(worker를 막지는 않는다). `claude plugin list`가 되는지 본다 |
+| Evidence → 실행 측정 | gs 버전·설치 commit, 일시 오류 수·대기 시간(전체, 티켓별), 표: worker 시도별 실제 모델·effort·소요·처리 대기, 리뷰어별 소요·지적·채택(fix, 해결 수와 다르다), 리뷰 호출별 시간(재호출 포함), gs 검증별 명령·SHA·소요·결과, 마무리 단계별 시간. 어디서 시간을 썼는지 볼 때 읽는다. 뜻은 [internals](internals.md#상태) |
+| Evidence → 검증 실패(마무리 전체 검증이 실패했을 때만) | 실패한 단계(`integration`, `integration-final`), 로그 경로, 실패 줄 최대 10줄, `후보 티켓(추정)`. 추정이라 틀릴 수 있다. 로그로 확인하고 `/grill`로 고칠 티켓을 더한다 |
 | Evidence → 티켓별 결과 | 티켓마다 결과(`merged`, `failed`, `skipped`)와 이유. 단계별 소요(`worker 9분 · 리뷰 4분 · 수정 2분 · 재리뷰 1분 · 검증 3분`, 0분인 단계는 빼고 모두 1분 미만이면 `모두 1분 미만`). 미커밋 변경 때문에 남긴 worktree(`--only` 범위 밖 티켓 것도). `경고: setup이 추적 파일을 바꿨다 → 되돌림: …`, 플러그인 격리 경고 |
 | Evidence → 리뷰 지적 | 다른 계열 reviewer의 지적 전부와 지적마다의 상태·근거·판단·재리뷰 근거. 고쳐졌다고 확인된 지적도 `수정됨(재리뷰 확인)`으로 남는다. `second_reviewer`가 있으면 리뷰마다 `04 리뷰(codex)`, `04 리뷰(agy)`로 나뉜다. 리뷰 자체가 실패했거나 `건너뜀(한도)`이면 그 메모, 수정·재리뷰 경과 메모 |
 | Evidence 끝 `agy 사용: N/상한` | 이번 실행에서 gs가 띄운 agy 호출 수 |
@@ -548,8 +628,9 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 
 | 이유 | 뜻 | 할 일 |
 |---|---|---|
-| `검증 실패(로그 <경로>)` | 티켓을 integration에 합친 결과가 spec의 `verify`를 통과하지 못했다 | 그 `verify.log`를 읽는다 |
+| `검증 실패(로그 <경로>)` | 티켓을 integration에 합친 결과가 티켓 검증 명령을 통과하지 못했다 | 그 `verify.log`를 읽는다 |
 | `검증 시간 초과(<N>분, 로그 <경로>)` | verify가 `verify_minutes`를 넘겼다 | 시험이 멈추는지 보거나 spec의 `verify_minutes`를 늘린다 |
+| `네트워크 대기: <이유>`, `중단(네트워크)` | 끊겨서 기다리는 중이거나 상한을 넘겨 멈췄다. 실패가 아니다 | [네트워크가 끊겼을 때](#네트워크가-끊겼을-때) |
 | `시간 초과: <N>분 동안 로그 출력·새 커밋 없음` | worker가 `idle_minutes` 동안 아무것도 안 했다 | `worker.log` 끝을 본다. 티켓이 너무 크면 나눈다 |
 | `커밋 없음`, `worker 종료 코드 <N>` | worker가 커밋 없이 끝났거나 실패로 끝났다 | `worker.log`, worker의 마지막 메시지(막힌 이유) |
 | `conflict`, `integration 병합 충돌` | 먼저 병합된 티켓과 같은 곳을 고쳤다 | `merge.log`. 같은 파일을 건드리는 티켓은 `blocked_by`로 줄 세운다 |
@@ -558,7 +639,7 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `agy 차단 장치가 없다: …` | agy가 gs hook을 걸지 못해 worker로 띄우지 않았다 | 그 티켓의 `model`을 바꾸거나 agy를 고친다 |
 | `agy 한도: 이번 실행의 agy 호출이 상한 3/3에 닿아 worker를 띄우지 않았다(config agy.max_calls_per_run)` | 이번 실행의 agy 호출이 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿았다. 재시도하지 않는다 | 상한을 올리거나 그 티켓의 `model`을 바꿔 다시 `gs go` |
 
-실패한 티켓은 같은 모델로 한 번 자동 재시도한 뒤에도 실패한 것이다(`준비 실패`와 `agy 한도`는 재시도하지 않는다). 시도마다 증거가 `.goldstack/work/csv-export/run/<티켓>/<시도>/`에 남는다: `brief.md`, `setup.log`, `worker.log`, `verify.log`, `merge.log`, `failure.log`, `failure-summary.md`(판단 모델의 요약), `review/`(diff·reviewer 답), `fix/`·`fix2/`(수정 worker), `rereview1-<계열>/`·`rereview2-<계열>/`(재리뷰). 실패한 worktree(`run/wt/03`, `run/wt/03-retry-1`)도 지우지 않고 남긴다. 다 봤으면 [`gs clean`](#끝난-feature-치우기gs-clean)으로 지운다.
+실패한 티켓은 같은 계열에서 등급을 한 단계 올려(표가 없으면 같은 모델로) 한 번 자동 재시도한 뒤에도 실패한 것이다(`준비 실패`와 `agy 한도`는 재시도하지 않는다). 재시도한 모델은 보고서 "실행 측정"에 있다. 시도마다 증거가 `.goldstack/work/csv-export/run/<티켓>/<시도>/`에 남는다: `brief.md`, `setup.log`, `worker.log`, `verify.log`, `merge.log`, `failure.log`, `failure-summary.md`(`models.failure_summary`의 요약), `review/`(diff·reviewer 답), `fix/`·`fix2/`(수정 worker, 끊겨서 다시 띄웠으면 `fix-net1/` 등), `rereview1-<계열>/`·`rereview2-<계열>/`(재리뷰). 실패한 worktree(`run/wt/03`, `run/wt/03-retry-1`)도 지우지 않고 남긴다. 다 봤으면 [`gs clean`](#끝난-feature-치우기gs-clean)으로 지운다.
 
 **마무리 결과**(보고서 Merge Danger, `■ 마무리:` 줄)
 
@@ -576,8 +657,45 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `마무리 실패: squash 커밋 …의 tree가 검증한 integration …의 tree와 다르다…` | 실행 중 main이 움직였다. [squash 예시](#예시-squash만-허용)대로 main을 확인하고 빠져나온다 |
 | `PR …이 병합되지 않고 닫혔다 → 병합 안 함. 다음 gs go가 새 PR을 연다` | 사람이 PR을 닫았다 |
 | `main 검증 실패 → revert <sha>를 main에 push함` | 병합 뒤 main 검증이 실패해 병합 커밋을 되돌렸다(force push 없음). gs는 그 revert를 되돌린 커밋을 integration에 합쳐 둔다. 고칠 티켓을 더해 `gs go`하면 그 PR이 feature 코드를 되살린다 |
+| `중단(네트워크)` | 대기 상한을 넘겨 티켓 단계에서 멈췄다(종료 코드 3). 마무리를 하지 않았다. 네트워크가 돌아오면 `gs go` |
 
-**다시 실행** — 고칠 것이 spec·티켓이면 `/grill csv-export`로 고치고(커밋까지 한다), 그 뒤 `/go csv-export`. 코드만 다시 돌리면 되면 바로 `/go csv-export`.
+### 네트워크가 끊겼을 때
+
+**무엇이 끊김인가** — 모델 CLI가 낸 연결 실패, DNS 오류, 5xx, 429다. 인증 오류, 구독 사용량 한도, 없는 모델 이름, 모르는 오류는 평소의 실패다(worker는 재시도, 리뷰는 `리뷰 실패`). 리뷰어·판단 모델의 시간 초과는 끊김으로 본다. worker가 출력 없이 `idle_minutes`를 넘긴 멈춤은 평소의 실패다.
+
+**스스로 하는 일** — 사람이 할 일은 없다.
+```
+[02] 일시 오류(connection_failed): 실패로 세지 않는다. 네트워크 대기(1회, 1분 뒤)
+[02] 네트워크 끊김 뒤 같은 worktree에서 다시 시작 (claude, pid 54960, 로그 …/run/02/2/worker.log)
+■ 네트워크 회복: 다른 티켓 시작을 재개한다
+```
+1. **실패로 세지 않는다.** 재시도 횟수와 등급이 그대로이고, 실패 요약도 부르지 않는다.
+2. **기다린다.** 1→2→5→10→10…분, 합계 `timeouts.network_wait_minutes`(기본 60)까지. 다시 부르는 것이 곧 회복 확인이다. 호스트를 따로 찌르지 않는다.
+3. **같은 worktree에서 새 worker로 잇는다.** 커밋 안 된 작업도 남아 있고, brief에 "지난 시도가 네트워크로 끊겼다. `git status`와 `git diff`로 남은 변경을 보고 이어라"가 붙는다. 세션을 이어 가는 것은 아니다.
+4. **그동안 새 worker·리뷰를 시작하지 않는다.** 도는 worker는 그대로 돌고, 성공으로 끝난 worker의 리뷰는 회복 뒤로 미룬다. 다시 띄운 worker가 5분 넘게 일시 오류 없이 돌거나 끝나면 회복이다. 대기 합계는 끊김마다 새로 센다.
+
+리뷰·재리뷰·판단 호출은 같은 일정으로 다시 부른다(합계는 호출마다 따로다). 리뷰어가 계속 시간 초과면 호출 시간까지 더해져, 기본값으로 첫 리뷰 하나가 약 6시간(호출 10번 × 30분 + 대기 60분)까지 간 뒤 중단된다. codex worker는 끊겨도 죽지 않고 `Reconnecting`을 찍으며 기다리므로, 그 상태가 상한을 넘기면 중단한다.
+
+**`중단(네트워크)`** — 상한을 넘기면 실행을 멈춘다. 돌던 worker를 끝내고, 티켓은 `대기`로 두고, 보고서·PR·병합을 하지 않으며, 끊겼다는 이유로 리뷰 없이 병합하지 않는다. 종료 코드는 3이다.
+```
+[01] 중단(네트워크): worker를 끝낸다
+■ 네트워크 중단 이유: 대기 합계가 상한 60분을 넘었다(timeouts.network_wait_minutes)
+■ 중단(네트워크): 다음 gs go가 이어 간다
+■ 요약: 병합 1, 대기 2
+■ 마무리: 중단(네트워크)
+```
+```
+❌ csv-export · 중단(네트워크) · 티켓 1/3 · 보고서 .goldstack/work/csv-export/report.md
+```
+마무리를 하지 않았으니 `■ 보고서:` 줄과 알림의 경로에는 파일이 없거나 지난 실행의 것이 있다. 지금 상태는 `gs status csv-export`로 본다.
+
+**이어 가기** — 네트워크가 돌아오면 `gs go csv-export`(또는 `/go`)를 다시 친다. 끊긴 worker는 같은 worktree에서 잇고, worker가 끝나 있던 티켓은 리뷰·재리뷰부터 하고, 대기 합계는 새로 센다. 그 worktree를 지웠거나 브랜치가 달라졌으면 경고하고 새로 시작한다. agy worker는 다시 띄울 때도 호출로 세므로 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿으면 `agy 한도`로 실패한다. 이 상한은 `agy.max_calls_per_run`으로 올린다. 대기 합계의 상한은 `timeouts.network_wait_minutes`로 올린다.
+
+끊김을 자주 보면 보고서 "실행 측정"의 일시 오류 수·대기 시간을 본다. 마무리 단계의 push·`gh` 오류는 기다리지 않는다. 지금처럼 멈추고 다음 `gs go`가 잇는다.
+
+### 다시 실행
+
+고칠 것이 spec·티켓이면 `/grill csv-export`로 고치고(커밋까지 한다), 그 뒤 `/go csv-export`. 코드만 다시 돌리면 되면 바로 `/go csv-export`.
 - integration에 병합된 티켓은 건너뛴다(`[01] 이미 병합됨`). 실패·건너뜀 티켓은 실패 횟수를 0으로 되돌리고 다시 한다.
 - `gs go`가 죽어 `running`으로 남은 티켓은 실패로 세지 않고 새로 시작한다. 살아 남은 worker가 있으면 먼저 끝낸다.
 - 지난 마무리가 끝나지 않았으면(승인·CI 대기, main 검증 전 등) 그것만 끝내고 멈춘다. 실패·건너뜀 티켓이 있으면 `■ 남은 티켓 N개 → 다음 gs go`이니 [한 번 더 친다](#예시-보호된-main--필수-승인).
@@ -606,6 +724,7 @@ grill이 끝난 feature가 여럿이면(밤새 돌려 둘 때) 한 번에 줄 �
 - 티켓 하나라도 실패·건너뜀(병합된 티켓은 main에 들어가 마무리가 `verified`여도): `■ csv-export: verified → 여기서 멈춤(남은: csv-import)`.
 - 재개한 마무리가 `verified`로 끝났지만 그 feature에 티켓이 남음(`■ 남은 티켓 N개 → 다음 gs go`): 출력은 위와 같다. 같은 줄을 다시 치면 남은 티켓부터 돈다.
 - `not_merged`(integration 검증 실패, merged 티켓 없음), `merge_pending`(병합 큐·승인 대기), `checks_failed`·`checks_timeout`(CI), `revert_pending`·`report_pending`(gs PR의 승인 대기), `setup_failed`·`base_unverified`(준비 실패), `closed`, `reverted`(main 검증 실패로 revert).
+- [`중단(네트워크)`](#네트워크가-끊겼을-때): `■ csv-export: 중단(네트워크) → 여기서 멈춤(남은: csv-import)`, 종료 코드 3. 같은 줄을 다시 치면 끊긴 곳부터 잇는다.
 - `gs go`가 시작 전에 거부(미커밋 spec, 다른 `gs go`가 잠금): 종료 코드가 1이라 state에 지난 실행의 `verified`가 남아 있어도 멈춘다. state.json을 못 읽으면 `■ csv-export: unknown → 여기서 멈춤(남은: csv-import)`.
 
 멈췄으면 앞 feature를 [실패했을 때](#실패했을-때)대로 고친 뒤 같은 줄을 다시 친다. 모두 병합돼 정리된 앞 feature는 `■ 이미 끝남: csv-export (verified)`로 바로 넘어간다. `--only`는 여러 feature와 함께 못 쓴다(`gs: error: 여러 feature와 --only는 함께 쓸 수 없다`).

@@ -12,13 +12,16 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import median
+
+from . import transient
 
 PENDING, RUNNING, MERGED, FAILED, SKIPPED = "pending", "running", "merged", "failed", "skipped"
 STATUSES = (PENDING, RUNNING, MERGED, FAILED, SKIPPED)
@@ -26,6 +29,11 @@ STATUSES = (PENDING, RUNNING, MERGED, FAILED, SKIPPED)
 
 def now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def after(seconds: float) -> str:
+    """지금부터 seconds 뒤의 시각."""
+    return (datetime.now().astimezone() + timedelta(seconds=seconds)).isoformat(timespec="seconds")
 
 
 def parse_time(s: str | None) -> datetime | None:
@@ -67,8 +75,14 @@ class TicketState:
     # 두 번째 리뷰(second_reviewer)의 기록. 모양은 review와 같다. second_reviewer가 없는 티켓은 비어 있다
     second_review: dict = field(default_factory=dict)
     # 단계 전환마다 추가한다. attempt는 worker 실행 디렉터리 번호(중단 재개 때도 재사용하지 않음).
-    # 각 항목: attempt, phase, model, started_at, ended_at. 지난 시도도 보고서에 합산한다.
+    # 각 항목: attempt, phase, model(계열), started_at, ended_at. 지난 시도도 보고서에 합산한다.
+    # worker·수정 단계에는 tier, actual_model, effort도 보존한다(옛 state에는 없음, 빈 모델·effort는 CLI 기본값).
     phases: list[dict] = field(default_factory=list)
+    transient_errors: int = 0  # worker가 일시 오류로 끝난 횟수. failures와 따로 센다(재시작을 넘어 누적)
+    network_wait_seconds: float = 0  # 이 티켓이 네트워크 대기로 보낸 시간(누적)
+    # 끊긴 worker를 잇는 표시: branch, worktree, base, fix(수정 worker 회차, 0이면 구현), rundir,
+    # done(worker는 끝났고 리뷰부터 하면 된다). 있으면 _start가 새 worktree 대신 여기서 잇는다. 비었으면 없음.
+    network_resume: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -84,6 +98,12 @@ class State:
     phase: str = ""  # feature 전체 마무리 중이면 finish
     progress: dict = field(default_factory=dict)
     agy_calls: int = 0  # 이번 실행에서 gs가 띄운 agy 호출 수(worker 1번·리뷰 1번 = 1회, 재시도·수정·재리뷰 포함). 실행마다 0에서
+    # 네트워크 끊김: errors(일시 오류 수), waited_seconds(기다린 시간, 둘 다 실행을 넘어 누적),
+    # wait(지금의 대기: count, due_at. due_at이 비면 다시 띄운 worker로 회복을 확인하는 중), aborted(중단 이유)
+    network: dict = field(default_factory=dict)
+    # 선택 측정 이력. 재개·재시도·새 마무리에서도 덮어쓰지 않는다. 옛 state에는 없어도 된다.
+    # runtime, workers, validations, reviewers, review_calls, finish_stages의 목록(metrics.py).
+    metrics: dict = field(default_factory=dict)
 
     def ticket(self, tid: str) -> TicketState:
         return self.tickets.setdefault(tid, TicketState())
@@ -100,7 +120,7 @@ def agy_reached(st: State, limit: int) -> bool:
 
 
 PHASE_LABELS = {"worker": "worker", "review": "리뷰", "fix": "수정", "rereview": "재리뷰", "fix2": "수정 2",
-                "verify": "검증", "finish": "마무리", "checks": "CI 대기", "setup": "준비"}
+                "verify": "검증", "finish": "마무리", "checks": "CI 대기", "setup": "준비", "network": "네트워크 대기"}
 
 
 def end_phase(ts: TicketState, at: str | None = None) -> None:
@@ -134,6 +154,17 @@ def phase_durations(ts: TicketState) -> dict[str, float]:
             phase = p["phase"]
             totals[phase] = totals.get(phase, 0) + seconds_between(p["started_at"], p["ended_at"])
     return totals
+
+
+def network_label(st: State, at: str) -> str:
+    """진행 바·`gs status`의 네트워크 줄. 대기 중이 아니면 빈 문자열."""
+    wait = st.network.get("wait") or {}
+    if not wait:
+        return ""
+    if not wait.get("due_at"):
+        return f"네트워크 회복 확인({wait['count']}회)"
+    left = math.ceil(seconds_between(at, wait["due_at"]) / transient.minute_seconds())
+    return f"네트워크 대기({wait['count']}회, {max(1, left)}분 뒤)"
 
 
 def load_eta_history(repo: Path, feature: str) -> float | None:
@@ -173,8 +204,9 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
         ts = st.tickets[tid]
         if ts.status == RUNNING and not st.finished_at:
             p = ts.phases[-1] if ts.phases else {}
-            running.append({"id": tid, "phase": p.get("phase", "worker"),
-                            "model": p.get("model", (models or {}).get(tid, ""))})
+            if p.get("phase") != "network":  # 기다리는 티켓은 아래 네트워크 대기 한 칸으로 보인다
+                running.append({"id": tid, "phase": p.get("phase", "worker"),
+                                "model": p.get("model", (models or {}).get(tid, ""))})
         if tid in prior or ts.status not in terminal or not ts.started_at or not ts.ended_at:
             continue
         # 시작 시각은 최신 worker의 것이라, 재시도를 포함한 첫 단계부터 잰다.
@@ -199,6 +231,8 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
         label = PHASE_LABELS[p["phase"]]
         model = f"({p['model']})" if p["model"] else ""
         parts.append(f"{p['id'] + ' ' if p['id'] else ''}{label} 중{model}")
+    if not st.finished_at and (network := network_label(st, at)):
+        parts.append(network)
     eta_text = f"약 {eta // 60}분 남음" if eta is not None else "남은 시간 계산 중"
     if historical:
         eta_text += "(이전 실행 기준)"

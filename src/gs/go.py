@@ -1,6 +1,6 @@
 """`gs go`: 시작할 수 있는 티켓을 max_workers개까지 동시에 worker에 맡기고 integration에 모아 PR을 연다.
 
-병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 모델로 한 번 재시도한다(07).
+병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 계열로 한 번 재시도한다(07).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
 띄운다(06, review.py). 티켓에 second_reviewer가 있으면 두 리뷰를 동시에 띄우고 지적을 합쳐 수정 worker는 하나다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
@@ -10,6 +10,13 @@ gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 stat
 끝에는 보고서·PR·base 검증·revert를 한다(08). 지난 마무리가 남았으면 그것만 끝내고 멈춘다. 남은 티켓은 다음 gs go가 한다.
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
+
+worker는 config 등급표와 티켓 tier(기본 medium)로 모델·effort를 고른다. 첫 실패 뒤에는 한 단계 올리고 수정 worker도 그 등급을 쓴다.
+worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 않고 등급도 올리지 않는다. 간격을 늘려 기다렸다가 같은 worktree·브랜치에서 새 시도
+디렉터리로 다시 띄운다(Outage). 끊김이 이어지는 동안 새 worker·리뷰를 시작하지 않고 도는 worker는 그대로 둔다. 다시 띄운 worker가
+5분 넘게 일시 오류 없이 돌거나 끝나면 회복이다. 대기 합계와 일정은 끊김마다 새로 센다(`Backoff`). 상한을 넘기거나 codex가 Reconnecting만 그만큼
+이어 가거나 다른 호출이 NetworkAbort를 던지면 `중단(네트워크)`다: 돌던 worker를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴
+network_resume으로 다음 `gs go`가 같은 worktree에서 잇는다.
 """
 from __future__ import annotations
 
@@ -22,12 +29,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import adapters, clean, config, failure, finish, git, graph, herdr, notify, report, review, setup, state, verify, worker
+from . import adapters, clean, config, failure, finish, git, graph, herdr, metrics, notify, report, review, setup, state, transient, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
 CONFLICT = "conflict"
 HEARTBEAT_SECONDS = 60  # 상태가 그대로여도 이 간격마다 state.json을 다시 쓴다(진행 바가 오래된 실행으로 보고 지우지 않게)
+EXIT_NETWORK = 3  # `중단(네트워크)`의 종료 코드. 다음 gs go가 이어 간다
+NETWORK_ABORT = "중단(네트워크)"
+NETWORK_ABORT_LINE = f"■ {NETWORK_ABORT}: 다음 gs go가 이어 간다"
 
 
 def integration_branch(feature: str) -> str:
@@ -56,6 +66,7 @@ class Run:
     ihead: str = ""  # gs가 아는 integration 끝. 병합할 때만 움직인다
     saved: float = 0.0  # 마지막 save()의 time.monotonic(). heartbeat가 본다
     history_median_s: float | None = None  # 실행 시작에 한 번 읽은 다른 feature의 ETA 표본 중앙값
+    net: Outage | None = None  # 지금의 네트워크 끊김. _loop가 새로 만든다: 대기 합계는 gs go마다 새로 센다
 
     @property
     def name(self) -> str:
@@ -111,6 +122,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     except state.Locked as e:
         print(f"gs go: {e}. 같은 feature에 gs go는 하나만 돈다. 아무것도 띄우지 않았다.", file=sys.stderr)
         return 1
+    aborted = False
     try:
         url, finished = None, False
         try:
@@ -132,6 +144,12 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 else:
                     _loop(r)
                     url, finished = _finish_run(r)
+        except transient.NetworkAbort as e:
+            # 마무리를 하지 않는다. 남은 일은 다음 gs go가 티켓마다 남긴 network_resume으로 잇는다.
+            aborted, finished = True, False
+            r.st.network["aborted"] = str(e)
+            url = r.st.finish.get("url")
+            say(f"■ 네트워크 중단 이유: {e}")
         except git.GitError as e:
             print(f"gs go: git 오류: {e}", file=sys.stderr)
             finished = False
@@ -151,10 +169,14 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     finally:
         lock.release()
     ok = finished and all(r.st.tickets[tid].status == state.MERGED for tid in r.order)
+    if aborted:
+        say(NETWORK_ABORT_LINE)
     if r.st is not None:
         _summary(r, url)
         if cfg.notify.telegram:
             _notify(r, url, ok)
+    if aborted:
+        return EXIT_NETWORK
     return 0 if ok else 1
 
 
@@ -194,6 +216,7 @@ def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
 def _begin(r: Run) -> None:
     """state.json을 읽어 이번 실행을 시작한다. 지난 실행이 죽어 running으로 남은 티켓은 실패로 세지 않는다."""
     st = state.load(r.rundir, r.name)
+    metrics.close_interrupted_stages(st)
     r.g = _graph(r)
     r.order = graph.topo_order(r.g)
     for tid, ts in sorted(st.tickets.items()):
@@ -211,7 +234,10 @@ def _begin(r: Run) -> None:
             ts.status, ts.pane, ts.started_at, ts.ended_at = state.PENDING, "", "", ""
     st.pid, st.only, st.started_at, st.finished_at, st.phase = os.getpid(), r.only, state.now(), "", ""
     st.agy_calls = 0  # 상한은 실행마다다(spec 1-9)
+    st.network.pop("wait", None)
+    st.network.pop("aborted", None)
     r.st = st
+    metrics.runtime(r)
     r.history_median_s = state.load_eta_history(r.repo, r.name)
     r.save()
 
@@ -256,6 +282,18 @@ def _phase(r: Run, tid: str, phase: str, model: str, *, attempt: int | None = No
     r.save()
 
 
+def _worker_adapter(r: Run, t: Ticket) -> adapters.Adapter:
+    """구현·수정·일시 오류 재시작에 같은 선택 규칙을 쓰고 실행마다 실제 옵션을 보존한다."""
+    ts = r.st.ticket(t.id)
+    tier, selection = r.cfg.tiers.worker(t.model, t.tier, failures=ts.failures)
+    adapter = adapters.for_model(t.model, r.cfg.models, selection)
+    # model은 진행·계열별 소요 통계가 쓰므로 계열로 유지한다. 빈 값은 CLI 사용자 기본값이다.
+    chosen = getattr(adapter, "selection", None)
+    metrics.worker_selection(ts, tier, chosen)
+    # 호출 경로의 다음 _set(pane) 또는 실패 저장이 이 선택도 함께 쓴다.
+    return adapter
+
+
 def _isolation_warning(r: Run, tid: str, adapter: adapters.Adapter) -> None:
     warning = adapter.isolation_warning
     warnings = r.st.ticket(tid).isolation_warnings
@@ -278,7 +316,12 @@ def _reset_integration(r: Run, to: str = "HEAD") -> bool:
     if git.run(r.iwt, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).returncode == 0:
         git.run(r.iwt, "merge", "--abort", check=False)
         dirty = True
-    moved = git.sha(r.iwt, "HEAD") != git.sha(r.iwt, to)
+    head = git.sha(r.iwt, "HEAD")
+    branch = integration_branch(r.name)
+    on_branch = git.run(r.iwt, "symbolic-ref", "-q", "HEAD", check=False).stdout.strip() == f"refs/heads/{branch}"
+    if not on_branch:  # 검증 명령이 브랜치를 옮겼을 수 있다. 그대로 reset하면 엉뚱한 브랜치가 움직인다
+        git.run(r.iwt, "checkout", "-q", "--force", branch, check=False)
+    moved = not on_branch or head != git.sha(r.iwt, to)
     git.run(r.iwt, "reset", "-q", "--hard", to)
     setup.clean(r.iwt, "-q", "-fd")
     return dirty or moved
@@ -469,6 +512,22 @@ class Active:
     last_log: tuple[int, int] | None = None
     last_head: str = ""
     fix: int = 0  # 리뷰 지적을 고치는 수정 worker면 그 회차(1 | 2), 구현 worker면 0. 끝나면 재리뷰로 간다
+    watch: transient.ReconnectWatch | None = None  # codex worker만
+    started: float = field(default_factory=time.monotonic)
+    held_at: float = 0.0  # 네트워크 대기에 들어간 시각
+    parked: bool = False  # 끝났지만 끊김 때문에 리뷰를 미뤘다. 돌아오면 끝 줄을 다시 찍지 않는다
+
+    def quiet_seconds(self) -> float:
+        """일시 오류 없이 돈 시간. 시작 이후 마지막 Reconnecting부터 잰다. Reconnecting 뒤 다른 이벤트가 아직 없으면 0이다."""
+        if self.watch is None:
+            return time.monotonic() - self.started
+        try:
+            self.watch.poll()  # _wait_any의 sleep 동안 쓰인 로그까지 본다
+        except OSError:  # 못 읽으면 회복으로 보지 않는다. 티켓 오류로 다루는 것은 바로 뒤 _wait_any다
+            return 0.0
+        if self.watch.since is not None:
+            return 0.0
+        return time.monotonic() - max(self.started, self.watch.last or 0.0)
 
     def idle(self, repo: Path) -> float:
         """로그 출력 또는 브랜치 커밋이 바뀌면 유휴 시계를 다시 시작한다."""
@@ -484,27 +543,54 @@ class Active:
         return time.monotonic() - self.last_activity
 
 
+@dataclass
+class Outage:
+    """네트워크 끊김 하나. 끊김 = 기다리는 worker나 회복을 확인하는 worker가 있는 동안(active). 그동안 새 worker·리뷰를 시작하지 않는다."""
+    backoff: transient.Backoff = field(default_factory=transient.Backoff)
+    waiting: dict[str, Active] = field(default_factory=dict)  # 일시 오류로 끝나 다시 띄우기를 기다린다
+    parked: dict[str, Active] = field(default_factory=dict)  # 성공으로 끝났지만 리뷰를 미뤘다. 회복하면 active로 돌아간다
+    probes: set[str] = field(default_factory=set)  # 다시 띄운 worker. 이것으로 회복을 안다
+    due: float | None = None  # waiting을 다시 띄울 시각(time.monotonic)
+    wait_started: float = 0.0
+
+    @property
+    def active(self) -> bool:
+        return bool(self.waiting or self.probes)
+
+
 def _idle_seconds(r: Run) -> float:
     """시험은 이 시간만 짧게 바꿔 실제 worker의 멈춤을 확인할 수 있다."""
     return r.feat.spec.idle_minutes * 60
+
+
+def _network_limit_seconds(r: Run) -> float:
+    return r.cfg.timeouts.network_wait_minutes * transient.minute_seconds()
+
+
+def _watch(adapter: adapters.Adapter, job: worker.Job) -> transient.ReconnectWatch | None:
+    """codex는 끊겨도 죽지 않고 Reconnecting을 찍으며 기다린다. 다른 계열은 끝날 때 판별한다."""
+    return transient.ReconnectWatch(job.log) if adapter.name == "codex" else None
 
 
 def _loop(r: Run) -> None:
     """frontier에서 max_workers개까지 띄우고, 하나 끝날 때마다 병합·검증한 뒤 frontier를 다시 계산해 채운다.
 
     루프는 스레드 하나다. worker는 각자 pane·프로세스에서 돌고, 병합과 검증은 이 루프 안에서 하나씩 한다(직렬).
+    네트워크 끊김 동안에는 새 worker를 띄우지 않고 끝난 worker만 처리한다. 대기는 sleep이 아니라 이 루프의 시계다(_net_tick).
     """
     cap = max(1, r.feat.spec.max_workers)
     say(f"■ 순서: {' '.join(r.order)}")
     say(f"■ 동시 worker: 최대 {cap}")
     say(f"■ 상태: {state.path(r.rundir)}")
     r.ihead = git.sha(r.iwt, "HEAD")
+    r.net = Outage()
     runner = worker.make_runner(r.repo, r.name)
     active: dict[str, Active] = {}
     try:
         while True:
             _skip_blocked(r)
-            while len(active) < cap:
+            _net_tick(r, active, runner)
+            while not r.net.active and len(active) < cap:
                 ready = [tid for tid in _frontier(r) if tid not in active]
                 if not ready:
                     break
@@ -513,9 +599,12 @@ def _loop(r: Run) -> None:
                     _skip_blocked(r)
                 else:
                     active[a.t.id] = a
-            if not active:
+            if not active and not r.net.active:
                 return
-            tid, code, error = _wait_any(r, active, runner)
+            ended = _wait_any(r, active, runner, once=r.net.active)
+            if ended is None:  # 끊김 중에는 대기 시계와 회복을 보러 돌아온다
+                continue
+            tid, code, error = ended
             # 결과 처리가 끝날 때까지 정리 대상에 둔다. _finish·_fail이 예외를 내도 finally에서 거둔다.
             a = active[tid]
             if error and not a.fix:  # 이 worker를 확인하다 오류가 났다. 이 티켓만 실패시킨다
@@ -535,11 +624,137 @@ def _loop(r: Run) -> None:
                 _reset_integration(r, r.ihead)
                 _fail(r, a.t, f"worker 결과 처리 중 오류: {_err(e)}")
                 active.pop(tid)
+    except transient.NetworkAbort:
+        _net_abort(r, active)
+        active.clear()
+        raise
     finally:
         # 예상 못 한 오류로 루프를 떠나도 띄운 worker를 남기지 않는다.
         for a in active.values():
             say(f"[{a.t.id}] gs가 멈춰 worker를 끝낸다")
             a.proc.stop()
+
+
+def _mark_resume(r: Run, a: Active, *, done: bool = False) -> None:
+    """이 worker를 다음에 같은 worktree에서 잇도록 state에 남긴다. done이면 worker는 끝났고 리뷰부터 하면 된다."""
+    r.st.ticket(a.t.id).network_resume = {
+        "branch": a.branch, "worktree": str(a.wt.resolve()), "base": a.base, "fix": a.fix, "done": done,
+        "rundir": str(a.proc.job.rundir)}
+    r.save()
+
+
+def _net_publish(r: Run) -> None:
+    """지금의 대기를 state에 쓴다(진행 바·gs status가 읽는다)."""
+    n = r.net
+    wait = {}
+    if n.active:
+        due_at = state.after(n.due - time.monotonic()) if n.due is not None else ""
+        wait = {"count": n.backoff.count, "due_at": due_at}
+    r.st.network["wait"] = wait
+    r.save()
+
+
+def _net_add_waited(r: Run, seconds: float) -> None:
+    r.st.network["waited_seconds"] = round(r.st.network.get("waited_seconds", 0) + seconds, 1)
+
+
+def _net_hold(r: Run, a: Active, why: str) -> None:
+    """worker가 일시 오류로 끝났다. 실패로 세지 않고 다시 띄울 때까지 세워 둔다. 상한을 다 썼으면 NetworkAbort."""
+    n, tid = r.net, a.t.id
+    ts = r.st.ticket(tid)
+    a.proc.finish(True)  # 다음 시도는 새 pane이다. 증거는 시도 디렉터리에 남는다
+    n.probes.discard(tid)
+    n.waiting[tid] = a
+    a.held_at = time.monotonic()
+    ts.transient_errors += 1
+    r.st.network["errors"] = r.st.network.get("errors", 0) + 1
+    ts.reason = f"네트워크 대기: {why}"
+    state.begin_phase(ts, "network", "")
+    _mark_resume(r, a)
+    if n.due is None:  # 다른 worker가 이미 잡아 둔 대기가 있으면 거기에 함께 탄다
+        delay = n.backoff.next(r.cfg.timeouts.network_wait_minutes)
+        if delay is None:
+            raise transient.NetworkAbort(
+                f"대기 합계가 상한 {r.cfg.timeouts.network_wait_minutes}분을 넘었다(timeouts.network_wait_minutes)")
+        n.due, n.wait_started = time.monotonic() + delay, time.monotonic()
+    _net_publish(r)
+    say(f"[{tid}] 일시 오류({why}): 실패로 세지 않는다. {state.network_label(r.st, state.now())}")
+
+
+def _net_park(r: Run, a: Active) -> bool:
+    """끊김 중에 끝난 성공 worker의 리뷰를 회복 뒤로 미룬다. 미뤘으면 True."""
+    if not r.net.active:
+        return False
+    r.net.parked[a.t.id] = a
+    a.parked = True
+    state.begin_phase(r.st.ticket(a.t.id), "network", "")
+    _mark_resume(r, a, done=True)
+    say(f"[{a.t.id}] 네트워크 대기 중이라 리뷰를 회복 뒤로 미룬다")
+    return True
+
+
+def _net_tick(r: Run, active: dict[str, Active], runner) -> None:
+    """끊김의 시계: 회복을 판단하고, 때가 된 worker를 다시 띄우고, 끊김이 끝나면 미룬 리뷰를 돌려놓는다."""
+    n = r.net
+    if not n.active and not n.parked:
+        return
+    now = time.monotonic()
+    changed = False
+    # 다시 띄운 worker가 일시 오류로 끝나면 _net_hold가 probes에서 뺀다. 그 밖의 이유로 없어졌으면 끝난 것이다.
+    healed = bool(n.probes - active.keys()) or any(
+        active[tid].quiet_seconds() >= transient.RECOVERY_MINUTES * transient.minute_seconds()
+        for tid in n.probes & active.keys())
+    if healed:
+        n.probes.clear()
+        if n.waiting:  # 회복했으니 함께 기다리던 worker도 지금 다시 띄운다
+            n.due = now
+        changed = True
+    if n.waiting and n.due is not None and now >= n.due:
+        _net_add_waited(r, now - n.wait_started)
+        for tid in [tid for tid in r.order if tid in n.waiting]:
+            a = n.waiting.pop(tid)
+            ts = r.st.ticket(tid)
+            ts.network_wait_seconds = round(ts.network_wait_seconds + now - a.held_at, 1)
+            nxt = _resume(r, a.t, runner, ts.network_resume)
+            if nxt is not None:
+                active[tid] = nxt
+                if not healed:
+                    n.probes.add(tid)
+        n.due = None
+        changed = True
+    if not n.active:
+        if n.backoff.count:
+            say("■ 네트워크 회복: 다른 티켓 시작을 재개한다")
+        n.backoff = transient.Backoff()
+        active.update(n.parked)
+        n.parked.clear()
+        changed = True
+    if changed:
+        _net_publish(r)
+
+
+def _net_abort(r: Run, active: dict[str, Active]) -> None:
+    """`중단(네트워크)`: 돌던 worker를 끝내고, 티켓은 실패로 세지 않고, 다음 gs go가 이어 갈 표시를 남긴다."""
+    n = r.net
+    now = time.monotonic()
+    if n.waiting and n.due is not None:
+        _net_add_waited(r, now - n.wait_started)
+    for tid, a in {**active, **n.waiting, **n.parked}.items():
+        ts = r.st.ticket(tid)
+        if not ts.network_resume:
+            _mark_resume(r, a)
+        if tid in n.waiting:
+            ts.network_wait_seconds = round(ts.network_wait_seconds + now - a.held_at, 1)
+        elif tid in active and not isinstance(a.proc, worker.Finished):
+            say(f"[{tid}] {NETWORK_ABORT}: worker를 끝낸다")
+        a.proc.stop()
+        _set(r, tid, status=state.PENDING, pane="", reason=NETWORK_ABORT, ended_at=state.now())
+    n.waiting.clear()
+    n.parked.clear()
+    n.probes.clear()
+    n.due = None
+    r.st.network["wait"] = {}
+    r.save()
 
 
 def _frontier(r: Run) -> list[str]:
@@ -562,10 +777,12 @@ def _skip_blocked(r: Run) -> None:
             say(f"[{tid}] 건너뜀: {', '.join(blockers)} 실패")
 
 
-def _wait_any(r: Run, active: dict[str, Active], runner) -> tuple[str, int | None, str]:
+def _wait_any(r: Run, active: dict[str, Active], runner, *, once: bool = False) -> tuple[str, int | None, str] | None:
     """돌고 있는 worker 중 하나가 끝날 때까지 기다린다. 동시에 끝났으면 r.order 앞쪽부터.
 
     (티켓, 종료 코드, 오류). 확인 중 오류(실행기·어댑터 판정의 예외)는 그 티켓의 오류로 돌려준다.
+    once면 한 번만 보고 끝난 worker가 없으면 None이다(끊김 중: 루프가 대기 시계를 본다).
+    codex worker가 Reconnecting만 상한 넘게 이어 가면 NetworkAbort를 올린다.
     """
     while True:
         result = timed_out = None
@@ -576,6 +793,12 @@ def _wait_any(r: Run, active: dict[str, Active], runner) -> tuple[str, int | Non
                     if code is None and active[tid].idle(r.repo) >= _idle_seconds(r):
                         timed_out = timed_out or (
                             tid, None, f"시간 초과: {r.feat.spec.idle_minutes}분 동안 로그 출력·새 커밋 없음")
+                    watch = active[tid].watch
+                    if code is None and watch and watch.stalled_for() > _network_limit_seconds(r):
+                        raise transient.NetworkAbort(
+                            f"[{tid}] codex가 Reconnecting만 {r.cfg.timeouts.network_wait_minutes}분 넘게 이어 갔다")
+                except transient.NetworkAbort:
+                    raise
                 except Exception as e:  # noqa: BLE001 — 한 worker의 오류로 코디네이터가 멈추지 않게
                     result = result or (tid, None, f"worker 확인 중 오류: {_err(e)}")
                 else:
@@ -587,13 +810,108 @@ def _wait_any(r: Run, active: dict[str, Active], runner) -> tuple[str, int | Non
         if time.monotonic() - r.saved >= HEARTBEAT_SECONDS:
             r.save()  # heartbeat: 바뀐 것이 없어도 mtime·경과 시간을 새로 쓴다
         time.sleep(worker.poll_interval(runner))
+        if once:
+            return None
+
+
+def _failure_summary(r: Run, ts: state.TicketState) -> str:
+    """지난 실패의 요약(재시도 brief에 붙인다). 없으면 빈 문자열."""
+    if not ts.failure_summary:
+        return ""
+    path = Path(ts.failure_summary)
+    if not path.exists():  # 요약 호출 중 코디네이터가 죽었으면 새 호출로 마무리한다
+        failure.summarize(r.repo, path.with_name("failure.log"), r.cfg, _call_wait(r, ""))
+    return path.read_text(encoding="utf-8")
+
+
+def _resumable(r: Run, mark: dict) -> bool:
+    """network_resume이 가리키는 worktree가 그 브랜치로 그대로 있나."""
+    try:
+        return git.worktrees(r.repo).get(Path(mark["worktree"]).resolve()) == mark["branch"]
+    except (git.GitError, OSError, KeyError):
+        return False
+
+
+def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
+    """끊긴 worker를 mark의 worktree·브랜치에서 잇는다. failures를 올리지 않는다.
+
+    worker가 끝나 있으면(done) 프로세스 없이 리뷰부터 잇는다. 새 시도 디렉터리를 쓰므로 지난 로그는 남고 base는 처음 그대로라
+    앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정으로 처리한다(수정 전 구현을 병합·검증한다).
+    """
+    ts = r.st.ticket(t.id)
+    wt, branch, base, nth = Path(mark["worktree"]), mark["branch"], mark["base"], mark.get("fix", 0)
+    last = Path(mark["rundir"])
+
+    def stand_in(code: int, note: str = "") -> Active:
+        _set(r, t.id, status=state.RUNNING, branch=branch, worktree=str(wt), pane="", reason="", ended_at="",
+             started_at=state.now(), log=str(last / "worker.log"))
+        return Active(t, worker.Finished(worker.Job(t, wt, last), code, note), branch, wt, base, fix=nth)
+
+    def give_up(why: str, *, retry: bool = True) -> Active | None:
+        if nth:
+            say(f"[{t.id}] {_ordinal(nth)}수정 worker를 다시 띄우지 못했다: {why}")
+            return stand_in(1, why)
+        _fail(r, t, why, retry=retry)
+        return None
+
+    if mark.get("done"):
+        say(f"[{t.id}] 지난 worker는 끝났다. 같은 worktree에서 리뷰부터 잇는다({wt})")
+        return stand_in(0)
+    if _is_agy(t.model) and state.agy_reached(r.st, _agy_limit(r)):
+        return give_up(f"agy 한도: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿아 worker를 다시 띄우지 않았다"
+                       "(config agy.max_calls_per_run)", retry=False)
+    proc = None
+    try:
+        if nth:
+            step = "fix" if nth == 1 else f"fix{nth}"
+            k = 1
+            while (last.parent / f"{step}-net{k}").exists():
+                k += 1
+            rundir, phase, attempt = last.parent / f"{step}-net{k}", step, None
+        else:
+            rundir = worker.attempt_dir((r.rundir / t.id).resolve())
+            phase, attempt = "worker", int(rundir.name)
+        rundir.mkdir(parents=True)
+        job = worker.Job(ticket=t, worktree=wt, rundir=rundir)
+        state.begin_phase(ts, phase, t.model, attempt=attempt)
+        _set(r, t.id, status=state.RUNNING, attempts=ts.attempts + (0 if nth else 1), branch=branch, pane="",
+             worktree=str(wt), log=str(job.log), started_at=state.now(), ended_at="", reason="")
+        worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth else _failure_summary(r, ts), resumed=True)
+        if nth:
+            with job.brief.open("a", encoding="utf-8") as f:
+                f.write(review.fix_brief(_todo(r, t, nth), nth))
+        adapter = _worker_adapter(r, t)
+        adapter.prepare(job.input)
+        worker.write_script(job, adapter)
+        _isolation_warning(r, t.id, adapter)
+        _count_agy(r, t.model)
+        metrics.worker_started(r, job)
+        proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:{rundir.name}", adapter)
+        _set(r, t.id, pane=proc.where)
+    except adapters.AdapterError as e:
+        return give_up(str(e))
+    except Exception as e:  # noqa: BLE001 — 한 티켓의 오류로 코디네이터가 멈추지 않게
+        if proc is not None:
+            proc.stop()
+        return give_up(f"worker를 다시 띄우지 못했다: {_err(e)}")
+    say(f"[{t.id}] 네트워크 끊김 뒤 같은 worktree에서 다시 시작 ({adapter.name}, {proc.where}, 로그 {job.log})")
+    a = Active(t, proc, branch, wt, base, fix=nth, watch=_watch(adapter, job))
+    _mark_resume(r, a)  # 이 worker도 끊기거나 gs가 죽으면 여기서 잇는다
+    return a
 
 
 def _start(r: Run, t: Ticket, runner) -> Active | None:
     """최신 integration 끝에서 티켓 브랜치를 새로 만들고 worker를 띄운다. 띄우지 못하면 실패로 적고 None.
 
+    네트워크로 끊겼던 티켓(network_resume)은 같은 worktree에서 잇는다.
     어떤 오류든(git, herdr, 파일, 어댑터 준비) 이 티켓만 실패시킨다. 이미 띄운 worker가 있으면 끝낸다.
     """
+    mark = r.st.ticket(t.id).network_resume
+    if mark:
+        if _resumable(r, mark):
+            return _resume(r, t, runner, mark)
+        say(f"[{t.id}] 경고: 이어 갈 worktree가 없거나 브랜치가 달라 새로 시작한다: {mark.get('worktree')}")
+        _set(r, t.id, network_resume={})
     proc = None
     if _is_agy(t.model) and state.agy_reached(r.st, _agy_limit(r)):
         _fail(r, t, f"agy 한도: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿아 worker를 띄우지 않았다"
@@ -602,12 +920,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
     try:
         _recheck_kept(r, t.id)
         ts = r.st.ticket(t.id)
-        summary = ""
-        if ts.failure_summary:
-            path = Path(ts.failure_summary)
-            if not path.exists():  # 요약 호출 중 코디네이터가 죽었으면 새 호출로 마무리한다
-                failure.summarize(r.repo, path.with_name("failure.log"), r.cfg)
-            summary = path.read_text(encoding="utf-8")
+        summary = _failure_summary(r, ts)
         # 실패·중단 worktree는 지우지 않는다. 실행 디렉터리 번호로 브랜치와 경로도 새로 고른다.
         while True:
             rundir = worker.attempt_dir((r.rundir / t.id).resolve())
@@ -635,11 +948,12 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
             setup.remember(wt)
             _phase(r, t.id, "worker", t.model)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
-        adapter = adapters.for_model(t.model, r.cfg.models)
+        adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
         _isolation_warning(r, t.id, adapter)  # 종료·시간 초과·재개 여부와 무관하게 실행 전에 보존한다
         _count_agy(r, t.model)
+        metrics.worker_started(r, job)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}", adapter)
         _set(r, t.id, pane=proc.where)
     except adapters.AdapterError as e:
@@ -651,7 +965,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
         _fail(r, t, f"worker를 띄우지 못했다: {_err(e)}")
         return None
     say(f"[{t.id}] 시작: {t.title} ({adapter.name}, {proc.where}, 로그 {job.log})")
-    return Active(t, proc, branch, wt, base)
+    return Active(t, proc, branch, wt, base, watch=_watch(adapter, job))
 
 
 def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=None,
@@ -662,13 +976,16 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
     고칠 리뷰 지적이 있으면 수정 worker를 띄워 그 Active를 돌려준다(아니면 None). 수정 worker가 끝나면(a.fix) 재리뷰하고,
     1차 수정 뒤에 또 고칠 것이 있으면 2차 수정 worker를 띄운다. 그 밖에는 병합·검증으로 간다.
     error는 수정 worker를 확인하다 난 오류(시간 초과 등)다.
+    일시 오류로 끝났으면 실패로 세지 않고 세워 둔다(None, _net_tick이 다시 띄운다). 네트워크 끊김 중이면 리뷰·재리뷰를 미룬다.
     """
+    metrics.worker_finished(r, a.proc.job)
     t, wt, branch = a.t, a.wt, a.branch
     commits = git.count(r.repo, f"{a.base}..{branch}")
     note = a.proc.note
     who = "수정 worker" if a.fix else "worker"
-    say(f"[{t.id}] {who} 끝: " + (error if error else f"종료 코드 {code}") + f", 새 커밋 {commits}"
-        + (f" ({note})" if note else ""))
+    if not a.parked:
+        say(f"[{t.id}] {who} 끝: " + (error if error else f"종료 코드 {code}") + f", 새 커밋 {commits}"
+            + (f" ({note})" if note else ""))
 
     def fail(reason: str) -> None:
         a.proc.finish(False)
@@ -686,8 +1003,20 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
             return fail("worker가 integration worktree를 바꿨다(되돌림)")
         say(f"[{t.id}] 경고: integration worktree가 바뀌어 되돌렸다. 함께 돌던 worker({', '.join([t.id, *others])}) 중 "
             "누구 짓인지 모른다")
+    why = _transient_end(a, code, commits, error)
+    if why:
+        _net_hold(r, a, why)
+        return None
+    if r.st.ticket(t.id).network_resume:  # 이 worker는 끊기지 않고 끝났다
+        _set(r, t.id, network_resume={})
     if a.fix:
-        todo = _end_fix(r, a, code, commits, error)
+        if not error and code == 0 and commits and _net_park(r, a):  # 성공한 수정 worker는 재리뷰로 간다
+            return None
+        try:
+            todo = _end_fix(r, a, code, commits, error)
+        except transient.NetworkAbort:
+            _mark_resume(r, a, done=True)
+            raise
         if todo:
             a.proc.finish(True)  # 1차 수정 worker는 성공했다
             nxt = _start_fix(r, a, todo, runner, a.fix + 1)
@@ -701,10 +1030,15 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
             return fail("커밋 없음")
         if not setup.is_clean(wt):
             say(f"[{t.id}] 경고: worktree에 커밋 안 된 변경이 남았다(병합에 들어가지 않는다)")
+        if _net_park(r, a):
+            return None
         try:
             todo = _review(r, a)
         except review.Refused as e:
             return fail(str(e))
+        except transient.NetworkAbort:
+            _mark_resume(r, a, done=True)
+            raise
         if todo:
             a.proc.finish(True)  # 구현 worker는 성공했다
             nxt = _start_fix(r, a, todo, runner)
@@ -724,7 +1058,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
         _reset_integration(r, r.ihead)
         return fail("integration 병합 충돌")
     merged = _merge_state(r)  # 검증할 것: 병합 결과 트리
-    res, log = _verify(r, t)
+    res, log, changed = _verify(r, t)
     if not res.ok:
         _reset_integration(r, r.ihead)
         return fail(f"검증 시간 초과({res.minutes}분, 로그 {log})" if res.timed_out else f"검증 실패(로그 {log})")
@@ -733,6 +1067,9 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
     if _merge_state(r) != merged or merged[:2] != expected or not all(merged):
         _reset_integration(r, r.ihead)
         return fail("검증하는 동안 integration이 바뀌었다(되돌림): 검증한 것과 커밋할 것이 다르다")
+    if changed:  # 검증이 파일을 남겼다. 그 파일은 병합에 들어가지 않으니 통과를 믿을 수 없다
+        _reset_integration(r, r.ihead)
+        return fail(f"검증 중 worktree가 바뀌었다(로그 {log})")
     # 커밋은 검증한 트리로 직접 만들고, 브랜치는 r.ihead에 있을 때만 옮긴다(그 사이 바뀌어도 섞이지 않게)
     _phase(r, t.id, "finish", t.model)
     msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
@@ -741,14 +1078,28 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
     if moved.returncode:
         _reset_integration(r, r.ihead)
         return fail("검증하는 동안 integration이 바뀌었다(되돌림): 브랜치가 움직였다")
-    git.run(r.iwt, "reset", "-q", "--hard", new)  # 병합 상태와 검증이 남긴 파일은 버린다
+    git.run(r.iwt, "reset", "-q", "--hard", new)  # 병합 상태를 끝내고 worktree를 새 커밋에 맞춘다
     setup.clean(r.iwt, "-q", "-fd")
     r.ihead = new
     a.proc.finish(True)
-    _set(r, t.id, status=state.MERGED, ended_at=state.now())
+    _set(r, t.id, status=state.MERGED, ended_at=state.now(), reason="", network_resume={})
     say(f"[{t.id}] 검증 통과 → integration 병합")
     _cleanup_merged(r, t.id)
     return None
+
+
+def _transient_end(a: Active, code: int | None, commits: int, error: str) -> str:
+    """worker가 일시 오류로 끝났으면 그 이유, 아니면 빈 문자열. 판별 자체의 오류는 일시 오류가 아니라고 본다.
+
+    종료 0이고 커밋이 있으면 성공이다. 시간 초과·확인 오류는 일시 오류가 아니다(지금처럼 실패).
+    """
+    if error or code is None or (code == 0 and commits):
+        return ""
+    try:
+        return a.proc.transient_reason()
+    except Exception as e:  # noqa: BLE001 — 판별은 덤이다. 평소의 실패 처리로 간다
+        say(f"[{a.t.id}] 경고: 일시 오류 판별 실패: {_err(e)}")
+        return ""
 
 
 def _review(r: Run, a: Active) -> list[dict]:
@@ -756,8 +1107,10 @@ def _review(r: Run, a: Active) -> list[dict]:
 
     병합·검증처럼 루프 안에서 하나씩 돈다(다른 worker는 그동안 각자 돈다). 오래 걸리는 수정은 worker로 따로 띄운다.
     second_reviewer가 있으면 두 리뷰를 동시에 띄우고, 둘 다 끝나면 fix 지적을 합쳐 돌려준다(수정 worker는 하나).
-    그때는 한쪽이 거부·실패·시간 초과여도 다른 쪽으로 간다. 둘 다 거부면 하나일 때처럼 티켓 실패다.
+    그때는 한쪽이 거부·실패여도 다른 쪽으로 간다. 둘 다 거부면 하나일 때처럼 티켓 실패다.
+    일시 오류·시간 초과는 실패가 아니다: review가 이 스레드(둘이면 그 스레드들)에서 기다렸다 다시 부른다.
     agy 리뷰는 이번 실행의 상한에 닿았으면 띄우지 않고 "건너뜀(한도)"으로 적는다.
+    중단 예외(NetworkAbort)는 리뷰 실패로 적지 않고 올린다: 끊겼다는 이유로 리뷰 없이 병합하지 않는다.
     """
     t = a.t
     base = a.proc.job.rundir
@@ -787,18 +1140,21 @@ def _review(r: Run, a: Active) -> list[dict]:
     names = "+".join(who for _, who, _ in launch) or "+".join(who for _, who, _ in slots)
     _phase(r, t.id, "review", names)
     say(f"[{t.id}] 리뷰: {names}")
+    wait = _call_wait(r, t.id)
     jobs = [dict(repo=r.repo, worktree=a.wt.resolve(), rdir=rdir, base=r.ihead, branch=a.branch,
-                 ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg)
+                 ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg,
+                 on_wait=wait)
             for _, who, rdir in launch]
     if len(jobs) == 1:  # 하나면 이 스레드에서 부른다(second_reviewer가 없는 티켓의 흐름 그대로)
         try:
             results: list = [review.run(**jobs[0])]
-        except (review.Refused, git.GitError):
+        except (review.Refused, git.GitError, transient.NetworkAbort):
             raise
         except Exception as e:  # noqa: BLE001 — 아래에서 리뷰 실패로 적는다
             results = [e]
     else:
         results = review.run_together(jobs)
+    _raise_network_abort(results)
     errors = []
     for (key, who, rdir), res in zip(launch, results):
         if isinstance(res, git.GitError):
@@ -815,6 +1171,18 @@ def _review(r: Run, a: Active) -> list[dict]:
         who = f"({rec['reviewer']})" if len(slots) > 1 else ""
         say(f"[{t.id}] 리뷰 끝{who}: {review.counts(rec)}" + (f" — {rec['note']}" if rec["note"] else ""))
     return _todo(r, t, 1)
+
+
+def _call_wait(r: Run, tid: str) -> review.CallWait:
+    """리뷰·판단 호출의 대기를 진행 바에 보인다. 이 스레드가 그 호출을 기다리는 동안 다른 worker는 각자 돈다."""
+    return review.CallWait(r.st, r.save, tid, say)
+
+
+def _raise_network_abort(results: list) -> None:
+    """함께 돌린 호출의 결과 중 중단 예외가 있으면 올린다. 다른 쪽 결과는 다음 gs go가 다시 받는다."""
+    for res in results:
+        if isinstance(res, transient.NetworkAbort):
+            raise res
 
 
 def _is_agy(model: str) -> bool:
@@ -873,13 +1241,14 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
             f.write(review.fix_brief(todo, nth))
-        adapter = adapters.for_model(t.model, r.cfg.models)
+        adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
         _isolation_warning(r, t.id, adapter)
         base = git.sha(r.repo, a.branch)
         _set(r, t.id, log=str(job.log), pane="")  # 재실행 때 살아 남은 수정 worker를 run.sh로 찾게
         _count_agy(r, t.model)
+        metrics.worker_started(r, job)
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:{step}", adapter)
         _set(r, t.id, pane=proc.where)
     except Exception as e:  # noqa: BLE001 — 수정은 덤이다. 지금 브랜치의 구현은 그대로 병합한다
@@ -888,7 +1257,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         _skip_fix(r, t, nth, f"띄우지 못함: {_err(e)}", f"{_ordinal(nth)}수정 worker를 띄우지 못했다: {_err(e)}")
         return None
     say(f"[{t.id}] {_ordinal(nth)}수정 worker 시작: 지적 {len(todo)}개 ({adapter.name}, {proc.where}, 로그 {job.log})")
-    return Active(t, proc, a.branch, a.wt, base, fix=nth)
+    return Active(t, proc, a.branch, a.wt, base, fix=nth, watch=_watch(adapter, job))
 
 
 def _ordinal(nth: int) -> str:
@@ -913,6 +1282,8 @@ def _note_fix(r: Run, t: Ticket, nth: int, msg: str) -> None:
 
 
 def _append_fix(rec: dict, msg: str) -> None:
+    if msg in rec.get("fix", ""):  # 중단 뒤 재리뷰부터 이을 때 같은 줄을 또 적지 않는다
+        return
     rec["fix"] = f"{rec['fix']} / {msg}" if rec.get("fix") else msg
 
 
@@ -956,7 +1327,8 @@ def _mark_fixes(r: Run, t: Ticket, nth: int, result: str, reason: str = "") -> N
 def _rereview(r: Run, a: Active) -> list[dict]:
     """지적을 낸 리뷰어들에게 수정 커밋을 다시 보게 하고, 결과를 지적에 적는다. 2차 수정이 고칠 지적을 돌려준다.
 
-    병합·검증처럼 루프 안에서 돈다. 여기서 난 어떤 오류도 병합을 막지 않는다: 아직 결과가 없는 지적은 unchecked(재리뷰 실패)다.
+    병합·검증처럼 루프 안에서 돈다. 여기서 난 오류는 병합을 막지 않는다: 아직 결과가 없는 지적은 unchecked(재리뷰 실패)다.
+    중단 예외(NetworkAbort)만 올린다. 다음 gs go가 재리뷰부터 잇는다.
     """
     t, nth = a.t, a.fix
     targets = _targets(r, t, nth)
@@ -969,6 +1341,8 @@ def _rereview(r: Run, a: Active) -> list[dict]:
             for rec, found in targets:
                 review.mark_rereview(found, nth, review.UNRESOLVED, "", "수정 커밋의 diff가 비었다")
                 _append_fix(rec, f"재리뷰 {nth}차: 수정 커밋의 diff가 비어 부르지 않았다(unresolved)")
+    except transient.NetworkAbort:
+        raise
     except Exception as e:  # noqa: BLE001 — verify가 병합 관문이다
         say(f"[{t.id}] 재리뷰 {nth}차 실패: {_err(e)}")
         for _, found in targets:
@@ -1021,10 +1395,13 @@ def _run_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]], he
     names = "+".join(rec["reviewer"] for rec, _ in launch)
     _phase(r, t.id, "rereview", names)
     say(f"[{t.id}] 재리뷰 {nth}차: {names}")
+    wait = _call_wait(r, t.id)
     jobs = [dict(repo=r.repo, worktree=tree, rdir=_attempt_dir(a) / f"rereview{nth}-{rec['reviewer']}",
                  base=a.base, head=head, found=found, ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(),
-                 reviewer=rec["reviewer"], cfg=r.cfg, nth=nth) for rec, found in launch]
-    for (rec, found), res in zip(launch, review.run_together(jobs, review.rereview)):
+                 reviewer=rec["reviewer"], cfg=r.cfg, nth=nth, on_wait=wait) for rec, found in launch]
+    results = review.run_together(jobs, review.rereview)
+    _raise_network_abort(results)
+    for (rec, found), res in zip(launch, results):
         if isinstance(res, BaseException):
             res = {"dir": "", "base": a.base, "head": head, "note": f"뜻밖의 오류 {_err(res)}",
                    "failed": review.REASON_FAILED, "verdicts": {}, "findings": []}
@@ -1078,30 +1455,38 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
     summary = str(log.with_name("failure-summary.md")) if retry else ts.failure_summary
     # 판단 모델 호출 전에 실패 횟수를 남긴다. 호출 도중 gs가 죽어도 재시도 횟수가 늘지 않는다.
     _set(r, t.id, status=state.PENDING if retry else state.FAILED, reason=reason, ended_at=state.now(),
-         failures=failures, failed_worktrees=paths, failure_summary=summary)
+         failures=failures, failed_worktrees=paths, failure_summary=summary, network_resume={})
     if retry:
-        failure.summarize(r.repo, log, r.cfg)
+        failure.summarize(r.repo, log, r.cfg, _call_wait(r, t.id))
     say(f"[{t.id}] 실패: {reason}")
     if retry:
-        say(f"[{t.id}] 같은 모델({t.model})로 최신 integration에서 한 번 재시도한다")
+        say(f"[{t.id}] 같은 계열({t.model})로 최신 integration에서 한 번 재시도한다")
     return False
 
 
-def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path]:
+def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
+    """티켓 검증은 명령과 상관없이 커밋될 트리, 곧 integration의 미완 병합에서 돈다(티켓 worktree의 커밋 안 된 파일은 못 본다).
+
+    (결과, 로그, 트리가 바뀌었나). 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
+    더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다."""
     log = Path(r.st.ticket(t.id).log).parent / "verify.log"
     spec = r.feat.spec
-    # 별도 명령이 없으면 기존처럼 integration의 미완 병합 트리를 검증한다.
-    wt = Path(r.st.ticket(t.id).worktree) if spec.verify_ticket is not None else r.iwt
-    command = spec.ticket_verify
+    command = spec.verify_for(t)
+    before = _merge_state(r)
     say(f"[{t.id}] 검증: {command}")
     with log.open("w", encoding="utf-8") as f:
-        if spec.verify_ticket is not None:
-            f.write(f"$ {command}\ncwd: {wt}\n")
-        res = verify.run(replace(spec, verify=command), wt, f)
-        verify.flaky(res, f"ticket-{t.id}", f)
+        f.write(f"$ {command}\ncwd: {r.iwt}\n")
+        res = verify.run(replace(spec, verify=command), r.iwt, f)
+        changed = not res.timed_out and (_merge_state(r) != before or not setup.is_clean(r.iwt, staged_ok=True))
+        if changed:
+            f.write("\n검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
+        elif res.ok:
+            verify.flaky(res, f"ticket-{t.id}", f)
     if res.timed_out:
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
-    return res, log
+    metrics.validation(r, f"ticket-{t.id}", command, before[0], res, changed,
+                       tree_sha=before[3], merge_head=before[2])
+    return res, log, changed
 
 
 LABEL = {"merged": "병합", "already": "이미 병합", "failed": "실패", "skipped": "건너뜀", "pending": "대기",
@@ -1117,11 +1502,17 @@ def _summary(r: Run, url: str | None) -> None:
     labels = {tid: _label(r, tid) for tid in r.order}
     counts = {k: sum(v == k for v in labels.values()) for k in LABEL}
     say("■ 요약: " + ", ".join(f"{LABEL[k]} {n}" for k, n in counts.items() if n))
-    f = r.st.finish
-    say(f"■ 마무리: {f.get('outcome', f.get('phase', '미완료'))}")
+    say(f"■ 마무리: {_outcome(r)}")
     left = _left(r)
     say(f"■ 보고서: {work_rel(r.name)}/report.md · 남은 리뷰 지적 {left}")
     say(f"■ PR: {url or '없음'}")
+
+
+def _outcome(r: Run) -> str:
+    if r.st.network.get("aborted"):
+        return NETWORK_ABORT
+    f = r.st.finish
+    return f.get("outcome", f.get("phase", "미완료"))
 
 
 def _left(r: Run) -> int:
@@ -1139,7 +1530,7 @@ def _message(r: Run, url: str | None, ok: bool) -> str:
         return (f"✅ {r.name} · {r.base} 병합\n{tickets} 병합 · {took}분 · 남은 지적 {left}\n"
                 f"PR {url or '없음'}")
     f = r.st.finish
-    outcome = f.get("outcome", f.get("phase", "미완료"))
+    outcome = _outcome(r)
     failed = [f"{tid} 실패: {(r.st.tickets[tid].reason.splitlines() or [''])[0]}"
               for tid in r.order if r.st.tickets[tid].status == state.FAILED]
     if failed:

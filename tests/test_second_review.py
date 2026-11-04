@@ -7,8 +7,8 @@ import sys
 import unittest
 from unittest import mock
 
-import test_go
-from test_go import sh
+import support
+from support import sh
 
 from gs import cli, config, review, state
 
@@ -60,12 +60,12 @@ def finding(claim, severity="high", evidence="e"):
 
 class SecondReviewTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     tearDown, go, rundir, integration, final_report, merged, calls, lines = (
         G.tearDown, G.go, G.rundir, G.integration, G.final_report, G.merged, G.calls, G.lines)
 
     def setUp(self):
-        test_go.GoTest.setUp(self)
+        support.GoTest.setUp(self)
         (self.bin / "reviewer.sh").write_text(REVIEWER)
         (self.bin / "judge").write_text("#!/bin/bash\n" + JUDGE)
         agy = self.bin / "agy"  # gs check가 PATH에서 찾는다. 리뷰는 GS_REVIEWER_CMD로 바꿔 끼운다
@@ -177,21 +177,27 @@ class SecondReviewTest(unittest.TestCase):
         self.assertIn("- 01 리뷰(agy): 리뷰 실패", report)
         self.assertIn("- 01 리뷰(codex) [high] file_01: FIX A: 값이 틀렸다", report)
 
-    def test_one_times_out_other_drives_fix(self):
+    def test_one_times_out_is_called_again_and_both_drive_fix(self):
         self.tickets(**{"01": ("claude", "codex", "agy", "[]")})
         self.findings("agy", finding("FIX B: 경계값 누락"))
         (self.bin / "hang_codex").touch()
         call = review._call
 
         def short(argv, **kw):  # 시험은 시간 제한만 1초로 줄인다
-            return call(argv, **{**kw, "timeout": min(kw["timeout"], 1)})
+            try:
+                return call(argv, **{**kw, "timeout": min(kw["timeout"], 1)})
+            except review.ReviewTimeout:
+                (self.bin / "hang_codex").unlink(missing_ok=True)  # 첫 호출만 멈춘다
+                raise
 
-        with mock.patch.object(review, "_call", side_effect=short):
+        with mock.patch.dict(os.environ, {"GS_NETWORK_MINUTE": "0.01"}), \
+                mock.patch.object(review, "_call", side_effect=short):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.lines("fix.log"), ["fix 01"])
+        self.assertIn("초 안에 끝나지 않았다", out)
         ts = self.ts()
-        self.assertIn("초 안에 끝나지 않았다", ts.review["note"])
+        self.assertEqual(ts.review["note"], "")  # 끊겼다는 이유로 리뷰 없이 넘어가지 않는다
         self.assertEqual([f["fix_attempt"] for f in ts.second_review["findings"]], [review.ATTEMPTED])
         self.assertIn("수정 커밋", ts.second_review["fix"])
         self.assertEqual(ts.review["fix"], "")  # 수정 결과는 fix 지적을 낸 리뷰에만 적는다

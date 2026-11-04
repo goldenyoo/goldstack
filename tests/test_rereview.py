@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 import test_config
-import test_go
+import support
 import test_second_review
 from test_second_review import finding
 
@@ -329,7 +329,7 @@ class RereviewTreeTest(Base):
 
     def seen(self, who="codex", n=1):
         path, head, *status = self.lines(f"rereview.tree.{who}.{n}")
-        return path, test_go.sh(self.repo, "git", "log", "-1", "--format=%s", head).strip(), status
+        return path, support.sh(self.repo, "git", "log", "-1", "--format=%s", head).strip(), status
 
     def dirty_fix(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
@@ -338,7 +338,7 @@ class RereviewTreeTest(Base):
 
     def assert_no_snapshot_left(self):
         self.assertEqual(list(self.rundir.glob("gs-rereview-*")), [])
-        self.assertNotIn("gs-rereview-", test_go.sh(self.repo, "git", "worktree", "list"))
+        self.assertNotIn("gs-rereview-", support.sh(self.repo, "git", "worktree", "list"))
 
     def test_clean_worktree_is_rereviewed_in_place(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
@@ -425,7 +425,7 @@ class RereviewTreeTest(Base):
 
 
 class UncheckedTest(Base):
-    def test_timeout_marks_that_reviewer_unchecked(self):
+    def test_timeout_waits_and_calls_that_reviewer_again(self):
         path = self.repo / config.CONFIG_PATH
         path.write_text(path.read_text().replace("rereview_minutes = 10", "rereview_minutes = 7"))
         self.commit("rereview 7분")
@@ -433,28 +433,33 @@ class UncheckedTest(Base):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         self.findings("agy", finding("FIX B: 경계값 누락"))
         self.answer("agy", 1, [(1, "resolved", "고침")])
+        self.answer("codex", 2, [(1, "resolved", "다시 봐도 고침")])
         (self.bin / "rehang_codex").touch()
         call = review._call
         seen = []
 
         def short(argv, **kw):
             seen.append(kw["timeout"])
-            return call(argv, **{**kw, "timeout": 1 if kw["timeout"] == 7 * 60 else kw["timeout"]})
+            try:
+                return call(argv, **{**kw, "timeout": 1 if kw["timeout"] == 7 * 60 else kw["timeout"]})
+            except review.ReviewTimeout:
+                (self.bin / "rehang_codex").unlink()  # 첫 호출만 멈춘다
+                raise
 
-        with mock.patch.object(review, "_call", side_effect=short):
+        with mock.patch.dict(os.environ, {"GS_NETWORK_MINUTE": "0.01"}), \
+                mock.patch.object(review, "_call", side_effect=short):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertIn(7 * 60, seen)
         self.assertIn(30 * 60, seen)
-        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])  # 확인 못 한 지적은 2차 수정 대상이 아니다
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        self.assertIn("초 안에 끝나지 않았다", out)
         ts = self.ts()
         [a] = ts.review["findings"]
-        self.assertEqual((a["rereview"], a["rereview_reason"], a["rereview_round"]),
-                         (review.UNCHECKED, review.REASON_TIMEOUT, 1))
-        self.assertIn("초 안에 끝나지 않았다", a["rereview_evidence"])
-        self.assertEqual(ts.review["rereviews"][0]["failed"], review.REASON_TIMEOUT)
+        self.assertEqual((a["rereview"], a["rereview_evidence"]), (review.RESOLVED, "다시 봐도 고침"))
+        self.assertEqual(ts.review["rereviews"][0]["failed"], "")
         self.assertEqual(ts.second_review["findings"][0]["rereview"], review.RESOLVED)
-        self.assertEqual(len(review.remaining(ts.review)), 1)
+        self.assertEqual(review.remaining(ts.review), [])
 
     def test_failed_or_malformed_rereview_does_not_block_merge(self):
         for name, setup in (("실패", lambda: (self.bin / "refail_codex").touch()), ("형식", lambda: None)):

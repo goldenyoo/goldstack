@@ -29,6 +29,7 @@ POLL_SECONDS = 2.0
 PUSH_BLOCKED = "/dev/null/gs-worker-push-blocked/"  # 만들 수 없는 경로: push가 여기로 바뀌면 반드시 실패한다
 GH_BLOCKED = "gs-worker-no-gh"  # gh는 GH_TOKEN을 keyring보다 먼저 쓴다. 틀린 토큰이라 쓰기도 읽기도 못 한다
 PROFILE_REL = ".goldstack/profile.md"  # /adopt가 쓰는 레포 요약. brief에는 포인터 한 줄만(내용은 넣지 않는다)
+NETWORK_RESUME = "지난 시도가 네트워크로 끊겼다. `git status`와 `git diff`로 남은 변경을 보고 이어라."
 
 
 @dataclass
@@ -58,7 +59,8 @@ class Job:
         return WorkerInput(brief=self.brief, worktree=self.worktree, log=self.log)
 
 
-def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "") -> None:
+def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "",
+                resumed: bool = False) -> None:
     t = job.ticket
     spec_rel = f"{work_rel(feature)}/spec.md"
     ticket_rel = f"{work_rel(feature)}/tickets/{t.path.name}"
@@ -73,7 +75,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 - 이 worktree 안의 파일만 바꾼다.
 - 끝나면 변경을 이 브랜치에 커밋한다(여러 커밋 가능). 커밋이 없으면 실패로 처리된다.
 - push, PR 생성, 병합은 하지 않는다. gs가 한다.
-- 검증 명령 `{spec.ticket_verify}`를 커밋 전에 돌려 통과시킨다. gs가 다시 돌려 확인한다.
+- 검증 명령 `{spec.verify_for(t)}`: 개발 중에는 관련 시험만 돌리고, 커밋 전에 이 명령을 한 번 돌린다. 통과시켜야 한다. gs가 커밋된 내용만으로 병합 트리에서 다시 돌려 확인한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.
 - 완료 조건이 이 티켓의 명세다. 범위 밖은 건드리지 않는다.
 
@@ -85,6 +87,9 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     if failure_summary:
         with job.brief.open("a", encoding="utf-8") as f:
             f.write("\n---\n## 지난 시도 실패 요약\n\n" + failure_summary.strip() + "\n")
+    if resumed:
+        with job.brief.open("a", encoding="utf-8") as f:
+            f.write(f"\n---\n## 이어서 하기\n\n{NETWORK_RESUME}\n")
 
 
 def attempt_dir(ticket_dir: Path) -> Path:
@@ -334,6 +339,10 @@ class Proc:
             return -1
         return None
 
+    def transient_reason(self) -> str:
+        """로그에서 찾은 일시 오류 이유(transient.reason). 없으면 빈 문자열."""
+        return self.adapter.transient_reason(self.job.input) if self.adapter is not None else ""
+
     def finish(self, ok: bool) -> None:
         self.runner.finish(self.handle, ok)
 
@@ -344,3 +353,28 @@ class Proc:
                 step()
             except Exception:  # noqa: BLE001 — 정리 중이다. 남은 단계는 계속한다
                 pass
+
+
+class Finished:
+    """다시 띄우지 않는 worker 자리. Proc처럼 다루지만 프로세스가 없고 결과가 정해져 있다.
+
+    `중단(네트워크)` 뒤 리뷰부터 이을 때(지난 worker는 이미 성공했다), 수정 worker를 다시 띄우지 못했을 때(실패로 둔다) 쓴다.
+    """
+    where = ""
+
+    def __init__(self, job: Job, code: int = 0, note: str = ""):
+        self.job = job
+        self.code = code
+        self.note = note
+
+    def poll(self) -> int:
+        return self.code
+
+    def transient_reason(self) -> str:
+        return ""
+
+    def finish(self, ok: bool) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass

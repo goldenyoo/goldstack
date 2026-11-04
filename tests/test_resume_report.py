@@ -8,10 +8,10 @@ import sys
 import unittest
 from unittest import mock
 
-import test_go
+import support
 import test_protected_base as protected
 from gs import finish, state
-from test_go import sh
+from support import sh
 
 URL = protected.URL
 POLICY = "base branch policy"
@@ -202,7 +202,7 @@ class ProtectedResumeTest(Fixture):
 
 class DirectPushResumeTest(unittest.TestCase):
     BASE, REMOTE = "main", "origin"
-    G = test_go.GoTest
+    G = support.GoTest
     setUp, tearDown, go, calls, rundir, integration = G.setUp, G.tearDown, G.go, G.calls, G.rundir, G.integration
     add_ticket, final_report, under_report, remote_files = G.add_ticket, G.final_report, G.under_report, G.remote_files
     parallel = G.parallel

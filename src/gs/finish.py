@@ -18,6 +18,7 @@ integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base�
 
 finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행은 같은 PR을 다시 병합하지 않고
 base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
+integration 전체 검증 실패로 not_merged가 되면 실패한 검증 단계를 남겨 보고서가 로그·후보 티켓을 붙인다.
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from . import clean, doctor, git, report, setup, state, verify
+from . import clean, doctor, git, metrics, report, review, setup, state, verify
 from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
@@ -175,6 +176,7 @@ def _poll_checks(r, url: str, head: str, on_poll) -> tuple[str, list[str]]:
         time.sleep(min(CHECK_INTERVAL, remaining, grace - now) if not checks else min(CHECK_INTERVAL, remaining))
 
 
+@metrics.stage("checks")
 def _wait_checks(r) -> bool:
     """보고서까지 검증한 head만 기다린다."""
     _save(r, phase="checks_pending", outcome="CI 검사 대기 중")
@@ -268,6 +270,7 @@ def merge_base(r) -> None:
         _merge(r, r.base_ref)
 
 
+@metrics.stage("restore-reverts", finishing_only=True)
 def _restore_reverts(r) -> bool:
     """base에 있는 이 feature 병합의 revert를 되돌린 커밋을 integration에 합친다. 합쳤으면 True(그 base까지 합친 것이다)."""
     _absorb_squash(r)
@@ -324,6 +327,7 @@ def _merge(r, rev: str) -> None:
         raise git.GitError(f"{r.base_ref}를 gs/{r.name}/integration에 합치다 충돌했다: {res.stdout.strip()}")
 
 
+@metrics.stage("verify")
 def _verify(r, wt: Path, label: str) -> bool:
     """명령과 실제 출력·종료 코드를 보존한다. 검증이 worktree를 바꾸면 통과로 인정하지 않는다.
     시간을 넘기면(verify.run) 로그 끝이 `시간 초과: <N>분` 줄이고 실패다."""
@@ -336,6 +340,7 @@ def _verify(r, wt: Path, label: str) -> bool:
         res = verify.run(r.feat.spec, wt, stream)
         if res.timed_out:
             print(f"■ {label} 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다", flush=True)
+            metrics.validation(r, label, r.feat.spec.verify, head, res)
             return False
         changed = (git.sha(wt, "HEAD") != head or not setup.is_clean(wt)
                    or git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout != branch)
@@ -344,6 +349,7 @@ def _verify(r, wt: Path, label: str) -> bool:
             stream.write("검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
         elif res.ok:
             verify.flaky(res, label, stream)
+    metrics.validation(r, label, r.feat.spec.verify, head, res, changed)
     return res.ok and not changed
 
 
@@ -359,6 +365,7 @@ def _verify_final(r, verified_head: str) -> bool:
     return _verify(r, r.iwt, "integration-final")
 
 
+@metrics.stage("restore-integration")
 def _restore_integration(r, head: str) -> None:
     git.run(r.iwt, "merge", "--abort", check=False)
     git.run(r.iwt, "checkout", "--force", f"gs/{r.name}/integration")
@@ -366,6 +373,7 @@ def _restore_integration(r, head: str) -> None:
     setup.clean(r.iwt, "-fd")
 
 
+@metrics.stage("report")
 def _commit_report(r, summary: str) -> Path:
     path = report.write(r, summary)
     rel = str(path.relative_to(r.iwt))
@@ -376,10 +384,12 @@ def _commit_report(r, summary: str) -> Path:
     return path
 
 
+@metrics.stage("push")
 def _push(r) -> None:
     git.run(r.iwt, "push", "-u", r.remote, f"HEAD:refs/heads/gs/{r.name}/integration")
 
 
+@metrics.stage("publish")
 def _publish(r, path: Path) -> str:
     branch = f"gs/{r.name}/integration"
     url = _gh(r, "list", "--head", branch, "--base", r.base, "--state", "open", "--json", "url", "--jq", ".[0].url")
@@ -417,6 +427,7 @@ def _squash_message(r) -> tuple[str, str]:
     return title, "\n\n".join(sections)
 
 
+@metrics.stage("merge-pr")
 def _merge_pr(r) -> None:
     f = r.st.finish
     if f.get("merge_method", "merge") == "squash":
@@ -450,6 +461,7 @@ def _needs_human(view: dict, error: str) -> bool:
     return bool(error and re.search(r"review|approv|base branch policy|protected branch", error, re.I))
 
 
+@metrics.stage("confirm-merge")
 def _confirm(r, view: dict, error: str = "") -> bool:
     if view.get("state") == "CLOSED":
         # 사람이 병합하지 않고 닫았다. 대기 상태를 풀어 다음 gs go가 새 PR을 열게 한다.
@@ -566,6 +578,7 @@ def _revert_pr(r, sha: str) -> bool:
     return False
 
 
+@metrics.stage("postmerge")
 def _postmerge(r) -> bool:
     f = r.st.finish
     if f["phase"] == "verified":
@@ -679,6 +692,7 @@ def _report_commit(r, rel: str, text: bytes, *, push: bool = True) -> str:
             git.remove_worktree(r.repo, wt)
 
 
+@metrics.stage("report-to-base")
 def _report_to_base(r) -> None:
     """integration의 최종 report.md를 base에도 남긴다. 거부되면 최신 base 위에서 한 번 더.
     그래도 실패하면 경고뿐이다(실행 결과·종료 코드는 그대로, 다음 gs go도 재시도하지 않는다).
@@ -740,6 +754,7 @@ def _report_pr(r, rel: str) -> None:
         print(f"■ 경고: 최종 보고서 PR을 {r.base}에 병합하지 못했다. 실행 결과는 그대로다: {e}", flush=True)
 
 
+@metrics.stage("sync-integration")
 def _merge_base_keep_report(r) -> None:
     """base(보고서 커밋 포함)를 integration에 합쳐 push한다. report.md를 다시 쓰지 않아 base판과 어긋나지 않는다."""
     git.run(r.repo, "fetch", "-q", r.remote, r.base)
@@ -757,6 +772,7 @@ def _landed(r, commit: str, prev: dict) -> bool:
                 and _ancestor(r.repo, sha, r.base_ref))
 
 
+@metrics.stage("total")
 def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
     directory = r.rundir / "finish"
     directory.mkdir(parents=True, exist_ok=True)
@@ -805,7 +821,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         # verify가 남긴 변경은 보고서 커밋에 섞이지 않게 한다(gs 전용 worktree).
         if not ok:
             _restore_integration(r, r.ihead)
-        summary = report.summarize(r)
+        summary = report.summarize(r, review.CallWait(r.st, r.save))
         path = _commit_report(r, summary)
         _push(r)
         _publish(r, path)
@@ -817,6 +833,8 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         _save(r, integration_ok=final_ok)
         merged = any(r.st.tickets[tid].status == state.MERGED for tid in r.order)
         if not merged or not final_ok:
+            if not final_ok:
+                _save(r, failed_verify="integration-final" if ok else "integration")
             _save(r, phase="not_merged", outcome="merged 티켓 없음 → 병합 안 함" if not merged else "integration 검증 실패 → 병합 안 함")
             _update(r, summary)
             return f.get("url"), False
