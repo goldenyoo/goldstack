@@ -10,7 +10,7 @@ import support
 import test_second_review
 from test_second_review import finding
 
-from gs import config, go, review, state
+from gs import config, go, retrolog, review, state
 
 WORKER = """\
 here="$(dirname "$0")"
@@ -20,6 +20,7 @@ if grep -q '^## 리뷰 지적(고칠 것)' "$GS_BRIEF"; then
   echo "fix $GS_TICKET $n" >> "$here/fix.log"
   if [ -f "$here/fixfail_$n" ]; then echo bad > "bad${n}_$GS_TICKET"; git add -A; git commit -qm "bad fix $n"; exit 3; fi
   if [ -f "$here/fixempty_$n" ]; then git commit -q --allow-empty -m "empty fix $n"; exit 0; fi
+  [ -f "$here/fixnone_$n" ] && exit 0
   if [ -f "$here/fixdirty_$n" ]; then  # 일부만 커밋하고 진짜 수정은 미커밋으로 남긴다
     echo partial > "partial${n}_$GS_TICKET"; git add -A; git commit -qm "partial fix $n"
     echo real > pending_fix; echo changed >> "file_$GS_TICKET"; exit 0
@@ -185,6 +186,19 @@ class FirstRereviewTest(Base):
         [f] = self.ts().review["findings"]
         self.assertEqual((f["fix_attempt"], f["fix_round"], f["rereview"]), (review.DISCARDED, 1, ""))
         self.assertIn("종료 코드 3", f["fix_reason"])
+
+    def test_retro_log_reads_no_commit_fix_as_failed(self):
+        """커밋 없이 종료 코드 0으로 끝난 수정 worker는 state.json에만 남는다. 실제 실행의 기록으로 retro-log가 실패로 읽는지 본다."""
+        self.findings("codex", finding("FIX A: 값이 틀렸다"))
+        (self.bin / "fixnone_1").touch()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual((self.rundir / "01/1/fix/exit").read_text().strip(), "0")
+        self.assertFalse((self.rundir / "01/1/fix/failure.log").exists())
+        text = retrolog.build(self.repo, "demo", self.run_state())
+        self.assertIn("### 시도 1 (실패)", text)
+        self.assertIn("#### 수정 worker fix (실패)", text)
+        self.assertIn("수정 worker 실패: 커밋 없음", text)
 
 
 class SecondFixTest(Base):

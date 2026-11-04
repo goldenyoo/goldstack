@@ -7,8 +7,8 @@
 - `render`는 도구 출력(시험 실패 내용)을 버린다. 실패한 시도에는 원본 로그와 `verify.log`의 오류 줄을 길이를 제한해 더한다.
 - 한도를 넘을 때만 줄인다. 실패한 시도를 먼저 남기고(1순위), 리뷰 답(2순위), 나머지 시도의 로그(3순위) 순으로 예산을 준다.
   같은 순위끼리는 긴 것부터 깎는다. 줄인 곳은 파일 맨 위와 그 자리에 적는다.
-- 시도 표시: 실패(`failure.log`, 0이 아닌 `exit`, 수정 worker의 실패, 실패로 끝난 티켓의 마지막 시도), 중단(실패 기록 없이 다음 시도가
-  이어졌다. 세션 끊김 등), 끝 기록 없음(`exit`가 없다. 도는 중이거나 죽었다), 통과.
+- 시도 표시: 실패(`failure.log`, 0이 아닌 `exit`, 수정 worker의 실패, state.json에 적힌 버려진 수정, 실패로 끝난 티켓의 마지막 시도),
+  중단(실패 기록 없이 다음 시도가 이어졌다. 세션 끊김 등), 끝 기록 없음(`exit`가 없다. 도는 중이거나 죽었다), 통과.
 - `run/retro-log.md`만 쓴다(`run/`은 gitignore). 나머지는 읽기만 한다.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import feature as featmod
-from . import state, streamfmt
+from . import review, state, streamfmt
 
 LIMIT_CHARS = 210_000  # 약 8만 토큰(2.7자당 1토큰 어림)
 LINE_CAP = 1500  # 로그 한 줄의 상한. stream-json의 긴 줄이 render를 거쳐도 길 수 있다
@@ -104,11 +104,34 @@ def _ticket(repo: Path, rundir: Path, st: state.State, tid: str) -> list[str | S
                              f"{p.get('started_at') or '?'} → {p.get('ended_at') or '?'}")
     parts: list[str | Section] = ["\n".join(lines)]
     attempts = _attempts(rundir / tid)
+    discarded = _discarded(ts) if ts is not None else {}
     for adir in attempts:
         last = adir == attempts[-1]
-        failed = _attempt_failed(adir) or (ticket_failed and last)
-        parts.extend(_attempt(repo, tid, adir, failed, last))
+        rounds = discarded.get(adir.name, {})
+        failed = _attempt_failed(adir) or bool(rounds) or (ticket_failed and last)
+        parts.extend(_attempt(repo, tid, adir, failed, last, rounds))
     return parts
+
+
+def _discarded(ts: state.TicketState) -> dict[str, dict[int, str]]:
+    """버려진 수정 worker: 시도 번호 → {수정 회차: 이유}.
+
+    커밋 없음·이전 커밋 삭제는 종료 코드가 0이라 실행 디렉터리에 흔적이 없고 리뷰 기록의 지적에만 남는다(go._end_fix).
+    새 시도가 리뷰 기록을 비우므로 지난 시도의 것은 없다. 그 시도는 재시도를 부른 failure.log로 실패다.
+    """
+    found: dict[str, dict[int, str]] = {}
+    for rec in state.reviews(ts):
+        attempt = Path(rec.get("dir") or "").parent.name  # 리뷰 디렉터리는 시도 디렉터리 바로 아래다
+        for f in rec.get("findings", []):
+            if f.get("fix_attempt") == review.DISCARDED:
+                found.setdefault(attempt, {}).setdefault(f.get("fix_round") or 1, f.get("fix_reason") or "수정 버림")
+    return found
+
+
+def _fix_round(name: str) -> int:
+    """fix·fix-net1은 1회차, fix2·fix2-net1은 2회차. 끊겨 다시 띄운 수정 worker(-netN)도 같은 회차다."""
+    m = re.match(r"fix(\d*)", name)
+    return int(m.group(1) or 1) if m else 0
 
 
 def _failed(directory: Path) -> bool:
@@ -131,8 +154,9 @@ def _mark(directory: Path, failed: bool, last: bool = True) -> str:
     return "통과" if (directory / "exit").exists() else "끝 기록 없음"
 
 
-def _attempt(repo: Path, tid: str, adir: Path, failed: bool, last: bool) -> list[Section | str]:
-    """실패한 시도는 구현·리뷰·수정 로그 전부가 1순위다. 오류 줄은 실패한 실행(failed·sub_failed)에만 붙는다."""
+def _attempt(repo: Path, tid: str, adir: Path, failed: bool, last: bool, rounds: dict[int, str]) -> list[Section | str]:
+    """실패한 시도는 구현·리뷰·수정 로그 전부가 1순위다. 오류 줄은 실패한 실행(failed·sub_failed)에만 붙는다.
+    rounds는 이 시도에서 버려진 수정의 회차와 이유다(_discarded)."""
     name = f"티켓 {tid} 시도 {adir.name}"
     tier = TIER_FAILED if failed else TIER_OTHER
     parts: list[Section | str] = [f"\n### 시도 {adir.name} ({_mark(adir, failed, last)})"]
@@ -144,9 +168,10 @@ def _attempt(repo: Path, tid: str, adir: Path, failed: bool, last: bool) -> list
                 parts.append(Section(TIER_FAILED if failed else TIER_REVIEW, f"{name} {sub.name} 리뷰 답",
                                      f"\n#### {sub.name} 리뷰 답 (원본 {_rel(repo, sub / 'review.txt')})", _clip(text)))
         elif sub.name.startswith("fix"):
-            sub_failed = _failed(sub)
+            why = rounds.get(_fix_round(sub.name), "")
+            sub_failed = _failed(sub) or bool(why)
             parts.append(f"\n#### 수정 worker {sub.name} ({_mark(sub, sub_failed)})")
-            parts.extend(_run(repo, f"{name} {sub.name}", sub, "수정 worker", sub_failed, tier))
+            parts.extend(_run(repo, f"{name} {sub.name}", sub, "수정 worker", sub_failed, tier, why))
     return parts
 
 
@@ -161,8 +186,8 @@ def _sub_key(d: Path) -> tuple[int, int, str]:
     return (int(num or 1), 1 if kind == "fix" else 2, d.name)
 
 
-def _run(repo: Path, name: str, directory: Path, kind: str, failed: bool, tier: int) -> list[Section | str]:
-    """worker.log(render). 실패면 종료 코드·이유, 오류 줄, verify.log의 오류 줄과 끝."""
+def _run(repo: Path, name: str, directory: Path, kind: str, failed: bool, tier: int, why: str = "") -> list[Section | str]:
+    """worker.log(render). 실패면 종료 코드·이유, 오류 줄, verify.log의 오류 줄과 끝. why는 state.json에만 있는 이유다."""
     log = directory / "worker.log"
     parts: list[Section | str] = []
     if failed:
@@ -173,6 +198,8 @@ def _run(repo: Path, name: str, directory: Path, kind: str, failed: bool, tier: 
         reason = _read(directory / "failure.log").split("\n\n", 1)[0].strip()
         if reason:
             facts.append(_one_line(reason))
+        if why:
+            facts.append(_one_line(why))
         if facts:
             parts.append("- " + " · ".join(facts))
     if log.exists():

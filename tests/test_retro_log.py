@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from gs import retrolog, state
+from gs import retrolog, review, state
 from gs.cli import main
 
 FEATURE = "feat"
@@ -319,6 +319,69 @@ class RetroLogTest(unittest.TestCase):
         self.assertIn("#### 수정 worker fix2 (실패)", part)
         self.assertIn("1: error FIX2-ERROR", part)
         self.assertEqual(part.count("#### 오류 줄"), 1)
+
+    def discard(self, tid, n, nth, reason, key="review"):
+        """go._end_fix가 남기는 기록: 종료 코드 0으로 끝난 수정 worker의 실패는 리뷰 기록의 지적에만 있다."""
+        setattr(self.st.ticket(tid), key, {"reviewer": "codex", "dir": str(self.rundir / tid / str(n) / "review"), "findings": [
+            {"id": 1, "action": "fix", "fix_attempt": review.ATTEMPTED, "fix_round": max(nth - 1, 1)},
+            {"id": 2, "action": "fix", "fix_attempt": review.DISCARDED, "fix_round": nth, "fix_reason": reason}]})
+
+    def test_discarded_fix_with_exit_zero_is_a_failed_attempt(self):
+        for tid, why in (("01", "커밋 없음"), ("02", "이전 커밋을 지웠다")):
+            self.ticket(tid)
+            self.attempt(tid, 1, [claude_text("impl")], exit_code=0, files={
+                "fix/worker.log": tool_result("error FIX-OUTPUT") + "\n", "fix/exit": "0\n"})
+            self.discard(tid, 1, 1, f"수정 worker 실패: {why}")
+        text = self.build()
+        first, second = text.split("## 티켓 02", 1)
+        for part, why in ((first, "커밋 없음"), (second, "이전 커밋을 지웠다")):
+            self.assertIn("### 시도 1 (실패)", part)
+            self.assertIn("#### 수정 worker fix (실패)", part)
+            self.assertIn(f"- 종료 코드 0 · 수정 worker 실패: {why}", part)
+            self.assertIn("1: error FIX-OUTPUT", part)
+            self.assertNotIn("(통과)", part)
+
+    def test_discarded_fix_is_kept_first_under_limit(self):
+        self.ticket("01")
+        self.attempt("01", 1, [claude_text(f"IMPL-{j} " + "i" * 90) for j in range(300)], exit_code=0, files={
+            "review/review.txt": "\n".join(f"REVIEW-{j} " + "r" * 90 for j in range(300)),
+            "fix/worker.log": "\n".join(claude_text(f"FIX-{j} " + "a" * 90) for j in range(300)) + "\n",
+            "fix/exit": "0\n"})
+        self.discard("01", 1, 1, "수정 worker 실패: 커밋 없음")
+        self.ticket("02")
+        self.attempt("02", 1, [claude_text(f"OTHER-{j} " + "o" * 90) for j in range(900)], exit_code=0)
+        text = self.build(110_000)
+        self.assertLessEqual(len(text), 110_000)
+        part = text.split("## 티켓 01", 1)[1].split("\n## 티켓", 1)[0]
+        for word in ("IMPL-299 ", "REVIEW-299 ", "FIX-299 ", "수정 worker 실패: 커밋 없음"):
+            self.assertIn(word, part)
+        self.assertNotIn("[줄임:", part)
+        self.assertIn("[줄임:", text.split("## 티켓 02", 1)[1])
+
+    def test_discard_marks_only_its_round_and_attempt(self):
+        """1차 수정이 통과하고 2차가 버려졌으면 2차만 실패다. 끊겨 다시 띄운 2차(-net1)도 같은 회차다. 지적은 기록의 dir로 시도를 찾는다."""
+        self.ticket("01", status="running")
+        self.attempt("01", 1, [claude_text("impl")], exit_code=0, files={
+            "fix/worker.log": claude_text("first") + "\n", "fix/exit": "0\n",
+            "fix2/worker.log": claude_text("second") + "\n",
+            "fix2-net1/worker.log": claude_text("second again") + "\n", "fix2-net1/exit": "0\n"})
+        self.attempt("01", 2, [claude_text("next")])
+        self.discard("01", 1, 2, "수정 worker 실패: 커밋 없음", key="second_review")
+        text = self.build()
+        self.assertIn("### 시도 1 (실패)", text)
+        self.assertIn("#### 수정 worker fix (통과)", text)
+        self.assertIn("#### 수정 worker fix2 (실패)", text)
+        self.assertIn("#### 수정 worker fix2-net1 (실패)", text)
+        self.assertIn("### 시도 2 (끝 기록 없음)", text)
+
+    def test_attempted_fix_is_not_a_failure(self):
+        self.ticket("01").review = {"reviewer": "codex", "dir": str(self.rundir / "01/1/review"), "findings": [
+            {"id": 1, "action": "fix", "fix_attempt": review.ATTEMPTED, "fix_round": 1},
+            {"id": 2, "action": "fix", "fix_reason": "한도"}]}  # 띄우지 못한 수정은 돈 worker가 없다
+        self.attempt("01", 1, [claude_text("impl")], exit_code=0, files={"fix/worker.log": "", "fix/exit": "0\n"})
+        text = self.build()
+        self.assertIn("### 시도 1 (통과)", text)
+        self.assertIn("#### 수정 worker fix (통과)", text)
 
     def test_attempt_labels_do_not_call_unfinished_runs_passed(self):
         self.ticket("01", status="running")
