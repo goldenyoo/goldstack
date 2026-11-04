@@ -37,6 +37,7 @@ rereview_minutes = 10
 judge_minutes = 10
 summary_seconds = 60
 checks_minutes = 60
+checks_grace_seconds = 60
 setup_minutes = 15
 
 [notify]
@@ -80,6 +81,7 @@ class TimeoutsConfig:
     checks_minutes: int = 60
     setup_minutes: int = 15
     rereview_minutes: int = 10
+    checks_grace_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -136,7 +138,9 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`가 없다"))
             elif type(raw[key]) is not kind:  # bool은 int의 하위형이지만 정수 설정으로 받지 않는다
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 {names[kind]}이어야 한다"))
-            elif section == "timeouts" and raw[key] <= 0:
+            elif section == "timeouts" and key == "checks_grace_seconds" and raw[key] < 0:
+                problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0 이상이어야 한다"))
+            elif section == "timeouts" and key != "checks_grace_seconds" and raw[key] <= 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0보다 커야 한다"))
             elif section == "git" and key == "merge_method" and raw[key] not in ("merge", "squash"):
                 problems.append(Problem("오류", CONFIG_PATH, "`git.merge_method`는 merge 또는 squash이어야 한다"))
