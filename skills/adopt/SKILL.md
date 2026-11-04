@@ -5,7 +5,7 @@ disable-model-invocation: true
 ---
 # /adopt
 
-goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profile.md`다. `/grill`이 1단계에서 가장 먼저 읽고, worker brief가 "먼저 읽어라"로 가리킨다. 레포 루트(`git rev-parse --show-toplevel`)에서 돈다. 사람에게는 3단계의 `--write` 여부만 묻는다.
+goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profile.md`다. `/grill`이 1단계에서 가장 먼저 읽고, worker brief가 "먼저 읽어라"로 가리킨다. 레포 루트(`git rev-parse --show-toplevel`)에서 돈다. 사람에게는 3단계의 `--write` 여부와 피드백 설정(`mode`·`detail`)만 묻는다.
 
 1. **레포를 훑는다.** 넓으면 subagent에게 맡긴다. 찾은 것은 근거 파일과 함께 적어 둔다.
    - README와 docs, 기여 안내(`CONTRIBUTING` 등)
@@ -16,6 +16,12 @@ goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profil
    - 최근 커밋 메시지 모양(`git log --oneline -20`)과 브랜치 이름
 2. **설정이 없으면 만든다.** `.goldstack/config.toml`이 없으면 `gs init`(끝에 `gs doctor`가 한 번 돈다). 있으면 그대로 둔다.
 3. **doctor를 보인다.** `gs doctor` 출력을 그대로 보이고(init에서 이미 봤으면 다시 돌리지 않는다) "제안대로 config에 쓸까(`gs doctor --write`)"를 묻는다. 원하면 돌리고 `<키>: <전> → <후> (<이유>)` 줄을 보인다.
+
+   **피드백 설정.** `.goldstack/config.toml`에 `[feedback]` 절이 이미 있으면 다시 묻지 않는다(`gs init`이 만든 기본 `draft`도 이미 있는 것으로 본다). 없을 때만 한 번 묻는다. 옛 config라 절이 없으면 `off`로 읽힌다.
+   - `mode`: `auto`(오류가 나면 gs가 자동으로 GitHub issue를 올린다) / `draft`(초안만 `.goldstack/feedback/`에 남기고 사람이 `gs feedback`으로 보낸다) / `off`(보내지 않는다).
+   - `detail`: `errors`(정해진 항목에 실패한 명령의 오류 줄 최대 20줄을 더한다) / `minimal`(정해진 항목만, 오류 줄 없음).
+   - 예를 보이고 고르게 한다: 개인 프로젝트는 `auto` + `errors`, 회사 레포는 `off` 또는 `minimal`. 오류 줄에 회사 코드가 섞일 수 있으니 회사 레포는 `off`를 먼저 권한다.
+   - 답을 `.goldstack/config.toml`의 `[feedback]`에 `mode = "..."`, `detail = "..."`로 쓴다. 다른 키(`repo`, `max_per_day`)는 건드리지 않는다.
 4. **profile을 쓴다.** `.goldstack/profile.md`를 아래 절로 쓴다. 시험 명령은 가능하면 한 번 돌려 걸린 시간을 잰다(못 돌리면 이유를 적는다). 시험이 없으면 "검증 없음"을 경고하고 spec에 `verify: "true"`처럼 명시하라고 적는다. 비밀 값(`.env` 내용 등)은 적지 않고 위치만 적는다.
 
    ```
