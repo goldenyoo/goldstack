@@ -38,6 +38,7 @@ class WorkerInput:
 
 class Adapter:
     name = ""
+    isolation_warning = ""
 
     def __init__(self, models: config.ModelsConfig):
         self.models = models
@@ -73,16 +74,12 @@ class Claude(Adapter):
             '--disallowedTools "Bash(git push *)" "Bash(gh *)"')
     ISOLATION = "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --disable-slash-commands"
 
-    def __init__(self, models: config.ModelsConfig):
-        super().__init__(models)
-        self.note = ""
-
     def isolation(self, inp: WorkerInput) -> str:
         """격리 옵션. 플러그인 목록을 못 읽으면 플러그인 끄기만 빼고(나머지는 넣는다) outcome 메모로 알린다."""
         try:
             off = plugins_to_disable(claude_plugins(inp.worktree))
         except AdapterError as e:
-            self.note = f"플러그인 격리 못 함(goldstack 밖 플러그인이 실린다): {e}"
+            self.isolation_warning = f"플러그인 격리 못 함: {e}"
             off = []
         settings = ""
         if off:
@@ -94,7 +91,7 @@ class Claude(Adapter):
         return f"{self.BASE} {self.isolation(inp)} < {q(str(inp.brief))}"
 
     def outcome(self, code: int, inp: WorkerInput) -> tuple[int, str]:
-        return code, self.note
+        return code, self.isolation_warning
 
 
 GOLDSTACK_PLUGIN = "goldstack"
