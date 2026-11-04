@@ -3,8 +3,10 @@ id: "<NN>"
 title: "<한 줄 제목>"
 blocked_by: []
 touches: []
+tier: medium  # small|medium|large
 model: claude
 reviewer: codex
+# verify: "<검사 명령 한 줄>"  # 문서·설정 티켓: 앞의 `# `를 지우고 좁은 명령을 쓴다. 코드 티켓: 이 줄을 지운다. 단 spec에 `verify_ticket`이 있으면 그 값을 물려받으니 `# `를 지우고 spec `verify`(전체 검증)를 그대로 쓴다
 ---
 ## 목표
 <한두 문장>
