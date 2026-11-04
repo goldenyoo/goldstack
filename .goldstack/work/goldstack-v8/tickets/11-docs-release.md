@@ -1,7 +1,7 @@
 ---
 id: "11"
 title: "문서, CHANGELOG 미출시 항목"
-blocked_by: ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10"]
+blocked_by: ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "12", "13", "14", "15"]
 touches: ["README.md", "docs/guide.md", "docs/internals.md", "CHANGELOG.md", ".claude-plugin/**"]
 model: claude
 reviewer: codex
@@ -17,6 +17,7 @@ v8에서 바뀐 동작과 설정을 문서와 미출시 CHANGELOG에 반영한�
 - `README.md`: 처음 설치는 태그 `v0.1.0`(v8 뒤 사람이 만든다), 이후 업데이트는 `gs self-update`와 main 채널 기준이다. 리눅스 서버에서 쓰는 법(herdr 없이 도는 것, tmux)이 있다. skill 표에 `/overnight`, `/feedback`이 있다.
 - `docs/guide.md`: 피드백이 무엇을 보내고 무엇을 안 보내는지, 프로젝트별 끄는 법, `/overnight` 쓰는 법이 있다.
 - `docs/internals.md`: 모듈 표에 `version.py`, `selfupdate.py`, `feedback.py`가 있고, 피드백 흐름과 Actions 시험이 있다.
+- `docs/internals.md`: worker 차단 목록에 git 설정 변경이 있고, push 전 대조, 첫 리뷰 트리와 `reviewed_head`, 대기 상한의 회복 판정이 있다. 옛 설명을 고친다.
 - 태그와 GitHub Release는 만들지 않는다(v8이 verified가 된 뒤 사람이 확인하고 만든다).
 
 ## 범위 밖

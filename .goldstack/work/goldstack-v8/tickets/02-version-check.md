@@ -2,7 +2,7 @@
 id: "02"
 title: "버전 비교: 설치본이 뒤처지거나 플러그인과 어긋나면 경고, 레포 requires보다 낮으면 오류"
 blocked_by: []
-touches: ["src/gs/version.py", "src/gs/doctor.py", "src/gs/go.py", "src/gs/check.py", "src/gs/config.py", "tests/test_version_sync.py"]
+touches: ["src/gs/version.py", "src/gs/doctor.py", "src/gs/cli.py", "src/gs/check.py", "src/gs/config.py", "tests/test_version_sync.py"]
 model: codex
 reviewer: claude
 tier: medium
@@ -15,6 +15,7 @@ tier: medium
 - `gs go`와 `gs doctor`가 시작할 때 설치 commit을 원격 main(`git ls-remote <주소> main`, 5초 제한)과 비교해, 다르면 `경고: 설치본이 main보다 뒤처짐 → gs self-update`를 낸다. 조회 실패·주소 없음은 조용히 건너뛴다. 실행을 막지 않는다. 시험이 있다.
 - 플러그인 버전이 gs 버전과 다르면 `경고: 플러그인 <x> ≠ gs <y> → gs self-update`. 플러그인 목록을 못 읽으면 건너뛴다. 시험이 있다.
 - config `[goldstack] requires = ">=0.1"`이 있으면 `gs check`·`gs go`가 낮은 버전에서 오류를 낸다: `이 레포는 goldstack >=<요구>가 필요하다(지금 <버전>) → gs self-update`. 형식이 틀리면 `gs check` 오류다. 키가 없으면 지금과 같다. 시험이 있다.
+- `gs go` 시작 처리는 `cli.cmd_go`에 둔다. `go.py`는 건드리지 않는다(티켓 12–15가 고친다).
 - 저장소 주소를 코드에 적지 않는다.
 
 ## 범위 밖

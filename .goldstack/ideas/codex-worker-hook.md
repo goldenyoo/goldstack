@@ -19,3 +19,5 @@ codex worker를 sandbox 대신 hook으로 막기(agy처럼 deny+hook). 먼저 �
 - 셸 명령 차단(push, gh 쓰기, 비밀 파일 읽기)은 `gs hook pretooluse`를 그대로 쓸 수 있다. 입력 모양·종료 2 계약이 Claude Code와 같다. `GS_ROLE`·`GS_WORKTREE`도 hook에 전달된다.
 
 다시 볼 조건: codex가 hook 실패를 막음으로 다루는 동작이나 설정을 내면(연구 문서 §4의 네 가지 실패 모드를 다시 돌려 확인).
+
+- 2026-11-04 codex worker에는 비밀 파일 읽기 차단이 없다. `codex sandbox`(macOS, 0.166.0, 기본 정책)에서 임시 비밀 파일 `cat`은 되고 쓰기만 막혔다(worker의 `-s workspace-write`와 정책이 같은지는 추가 확인 필요). `docs/internals.md`의 "worker 차단 hook이 이 파일 읽기를 막는다"는 codex에 맞지 않는다. 위 조사와 다른 안: sandbox를 빼지 않고 그 위에 `gs hook pretooluse`를 겹치면 쓰기·네트워크는 sandbox가 그대로 막고 비밀 읽기만 보태어 막는다. hook이 fail-open이라 보조 장치이고, `--dangerously-bypass-hook-trust`가 필요하다 (출처: 2026-11-04 Gemini 리뷰, Claude가 재현)

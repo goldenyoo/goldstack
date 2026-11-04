@@ -17,7 +17,7 @@ verify: "uv run python -m unittest discover -s tests -p test_overnight_skill.py 
 - **사전 점검**: 세션 권한 모드(승인 창이 뜰 명령: push, 재설치), `gs check` 전부, 미커밋 grill, 원격 앞섬, 디스크, CLI 로그인, 버전 경고.
 - **깨어 있기**: `uname`으로 고른다. 맥 `caffeinate -dims -w <gs pid>`, 리눅스 `systemd-inhibit`(없으면 건너뜀), 맥북이면 전원·덮개 안내. 리눅스 서버는 tmux 안에서 세션을 띄우라고 안내한다.
 - **파일**: `.goldstack/overnight/<날짜>.md`에 받은 허락, 쓴 허락, 아침에 물을 것, 결과를 적는다. 밤사이 판단은 이 파일만 근거로 한다.
-- **잇기**: `gs go <f>`를 백그라운드로 띄우고 완료 알림에 깨어난다. verified면 `git pull`, gs 자신을 고친 레포면 재설치, 다음 spec의 환경 사실 재확인, `gs check` 경고 0, push, 다음 `gs go`.
+- **잇기**: `gs go <f>`를 백그라운드로 띄우고 완료 알림에 깨어난다. verified면 `git pull`, gs 자신을 고친 레포면 재설치(`uv tool install --reinstall .`와 `claude plugin marketplace update goldstack && claude plugin update goldstack@goldstack`), 다음 spec의 환경 사실 재확인, `gs check` 경고 0, push, 다음 `gs go`.
 - **멈출 조건**: 결정을 바꿔야 하는 어긋남, 경고 남음, 권한 승인 창, `중단(네트워크)`(다음 `gs go`로 다시 잇기를 먼저 시도). 독립이면 다음 feature로 넘어가고, 아니면 상태·재개 명령을 남기고 멈춘다.
 - **하지 않는 일**: force push, 원격 브랜치 수동 삭제, 허락에 없는 결정.
 - **아침 보고**: feature별 결과(verified/멈춤과 이유), PR 링크, 고친 사소한 것, 남은 질문, 피드백 건수를 한 장으로. 텔레그램이 켜져 있으면 요약 한 통.

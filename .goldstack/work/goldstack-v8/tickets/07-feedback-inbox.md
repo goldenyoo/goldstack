@@ -1,7 +1,7 @@
 ---
 id: "07"
 title: "받는 쪽: gs backlog와 grill이 field-report를 보이고, 티켓 closes로 닫는다"
-blocked_by: ["05"]
+blocked_by: ["05", "12"]
 touches: ["src/gs/backlog.py", "src/gs/feature.py", "src/gs/finish.py", "skills/grill/SKILL.md", "tests/test_feedback_inbox.py"]
 model: codex
 reviewer: claude
