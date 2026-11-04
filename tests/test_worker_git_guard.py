@@ -149,10 +149,42 @@ class SharedGitBlocksTest(unittest.TestCase):
 
     def test_xargs_option_value_is_not_the_command(self):
         for form in ("xargs -I {{}} git {}", "xargs -I % git {}", "xargs -I{{}} git {}", "xargs -L 1 git {}", "xargs -d x git {}",
-                     "xargs -n 1 -P 4 git {}", "xargs -P 4 -I {{}} git {}", "xargs -E END git {}", "xargs -a f git {}"):
+                     "xargs -n 1 -P 4 git {}", "xargs -P 4 -I {{}} git {}", "xargs -E END git {}", "xargs -a f git {}",
+                     "xargs -0I {{}} git {}", "xargs -tI {{}} git {}", "xargs -0I{{}} git {}", "xargs -0n 1 git {}", "xargs -0n1 git {}",
+                     "xargs --delimiter x git {}", "xargs --arg-file f git {}", "xargs --max-args 1 git {}", "xargs --max-args=1 git {}",
+                     "xargs --process-slot-var V git {}", "xargs --replace git {}", "xargs --replace={{}} git {}",
+                     "xargs -i git {}", "xargs -i{{}} git {}", "xargs -l git {}", "xargs -e git {}", "xargs --eof git {}"):
             self.assertBlocked(form.format("push"), form.format("config core.hooksPath x"), form.format("config core.hooksPath"))
         self.assertAllowed("xargs -I {} git status {}", "xargs -I {} echo {}", "xargs -n 1 echo", "xargs -P 4 -n 1 uv run python x")
         self.assertBlocked("xargs -I {} cat ~/.ssh/id_rsa")  # 명령 이름을 찾으면 나머지 판정도 듣는다
+
+    def test_xargs_replace_strings_are_read_from_every_option_form(self):
+        ctx = hook.Ctx(worktree=str(self.wt), cwd=str(self.wt), env=self.env)
+
+        def fill(command):
+            return [hook._xargs_fill(args[:len(args) - len(hook.strip_prefix(args))])
+                    for args, _, _ in hook.segments(hook.scan(command)[0], str(self.wt), ctx)]
+
+        for command, expected in [("xargs -I R c", ("R",)), ("xargs -IR c", ("R",)), ("xargs -0I R c", ("R",)), ("xargs -0tIR c", ("R",)),
+                                  ("xargs -J R c", ("R",)), ("xargs -JR c", ("R",)), ("xargs -iR c", ("R",)), ("xargs -i c", ("{}",)),
+                                  ("xargs --replace=R c", ("R",)), ("xargs --repl=R c", ("R",)), ("xargs --replace c", ("{}",)),
+                                  ("env xargs -P 2 -I R env c", ("R",)), ("xargs -I '' c", ()), ("xargs -n 1 -P 2 -L 1 -E R c", ()),
+                                  ("xargs c -I R", ()), ("env -i c", ()), ("stdbuf -i0 xargs c", ())]:
+            self.assertEqual(fill(command), [expected], command)
+
+    def test_xargs_replace_string_in_the_command_name_hides_the_command(self):  # GNU xargs는 첫 단어도 바꾼다
+        self.assertBlocked("echo git | xargs -I X X update-ref refs/heads/main HEAD~1", "echo git | xargs -I X env X config a.b c",
+                           "echo i | xargs -I X gXt config a.b c", "echo /usr/bin | xargs -I X X/git config a.b c",
+                           "echo 'git config a.b c' | xargs -I X bash -c X", "echo git | xargs -I X sh -c 'X config a.b c'")
+        self.assertAllowed("xargs -I {} sh -c 'wc -l {}'", "xargs -I {} sh -c 'f={}; cat \"$f\"'", "xargs -I {} bash -c 'echo {} && git status'")
+
+    def test_xargs_replace_string_can_build_a_git_word(self):
+        self.assertBlocked("echo con | xargs -I X git Xfig a.b c", "echo /elsewhere | xargs -I X git -c a.b=c Xconfig a.b",
+                           "echo -- | xargs -I X git config Xlist a.b c", "echo con | xargs -I X bash -c 'git Xfig a.b c'",
+                           "echo pu | xargs -I X git Xsh origin", "echo push | xargs -I {} git {} origin")
+        self.assertAllowed("xargs -I {} git add {}", "xargs -I {} git add src/{}", "xargs -J % git diff %", "xargs -0I {} git log {}",
+                           "xargs --replace git add {}", "xargs -i git add {}", "xargs -I {} git config --get {}",
+                           "xargs -I {} bash -c 'git add {} && git status'", "xargs -I {} git commit -m {}")
 
     def test_unknown_word_alone_may_be_a_symbolic_ref_write(self):
         self.assertBlocked("git symbolic-ref $X", "git symbolic-ref \"$X\"", "git symbolic-ref -m why $X")
@@ -309,6 +341,54 @@ class OwnBranchTest(WorktreeFixture):
         self.assertNotEqual(sh(self.repo, "git", "rev-parse", "main"), before["main"])
         self.assertEqual(sh(self.repo, "git", "rev-parse", "gs/f/12"), before["gs/f/12"])
 
+    def test_xargs_replace_string_moves_refs_outside_own_branch(self):
+        """`xargs -I HEAD`의 `HEAD`는 자기 브랜치가 아니라 입력이다."""
+        for command in ("xargs -I HEAD git update-ref HEAD HEAD~1", "xargs -IHEAD git update-ref HEAD HEAD~1",
+                        "xargs -0I HEAD git update-ref HEAD HEAD~1", "xargs -0IHEAD git update-ref HEAD HEAD~1",
+                        "xargs -tI HEAD git update-ref HEAD HEAD~1", "xargs -J HEAD git update-ref HEAD HEAD~1",
+                        "xargs -JHEAD git update-ref HEAD HEAD~1", "xargs -iHEAD git update-ref HEAD HEAD~1",
+                        "xargs --replace=HEAD git update-ref HEAD HEAD~1", "xargs --repl=HEAD git update-ref HEAD HEAD~1",
+                        "xargs -P 2 -I HEAD git update-ref HEAD HEAD~1", "xargs --delimiter x -I HEAD git update-ref HEAD HEAD~1",
+                        "env xargs -I HEAD git update-ref HEAD HEAD~1", "xargs -I HEAD env git update-ref HEAD HEAD~1",
+                        "/usr/bin/xargs -I HEAD git update-ref HEAD HEAD~1", "xargs -I HEAD git update-ref -m why HEAD HEAD~1",
+                        "xargs -I HEAD bash -c 'git update-ref HEAD HEAD~1'", "xargs -I HEAD sh -c \"git update-ref HEAD HEAD~1\"",
+                        "xargs -I HEAD bash -c 'bash -c \"git update-ref HEAD HEAD~1\"'",
+                        "xargs -I HEAD bash -c 'echo \"$(git update-ref HEAD HEAD~1)\"'",
+                        "xargs -I EA git update-ref HEAD HEAD~1", "xargs -I HE git update-ref HEAD HEAD~1",  # 단어 일부도 바뀐다
+                        "xargs -I % git update-ref HEAD% HEAD~1", "xargs -I X git update-ref refs/heads/X HEAD",
+                        "xargs -I 12 git update-ref refs/heads/gs/f/12 HEAD", "xargs -I 12 git branch -f gs/f/12 HEAD",
+                        "xargs -I 12 git symbolic-ref HEAD refs/heads/gs/f/12", "xargs -I HEAD git symbolic-ref HEAD refs/heads/gs/f/12",
+                        "xargs -I X git update-ref -X HEAD refs/heads/main HEAD~1",  # `-X`가 `-m`이 되면 `HEAD`는 이유다
+                        "xargs -I X bash -c 'git update-ref -X HEAD refs/heads/main HEAD~1'",
+                        "xargs -I X bash -c 'git update-ref -\"X\" HEAD refs/heads/main HEAD~1'",
+                        "xargs -I X git -C X update-ref HEAD HEAD~1", "xargs -I X git --git-dir=X update-ref HEAD HEAD~1",  # 다른 레포의 HEAD
+                        "xargs -I X sh -c 'git -C X update-ref HEAD HEAD~1'", "xargs -I X sh -c 'cd X && git update-ref HEAD HEAD~1'",
+                        "xargs -I X sh -c 'cd /X; git symbolic-ref HEAD refs/heads/gs/f/12'", "xargs -I X sh -c 'GIT_DIR=X git update-ref HEAD HEAD~1'",
+                        "xargs -I X env GIT_DIR=X git update-ref HEAD HEAD~1"):
+            self.assertIsNotNone(self.verdict(f"echo refs/heads/main | {command}"), command)
+            self.assertIsNotNone(self.verdict(f"{command} < refs.txt"), command)
+
+    def test_xargs_replace_string_outside_the_ref_keeps_own_branch(self):
+        for command in ("xargs -I {} git update-ref HEAD {}", "xargs -I {} git update-ref refs/heads/gs/f/12 {}",
+                        "xargs -I {} git update-ref -m {} HEAD HEAD~1", "xargs -0I {} git update-ref HEAD {}",
+                        "xargs --replace git update-ref HEAD {}", "xargs -I {} git branch -f gs/f/12 {}",
+                        "xargs -I {} bash -c 'git update-ref HEAD {}'", "xargs -I {} git -C sub update-ref HEAD {}",
+                        "xargs -I X sh -c 'cd sub && git update-ref HEAD X'", "xargs -I {} git status {}", "xargs -I {} git diff {}",
+                        "xargs -I {} git add {}", "xargs -I {} git reset {}"):
+            self.assertIsNone(self.verdict(f"echo main | {command}"), command)
+
+    def test_xargs_replace_string_really_moves_another_ref(self):
+        """위 시험의 전제: 이 명령들은 worker의 브랜치가 아니라 main을 옮긴다."""
+        before = {name: sh(self.repo, "git", "rev-parse", name) for name in ("main", "gs/f/12")}
+        for command in ("echo refs/heads/main | xargs -I HEAD git update-ref HEAD HEAD~1",
+                        "echo refs/heads/main | xargs -I HEAD sh -c 'git update-ref HEAD HEAD~1'",
+                        "echo m | xargs -I X git update-ref -X HEAD refs/heads/main HEAD~1",
+                        f"echo {self.repo} | xargs -I X sh -c 'cd X && git update-ref HEAD HEAD~1'"):
+            subprocess.run(["bash", "-c", command], cwd=self.wt, check=True)
+            self.assertNotEqual(sh(self.repo, "git", "rev-parse", "main"), before["main"], command)
+            self.assertEqual(sh(self.repo, "git", "rev-parse", "gs/f/12"), before["gs/f/12"], command)
+            sh(self.repo, "git", "update-ref", "refs/heads/main", before["main"])
+
     def test_detached_head_owns_no_branch(self):
         sh(self.wt, "git", "checkout", "-q", "--detach")
         self.assertIsNotNone(self.verdict("git update-ref refs/heads/gs/f/12 HEAD~1"))
@@ -335,7 +415,9 @@ class AgyHookTest(WorktreeFixture):
             self.assertEqual(self.verdict(command)["decision"], "deny", command)
         for command in [f"GIT_DIR={self.repo}/.git git update-ref HEAD HEAD~1", f"export GIT_DIR={self.repo}/.git; git update-ref HEAD HEAD~1",
                         f"git -C {self.repo} symbolic-ref HEAD refs/heads/gs/f/12", "git config core.hooksPath 2 >/dev/null",
-                        "echo /tmp/evil | xargs git config core.hooksPath", "xargs -I {} git config core.hooksPath {}"]:
+                        "echo /tmp/evil | xargs git config core.hooksPath", "xargs -I {} git config core.hooksPath {}",
+                        "echo refs/heads/main | xargs -I HEAD git update-ref HEAD HEAD~1",
+                        "echo refs/heads/main | xargs -I HEAD bash -c 'git update-ref HEAD HEAD~1'"]:
             self.assertEqual(self.verdict(command)["decision"], "deny", command)
         for command in [*OWN_BRANCH_OK, "git config --get remote.origin.url", "git config --list", "git remote -v"]:
             self.assertEqual(self.verdict(command)["decision"], "allow", command)

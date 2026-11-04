@@ -57,7 +57,9 @@ GIT_CONFIG_WRITE = ("`git config` 쓰기는 공용 git 설정(gs의 push 목적�
 GIT_LOCATION_ENV = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_CONFIG")  # 명령 앞에 붙으면 git이 볼 곳이 바뀐다
 # xargs가 stdin에서 붙이는 단어의 자리표시. `$X`처럼 몇 단어인지 모르는 값으로 판정한다
 XARGS_INPUT = "$XARGS_INPUT"
-XARGS_OPTS_WITH_VALUE = {"-I", "-J", "-L", "-R", "-S", "-a", "-d", "-E", "-n", "-P", "-s"}
+XARGS_SHORT_VALUED = set("IJLRSadEnPs")  # 값을 받는다. 붙이거나(`-n1`) 다음 단어로 준다
+XARGS_SHORT_OPTIONAL = set("eil")  # GNU. 값이 있으면 붙여 쓴다(`-iX`). 다음 단어는 값이 아니다
+XARGS_LONG_VALUED = ("--arg-file", "--delimiter", "--max-args", "--max-chars", "--max-procs", "--process-slot-var")
 
 # gh 읽기 전용 명령. 여기 없는 것은 쓰기로 본다(되돌릴 수 없는 쪽으로 기울인다)
 GH_READ = {
@@ -100,6 +102,7 @@ class Ctx:
     cwd: str
     env: Mapping[str, str]
     located: tuple[str, ...] = ()  # 명령 글에서 git이 볼 곳을 바꾸는 말의 값(`_git_locations`)
+    xargs_fill: tuple[str, ...] = ()  # 바깥 xargs가 입력으로 바꿔 넣을 글자들(`_xargs_fill`). `sh -c` 안까지 듣는다
 
 
 # ---------------------------------------------------------------- 진입점
@@ -180,7 +183,7 @@ def check_bash(command: str, ctx: Ctx, depth: int = 0) -> str | None:
     if depth > 3:
         return None
     text, subs = scan(command.replace("\\\n", " "))
-    ctx = replace(ctx, located=(*ctx.located, *_git_locations(text)))
+    ctx = replace(ctx, located=(*ctx.located, *_git_locations(text, ctx.xargs_fill)))
     for inner in subs:  # $(...)와 `...`도 명령이다(큰따옴표 안이어도 돈다. 작은따옴표 안은 글자일 뿐)
         reason = check_bash(inner, ctx, depth + 1)
         if reason:
@@ -360,6 +363,44 @@ def _is_xargs(word: str) -> bool:
     return os.path.basename(word).lstrip("\\") == "xargs"
 
 
+def _xargs_short(word: str) -> tuple[str, str | None]:
+    """값을 받는 짧은 옵션 글자와 붙은 값. `-0I` → (I, None), `-0IX` → (I, X), `-t`와 긴 옵션 → ("", None)."""
+    if word.startswith("-") and not word.startswith("--"):
+        for k, flag in enumerate(word[1:], start=1):
+            if flag in XARGS_SHORT_VALUED or flag in XARGS_SHORT_OPTIONAL:
+                return flag, word[k + 1:] or None
+    return "", None
+
+
+def _xargs_takes_next(word: str) -> bool:
+    """이 xargs 옵션의 값이 다음 단어인가(`-I {}`, `-0I {}`, `--delimiter x`). 그 단어는 명령이 아니다."""
+    if "=" not in word and _is_long(word, *XARGS_LONG_VALUED):
+        return True
+    flag, value = _xargs_short(word)
+    return flag in XARGS_SHORT_VALUED and value is None
+
+
+def _xargs_fill(prefix: list[str]) -> tuple[str, ...]:
+    """명령 앞 단어들에서 xargs가 입력으로 바꿔 넣을 글자들. `-I R`, `-0IR`, `-J R`, `-iR`, `--replace=R`. `-i`·`--replace`만 쓰면 `{}`다."""
+    start = next((k for k, word in enumerate(prefix) if _is_xargs(word)), len(prefix))
+    words = prefix[start:]
+    fill: list[str] = []
+    for word, following in zip(words, [*words[1:], ""]):
+        flag, value = _xargs_short(word)
+        if _is_long(word, "--replace"):
+            fill.append(word.partition("=")[2] or "{}")
+        elif flag in ("I", "J"):
+            fill.append(following if value is None else value)
+        elif flag == "i":
+            fill.append("{}" if value is None else value)
+    return tuple(s for s in fill if s)
+
+
+def _xargs_filled(words: list[str], fill: tuple[str, ...]) -> list[str]:
+    """xargs가 바꿔 넣은 뒤의 단어들. 글자가 들어 있는 단어는 통째로 모르는 값이다(`HEAD`가 다른 ref가 되고 `-X`가 `-m`이 된다)."""
+    return [XARGS_INPUT if any(s in word for s in fill) else word for word in words]
+
+
 def strip_prefix(argv: list[str]) -> list[str]:
     """`FOO=1 sudo env -i nohup git push`에서 `git push`만 남긴다."""
     i = 0
@@ -370,10 +411,10 @@ def strip_prefix(argv: list[str]) -> list[str]:
         elif re.match(r"^[A-Za-z_]\w*=", a):
             i += 1
         elif os.path.basename(a).lstrip("\\") in WRAPPERS:
-            valued = XARGS_OPTS_WITH_VALUE if _is_xargs(a) else ()  # `xargs -I {} git …`의 `{}`는 명령이 아니다
+            xargs = _is_xargs(a)  # `xargs -I {} git …`의 `{}`는 명령이 아니다
             i += 1
             while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i] or re.match(r"^\d+[smhd]?$", argv[i])):
-                i += 2 if argv[i] in valued else 1
+                i += 2 if xargs and _xargs_takes_next(argv[i]) else 1
         else:
             break
     return argv[i:]
@@ -388,7 +429,11 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     rest = strip_prefix(argv)
     name = command_name(argv)
     args = rest[1:]
-    seg = replace(ctx, cwd=cwd)
+    prefix = argv[:len(argv) - len(rest)]
+    seg = replace(ctx, cwd=cwd, xargs_fill=(*ctx.xargs_fill, *_xargs_fill(prefix)))
+
+    if _xargs_filled(rest[:1], seg.xargs_fill) == [XARGS_INPUT]:  # GNU xargs는 명령 이름도 바꾼다
+        return f"`xargs`의 치환 문자열이 명령 이름 `{rest[0]}`에 들어 있어 어떤 명령을 돌리는지 볼 수 없다. `{{}}`처럼 겹치지 않는 문자열을 쓴다"
 
     if name in ("bash", "sh", "zsh", "dash"):
         script = shell_c_script(args)
@@ -399,8 +444,10 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
 
     if name == "git":
         # xargs 뒤의 git은 글에 없는 단어를 더 받는다. `xargs git config core.hooksPath`는 읽기처럼 보이는 쓰기다
-        via_xargs = any(_is_xargs(a) for a in argv[:len(argv) - len(rest)])
-        reason = check_git([*args, XARGS_INPUT] if via_xargs else args, seg)
+        via_xargs = any(_is_xargs(a) for a in prefix)
+        words = [*args, XARGS_INPUT] if via_xargs else args
+        # `-I HEAD`는 글의 단어도 바꾼다. 어느 자리까지 바꾸는지는 옵션(`-J`, `-R`)과 구현마다 달라 글 그대로와 바뀐 뒤를 둘 다 본다
+        reason = check_git(words, seg) or check_git(_xargs_filled(words, seg.xargs_fill), seg)
         if reason:
             return reason
     if name == "gh":
@@ -611,16 +658,18 @@ def check_shared_git(sub: str, rest: list[str], gitdir: str, paths: list[str], c
     return None if reason is None or _scratch_repo(gitdir, paths, ctx) else reason
 
 
-def _git_locations(text: str) -> tuple[str, ...]:
+def _git_locations(text: str, fill: tuple[str, ...] = ()) -> tuple[str, ...]:
     """명령 글에서 git이 볼 곳을 바꾸는 말의 값: `GIT_DIR=x` 같은 대입과 모르는 곳으로 가는 `cd`.
 
     대입은 앞붙임만이 아니다(`export GIT_DIR=x; git …`, `GIT_DIR=x bash -c 'git …'`). 어느 명령까지 듣는지 따지지 않고
     글 안의 git 명령 전부에 적용한다. 이 값은 자기 브랜치·임시 레포 예외를 없애는 데만 쓰여, 잘못 세도 그 예외만 잃는다.
+    `fill`은 xargs가 입력으로 바꿔 넣을 글자들이다. `xargs -I X sh -c 'cd X && git …'`의 `X`도 모르는 곳이다.
     """
     names = tuple(f"{name}=" for name in GIT_LOCATION_ENV)
     toks = tokens(text)
     found = [tok.split("=", 1)[1] for tok in toks if tok.startswith(names)]
-    found += [tok for before, tok in zip(toks, toks[1:]) if before in ("cd", "pushd") and ("$" in tok or "`" in tok)]
+    found += [tok for before, tok in zip(toks, toks[1:])
+              if before in ("cd", "pushd") and ("$" in tok or "`" in tok or any(s in tok for s in fill))]
     return tuple(found)
 
 
