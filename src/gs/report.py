@@ -171,7 +171,8 @@ def measurements(r) -> str:
 
     table("worker 시도별 실제 모델·effort와 소요", ["티켓/시도/단계", "계열", "모델/effort", "소요(초)", "처리 대기(초)"], [
         (f"{x['ticket']}/{x['attempt']}/{x['phase']}", x['model'], model(x),
-         x.get('seconds', '미종료'), x.get('processing_wait_seconds', '기록 없음')) for x in data.get('workers', [])])
+         x['seconds'] if x.get('seconds') is not None else '기록 없음' if x.get('worker_exited_at') else '미종료',
+         x.get('processing_wait_seconds', '기록 없음')) for x in data.get('workers', [])])
     reviewers = data.get("reviewers", [])
     table("리뷰어별 소요와 채택(판단이 fix인 지적, 해결 수와 다름)",
           ["리뷰어/회차", "티켓", "모델/effort", "소요(초)", "지적", "채택(fix)"], [
@@ -189,6 +190,8 @@ def measurements(r) -> str:
         totals[rec['label']] += seconds if seconds is not None else state.seconds_between(rec['started_at'], state.now())
     table("마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)", ["단계", "소요(초)"],
           [(label, round(seconds, 3)) for label, seconds in totals.items()])
+    if any(rec.get("interrupted") for rec in data.get("finish_stages", [])):
+        lines.append("중단된 마무리 단계는 마지막 상태 저장까지의 시간만 포함한다(실제 소요의 하한).")
     return "\n".join(lines) + "\n\n"
 
 

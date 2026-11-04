@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import support
-from gs import config, metrics, report, review, state, status, transient, verify, worker
+from gs import config, go, metrics, report, review, state, status, transient, verify, worker
 from gs.feature import Ticket
 
 
@@ -45,6 +45,44 @@ class MetricsTest(unittest.TestCase):
         self.assertAlmostEqual(got['seconds'], 60, places=4)
         self.assertGreaterEqual(got['processing_wait_seconds'], 30)
         self.assertGreaterEqual(got['processing_started_at'], got['worker_exited_at'])
+
+    def test_old_finished_worker_has_unknown_time_and_its_own_phase(self):
+        for phase, dirname in [('worker', '3'), ('fix', '3/fix'), ('fix2', '3/fix2-net1')]:
+            with self.subTest(phase=phase):
+                ts = self.st.ticket('01')
+                ts.phases = []
+                state.begin_phase(ts, phase, 'codex', attempt=3)
+                metrics.worker_selection(ts, 'large', config.ModelEffort('actual', 'high'))
+                state.begin_phase(ts, 'review', 'claude')
+                state.begin_phase(ts, phase, 'agy', attempt=4)
+                metrics.worker_selection(ts, 'medium', config.ModelEffort('other', 'low'))
+                state.begin_phase(ts, 'review', 'claude')
+                directory = self.root / dirname
+                directory.mkdir(parents=True, exist_ok=True)
+                job = worker.Job(Ticket('01', 't', [], 'codex', 'claude', self.root / 'ticket'),
+                                 self.root, directory)
+                job.exit_file.write_text('0')
+                metrics.worker_finished(self.run, job)
+                rec = state.load(self.root, 'demo').metrics['workers'][-1]
+                self.assertEqual((rec['attempt'], rec['phase'], rec['model'], rec['actual_model'], rec['effort']),
+                                 (3, phase, 'codex', 'actual', 'high'))
+                self.assertEqual(rec['started_at'], '')
+                self.assertIsNone(rec['seconds'])
+                self.assertTrue(rec['worker_exited_at'])
+                self.assertGreaterEqual(rec['processing_wait_seconds'], 0)
+                text = report.measurements(SimpleNamespace(st=self.st, order=['01']))
+                self.assertIn(f'| 01/3/{phase} | codex | actual/high | 기록 없음 |', text)
+
+    def test_old_finished_worker_without_phase_history_still_records_exit(self):
+        directory = self.root / '2'
+        directory.mkdir()
+        job = worker.Job(Ticket('01', 't', [], 'codex', 'claude', self.root / 'ticket'), self.root, directory)
+        job.exit_file.write_text('0')
+        metrics.worker_finished(self.run, job)
+        rec = state.load(self.root, 'demo').metrics['workers'][0]
+        self.assertEqual((rec['attempt'], rec['phase'], rec['model']), (2, 'worker', 'codex'))
+        self.assertIsNone(rec['seconds'])
+        self.assertTrue(rec['worker_exited_at'])
 
     def test_verify_records_each_retry_command_sha_time_and_result(self):
         spec = SimpleNamespace(verify='test command', verify_retries=1)
@@ -91,6 +129,33 @@ class MetricsTest(unittest.TestCase):
                 mock.patch.object(self.run, 'save', side_effect=OSError('measurement storage')):
             with self.assertRaisesRegex(ValueError, 'original failure'):
                 action(self.run)
+
+    def test_resume_closes_interrupted_stages_before_overwriting_last_save_time(self):
+        self.st.metrics['finish_stages'] = [
+            dict(label='total', started_at='2020-01-01T00:00:00+00:00', ended_at='', seconds=None),
+            dict(label='checks', started_at='2020-01-01T00:00:10+00:00', ended_at='', seconds=None),
+            dict(label='total', seconds=5, ended_at='2020-01-01T00:00:00+00:00'),
+        ]
+        state.save(self.root, self.st)
+        raw = json.loads(state.path(self.root).read_text())
+        raw['updated_at'] = '2020-01-01T00:00:30+00:00'
+        state.path(self.root).write_text(json.dumps(raw))  # finally 없이 종료된 state
+        r = SimpleNamespace(rundir=self.root, repo=self.root, name='demo', only=None)
+        r.save = lambda: state.save(self.root, r.st)
+        with mock.patch.object(go, '_graph', return_value={}):
+            go._begin(r)
+            go._begin(r)  # 次の再開でも終了時刻・時間を増やさない
+        rows = state.load(self.root, 'demo').metrics['finish_stages']
+        self.assertEqual([x['seconds'] for x in rows], [30, 20, 5])
+        self.assertTrue(all(x['ended_at'] == raw['updated_at'] and x['interrupted'] for x in rows[:2]))
+        # 再開後の進行中段階は従来通り報告時点までを足す。12時間の停止は足さない。
+        r.st.metrics['finish_stages'].append(
+            dict(label='total', started_at='2020-01-01T12:00:00+00:00', seconds=None))
+        with mock.patch.object(state, 'now', return_value='2020-01-01T12:00:10+00:00'):
+            text = report.measurements(r)
+        self.assertIn('| total | 45.0 |', text)
+        self.assertIn('| checks | 20.0 |', text)
+        self.assertIn('실제 소요의 하한', text)
 
     def test_old_state_status_and_report_without_metrics(self):
         run = self.root / '.goldstack/work/demo/run'

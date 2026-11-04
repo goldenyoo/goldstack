@@ -216,6 +216,7 @@ def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
 def _begin(r: Run) -> None:
     """state.json을 읽어 이번 실행을 시작한다. 지난 실행이 죽어 running으로 남은 티켓은 실패로 세지 않는다."""
     st = state.load(r.rundir, r.name)
+    metrics.close_interrupted_stages(st)
     r.g = _graph(r)
     r.order = graph.topo_order(r.g)
     for tid, ts in sorted(st.tickets.items()):

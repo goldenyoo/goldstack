@@ -69,16 +69,25 @@ def worker_finished(r, job) -> None:
     rows = r.st.metrics.setdefault("workers", [])
     rec = next((x for x in reversed(rows) if x["dir"] == str(job.rundir)), None)
     if rec is None:  # 옛 state에서 재개한 worker도 종료·처리 시각은 남긴다
-        worker_started(r, job)
-        rec = next(x for x in reversed(rows) if x["dir"] == str(job.rundir))
-        rec["started_at"] = ""  # 새로 실행한 것으로 꾸미지 않는다
+        phase = "worker" if job.rundir.name.isdigit() else job.rundir.name.split("-net", 1)[0]
+        directory = job.rundir if phase == "worker" else job.rundir.parent
+        attempt = int(directory.name) if directory.name.isdigit() else None
+        # 마지막 단계는 이미 review·network일 수 있다. 이 실행 디렉터리에 맞는 worker 단계만 쓴다.
+        p = next((p for p in reversed(r.st.ticket(job.ticket.id).phases)
+                  if p.get("phase") == phase and p.get("attempt") == attempt), {})
+        rec = {"ticket": job.ticket.id, "dir": str(job.rundir), "attempt": attempt,
+               "phase": phase, "model": p.get("model", job.ticket.model),
+               **{k: p.get(k, "") for k in ("actual_model", "effort", "tier")},
+               "started_at": "", "seconds": None, "worker_exited_at": "", "processing_started_at": ""}
+        rows.append(rec)  # 실제 시작 측정이 없으므로 새로 실행한 시각·0초를 만들지 않는다
     if rec.get("processing_started_at"):
         return  # 네트워크 대기로 세워 둔 worker의 첫 처리 시각을 보존한다
     rec["processing_started_at"] = datetime.now().astimezone().isoformat()
     if job.exit_file.exists():
         rec["worker_exited_at"] = datetime.fromtimestamp(job.exit_file.stat().st_mtime).astimezone().isoformat()
         rec["processing_wait_seconds"] = state.seconds_between(rec["worker_exited_at"], rec["processing_started_at"])
-        rec["seconds"] = state.seconds_between(rec["started_at"], rec["worker_exited_at"])
+        if rec.get("started_at"):
+            rec["seconds"] = state.seconds_between(rec["started_at"], rec["worker_exited_at"])
     r.save()
 
 
@@ -162,6 +171,16 @@ def reviewed(fn):
         archive_review(kwargs, rec)
         return rec
     return wrapped
+
+
+@best_effort
+def close_interrupted_stages(st) -> None:
+    """지난 프로세스의 미완 단계는 마지막 저장까지의 하한으로 닫아 중단 기간을 제외한다."""
+    for rec in st.metrics.get("finish_stages", []):
+        if rec.get("seconds") is None and not rec.get("interrupted"):
+            ended_at = st.updated_at or rec["started_at"]
+            rec.update(ended_at=ended_at, seconds=state.seconds_between(rec["started_at"], ended_at),
+                       interrupted=True)
 
 
 @best_effort
