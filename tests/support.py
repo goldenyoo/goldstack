@@ -179,7 +179,7 @@ feature: demo
 verify: test ! -f BROKEN
 max_workers: 1
 ---
-"""  # 02부터의 시험은 순차(max_workers 1)로 돈다. 병렬 시험은 ParallelTest
+"""  # worker는 한 번에 하나다(max_workers 1). 병렬 시험은 ParallelTest. 리뷰 중인 티켓은 자리를 비우니 티켓 순서가 중요하면 blocked_by로 고정한다
 
 
 def ticket(tid, deps="[]", title=None):
@@ -278,9 +278,9 @@ class GoTest(unittest.TestCase):
                 args = tuple(arg.replace("gs/demo/integration", head) for arg in args)
         return sh(self.repo, "git", *args)
 
-    def add_ticket(self, tid, title=None, push=True):
+    def add_ticket(self, tid, title=None, push=True, deps="[]"):
         sh(self.repo, "git", "pull", "-q", "--ff-only", self.REMOTE, self.BASE)
-        (self.repo / ".goldstack/work" / "demo" / "tickets" / f"{tid}-t.md").write_text(ticket(tid, title=title))
+        (self.repo / ".goldstack/work" / "demo" / "tickets" / f"{tid}-t.md").write_text(ticket(tid, deps, title=title))
         sh(self.repo, "git", "add", "-A")
         sh(self.repo, "git", "commit", "-qm", f"ticket {tid}")
         if push:
