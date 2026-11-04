@@ -503,9 +503,16 @@ class Active:
     parked: bool = False  # 끝났지만 끊김 때문에 리뷰를 미뤘다. 돌아오면 끝 줄을 다시 찍지 않는다
 
     def quiet_seconds(self) -> float:
-        """일시 오류 없이 돈 시간. 시작 이후 마지막 Reconnecting부터 잰다."""
-        last = self.watch.last if self.watch else None
-        return time.monotonic() - max(self.started, last or 0.0)
+        """일시 오류 없이 돈 시간. 시작 이후 마지막 Reconnecting부터 잰다. Reconnecting 뒤 다른 이벤트가 아직 없으면 0이다."""
+        if self.watch is None:
+            return time.monotonic() - self.started
+        try:
+            self.watch.poll()  # _wait_any의 sleep 동안 쓰인 로그까지 본다
+        except OSError:  # 못 읽으면 회복으로 보지 않는다. 티켓 오류로 다루는 것은 바로 뒤 _wait_any다
+            return 0.0
+        if self.watch.since is not None:
+            return 0.0
+        return time.monotonic() - max(self.started, self.watch.last or 0.0)
 
     def idle(self, repo: Path) -> float:
         """로그 출력 또는 브랜치 커밋이 바뀌면 유휴 시계를 다시 시작한다."""

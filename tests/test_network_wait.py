@@ -13,7 +13,7 @@ from unittest import mock
 import support
 from support import alive, sh, ticket
 
-from gs import cli, config, review, state, transient, worker
+from gs import cli, config, feature, go, review, state, transient, worker
 
 ERROR_RESULT = '{"type":"result","is_error":true,"api_error":"connection_failed","terminal_reason":"api_error",' \
     '"result":"API Error: Connection refused (ECONNREFUSED)"}'
@@ -186,6 +186,30 @@ class NetworkTest(support.GoTest):
         self.tickets({"11": ticket("11"), "12": ticket("12"), "13": ticket("13", '["12"]')}, spec_workers=2)
         code, out, err = self.go("--only", "11,12,13")
         self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.ticket_state("11").failures, 0, out)
+        self.assertIn("■ 네트워크 회복", out)
+
+    def test_restarted_codex_still_reconnecting_is_not_recovered(self):
+        """다시 띄운 codex가 Reconnecting 뒤 조용하면 5분(0.25초)이 지나도 회복이 아니다. 다른 이벤트가 나온 뒤에야 13이 시작한다."""
+        self.fake("codex", textwrap.dedent(f'''\
+            if [ "$n" = 1 ]; then touch "$here/cut"; echo '{RECONNECTING}'; exit 1; fi
+            echo '{RECONNECTING}'
+            sleep 1.5
+            if [ -f "$here/n_13" ]; then touch "$here/early"; fi
+            echo '{{"type":"item.completed"}}'
+            for i in $(seq 400); do [ -f "$here/n_13" ] && break; sleep 0.05; done
+            [ -f "$here/n_13" ] || exit 7
+            echo x > file_11; git add -A; git commit -qm t11
+        '''))
+        self.fake("claude", textwrap.dedent('''\
+            if [ "$GS_TICKET" = 12 ]; then for i in $(seq 100); do [ -f "$here/cut" ] && break; sleep 0.05; done; fi
+            echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
+        '''))
+        self.tickets({"11": worker_ticket("11", model="codex", reviewer="claude"), "12": ticket("12"),
+                      "13": ticket("13", '["12"]')}, spec_workers=2)
+        code, out, err = self.go("--only", "11,12,13")
+        self.assertEqual(code, 0, out + err)
+        self.assertFalse((self.bin / "early").exists(), out)
         self.assertEqual(self.ticket_state("11").failures, 0, out)
         self.assertIn("■ 네트워크 회복", out)
 
@@ -438,6 +462,33 @@ class UnitTest(unittest.TestCase):
                 f.write("}\n")
             self.assertEqual(watch.stalled_for(), 0)  # 다른 이벤트
             self.assertIsNotNone(watch.last)
+
+    def _codex_active(self, log, **kw):
+        t = feature.Ticket("01", "t", [], [], "codex", "claude", "", "", Path("01.md"))
+        return go.Active(t, worker.Finished(worker.Job(t, Path("."), Path(".")), 0), "b", Path("."), "0",
+                         watch=transient.ReconnectWatch(log), **kw)
+
+    def test_quiet_seconds_reads_log_and_stays_zero_while_reconnecting(self):
+        with tempfile.TemporaryDirectory() as d:
+            log = Path(d) / "worker.log"
+            a = self._codex_active(log, started=time.monotonic() - 100)
+            self.assertGreaterEqual(a.quiet_seconds(), 100)  # 로그가 없으면 시작부터 잰다
+            log.write_text(RECONNECTING + "\n")
+            self.assertEqual(a.quiet_seconds(), 0)  # 아무도 poll하지 않은 Reconnecting도 본다
+            a.watch.since -= 100
+            a.watch.last -= 100
+            self.assertEqual(a.quiet_seconds(), 0)  # 마지막 출력이 오래됐어도 재연결 중이면 회복이 아니다
+            with log.open("a") as f:
+                f.write('{"type":"item.completed"}\n')
+            self.assertGreaterEqual(a.quiet_seconds(), 100)  # 다른 이벤트가 나오면 마지막 Reconnecting부터 잰다
+            with log.open("a") as f:
+                f.write(RECONNECTING + '\n{"type":"item.completed"}\n')
+            self.assertLess(a.quiet_seconds(), 50)  # 새 Reconnecting이 시계를 다시 시작한다
+
+    def test_quiet_seconds_unreadable_log_is_not_recovery(self):
+        with tempfile.TemporaryDirectory() as d:  # 디렉터리는 FileNotFoundError가 아닌 OSError를 낸다
+            a = self._codex_active(Path(d), started=time.monotonic() - 100)
+            self.assertEqual(a.quiet_seconds(), 0)
 
     def test_progress_line_and_status_show_wait(self):
         st = state.State(feature="demo", started_at="2026-11-04T10:00:00+09:00")
