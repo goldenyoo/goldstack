@@ -6,6 +6,7 @@
 |---|---|
 | `cli.py` | `gs` 명령줄: `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `hook` |
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
+| `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
 | `doctor.py` | `gs doctor`: GitHub 병합·보호 설정 읽기, config 제안, `--write` |
 | `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, agy 배정 수, 환경 검사 |
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 리뷰·수정·재리뷰 띄우기(두 리뷰 동시), agy 호출 세기, 재개 뒤 멈춤, 요약 출력, 알림 |
@@ -22,6 +23,10 @@
 | `migrate.py` | `gs migrate` |
 | `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건 |
 | `git.py` | git 호출, 원격 URL에서 GitHub owner/repo 풀기(`github_repo`) |
+
+`gs go`(`cli.cmd_go`)·`gs doctor`는 시작할 때 설치 배포판의 `direct_url.json`에서 git URL·commit을 읽는다. 로컬 디렉터리 설치는 출처가 없다. `git ls-remote <설치 URL> main`(5초 제한)의 main commit이 다르면 `gs self-update` 경고만 내고, 조회 실패·출처 없음은 건너뛴다. `claude plugin list --json`(`GS_CLAUDE`)에서 goldstack 플러그인 버전이 gs 버전과 달라도 경고하며, 목록을 못 읽으면 건너뛴다. 대상 레포의 원격 주소는 설치 출처로 쓰지 않는다.
+
+선택 설정 `[goldstack] requires = ">=0.1"`은 최소 버전 하나(숫자 1–3부분)를 받는다. 형식 오류는 config 오류이며, `gs check`·`gs go`는 설치 버전이 낮으면 실행을 거부하고 `gs self-update`를 안내한다. 생략하면 최소 버전 검사를 하지 않는다. 비교 때 `0.1`과 `0.1.0`은 같다.
 
 ## 대상 레포의 파일 배치
 

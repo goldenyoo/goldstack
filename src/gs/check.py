@@ -10,7 +10,7 @@ from itertools import combinations
 from pathlib import Path, PurePosixPath
 
 from . import feature as featmod
-from . import config, git, graph
+from . import config, git, graph, version
 
 
 def _glob_tokens(pattern: str) -> list[str]:
@@ -163,6 +163,8 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
     cfg, problems = config.load(repo)
     if cfg is None:
         return featmod.Feature(name=name, root=featmod.work_dir(repo, name), spec=None, problems=problems), []
+    if error := version.requirement_error(cfg.goldstack.requires):
+        problems.append(featmod.Problem("오류", config.CONFIG_PATH, error))
     feat = featmod.load(repo, name)
     feat.problems[:0] = problems + notify_problems(repo, cfg)
     g = {t.id: t.blocked_by for t in feat.tickets.values()}

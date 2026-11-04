@@ -7,7 +7,7 @@ from importlib import metadata
 from pathlib import Path
 
 from . import feature as featmod
-from . import config
+from . import config, version
 from .check import check
 
 
@@ -95,6 +95,12 @@ def _ids(raw: str | None) -> list[str] | None:
 def cmd_go(repo: Path, names: list[str], only: list[str] | None) -> int:
     from .go import NETWORK_ABORT, go
     from . import state
+
+    version.warn(repo, sys.stderr)
+    cfg, _ = config.load(repo)
+    if cfg is not None and (error := version.requirement_error(cfg.goldstack.requires)):
+        print(f"오류: {error}", file=sys.stderr)
+        return 1
 
     if len(names) == 1:
         return go(repo, names[0], only)
