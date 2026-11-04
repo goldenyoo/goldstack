@@ -17,6 +17,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, help="레포 루트(기본: 현재 디렉터리에서 위로 .git을 찾는다)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    from .selfupdate import LIMIT
+    p = sub.add_parser("self-update", help="CLI와 플러그인을 갱신한다", epilog=LIMIT)
+    p.add_argument("--from", dest="source", help="설치 기록 대신 사용할 git 주소")
+    p.add_argument("--version", dest="ref", default="main", help="설치할 태그(기본: main)")
+
     sub.add_parser("init", help=".goldstack 설정 파일과 비밀 파일 예제를 만든다")
     p = sub.add_parser("doctor", help="GitHub 병합·base 보호 설정을 읽고 config 값을 제안한다")
     p.add_argument("--write", action="store_true", help="제안된 키만 config.toml에 쓴다(주석 보존)")
@@ -55,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
             return hook_agy.main()
         from . import hook
         return hook.main([args.event])
+    if args.cmd == "self-update":
+        from .selfupdate import self_update
+        return self_update(args.repo or Path.cwd(), args.source, args.ref, sys.stdout, sys.stderr)
     repo = args.repo or featmod.find_repo_root(Path.cwd())
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
