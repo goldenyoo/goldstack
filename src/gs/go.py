@@ -7,7 +7,7 @@ worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰�
 worker를 한 번 더 띄우고 다시 재리뷰한다. 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
 순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(마지막에 한 번) → 병합.
 gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 state에 세고 config `[agy] max_calls_per_run`에 닿으면 더 띄우지 않는다.
-끝에는 보고서·PR·base 검증·revert를 한다(08).
+끝에는 보고서·PR·base 검증·revert를 한다(08). 지난 마무리가 남았으면 그것만 끝내고 멈춘다. 남은 티켓은 다음 gs go가 한다.
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
@@ -127,13 +127,9 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
                 if not prepared:
                     finished = False
-                elif r.st.finish.get("phase") in finish.RESUME_PHASES:
-                    r.ihead = git.sha(r.iwt, "HEAD")
-                    # 회복 뒤 새 범위를 이어 돌릴 수 있어, 마지막 마무리까지 integration을 둔다.
-                    url, finished = _finish_run(r, cleanup=False)
+                elif _resuming(r):
+                    url, finished = _resume_finish(r)
                 else:
-                    finished = True
-                if finished:
                     _loop(r)
                     url, finished = _finish_run(r)
         except git.GitError as e:
@@ -160,6 +156,29 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         if cfg.notify.telegram:
             _notify(r, url, ok)
     return 0 if ok else 1
+
+
+def _resuming(r: Run) -> bool:
+    """지난 마무리가 끝나지 않았다. 새 worker보다 그것을 먼저 끝낸다. verified·reverted여도 base 보고서를 아직 시도하지 않았으면 그렇다."""
+    phase = r.st.finish.get("phase")
+    return phase in finish.RESUME_PHASES or (phase in finish.BASE_REPORT_PHASES
+                                             and not r.st.finish.get("base_report_tried"))
+
+
+def _resume_finish(r: Run) -> tuple[str | None, bool]:
+    """지난 마무리만 끝내고 이 실행은 멈춘다(_loop·두 번째 마무리 없음). 남은 티켓은 다음 gs go가 base를 합친
+    integration 위에서 한다. 그래서 남은 티켓이 있으면 integration을 정리하지 않는다."""
+    r.ihead = git.sha(r.iwt, "HEAD")
+    left = _pending(r)
+    result = _finish_run(r, cleanup=not left)
+    if left and r.st.finish.get("phase") in finish.BASE_REPORT_PHASES:
+        say(f"■ 남은 티켓 {left}개 → 다음 gs go")
+    return result
+
+
+def _pending(r: Run) -> int:
+    """이번 범위에서 아직 시작하지 않은 티켓 수."""
+    return sum(r.st.tickets[tid].status == state.PENDING for tid in r.order)
 
 
 def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
@@ -368,7 +387,7 @@ def _drop_kept(r: Run, tid: str, path: Path) -> bool:
         if not valid or wt not in current or wt == r.iwt.resolve():
             say(f"[{tid}] 경고: 남긴 경로가 이 티켓의 worktree가 아니라 정리하지 않는다: {path}")
             return False
-        if not git.is_clean(wt):
+        if not setup.is_clean(wt):
             say(f"[{tid}] 경고: 남긴 worktree: {wt} (미커밋 변경)")
             return False
         branch = ticket_branch(r.name, tid) + suffix
@@ -376,6 +395,7 @@ def _drop_kept(r: Run, tid: str, path: Path) -> bool:
             # 분리 HEAD나 다른 브랜치의 커밋은 이 worktree만 가리킬 수 있다. 지우면 잃으니 남긴다.
             say(f"[{tid}] 경고: 남긴 worktree의 브랜치가 {branch}가 아니라 정리하지 않는다: {wt}")
             return False
+        setup.discard_artifacts(wt)
         git.run(r.repo, "worktree", "remove", str(wt))  # --force 없이: 검사 뒤 생긴 변경은 git이 지킨다
         say(f"[{tid}] 남긴 worktree 정리: {wt}")
         if git.branch_exists(r.repo, branch):
@@ -414,13 +434,14 @@ def _cleanup_merged(r: Run, tid: str) -> None:
             if wt not in current or current[wt] != ts.branch:
                 say(f"[{tid}] 경고: worktree의 브랜치가 달라 정리를 건너뛴다: {wt}")
                 return
-            if not git.is_clean(wt):
+            if not setup.is_clean(wt):
                 if ts.worktree not in ts.kept_worktrees:
                     _set(r, tid, kept_worktrees=[*ts.kept_worktrees, ts.worktree])
                 say(f"[{tid}] 경고: 남긴 worktree: {wt} (미커밋 변경)")
                 return
         if wt and wt in current:
             # 검사 뒤 생긴 변경도 git이 지키도록 --force는 쓰지 않는다.
+            setup.discard_artifacts(wt)
             git.run(r.repo, "worktree", "remove", str(wt))
             say(f"[{tid}] worktree 정리: {wt}")
         if ts.worktree in ts.kept_worktrees:
@@ -611,6 +632,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
             if not setup.run(r.cfg, wt, rundir / "setup.log").ok:
                 _fail(r, t, "준비 실패", retry=False)
                 return None
+            setup.remember(wt)
             _phase(r, t.id, "worker", t.model)
         worker.write_brief(job, r.feat.spec, r.name, branch, summary)
         adapter = adapters.for_model(t.model, r.cfg.models)
@@ -677,7 +699,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
             return fail(why + (f" ({note})" if note else ""))
         if commits == 0:
             return fail("커밋 없음")
-        if not git.is_clean(wt):
+        if not setup.is_clean(wt):
             say(f"[{t.id}] 경고: worktree에 커밋 안 된 변경이 남았다(병합에 들어가지 않는다)")
         try:
             todo = _review(r, a)
@@ -907,7 +929,7 @@ def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> l
     why = error or ("" if code == 0 else f"종료 코드 {code}") or ("" if kept else "이전 커밋을 지웠다") \
         or ("" if commits else "커밋 없음")
     if not why:
-        if not git.is_clean(wt):
+        if not setup.is_clean(wt):
             say(f"[{t.id}] 경고: 수정 worker가 커밋 안 된 변경을 남겼다(병합에 들어가지 않는다)")
         _mark_fixes(r, t, nth, review.ATTEMPTED)
         ids = ", ".join(str(f["id"]) for f in _todo(r, t, nth))
@@ -1122,6 +1144,8 @@ def _message(r: Run, url: str | None, ok: bool) -> str:
               for tid in r.order if r.st.tickets[tid].status == state.FAILED]
     if failed:
         tickets += f" ({', '.join(failed)})"
+    if f.get("phase") in finish.BASE_REPORT_PHASES and (left := _pending(r)):
+        tickets += f" · 남은 티켓 {left}개 → 다음 gs go"
     return f"❌ {r.name} · {outcome} · {tickets} · 보고서 {work_rel(r.name)}/report.md"
 
 

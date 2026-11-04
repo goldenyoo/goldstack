@@ -7,6 +7,38 @@ from pathlib import Path
 
 from . import git, verify
 
+WARNING = "경고: setup이 추적 파일을 바꿨다 → 되돌림: "
+
+
+def warnings(logs) -> list[str]:
+    """지난 시도도 포함해 로그의 복구 경고를 보고서에 보존한다."""
+    return list(dict.fromkeys(line for log in sorted(logs)
+                              for line in log.read_text(encoding="utf-8", errors="replace").splitlines()
+                              if line.startswith(WARNING)))
+
+
+def _restore_tracked(wt: Path) -> str:
+    entries = iter(git.run(wt, "status", "--porcelain", "-z").stdout.split("\0"))
+    paths = []
+    for entry in entries:
+        if not entry or entry.startswith("?? "):
+            continue
+        paths.append(entry[3:])
+        if "R" in entry[:2] or "C" in entry[:2]:
+            paths.append(next(entries))  # -z의 rename은 새 경로, 이전 경로 순서다.
+    paths = list(dict.fromkeys(paths))
+    if not paths:
+        return ""
+    original = set(git.run(wt, "ls-tree", "-r", "--name-only", "-z", "HEAD").stdout.split("\0"))
+    # setup이 stage까지 했더라도 되돌린다. 새 설치 파일은 untracked로 남긴다.
+    git.run(wt, "--literal-pathspecs", "reset", "-q", "HEAD", "--", *paths)
+    tracked = [p for p in paths if p in original]
+    if not tracked:
+        return ""
+    git.run(wt, "--literal-pathspecs", "checkout", "--", *tracked)
+    names = [json.dumps(p, ensure_ascii=False) if any(c in p for c in "\r\n\t") else p for p in tracked]
+    return WARNING + ", ".join(names)
+
 
 def marker(wt: Path) -> Path:
     """worktree별 git 관리 디렉터리에 둔다. reset·clean에도 남고 새 worktree에는 없다."""
@@ -33,6 +65,12 @@ def clean(wt: Path, *options: str) -> None:
         literal = "".join("\\" + c if c in "\\*?[]" else c for c in path)
         excludes.extend(("-e", "/" + literal))
     git.run(wt, "clean", *options, *excludes)
+
+
+def discard_artifacts(wt: Path) -> None:
+    """worktree 제거 전에 기억한 untracked 산출물만 지운다. 새 변경은 git이 지킨다."""
+    if paths := _artifacts(wt):
+        git.run(wt, "--literal-pathspecs", "clean", "-f", "--", *paths)
 
 
 def is_clean(wt: Path) -> bool:
@@ -63,5 +101,9 @@ def run(cfg, wt: Path, log: Path) -> verify.Result:
         except BaseException:
             verify.stop(p)
             raise
+        finally:
+            if warning := _restore_tracked(wt):
+                stream.write(f"\n{warning}\n")
+                print(warning, flush=True)
         stream.write(f"\n종료 코드: {result.code}\n")
     return result
