@@ -18,6 +18,7 @@ integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base�
 
 finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행은 같은 PR을 다시 병합하지 않고
 base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
+integration 전체 검증 실패로 not_merged가 되면 실패한 검증 단계를 남겨 보고서가 로그·후보 티켓을 붙인다.
 """
 from __future__ import annotations
 
@@ -817,6 +818,8 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         _save(r, integration_ok=final_ok)
         merged = any(r.st.tickets[tid].status == state.MERGED for tid in r.order)
         if not merged or not final_ok:
+            if not final_ok:
+                _save(r, failed_verify="integration-final" if ok else "integration")
             _save(r, phase="not_merged", outcome="merged 티켓 없음 → 병합 안 함" if not merged else "integration 검증 실패 → 병합 안 함")
             _update(r, summary)
             return f.get("url"), False
