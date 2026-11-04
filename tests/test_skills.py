@@ -1,15 +1,17 @@
 """skill(/grill, /go, mattpocock에서 옮긴 다섯)과 grill 템플릿. 템플릿을 채운 결과가 `gs check`를 통과해야 skill이 가리키는 형식과 파서가 어긋나지 않는다."""
 import contextlib
 import io
+import re
 import tempfile
 import unittest
 from pathlib import Path
 
-from gs import cli, config, git
+from gs import cli, config, feature, frontmatter, git
 
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
 TEMPLATES = SKILLS / "grill" / "templates"
+WORD_LIMITS = {"grill": 450, "go": 400}  # grill은 티켓 분해 기준 여섯 줄(v7 04)만큼 더 받는다
 
 
 def skill_frontmatter(text):
@@ -31,13 +33,13 @@ def fill(text, **values):
 
 class SkillTest(unittest.TestCase):
     def test_user_invoked_and_short(self):
-        for name in ("grill", "go"):
+        for name, limit in WORD_LIMITS.items():
             text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
             data, body = skill_frontmatter(text)
             self.assertEqual(data["name"], name)
             self.assertEqual(data["disable-model-invocation"], "true")  # 사용자 호출 skill
             self.assertIn(f"/{name} <feature>", data["description"])
-            self.assertLess(len(body.split()), 400, f"{name}: skill 글이 길다")
+            self.assertLess(len(body.split()), limit, f"{name}: skill 글이 길다")
 
     def test_grill_reads_back_short_answers(self):
         body = (SKILLS / "grill" / "SKILL.md").read_text(encoding="utf-8")
@@ -65,6 +67,9 @@ class SkillTest(unittest.TestCase):
             spec = spec.replace("<셸 명령 한 줄. gs가 integration에서 직접 돌린다>", '"true"')
             (root / "spec.md").write_text(fill(spec, feature="demo"), encoding="utf-8")
             ticket = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
+            if "tier" not in feature.TICKET_KEYS + feature.TICKET_OPTIONAL:
+                # 엔진은 v7 티켓 08이 넣는다. 그 전에는 모르는 키라 경고가 난다. 08 뒤로는 이 줄을 타지 않는다
+                ticket = re.sub(r"^tier:.*\n", "", ticket, flags=re.M)
             (root / "tickets" / "01-a.md").write_text(fill(ticket, NN="01"), encoding="utf-8")
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -91,6 +96,42 @@ def steps(body):
         head, _, rest = rest.partition(f"\n{n + 1}. ")
         parts[n], n = head, n + 1
     return parts
+
+
+class GrillBreakdownTest(unittest.TestCase):
+    """티켓 분해 라운드의 기준과 그것을 담는 템플릿(goldstack-v7 04)."""
+
+    def test_step_requires_criteria(self):
+        step = steps((SKILLS / "grill" / "SKILL.md").read_text(encoding="utf-8"))[5]
+        for text in ("가중 일렬 경로", "평균 동시 실행 수", "`일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1`",
+                     "등급(`tier`)과 이유 한 줄", "문서 small", "재개 흐름 large",
+                     '`blocked_by`마다 이유를 "같은 파일"과 "앞 결과 필요"로 구분',
+                     "강하게 엮인 작은 직렬 티켓은 한 장으로 묶는다",
+                     "두 번째 리뷰어", "`second_reviewer`", "상태 전이·재개·revert 티켓에만",
+                     "티켓 `verify`는 문서·설정 티켓에만 좁게", "코드 티켓은 전체 검증",
+                     "templates/spec.md"):
+            self.assertIn(text, step)
+
+    def test_spec_template_table(self):
+        spec = (TEMPLATES / "spec.md").read_text(encoding="utf-8")
+        section = spec.partition("## 5. 티켓 그래프")[2].partition("\n## 6.")[0]
+        rows = [[cell.strip() for cell in line.strip("|").split("|")]
+                for line in section.splitlines() if line.startswith("|")]
+        self.assertEqual(rows[0], ["id", "제목", "blocked_by(이유)", "wave", "tier(이유)", "예상",
+                                   "구현", "리뷰 계열", "touches", "verify"])
+        self.assertEqual({len(row) for row in rows}, {len(rows[0])})
+        for text in ("같은 파일", "앞 결과 필요", "두 번째 리뷰어"):
+            self.assertIn(text, section)
+        self.assertRegex(section, r"(?m)^일렬 경로 \S+ 예상 \S+분 · 평균 동시 \S+$")
+
+    def test_ticket_template_keys(self):
+        ticket = fill((TEMPLATES / "ticket.md").read_text(encoding="utf-8"), NN="01")
+        data, _ = frontmatter.split(ticket)
+        self.assertEqual(data["tier"], "medium")
+        self.assertNotIn("verify", data)  # 선택 키라 쓰는 티켓만 주석을 푼다
+        line = re.search(r"^# (verify: .*)$", ticket, flags=re.M)
+        self.assertIsNotNone(line)
+        self.assertIsInstance(frontmatter.parse([line[1]])["verify"], str)
 
 
 class IdeaFlowTest(unittest.TestCase):

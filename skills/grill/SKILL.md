@@ -17,5 +17,11 @@ disable-model-invocation: true
 
    라운드 1의 첫 질문은 "이번 feature에 넣을 후보"다: `gs backlog`의 열린 아이디어마다 번호를 붙이고 여러 개를 고르게 한다(예: "1. 2,4"). 열린 아이디어가 없으면 이 질문을 뺀다. 끝에 "yes = 추천 전부 수락. 바꿀 것만 번호로"라고 적는다.
 4. **답을 받으면 먼저 기록한다.** 사람의 답이 짧으면(예: "yes", "2. C", "5. a,b") 기록 전에 답마다 "이렇게 읽었다"를 한 줄로 보이고, 어긋나면 고친다. 그 밖의 말을 하기 전에 spec의 "결정" 표와 "grill 기록"에 그 라운드의 질문·추천·확정 답과 사람이 되물은 것을 쓴다. 답이 frontmatter 값(`verify`, `max_workers` 등)이면 frontmatter도 같이 고친다. `gs`는 표가 아니라 frontmatter를 읽는다. 되물음에는 답하고 같은 라운드를 다시 확정받는다. 답으로 새로 열린 결정을 tree에 넣고 다음 라운드로 간다.
-5. **마지막 라운드는 티켓 분해다.** frontier가 비면 그래프(blocked_by), wave, 티켓별 구현 모델과 리뷰 계열(서로 다른 계열), `touches`(건드릴 파일의 레포 루트 기준 경로 목록, glob 허용), 범위 밖 목록을 표로 보이고 확인받는다. 확정 뒤 티켓 frontmatter에 `touches`를 적는다. 티켓 하나는 새 worker 한 문맥에서 끝나는 크기이고, 완료 조건은 검증 가능한 문장이다. 같은 파일을 건드릴 티켓은 blocked_by로 줄 세운다.
+5. **마지막 라운드는 티켓 분해다.** frontier가 비면 `templates/spec.md` §5 표와 범위 밖 목록을 보이고 확인받는다. 확정 뒤 티켓 frontmatter에 `touches`, `tier`, 쓰기로 한 `verify`를 적는다. 티켓 하나는 새 worker 한 문맥에서 끝나는 크기이고, 완료 조건은 검증 가능한 문장이다. 표를 짤 때:
+   - 표에 가중 일렬 경로와 평균 동시 실행 수를 함께 보인다. 예: `일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1`
+   - 티켓마다 등급(`tier`)과 이유 한 줄. 예: 문서 small, 재개 흐름 large
+   - `blocked_by`마다 이유를 "같은 파일"과 "앞 결과 필요"로 구분한다
+   - 강하게 엮인 작은 직렬 티켓은 한 장으로 묶는다
+   - 두 번째 리뷰어(`second_reviewer`)는 상태 전이·재개·revert 티켓에만 붙인다
+   - 티켓 `verify`는 문서·설정 티켓에만 좁게 쓰고, 코드 티켓은 전체 검증을 쓴다
 6. **쓰고 검사한다.** 확정되면 `.goldstack/work/$ARGUMENTS/tickets/NN-slug.md`와 `.goldstack/out-of-scope/<slug>.md`를 쓰고, `gs check $ARGUMENTS`가 오류·경고 없이 통과할 때까지 고친다. frontmatter가 결정 표와 맞는지 한 번 더 본다. 라운드 1에서 고른 아이디어 파일의 frontmatter를 `status: "taken"`, `feature: "$ARGUMENTS"`로 바꾼다. spec 상태 줄을 "grill 완료"로 바꾸고 `.goldstack/work/$ARGUMENTS/`, `.goldstack/out-of-scope/`, `.goldstack/ideas/`, `.goldstack/profile.md`만 커밋한다(`git add -- .goldstack/work/$ARGUMENTS .goldstack/out-of-scope .goldstack/ideas .goldstack/profile.md && git commit -m "grill: $ARGUMENTS"`. 없는 경로는 `git add`에서 뺀다. push는 `/go`가 한다). `/go $ARGUMENTS`로 시작하면 된다고 말하고 끝낸다. `gs go`는 돌리지 않는다.

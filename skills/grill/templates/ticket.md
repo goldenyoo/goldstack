@@ -3,8 +3,10 @@ id: "<NN>"
 title: "<한 줄 제목>"
 blocked_by: []
 touches: []
+tier: medium  # small|medium|large
 model: claude
 reviewer: codex
+# verify: "<좁은 검사 명령 한 줄>"  # 문서·설정 티켓만 앞의 `# `를 지워 쓴다. 코드 티켓은 이 줄을 지운다
 ---
 ## 목표
 <한두 문장>
