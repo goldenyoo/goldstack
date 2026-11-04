@@ -32,7 +32,7 @@ goldenyoo의 여러 머신에서 goldstack을 손 덜 가게 쓰도록 하는 �
 - `/overnight`는 지침의 존재만 시험했으므로 실제 동작은 첫 사용에서 확인해야 한다.
 - 이 자료의 검증 로그는 맥 경로에서 돈 것뿐이다. ubuntu CI는 병합을 막지 않고, 그 결과도 이 자료에 없어 리눅스 동작은 아직 확인되지 않았다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/12 병합 · main 검증 통과
 리뷰 지적: 수정됨 16 · 보고만 23
 
 ## Evidence
@@ -217,21 +217,22 @@ gs 검증별 측정
 | ticket-06/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | f897d48fd5b628e256f849be3bbf0b76c262b836 | 263.785982 | passed |
 | ticket-11/1 | uv run python -m unittest discover -s tests -p test_version.py && claude plugin validate . && uv build -q -o "$(mktemp -d)" | bd8f22fcf5462fc55fe08cbdf61f408de32e8367 | 1.45052 | passed |
 | integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 44303ed448f5ecd5c331b4c5b39e8130d2023346 | 262.615853 | passed |
+| main/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 589ad6a068f5f68b91a26813ef6190e5d39a96c9 | 262.518066 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 976.246 |
-| verify | 773.106 |
+| total | 1254.246 |
+| verify | 1035.698 |
 | summary | 174.656 |
-| report | 1.133 |
-| push | 4.98 |
-| publish | 4.393 |
-| merge-pr | 3.904 |
-| confirm-merge | 0.007 |
-| postmerge | 257.816 |
-| restore-reverts | 0.038 |
+| report | 0.231 |
+| push | 6.745 |
+| publish | 10.098 |
+| merge-pr | 8.444 |
+| confirm-merge | 0.016 |
+| postmerge | 521.643 |
+| restore-reverts | 0.057 |
 | report-to-base | 2.467 |
 | sync-integration | 2.25 |
 
@@ -354,6 +355,6 @@ gs 검증별 측정
 - 07 리뷰(claude) [low] src/gs/finish.py:411: 보고서가 상한에 가까우면 _pr_body의 자르기가 보고서 끝 코드 블록의 닫는 fence를 지워, 종료 키워드가 열린 코드 블록 안에 들어간다. 그러면 merge 방식 PR에서 issue가 닫히지 않을 수 있다. — 상태: 보고만
   근거: 코드 추적과 산수이며 실행하지 않았다. report._render는 '```sh ... ```\n'로 끝난다(report.py:404-411). `path.read_text(encoding="utf-8")[:report.MAX_BODY - len(suffix)] + suffix`에서 두 자리 번호 하나면 suffix가 12자라 59988자만 남는다. 보고서가 59990~60000자면 닫는 fence가 깨지고, 그 뒤에 키워드 줄이 붙는다. 이 함수의 docstring은 '보고서 길이 제한에도 종료 키워드가 잘리지 않게'라고 적었지만 fence는 고려하지 않았다. 해당 길이 구간은 좁다. GitHub가 코드 블록 안의 키워드를 무시한다는 것은 여기서 확인하지 못한 가정이다.; 판단: 해당 보고서 길이 구간이 좁고 GitHub가 코드 블록 안의 키워드를 무시한다는 전제도 확인되지 않았다.
 - 07 리뷰(claude) [low] src/gs/report.py:99: PR 본문은 보고서 전체를 평문으로 싣는다. 실패한 티켓의 제목·이유나 리뷰 지적 글에 종료 키워드와 issue 번호가 있으면, closes 목록에 없어도 PR 병합 때 그 issue가 닫힐 수 있다. — 상태: 보고만
-  근거: 코드 추적이며 실행하지 않았다. report.py:99는 표 행에 티켓 제목·상태·이유를 코드 블록 없이 넣고, report.py:108은 리뷰 지적의 claim을 평문 목록으로 넣는다. _pr_body는 그 보고서를 그대로 앞에 붙인다(finish.py:411). 시험은 fixture에 그런 글이 없는 경우만 본다(tests/test_feedback_inbox.py의 assertNotIn). 이 feature는 closes를 다루므로 리뷰 글에 그런 표현이 나오기 쉽다. 이 지적도 같은 경로로 보고서에 실리므로 키워드와 번호를 붙여 쓰지 않았다. GitHub가 표·목록 속 키워드를 인식한다는 것은 여기서 확인하지 못한 가정이다. 보고서를 PR 본문에 싣는 동작은 이 diff 전부터 있었고, closes가 생기면서 영향이 커졌다. 어긴 문장: 티켓 '병합되지 않은 티켓의 번호는 닫지 않는다'.; 판단: GitHub가 
+  근거: 코드 추적이며 실행하지 않았다. report.py:99는 표 행에 티켓 제목·상태·이유를 코드 블록 없이 넣고, report.py:108은 리뷰 지적의 claim을 평문 목록으로 넣는다. _pr_body는 그 보고서를 그대로 앞에 붙인다(finish.py:411). 시험은 fixture에 그런 글이 
 
 …(보고서가 길어 잘랐다. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run`)
