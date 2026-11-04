@@ -13,6 +13,9 @@ squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에�
 승인 등 보호 규칙에 막히면 PR을 열어 둔 채 phase `revert_pending`·`report_pending`("사람 승인 필요: <url>")으로
 멈추고, 다음 `gs go`가 그 PR을 다시 읽어 병합됐으면 이어 간다. feature PR이 막히면 `merge_pending`이다.
 
+verified·reverted의 마무리 순서: integration에 보고서 커밋 → base에 보고서 커밋(직접 push·보고서 PR) → base를
+integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base판과 같다. 그래서 다음 PR이 report.md에서 충돌하지 않는다.
+
 finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행은 같은 PR을 다시 병합하지 않고
 base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
 """
@@ -43,6 +46,12 @@ CHECK_INTERVAL = 10
 def _save(r, **fields) -> None:
     r.st.finish.update(fields)
     r.save()
+
+
+def _clear_error(r) -> None:
+    """성공했으니 지난 거부·일시 오류는 끝난 일이다. 보고서 Merge Danger에 남기지 않는다."""
+    if r.st.finish.pop("error", None) is not None:
+        r.save()
 
 
 def _gh(r, *args: str, deadline: float | None = None) -> str:
@@ -215,11 +224,16 @@ def merge_base(r) -> None:
     if (f.get("merge_method") == "squash" and f.get("phase") in ("merge_requested", "merge_pending")
             and not f.get("merge_sha")):
         return
+    if not _restore_reverts(r):
+        _merge(r, r.base_ref)
+
+
+def _restore_reverts(r) -> bool:
+    """base에 있는 이 feature 병합의 revert를 되돌린 커밋을 integration에 합친다. 합쳤으면 True(그 base까지 합친 것이다)."""
     _absorb_squash(r)
     reverts = _undone_reverts(r)
     if not reverts:
-        _merge(r, r.base_ref)
-        return
+        return False
     with tempfile.TemporaryDirectory(prefix="gs-restore-", dir=r.rundir) as tmp:
         wt = Path(tmp) / "base"
         git.run(r.repo, "worktree", "add", "--detach", str(wt), r.base_ref)
@@ -239,6 +253,7 @@ def merge_base(r) -> None:
     for d in done:
         print(f"■ {r.base}가 이 feature의 병합 {d['merge'][:8]}을 되돌렸다(revert {d['revert'][:8]}). "
               f"integration에서 그 revert를 다시 되돌렸다({d['commit'][:8]})", flush=True)
+    return True
 
 
 def _absorb_squash(r) -> None:
@@ -404,6 +419,7 @@ def _confirm(r, view: dict, error: str = "") -> bool:
         raise git.GitError(f"병합된 PR의 {r.base} 대상·병합 커밋을 확인할 수 없다")
     if view.get("headRefOid") != r.st.finish["merge_head"]:
         raise git.GitError("병합된 PR head가 검증한 integration과 다르다")
+    _clear_error(r)
     _save(r, merge_sha=sha, phase="merged", outcome=f"PR 병합 확인, {r.base} 검증 대기")
     return True
 
@@ -419,12 +435,22 @@ def _side_merge(r, url: str, sha: str) -> None:
         _gh(r, "merge", url, "--merge", "--match-head-commit", sha)
 
 
+def _find_side_pr(r, branch: str, sha: str) -> str:
+    """branch의 열린 PR. 없으면 이 sha로 이미 병합된 PR(지난 생성 응답을 못 받은 PR을 사람이 병합했을 수 있다)."""
+    return (_gh(r, "list", "--head", branch, "--base", r.base, "--state", "open", "--json", "url", "--jq", ".[0].url")
+            or _gh(r, "list", "--head", branch, "--base", r.base, "--state", "merged", "--json", "url,headRefOid",
+                   "--jq", f'[.[] | select(.headRefOid == "{sha}")][0].url // ""'))
+
+
 def _side_pr(r, kind: str, sha: str, title: str, body: str) -> bool:
     """보호된 base(direct_push = false)에 넣을 gs 커밋 sha를 `gs/<f>/<kind>` PR로 올려 병합을 시도한다.
 
     병합을 확인하면 True(`<kind>_merge`에 병합 커밋). 승인·검사 등에 막히면 PR을 열어 둔 채 phase
     `<kind>_pending`과 outcome을 남기고 False. 지난 실행이 연 같은 head의 PR은 다시 읽는다(병합됐으면 이어 간다).
-    사람이 닫았으면 base에 넣어야 하는 커밋이라 다시 연다. base에는 아무것도 push하지 않는다."""
+    사람이 닫았으면 base에 넣어야 하는 커밋이라 다시 연다. base에는 아무것도 push하지 않는다.
+
+    브랜치를 올린 뒤에는 PR 생성 응답이 실패하거나 비어도 GitHub에는 PR이 생겼을 수 있다. `<kind>_pr`을 모르는 채
+    `<kind>_pending`으로 멈추고, 다음 실행이 이 브랜치의 PR을 찾아 이어 간다."""
     f = r.st.finish
     branch = f"gs/{r.name}/{kind}"
     url = f.get(f"{kind}_pr") if f.get(f"{kind}_head") == sha else None
@@ -432,13 +458,21 @@ def _side_pr(r, kind: str, sha: str, title: str, body: str) -> bool:
     if view.get("state") not in ("OPEN", "MERGED"):
         # gs 전용 브랜치라 덮어쓴다(옛 시도의 커밋). base 브랜치가 아니다.
         git.run(r.repo, "push", "--force", r.remote, f"{sha}:refs/heads/{branch}")
-        url = _gh(r, "list", "--head", branch, "--base", r.base, "--state", "open", "--json", "url", "--jq", ".[0].url")
-        if not url:
-            created = _gh(r, "create", "--base", r.base, "--head", branch, "--title", title, "--body", body)
-            url = created.splitlines()[-1] if created else ""
-        if not url:
-            raise git.GitError(f"{branch} PR URL이 비었다")
-        _save(r, **{f"{kind}_pr": url, f"{kind}_head": sha})
+        f.pop(f"{kind}_pr", None)  # 옛 시도의 PR이다
+        # 여기서 끊겨도(오류·중단) 다음 gs go가 이 phase로 재개해 브랜치의 PR을 찾는다.
+        _save(r, phase=f"{kind}_pending", outcome=f"{kind} PR 확인 대기: {branch}", **{f"{kind}_head": sha})
+        try:
+            url = _find_side_pr(r, branch, sha)
+            if not url:
+                created = _gh(r, "create", "--base", r.base, "--head", branch, "--title", title, "--body", body)
+                url = created.splitlines()[-1] if created else ""
+            if not url:
+                raise git.GitError(f"{branch} PR URL이 비었다")
+        except (git.GitError, OSError) as e:
+            _save(r, error=str(e), outcome=f"{kind} PR 확인 실패: {branch} ({e})")
+            print(f"■ 경고: {kind} PR을 확인하지 못했다. 다음 gs go가 {branch}의 PR을 찾는다: {e}", flush=True)
+            return False
+        _save(r, **{f"{kind}_pr": url})
         print(f"■ {r.base}에 직접 push하지 않는다: {kind} PR {url}", flush=True)
         view = _view(r, url)
     refused = ""
@@ -467,6 +501,7 @@ def _side_pr(r, kind: str, sha: str, title: str, body: str) -> bool:
     git.run(r.repo, "fetch", "-q", r.remote, r.base)
     if not _ancestor(r.repo, oid, r.base_ref):
         raise git.GitError(f"{kind} PR {url}의 병합 커밋 {oid}가 {r.base_ref}에 없다")
+    _clear_error(r)
     _save(r, **{f"{kind}_merge": oid})
     return True
 
@@ -495,8 +530,8 @@ def _postmerge(r) -> bool:
     _check_merge(r)
     tip = git.sha(r.repo, r.base_ref)
     sha = f.get("revert_sha")
-    if sha and f.get("revert_pr") and f.get("revert_head") == sha:
-        # 지난 실행이 연 revert PR(승인 대기, 또는 병합 직후 중단)을 다시 읽는다. squash면 sha는 base에 들지 않는다.
+    if sha and f.get("revert_head") == sha:
+        # 지난 실행이 올린 revert 브랜치·PR(승인 대기, 생성 응답 오류, 병합 직후 중단)을 다시 읽는다. squash면 sha는 base에 들지 않는다.
         return _revert_pr(r, sha)
     if sha and _ancestor(r.repo, sha, r.base_ref):
         _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
@@ -632,8 +667,8 @@ def _report_side_pr(r, sha: str) -> None:
 
 def _report_pr(r, rel: str) -> None:
     """보호된 base: 최종 report.md를 `gs/<f>/report` PR로 올린다. 승인에 막히면 phase report_pending으로 멈춘다.
-    PR을 만들기 전 오류는 direct push 때처럼 경고뿐이다(base_report_tried). PR을 만든 뒤 오류(검사·병합 조회 등)는
-    미병합 PR이 남으니 report_pending으로 멈춰 다음 gs go가 그 PR을 다시 읽게 한다."""
+    브랜치를 올리기 전 오류는 direct push 때처럼 경고뿐이다(base_report_tried). 올린 뒤 오류(PR 생성 응답·검사·병합
+    조회 등)는 미병합 PR이 남았을 수 있으니 report_pending으로 멈춰 다음 gs go가 그 PR을 찾아 다시 읽게 한다."""
     f = r.st.finish
     sha = ""
     try:
@@ -644,16 +679,24 @@ def _report_pr(r, rel: str) -> None:
         _save(r, report_result={"phase": f["phase"], "outcome": f.get("outcome", "")})
         _report_side_pr(r, sha)
     except Exception as e:  # noqa: BLE001 — 보고서는 최선. 병합·검증 결과를 바꾸지 않는다
-        url = f.get("report_pr")
-        if url and f.get("report_head") == sha and "report_result" in f:
+        if sha and f.get("report_head") == sha and "report_result" in f:  # report_head는 브랜치를 올린 뒤에 남긴다
             # report_result는 남긴다. 다음 gs go가 PR 병합을 확인하면 기다리던 phase·outcome으로 돌아간다.
-            _save(r, error=str(e), phase="report_pending", outcome=f"report PR 확인 실패: {url} ({e})")
-            print(f"■ 경고: 최종 보고서 PR {url}을 확인하지 못했다. 다음 gs go가 다시 읽는다: {e}", flush=True)
+            where = f.get("report_pr") or f"gs/{r.name}/report"
+            _save(r, error=str(e), phase="report_pending", outcome=f"report PR 확인 실패: {where} ({e})")
+            print(f"■ 경고: 최종 보고서 PR {where}을 확인하지 못했다. 다음 gs go가 다시 읽는다: {e}", flush=True)
             return
         result = f.pop("report_result", {})
         _save(r, base_report_tried=True, phase=result.get("phase", f["phase"]),
               outcome=result.get("outcome", f.get("outcome", "")))
         print(f"■ 경고: 최종 보고서 PR을 {r.base}에 병합하지 못했다. 실행 결과는 그대로다: {e}", flush=True)
+
+
+def _merge_base_keep_report(r) -> None:
+    """base(보고서 커밋 포함)를 integration에 합쳐 push한다. report.md를 다시 쓰지 않아 base판과 어긋나지 않는다."""
+    git.run(r.repo, "fetch", "-q", r.remote, r.base)
+    merge_base(r)
+    _save(r, head=git.sha(r.iwt, "HEAD"))
+    _push(r)
 
 
 def _landed(r, commit: str, prev: dict) -> bool:
@@ -687,6 +730,9 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         except (git.GitError, OSError) as e:
             _save(r, error=str(e), outcome=f"마무리 실패: {e}")  # report_pending 그대로. 다음 gs go가 다시 읽는다
             raise git.GitError(str(e)) from e
+        if f["phase"] in PENDING_PHASES:
+            return f.get("url"), False
+        _merge_base_keep_report(r)
         if cleanup:
             clean.integration(r)
         return f.get("url"), f["phase"] == "verified"
@@ -755,13 +801,28 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         if f["phase"] not in (*CHECK_PHASES, "merge_requested", "merge_pending"):
             _update(r, summary)
         raise git.GitError(str(e)) from e
-    # base를 포함한 integration에 보고서를 쓴다. 다음 go가 보고서만 다시 병합하지 않는다.
-    git.run(r.repo, "fetch", "-q", r.remote, r.base)
-    merge_base(r)
-    _update(r, summary)
-    # 지난 실행이 이미 시도했으면 다시 하지 않는다(실패했어도 재시도 없음, spec 2-6). 새 마무리는 finish를 비운다.
-    if f["phase"] in BASE_REPORT_PHASES and not f.get("base_report_tried"):
+    final = f["phase"] in BASE_REPORT_PHASES
+    if final:
+        _clear_error(r)
+    if final and not f.get("base_report_tried"):
+        # 지난 실행이 이미 시도했으면 다시 하지 않는다(실패했어도 재시도 없음, spec 2-6). 새 마무리는 finish를 비운다.
+        # 보고서를 먼저 쓰고 base에 넣은 뒤 base를 합친다. 양쪽 report.md가 같아 합칠 때도, 다음 PR도 충돌하지 않는다.
+        # revert를 되돌리는 일만 그 앞에 한다. 보고서에 그 커밋을 남기고, base에 보고서 커밋이 없어 report.md가 충돌하지 않는다.
+        git.run(r.repo, "fetch", "-q", r.remote, r.base)
+        _restore_reverts(r)
+        _update(r, summary)
         _report_to_base(r)
+        if f["phase"] in PENDING_PHASES:
+            return f.get("url"), False  # 보고서가 base에 들어간 뒤 다음 gs go가 합친다
+        _merge_base_keep_report(r)
+    elif final and all(r.st.tickets[tid].status == state.MERGED for tid in r.order):
+        _merge_base_keep_report(r)  # 할 일이 없었다. base에 넣은 보고서를 그대로 둔다
+    else:
+        # base를 포함한 integration에 보고서를 쓴다. 다음 go가 보고서만 다시 병합하지 않는다. 끝난 마무리에
+        # 이번 실행의 실패한 티켓이 더해지는 경우도 여기다(integration이 base 보고서 커밋을 품어 충돌하지 않는다).
+        git.run(r.repo, "fetch", "-q", r.remote, r.base)
+        merge_base(r)
+        _update(r, summary)
     if cleanup:
         clean.integration(r)
     return f.get("url"), ok and f["phase"] not in PENDING_PHASES
