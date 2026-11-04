@@ -75,7 +75,8 @@ class TicketState:
     # 두 번째 리뷰(second_reviewer)의 기록. 모양은 review와 같다. second_reviewer가 없는 티켓은 비어 있다
     second_review: dict = field(default_factory=dict)
     # 단계 전환마다 추가한다. attempt는 worker 실행 디렉터리 번호(중단 재개 때도 재사용하지 않음).
-    # 각 항목: attempt, phase, model, started_at, ended_at. 지난 시도도 보고서에 합산한다.
+    # 각 항목: attempt, phase, model(계열), started_at, ended_at. 지난 시도도 보고서에 합산한다.
+    # worker·수정 단계에는 tier, actual_model, effort도 보존한다(옛 state에는 없음, 빈 모델·effort는 CLI 기본값).
     phases: list[dict] = field(default_factory=list)
     transient_errors: int = 0  # worker가 일시 오류로 끝난 횟수. failures와 따로 센다(재시작을 넘어 누적)
     network_wait_seconds: float = 0  # 이 티켓이 네트워크 대기로 보낸 시간(누적)

@@ -163,7 +163,7 @@ class ConfigTest(unittest.TestCase):
         (self.repo / ".goldstack/local.env").write_text("TG_TOKEN=1:abc\nTG_CHAT_ID=42\n")  # telegram = true의 비밀 경고(06) 제외
         code, out, err = self.cli("check", "demo")
         self.assertEqual(code, 0)
-        self.assertIn("경고 1", out)
+        self.assertIn("경고 2", out)
         self.assertIn("알 수 없는 키 `notify.extra`", err)
         self.path.write_text(CONFIG.replace("telegram = true", 'telegram = "yes"'))
         for cmd in ("check", "go"):
@@ -194,8 +194,8 @@ class InitTest(unittest.TestCase):
         cfg, problems = config.load(self.repo)
         self.assertEqual(problems, [])
         self.assertEqual(cfg, config.Config(
-            config.GitConfig("origin", "main"), config.ModelsConfig("opus", "opus", "gemini-4-argon-high", ""),
-            config.TimeoutsConfig(30, 10, 60), config.NotifyConfig(False)))
+            config.GitConfig("origin", "main"), config.ModelsConfig("opus", "opus", "gemini-4-argon-high", "", "haiku"),
+            config.TimeoutsConfig(30, 10, 60), config.NotifyConfig(False), tiers=cfg.tiers))
         example = (self.repo / ".goldstack/local.env.example").read_text()
         self.assertIn("TG_TOKEN=\nTG_CHAT_ID=\n", example)
         self.assertIn("복사", example)

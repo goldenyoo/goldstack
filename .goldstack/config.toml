@@ -7,6 +7,26 @@ judge = "opus"
 claude_review = "opus"
 agy = "gemini-4-argon-high"
 codex = ""
+failure_summary = "haiku"
+
+[tiers]
+review = "large"
+rereview = "medium"
+
+[tiers.claude]
+small = "sonnet/medium"
+medium = "sonnet/high"
+large = "opus/xhigh"
+
+[tiers.codex]
+small = "gpt-6-luna/medium"
+medium = "gpt-6.1-sol/medium"
+large = "gpt-6.1-sol/high"
+
+[tiers.agy]
+small = "gemini-3.8-flash-medium"
+medium = "gemini-4-argon-medium"
+large = "gemini-4-argon-high"
 
 [timeouts]
 review_minutes = 30
