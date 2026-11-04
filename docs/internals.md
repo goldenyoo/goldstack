@@ -116,7 +116,7 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 3. `fix`가 있으면 같은 구현 모델로 수정 worker를 같은 브랜치·worktree에 띄운다(지적을 brief 끝에 붙인다). 커밋하면 재리뷰로 간다(아래). 수정 worker가 실패하면(종료 코드, 멈춤, 커밋 없음, 이전 커밋을 지움) 이번 수정 커밋만 버리고 수정 전 head로 되돌려 병합·검증한다. 재리뷰하지 않고 티켓 실패로 세지 않는다.
 4. reviewer·재리뷰·판단 모델 호출이 실패하거나 답의 형식이 틀려도 티켓은 그대로 간다(병합 관문은 verify). 그 사실은 리뷰 기록의 `note`나 지적의 `rereview_reason`에 남는다. 일시 오류·시간 초과는 실패가 아니다: 기다렸다 다시 부르고, 대기 상한을 넘기면 `중단(네트워크)`다("리뷰·판단 호출의 대기").
 
-기록은 state의 `review`(`reviewer`, `dir`, `merge_base`, `note`, `fix`, `rereviews`, `findings`), 두 번째 리뷰는 `second_review`, 그리고 시도 디렉터리의 `review/`(두 번째 리뷰는 `review-<계열>/`, 예 `review-agy/`)(`diff.patch`, `prompt.md`, `review.txt`, `reviewer.log`, `findings.json`, `judge-prompt.md`, `judge.txt`, `judge.log`), `fix/`·`fix2/`(수정 worker), `rereview<회차>-<계열>/`(재리뷰).
+기록은 state의 `review`(`reviewer`, `dir`, `merge_base`, `note`, `fix`, `rereviews`, `findings`, 호출 때의 `tier`·`actual_model`·`effort`), 두 번째 리뷰는 `second_review`, 그리고 시도 디렉터리의 `review/`(두 번째 리뷰는 `review-<계열>/`, 예 `review-agy/`)(`diff.patch`, `prompt.md`, `review.txt`, `reviewer.log`, `findings.json`, `judge-prompt.md`, `judge.txt`, `judge.log`), `fix/`·`fix2/`(수정 worker), `rereview<회차>-<계열>/`(재리뷰).
 
 **재리뷰**(`go._rereview`, `review.rereview`) — 순서는 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → catch-up·verify → 병합이고 verify는 마지막에 한 번이다. 수정은 티켓당 최대 2회, 리뷰를 깨끗해질 때까지 돌리지 않는다.
 - **대상**(`review.fix_targets`): 1차는 `fix` 지적 전부. 2차는 1차 재리뷰의 `unresolved`와 1차 재리뷰가 새로 낸 `fix` 지적. `resolved`·`unchecked`는 다시 고치지 않는다. 대상이 있는 리뷰 기록의 리뷰어만 부르고, 둘이면 `review.run_together`로 동시에 띄운다. 각자 자기 지적을 확인하고 새 문제는 부른 리뷰어 모두가 본다.
@@ -130,7 +130,7 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 
 | 위치 | 필드 | 값 |
 |---|---|---|
-| 리뷰 기록 | `rereviews` | 회차마다 `round`, `dir`, `base`, `head`, `note`, `failed`(못 했으면 이유) |
+| 리뷰 기록 | `rereviews` | 회차마다 `round`, `dir`, `base`, `head`, `note`, `failed`(못 했으면 이유), `tier`, `actual_model`, `effort` |
 | 리뷰 기록 | `fix` | 수정·재리뷰 경과 메모를 ` / `로 잇는다(`재리뷰 1차: resolved 1 · unresolved 1 · unchecked 0 · 새 지적 1`) |
 | 지적 | `fix_attempt` | `""`, `attempted`(수정 worker가 커밋했다), `discarded`(실패해 버렸다) |
 | 지적 | `fix_round` | 이 지적을 받은 마지막 수정 회차(0이면 받은 적 없음) |
@@ -155,7 +155,7 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 - agy 수정 worker: 띄우지 않고 지금 브랜치의 구현을 병합·검증한다(1차면 수정 전 구현, 2차면 1차 수정까지. 티켓 실패 아님). 대상 지적에 `fix_reason = 한도`를 남겨 보고서 `수정 못 함(한도)`, 1차 재리뷰의 `unresolved`는 `미해결`이다.
 `gs check`는 이 상한을 실행 전에 어림한다: 티켓마다 첫 호출(구현·리뷰·두 번째 리뷰)만 센다. 재시도·수정·재리뷰는 일어날지 몰라 미리 세지 않으므로, 경고가 없어도 실행 중 상한에 닿을 수 있다. 보고서 Evidence 끝에 `agy 사용: <agy_calls>/<상한>`(`report.agy_usage`).
 
-reviewer 명령(모두 읽기 전용, worker와 같은 push·gh 차단 환경):
+계열 표가 없을 때 reviewer 명령(모두 읽기 전용, worker와 같은 push·gh 차단 환경):
 
 | reviewer | 명령 |
 |---|---|
@@ -376,7 +376,9 @@ PR <url>
 
 worker의 모델·effort는 `.goldstack/config.toml`의 `[tiers.claude]`, `[tiers.codex]`, `[tiers.agy]`에서 고른다. 각 표는 `small`, `medium`, `large`를 `"모델/effort"`(effort 생략 가능)로 적는다. 티켓 frontmatter의 선택 키 `tier: small|medium|large`를 쓰며 생략하면 medium이다. 첫 실패 뒤 재시도는 한 단계 올린다(small→medium→large, large는 그대로). 수정 worker는 해당 구현 시도의 등급을 쓰고, 일시 오류 재시작은 등급을 올리지 않는다. 해당 계열의 표가 없으면 기존 선택(claude는 CLI 기본값, codex·agy는 `models.codex`·`models.agy`)을 보존하고 `gs check`가 경고한다. 표가 있으면 `models.codex`·`models.agy`보다 우선한다.
 
-어댑터의 선택 인자 `ModelEffort`는 claude·agy에 `--model <모델> [--effort <effort>]`, codex에 `--model <모델> [-c model_reasoning_effort=<effort>]`를 넣는다. `state.json`의 티켓 `phases`에서 구현·수정 실행마다 `tier`, `actual_model`, `effort`를 보존한다(빈 모델·effort는 CLI 사용자 기본값, 기존 `model`은 계열). 옛 state의 항목에는 이 키가 없어도 된다. `[tiers] review`·`rereview`는 기본 large·medium, `[models] failure_summary`는 생략하면 `models.judge`를 읽는다. 이 세 설정은 읽기만 하며 리뷰·실패 요약 호출은 기존 경로를 쓴다.
+어댑터의 선택 인자 `ModelEffort`는 claude·agy에 `--model <모델> [--effort <effort>]`, codex에 `--model <모델> [-c model_reasoning_effort=<effort>]`를 넣는다. `state.json`의 티켓 `phases`에서 구현·수정 실행마다 `tier`, `actual_model`, `effort`를 보존한다(빈 모델·effort는 CLI 사용자 기본값, 기존 `model`은 계열). 옛 state의 항목에는 이 키가 없어도 된다.
+
+첫 리뷰는 `[tiers] review`(기본 large), 재리뷰는 `rereview`(기본 medium)의 모델·effort를 같은 인자로 넘긴다. 계열 표가 없으면 위 reviewer 명령의 기존 모델과 CLI 기본 effort를 쓴다. 선택은 티켓 등급과 무관하며, 각 리뷰와 회차별 `rereviews` 기록에 `tier`·`actual_model`·`effort`를 남긴다. 실패 요약만 `[models] failure_summary`를 쓰고, 생략하면 `models.judge`를 읽는다. 지적 분류와 보고서 Summary는 계속 `models.judge`다.
 
 `transient_reason(inp)`은 종료 판정과 별개로 `transient.reason(family, text, model=..., cwd=...)`에 로그를 넘겨 일시 오류 이유를 돌려준다(없으면 빈 문자열). 연결·DNS·5xx·429만 인정하고 인증·구독 한도·모르는 오류는 제외한다. claude는 마지막 result, codex는 error·turn.failed 이벤트를 읽어 도구 출력 속 문자열을 무시한다. agy의 `invalid model selection`은 `agy models`(`GS_AGY` seam, 15초 제한)가 실패하거나 선택한 모델이 목록에 있을 때 일시 오류다. 목록에 모델이 없으면 설정 오류다. 이 판별 자체는 대기나 재시작을 하지 않는다.
 
