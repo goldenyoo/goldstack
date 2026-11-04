@@ -16,7 +16,7 @@ SPEC_REQUIRED = ("feature", "verify")
 SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20, "verify_retries": 0}
 SPEC_OPTIONAL = ("verify_ticket",)
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
-TICKET_OPTIONAL = ("touches", "second_reviewer", "verify", "tier")
+TICKET_OPTIONAL = ("touches", "second_reviewer", "verify", "tier", "closes")
 WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
 
 
@@ -73,6 +73,7 @@ class Ticket:
     second_reviewer: str | None = None
     verify: str | None = None
     tier: str | None = None
+    closes: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -240,8 +241,13 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
         err("`verify`는 비어 있지 않은 한 줄 셸 명령이어야 한다")
     if "tier" in data and data["tier"] not in TIERS:
         err("`tier`는 small|medium|large 중 하나여야 한다")
+    closes = data.get("closes", [])
+    if (not isinstance(closes, list)
+            or any(not re.fullmatch(r"[0-9]+", value) or int(value) < 1 for value in closes)):
+        err("`closes`는 양의 issue 번호 목록이어야 한다(예: [12])")
+        closes = []
     # 값 오류가 있어도 그래프에는 넣는다. 빼면 이 티켓을 참조하는 티켓마다 "없는 id" 오류가 덧붙는다.
     return Ticket(id=tid, title=data["title"], blocked_by=list(deps), model=data["model"],
                   reviewer=data["reviewer"], path=path, body=body, touches=valid_touches,
-                  second_reviewer=second_reviewer, tier=data.get("tier"),
+                  second_reviewer=second_reviewer, tier=data.get("tier"), closes=list(dict.fromkeys(map(int, closes))),
                   verify=data["verify"] if _valid_command(data.get("verify")) else None)
