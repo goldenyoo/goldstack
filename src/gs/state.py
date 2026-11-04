@@ -61,7 +61,9 @@ class TicketState:
     kept_worktrees: list[str] = field(default_factory=list)  # 병합됐지만 미커밋 변경 때문에 남긴 경로
     isolation_warnings: list[str] = field(default_factory=list)  # 지난 시도·수정 worker의 격리 실패도 보존
     failure_summary: str = ""  # 재시도 brief에 붙일 판단 모델 요약 파일
-    # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings.
+    # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings, reviewed_head.
+    # reviewed_head는 이 리뷰어를 부른 마지막 리뷰·재리뷰의 대상 head다(go가 적는다). 호출이 실패해도 남고 실패는 note·failed가 말한다.
+    # 부르지 못한 리뷰(거부, 한도, 트리 실패)는 옮기지 않는다. 옛 state의 기록에는 없다.
     # 재리뷰가 있었으면 rereviews(회차마다 round, dir, base, head, note, failed)도 있다.
     # 지적마다 severity·location·claim·evidence·action(fix|report)·why, 그리고 수정·재리뷰 결과(review.Finding):
     #   fix_attempt("" | attempted | discarded), fix_round(이 지적을 받은 마지막 수정 worker 회차, 0이면 받은 적 없음),
@@ -112,6 +114,11 @@ class State:
 def reviews(ts: TicketState) -> list[dict]:
     """티켓의 리뷰 기록들: 첫 리뷰, 있으면 두 번째 리뷰. 빈 기록은 뺀다."""
     return [rec for rec in (ts.review, ts.second_review) if rec]
+
+
+def reviewed_heads(ts: TicketState) -> set[str]:
+    """리뷰 기록들의 reviewed_head. 부르지 못한 리뷰·옛 state의 기록은 값이 없어 빠진다."""
+    return {rec["reviewed_head"] for rec in reviews(ts) if rec.get("reviewed_head")}
 
 
 def agy_reached(st: State, limit: int) -> bool:
