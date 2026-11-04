@@ -2,8 +2,8 @@
 date: "2026-11-04"
 severity: "medium"
 source: "2026-11-04 Codex 리뷰(Claude가 코드 대조)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v9"
 ---
 2차 수정이 1차에서 고친 지적을 되돌려도 그 지적은 계속 `resolved`로 남는다.
 

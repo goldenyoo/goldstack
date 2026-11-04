@@ -2,8 +2,8 @@
 date: "2026-11-04"
 severity: "medium"
 source: "2026-11-04 Gemini 리뷰 환각 분석(docs/research/agy.md §8)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v9"
 ---
 `/retro`가 agy에 원본 `worker.log`를 그대로 맡기지 않고, 약 8만 토큰 이하로 줄인 파일 하나를 넘긴다.
 
