@@ -689,7 +689,7 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 ```
 마무리를 하지 않았으니 `■ 보고서:` 줄과 알림의 경로에는 파일이 없거나 지난 실행의 것이 있다. 지금 상태는 `gs status csv-export`로 본다.
 
-**이어 가기** — 네트워크가 돌아오면 `gs go csv-export`(또는 `/go`)를 다시 친다. 끊긴 worker는 같은 worktree에서 잇고, worker가 끝나 있던 티켓은 리뷰·재리뷰부터 하고, 대기 합계는 새로 센다. 그 worktree를 지웠거나 브랜치가 달라졌으면 경고하고 새로 시작한다. agy worker는 다시 띄울 때도 호출로 세므로 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿으면 `agy 한도`로 실패한다. 값을 올리려면 `timeouts.network_wait_minutes`를 고친다.
+**이어 가기** — 네트워크가 돌아오면 `gs go csv-export`(또는 `/go`)를 다시 친다. 끊긴 worker는 같은 worktree에서 잇고, worker가 끝나 있던 티켓은 리뷰·재리뷰부터 하고, 대기 합계는 새로 센다. 그 worktree를 지웠거나 브랜치가 달라졌으면 경고하고 새로 시작한다. agy worker는 다시 띄울 때도 호출로 세므로 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿으면 `agy 한도`로 실패한다. 이 상한은 `agy.max_calls_per_run`으로 올린다. 대기 합계의 상한은 `timeouts.network_wait_minutes`로 올린다.
 
 끊김을 자주 보면 보고서 "실행 측정"의 일시 오류 수·대기 시간을 본다. 마무리 단계의 push·`gh` 오류는 기다리지 않는다. 지금처럼 멈추고 다음 `gs go`가 잇는다.
 
