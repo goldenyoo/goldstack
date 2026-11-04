@@ -186,6 +186,18 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertTrue((SKILLS / "idea" / "SKILL.md").is_file())
 
 
+    def test_adopt_asks_feedback_once(self):
+        body = self.read("adopt")
+        for text in ("[feedback]", "`mode`", "`detail`", "`auto`", "`draft`", "`off`", "`errors`", "`minimal`",
+                     "다시 묻지 않는다", "gs feedback send", "사람이 고른 것이 아니니 묻는다", "개인 프로젝트는 `auto` + `errors`", "회사 레포는 `off` 또는 `minimal`"):
+            self.assertIn(text, body)
+
+    def test_retro_can_file_issue(self):
+        body = self.read("retro")
+        for text in ("issue로 올리기", '`gs feedback "<사람이 확인한 한 줄>"`', "레포 이름·파일 이름을 넣지 않는다"):
+            self.assertIn(text, body)
+
+
 MATT_COMMIT = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
 MATT_SKILLS = {  # goldstack 이름 → 원본 레포 안 경로
     "wait-what": "skills/productivity/wait-what/SKILL.md",
