@@ -19,6 +19,7 @@ from pathlib import Path
 AGY_MODELS_TIMEOUT = 15
 WAIT_MINUTES = (1, 2, 5, 10)  # 마지막 값을 계속 쓴다
 RECOVERY_MINUTES = 5  # 다시 띄운 worker가 이만큼 일시 오류 없이 돌면 회복이다(claude 자체 재시도가 약 3분 넘게 걸린다)
+SAME_OUTAGE_MINUTES = 30  # 끊김이 끝난 뒤 이 안에 다시 끊기면 같은 끊김이다. 대기 일정과 합계를 잇는다
 
 # 429(rate limit)와 구독 사용량 한도는 다르다. 인증·구독 오류가 섞이면 재시도하지 않는다.
 _PERMANENT = re.compile(

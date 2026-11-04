@@ -13,10 +13,11 @@ gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 stat
 
 worker는 config 등급표와 티켓 tier(기본 medium)로 모델·effort를 고른다. 첫 실패 뒤에는 한 단계 올리고 수정 worker도 그 등급을 쓴다.
 worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 않고 등급도 올리지 않는다. 간격을 늘려 기다렸다가 같은 worktree·브랜치에서 새 시도
-디렉터리로 다시 띄운다(Outage). 끊김이 이어지는 동안 새 worker·리뷰를 시작하지 않고 도는 worker는 그대로 둔다. 다시 띄운 worker가
-5분 넘게 일시 오류 없이 돌거나 끝나면 회복이다. 대기 합계와 일정은 끊김마다 새로 센다(`Backoff`). 상한을 넘기거나 codex가 Reconnecting만 그만큼
-이어 가거나 다른 호출이 NetworkAbort를 던지면 `중단(네트워크)`다: 돌던 worker를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴
-network_resume으로 다음 `gs go`가 같은 worktree에서 잇는다.
+디렉터리로 다시 띄운다(Outage). 끊김이 이어지는 동안 새 worker·리뷰를 시작하지 않고 도는 worker는 그대로 둔다. 회복은 다시 띄운 worker로만
+판정한다: 기다리는 worker가 없을 때 그중 하나가 끝나거나, 마지막 일시 오류 뒤로 5분 넘게 일시 오류 없이 돌면 회복이다. 잡힌 대기는 다른 티켓이
+끝나도 끝까지 간다. 대기 합계와 일정(`Backoff`)은 회복해도 남는다. 끝난 뒤 30분 안에 다시 끊기면 같은 끊김으로 잇고, 30분을 넘겨 정상으로
+돌았으면 새 끊김으로 새로 센다. 상한을 넘기거나 codex가 Reconnecting만 그만큼 이어 가거나 다른 호출이 NetworkAbort를 던지면 `중단(네트워크)`다:
+돌던 worker를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴 network_resume으로 다음 `gs go`가 같은 worktree에서 잇는다. 합계는 그때 새로 센다.
 """
 from __future__ import annotations
 
@@ -545,13 +546,18 @@ class Active:
 
 @dataclass
 class Outage:
-    """네트워크 끊김 하나. 끊김 = 기다리는 worker나 회복을 확인하는 worker가 있는 동안(active). 그동안 새 worker·리뷰를 시작하지 않는다."""
+    """이 실행의 네트워크 끊김. 끊김 = 기다리는 worker나 회복을 확인하는 worker가 있는 동안(active). 그동안 새 worker·리뷰를 시작하지 않는다.
+
+    끊김이 끝나도 backoff는 남는다. 다음 일시 오류가 ended_at에서 SAME_OUTAGE_MINUTES 안이면 같은 끊김으로 잇는다(_net_hold).
+    """
     backoff: transient.Backoff = field(default_factory=transient.Backoff)
     waiting: dict[str, Active] = field(default_factory=dict)  # 일시 오류로 끝나 다시 띄우기를 기다린다
     parked: dict[str, Active] = field(default_factory=dict)  # 성공으로 끝났지만 리뷰를 미뤘다. 회복하면 active로 돌아간다
     probes: set[str] = field(default_factory=set)  # 다시 띄운 worker. 이것으로 회복을 안다
     due: float | None = None  # waiting을 다시 띄울 시각(time.monotonic)
     wait_started: float = 0.0
+    last_error: float = 0.0  # 마지막 일시 오류를 처리한 시각
+    ended_at: float | None = None  # 지난 끊김이 끝난 시각. 다음 끊김이 시작하면 지운다
 
     @property
     def active(self) -> bool:
@@ -665,18 +671,22 @@ def _net_hold(r: Run, a: Active, why: str) -> None:
     a.proc.finish(True)  # 다음 시도는 새 pane이다. 증거는 시도 디렉터리에 남는다
     n.probes.discard(tid)
     n.waiting[tid] = a
-    a.held_at = time.monotonic()
+    now = time.monotonic()
+    a.held_at = n.last_error = now
     ts.transient_errors += 1
     r.st.network["errors"] = r.st.network.get("errors", 0) + 1
     ts.reason = f"네트워크 대기: {why}"
     state.begin_phase(ts, "network", "")
     _mark_resume(r, a)
     if n.due is None:  # 다른 worker가 이미 잡아 둔 대기가 있으면 거기에 함께 탄다
+        if n.ended_at is not None and now - n.ended_at > transient.SAME_OUTAGE_MINUTES * transient.minute_seconds():
+            n.backoff = transient.Backoff()  # 정상으로 오래 돌았다. 새 끊김이다
+        n.ended_at = None
         delay = n.backoff.next(r.cfg.timeouts.network_wait_minutes)
         if delay is None:
             raise transient.NetworkAbort(
                 f"대기 합계가 상한 {r.cfg.timeouts.network_wait_minutes}분을 넘었다(timeouts.network_wait_minutes)")
-        n.due, n.wait_started = time.monotonic() + delay, time.monotonic()
+        n.due, n.wait_started = now + delay, now
     _net_publish(r)
     say(f"[{tid}] 일시 오류({why}): 실패로 세지 않는다. {state.network_label(r.st, state.now())}")
 
@@ -693,39 +703,44 @@ def _net_park(r: Run, a: Active) -> bool:
     return True
 
 
+def _net_recovered(n: Outage, active: dict[str, Active], now: float) -> bool:
+    """다시 띄운 worker 중 하나가 일시 오류 없이 끝났거나, 마지막 일시 오류 뒤로 5분 넘게 조용히 돈다. 일시 오류로 끝나면 _net_hold가 probes에서 뺀다."""
+    if n.probes - active.keys():
+        return True
+    enough = transient.RECOVERY_MINUTES * transient.minute_seconds()
+    return now - n.last_error >= enough and any(active[tid].quiet_seconds() >= enough for tid in n.probes)
+
+
 def _net_tick(r: Run, active: dict[str, Active], runner) -> None:
-    """끊김의 시계: 회복을 판단하고, 때가 된 worker를 다시 띄우고, 끊김이 끝나면 미룬 리뷰를 돌려놓는다."""
+    """끊김의 시계: 때가 된 worker를 다시 띄우고, 기다리는 worker가 없으면 회복을 판단하고, 끊김이 끝나면 미룬 리뷰를 돌려놓는다."""
     n = r.net
     if not n.active and not n.parked:
         return
     now = time.monotonic()
-    changed = False
-    # 다시 띄운 worker가 일시 오류로 끝나면 _net_hold가 probes에서 뺀다. 그 밖의 이유로 없어졌으면 끝난 것이다.
-    healed = bool(n.probes - active.keys()) or any(
-        active[tid].quiet_seconds() >= transient.RECOVERY_MINUTES * transient.minute_seconds()
-        for tid in n.probes & active.keys())
-    if healed:
+    changed = healed = False
+    if n.waiting:
+        # 잡힌 대기는 끝까지 간다. 지금의 probe는 모두 이 대기의 일시 오류 전에 떴으므로 그동안 끝나도 회복의 근거가 아니다.
+        n.probes &= active.keys()
+        if n.due is not None and now >= n.due:
+            _net_add_waited(r, now - n.wait_started)
+            for tid in [tid for tid in r.order if tid in n.waiting]:
+                a = n.waiting.pop(tid)
+                ts = r.st.ticket(tid)
+                ts.network_wait_seconds = round(ts.network_wait_seconds + now - a.held_at, 1)
+                nxt = _resume(r, a.t, runner, ts.network_resume)
+                if nxt is not None:
+                    active[tid] = nxt
+                    if not isinstance(nxt.proc, worker.Finished):  # 다시 띄우지 못한 수정 worker의 자리는 근거가 아니다
+                        n.probes.add(tid)
+            n.due = None
+            changed = True
+    elif _net_recovered(n, active, now):
         n.probes.clear()
-        if n.waiting:  # 회복했으니 함께 기다리던 worker도 지금 다시 띄운다
-            n.due = now
-        changed = True
-    if n.waiting and n.due is not None and now >= n.due:
-        _net_add_waited(r, now - n.wait_started)
-        for tid in [tid for tid in r.order if tid in n.waiting]:
-            a = n.waiting.pop(tid)
-            ts = r.st.ticket(tid)
-            ts.network_wait_seconds = round(ts.network_wait_seconds + now - a.held_at, 1)
-            nxt = _resume(r, a.t, runner, ts.network_resume)
-            if nxt is not None:
-                active[tid] = nxt
-                if not healed:
-                    n.probes.add(tid)
-        n.due = None
-        changed = True
+        healed = True
     if not n.active:
-        if n.backoff.count:
-            say("■ 네트워크 회복: 다른 티켓 시작을 재개한다")
-        n.backoff = transient.Backoff()
+        say("■ 네트워크 회복: 다른 티켓 시작을 재개한다" if healed
+            else "■ 네트워크 대기 끝: 다시 띄운 worker가 없어 다른 티켓 시작을 재개한다")
+        n.ended_at = now
         active.update(n.parked)
         n.parked.clear()
         changed = True
