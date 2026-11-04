@@ -46,7 +46,9 @@ class HeartbeatTest(GoCase):
         with mock.patch("gs.go.HEARTBEAT_SECONDS", 0.2), mock.patch.object(state, "save", side_effect=observe):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        quiet = [(m, s) for m, s in seen if [a["phase"] for a in s["progress"]["running"]] == ["worker"]]
+        # worker가 끝나 리뷰부터 잇는 표시를 남긴 기록은 조용한 구간이 아니다
+        quiet = [(m, s) for m, s in seen if [a["phase"] for a in s["progress"]["running"]] == ["worker"]
+                 and not s["tickets"]["01"]["network_resume"]]
         # 앞의 둘은 RUNNING·pane 기록이다. 그 뒤는 바뀐 것 없이 heartbeat만
         beats = quiet[2:]
         self.assertGreaterEqual(len(beats), 4, out)

@@ -18,6 +18,9 @@ squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에�
 verified·reverted의 마무리 순서: integration에 보고서 커밋 → base에 보고서 커밋(직접 push·보고서 PR) → base를
 integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base판과 같다. 그래서 다음 PR이 report.md에서 충돌하지 않는다.
 
+보고서 커밋에는 보고만 high·medium 지적의 아이디어 파일(findings.py)이 함께 들어간다. 첫 보고서 커밋에 들어가 보통
+feature PR로 base에 간다. base에 없으면(revert가 지움, 파일을 쓰기 전의 gs가 연 PR) base 보고서 커밋이 더한다.
+
 모든 push는 `git.push`로 실행 시작 때의 push 설정과 대조한다. 다르면 push하지 않고 `git.PushSettingsChanged`로 멈춘다.
 보고서 push의 "최선" 처리도 이것은 삼키지 않는다.
 
@@ -36,7 +39,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from . import clean, doctor, feedback, git, metrics, report, review, setup, state, verify
+from . import clean, doctor, feedback, findings, git, metrics, report, review, setup, state, verify
 from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
@@ -356,10 +359,10 @@ def _verify(r, wt: Path, label: str) -> bool:
 
 
 def _verify_final(r, verified_head: str) -> bool:
-    """통과한 integration과 보고서만 다르면 최종 검증 결과를 재사용한다."""
+    """통과한 integration과 보고서·이 feature의 아이디어 파일만 다르면 최종 검증 결과를 재사용한다."""
     changed = git.run(r.iwt, "diff", "--no-renames", "--name-only", "-z", verified_head, "HEAD").stdout
     report_path = f"{WORK}/{r.name}/report.md"
-    if set(changed.split("\0")) - {""} <= {report_path} and setup.is_clean(r.iwt):
+    if set(changed.split("\0")) - {""} <= {report_path, *findings.paths(r)} and setup.is_clean(r.iwt):
         message = "integration-final: 보고서만 바뀜, 건너뜀"
         (r.rundir / "finish" / "integration-final-verify.log").write_text(message + "\n", encoding="utf-8")
         print(f"■ {message}", flush=True)
@@ -379,10 +382,11 @@ def _restore_integration(r, head: str) -> None:
 def _commit_report(r, summary: str) -> Path:
     path = report.write(r, summary)
     rel = str(path.relative_to(r.iwt))
+    rels = [rel, *findings.write(r)]
     git.run(r.iwt, "add", "--", rel)
-    if git.run(r.iwt, "diff", "--cached", "--quiet", "--", rel, check=False).returncode:
-        # 보고서 외의 staged 파일을 이 커밋에 넣지 않는다.
-        git.run(r.iwt, "commit", "-m", f"gs: {r.name} 최종 보고서", "--only", "--", rel)
+    if git.run(r.iwt, "diff", "--cached", "--quiet", "--", *rels, check=False).returncode:
+        # 보고서·아이디어 파일 외의 staged 파일을 이 커밋에 넣지 않는다.
+        git.run(r.iwt, "commit", "-m", f"gs: {r.name} 최종 보고서", "--only", "--", *rels)
     return path
 
 
@@ -714,8 +718,8 @@ def _update(r, summary: str) -> None:
 
 
 def _report_commit(r, rel: str, text: bytes, *, push: bool = True) -> str:
-    """원격 base의 최신 끝 위에 report.md만 바꾼 커밋을 만들어 일반 push한다(push=False면 만들기만).
-    base에 이미 같으면 빈 문자열."""
+    """원격 base의 최신 끝 위에 report.md를 바꾸고 base에 없는 아이디어 파일을 더한 커밋을 만들어 일반 push한다
+    (push=False면 만들기만). base에 이미 같으면 빈 문자열."""
     git.run(r.repo, "fetch", "-q", r.remote, r.base)
     with tempfile.TemporaryDirectory(prefix="gs-report-", dir=r.rundir) as tmp:
         wt = Path(tmp) / "base"
@@ -724,10 +728,11 @@ def _report_commit(r, rel: str, text: bytes, *, push: bool = True) -> str:
             path = wt / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(text)
+            rels = [rel, *findings.copy_to_base(r, wt)]
             git.run(wt, "add", "--", rel)
-            if git.run(wt, "diff", "--cached", "--quiet", "--", rel, check=False).returncode == 0:
+            if git.run(wt, "diff", "--cached", "--quiet", "--", *rels, check=False).returncode == 0:
                 return ""
-            git.run(wt, "commit", "-q", "-m", f"gs: {r.name} 최종 보고서(병합 후)", "--only", "--", rel)
+            git.run(wt, "commit", "-q", "-m", f"gs: {r.name} 최종 보고서(병합 후)", "--only", "--", *rels)
             if push:
                 # 절대로 force하지 않는다. 거부되면(base가 움직임) 부른 쪽이 최신 base 위에서 다시 만든다.
                 git.push(wt, r.remote, r.st.push_record, f"HEAD:refs/heads/{r.base}")

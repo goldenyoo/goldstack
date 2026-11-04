@@ -93,18 +93,18 @@ class OvernightSkillTest(unittest.TestCase):
         section = self.parts["6. 잇기"]
         self.assertIn("완료 알림", section)
         between = section.partition("**사이 단계.**")[2]
-        self.assert_in_order(between, "git pull", "uv tool install --reinstall .",
-                             "claude plugin marketplace update goldstack", "claude plugin update goldstack@goldstack",
-                             "환경 사실", "`gs check <다음>`", "push", "다음 `gs go`")
+        self.assert_in_order(between, "git pull", "`gs self-update`", "환경 사실", "`gs check <다음>`", "push", "다음 `gs go`")
+        self.assertNotIn("uv tool install --reinstall", between)
         self.assertIn("pyproject.toml", between)  # gs 자신을 고친 레포를 가리는 법
 
-    def test_reinstall_checks_running_go_like_self_update(self):
-        """문자열 패턴은 전역 --repo와 python -m으로 뜬 gs go를 놓쳐 실행 중인 설치본을 바꾼다."""
+    def test_reinstall_uses_self_update_which_checks_running_go(self):
+        """self-update가 전역 --repo와 python -m으로 뜬 gs go를 찾아 실행 중인 설치본을 바꾸지 않는다."""
         between = self.parts["6. 잇기"].partition("**사이 단계.**")[2]
-        self.assert_in_order(between, "uv run python -c 'from gs.selfupdate import running_go; print(*running_go())'",
-                             "uv tool install --reinstall .")
+        for text in ("`gs self-update`", "거부", "--from <원격 주소>"):
+            self.assertIn(text, between)
         self.assertNotIn("pgrep", self.body)
-        self.assertIn("6단계의 실행 확인", self.parts["3. 사전 점검"])  # 새 명령 모양도 밤 전에 쳐 본다
+        self.assertNotIn("running_go", self.body)
+        self.assertIn("6단계의 재설치 `gs self-update`", self.parts["3. 사전 점검"])  # 새 명령 모양도 밤 전에 쳐 본다
         self.assertTrue(callable(selfupdate.running_go))
         for command in ("gs go demo", "/venv/bin/python /venv/bin/gs --repo /tmp/other go demo",
                         "/venv/bin/python -m gs.cli go demo"):
