@@ -14,6 +14,9 @@
 - [여러 feature 이어 돌리기(`gs go a b`)](#여러-feature-이어-돌리기gs-go-a-b)
 - [끝난 feature 치우기(`gs clean`)](#끝난-feature-치우기gs-clean)
 - [아이디어 흐름(`/retro` → `/idea` → `gs backlog` → `/grill`)](#아이디어-흐름)
+- [피드백: gs 결함을 goldstack에 알리기](#피드백-gs-결함을-goldstack에-알리기) · [`/overnight`: 자는 동안 이어 돌리기](#overnight-자는-동안-이어-돌리기)
+- [버전 맞추기(`gs self-update`, `requires`)](#버전-맞추기gs-self-update-requires)
+- [리눅스 서버에서 쓰기](#리눅스-서버에서-쓰기)
 - [기존 레포 옮기기(`gs migrate`)](#기존-레포-옮기기gs-migrate)
 - [skill 사용 장면](#skill-사용-장면)
 
@@ -296,6 +299,11 @@ verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest dis
 | `timeouts.checks_grace_seconds` | `60` | CI 대기에서 검사가 하나도 안 보일 때 등록을 기다리는 시간. 지나면 검사 없음으로 보고 병합을 시도한다. `0`이면 기다리지 않는다. 필수 검사 이름을 읽었으면 쓰지 않는다. `git.wait_checks`일 때만 |
 | `timeouts.setup_minutes` | `15` | `worktree.setup` 한 번 |
 | `notify.telegram` | `false` | `gs go`가 끝날 때 한 통, `gs check`(값이 비면 경고) |
+| `goldstack.requires` | 없음(검사 안 함) | `gs check`·`gs go`: 설치한 gs가 이 최소 버전(`">=0.1"`)보다 낮으면 오류로 거부하고 `gs self-update`를 안내한다. 형식이 틀리면 config 오류 |
+| `feedback.mode` | 절이 없으면 `off`, `gs init`이 만든 config는 `draft` | `off` 아무것도 안 쓴다 · `draft` 로컬 초안만 쌓는다 · `auto` GitHub issue로 보낸다. [피드백](#피드백-gs-결함을-goldstack에-알리기) |
+| `feedback.detail` | `errors` | `errors`는 가린 오류 줄 최대 20줄을 보낸다. `minimal`은 오류 줄 없이 항목만 |
+| `feedback.repo` | `gs init`이 `goldenyoo/goldstack`을 적는다 | issue를 올릴 저장소 |
+| `feedback.max_per_day` | `5` | 하루에 새로 올리는 issue 최대 수 |
 
 검사: 형이 틀린 값, 0 이하인 `timeouts.*`(`checks_grace_seconds`만 `0`을 허용하고 음수는 오류), 음수인 `agy.max_calls_per_run`, 빈 모델 이름(`models.codex`만 빈 값 허용), `merge`·`squash` 밖의 `git.merge_method`, 등급표의 빠진 칸·틀린 형식(공백, 슬래시 둘 이상, 없는 effort), `small`·`medium`·`large` 밖의 `tiers.review`·`rereview`는 오류, 모르는 키는 경고다. effort는 `low`·`medium`·`high`·`xhigh`·`max`이고 codex는 `none`·`minimal`도 받는다. 빠진 키도 오류지만 옛 config를 위해 `git.merge_method`·`direct_push`·`wait_checks`, `models.failure_summary`, `timeouts.checks_minutes`·`setup_minutes`·`rereview_minutes`·`checks_grace_seconds`·`network_wait_minutes`, `[worktree]`, `[agy]`, `[tiers]`는 없으면 기본값으로 읽는다.
 
@@ -694,7 +702,7 @@ gs go: git 오류: push 설정이 실행 시작 때와 달라 push하지 않았�
 1. **실패로 세지 않는다.** 재시도 횟수와 등급이 그대로이고, 실패 요약도 부르지 않는다.
 2. **기다린다.** 1→2→5→10→10…분, 합계 `timeouts.network_wait_minutes`(기본 60)까지. 다시 부르는 것이 곧 회복 확인이다. 호스트를 따로 찌르지 않는다.
 3. **같은 worktree에서 새 worker로 잇는다.** 커밋 안 된 작업도 남아 있고, brief에 "지난 시도가 네트워크로 끊겼다. `git status`와 `git diff`로 남은 변경을 보고 이어라"가 붙는다. 세션을 이어 가는 것은 아니다.
-4. **그동안 새 worker·리뷰를 시작하지 않는다.** 도는 worker는 그대로 돌고, 성공으로 끝난 worker의 리뷰는 회복 뒤로 미룬다. 다시 띄운 worker가 5분 넘게 일시 오류 없이 돌거나 끝나면 회복이다. 대기 합계는 끊김마다 새로 센다.
+4. **그동안 새 worker·리뷰를 시작하지 않는다.** 도는 worker는 그대로 돌고, 성공으로 끝난 worker의 리뷰는 회복 뒤로 미룬다. 다시 띄운 worker가 5분 넘게 일시 오류 없이 돌거나 끝나면 회복이다(회복은 다시 띄운 worker로만 판정한다). 회복 뒤 30분 안에 다시 끊기면 같은 끊김으로 합계를 잇고, 그보다 오래 정상으로 돌았으면 새 끊김으로 새로 센다.
 
 리뷰·재리뷰·판단 호출은 같은 일정으로 다시 부른다(합계는 호출마다 따로다). 리뷰어가 계속 시간 초과면 호출 시간까지 더해져, 기본값으로 첫 리뷰 하나가 약 6시간(호출 10번 × 30분 + 대기 60분)까지 간 뒤 중단된다. codex worker는 끊겨도 죽지 않고 `Reconnecting`을 찍으며 기다리므로, 그 상태가 상한을 넘기면 중단한다.
 
@@ -821,6 +829,61 @@ same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이
 yes = 추천 전부 수락. 바꿀 것만 번호로
 ```
 `1. 1,2`처럼 고르면 그 아이디어들이 이번 feature의 결정 표로 들어가고, grill이 끝날 때 그 파일이 `status: "taken"`, `feature: "<이번 feature>"`로 바뀐다. 열린 아이디어가 없으면 이 질문은 없다.
+
+## 버전 맞추기(`gs self-update`, `requires`)
+
+처음 설치는 README대로 태그(`@v0.1.0`)에서 하고, 그 뒤 업데이트는 main 채널이다. 태그는 기록용이다.
+- `gs go`·`gs doctor`는 시작할 때 설치본의 commit을 원격 main과 비교해 뒤처졌으면 `gs self-update`를 권하는 경고만 낸다. 조회가 안 되거나(오프라인, 로컬 디렉터리 설치) 출처를 모르면 건너뛴다. 플러그인 버전이 gs와 다르면 그것도 경고한다.
+- `gs self-update`: CLI를 main으로 재설치하고 이어서 플러그인(marketplace)을 갱신한다. `--version v0.1.0`처럼 태그로 고정할 수 있다. 이 머신에서 `gs go`가 돌고 있거나 프로세스 목록을 못 읽으면 아무것도 바꾸지 않고 거부한다. 확인 직후 시작하는 `gs go`까지는 막지 못한다(머신 공통 잠금은 없다). 머신이 여럿이면 머신마다 친다.
+- 레포가 최소 버전을 요구하려면 `.goldstack/config.toml`에 `[goldstack] requires = ">=0.1"`. 설치본이 더 낮으면 `gs check`·`gs go`가 오류로 멈춘다. 안 적으면 검사하지 않는다.
+
+## 피드백: gs 결함을 goldstack에 알리기
+
+현장에서 쓰다 드러난 gs 자체의 결함을 goldstack 저장소의 GitHub issue(라벨 `field-report`)로 올린다. 판단 모델 없이 규칙으로만 고른다.
+
+**보내는 것** — gs의 내부 예외, 마무리 이상(재개 phase에 갇힘, 예상 밖 revert, 마무리 오류), 이름 붙은 어댑터 실패 패턴(예 codex ref 잠금 실패)과 모르는 어댑터 오류(`unknown`), 그리고 사람이 `gs feedback "한 줄"`·`/feedback`으로 직접 쓴 글. issue에는 gs·CLI 버전, OS, 단계, 동작에 영향을 주는 config 값(merge_method 등), gs 소스의 프레임(파일:함수:줄), 지문, 횟수, 그리고 `detail = "errors"`면 가린 오류 줄 최대 20줄이 들어간다.
+
+**안 보내는 것** — 대상 레포 이름·원격 URL, 파일·디렉터리 이름, 코드·diff, 커밋 메시지, 브랜치·feature 이름, 사람 이름, `local.env` 값, 모델이 쓴 글. 오류 줄은 경로·이름·토큰 모양을 `<repo>/…`, `~`, `<feature>`, `<secret>`, `<name>`으로 가리고 흔한 오류 낱말만 남긴다. 티켓 구현 실패, 시험 실패, 리뷰 지적, 네트워크·인증·사용량 한도 같은 환경 오류는 올리지 않는다. 직접 쓴 글은 가리지 않고 쓴 그대로 나가니 회사 이름 같은 것을 넣지 않는다.
+
+**동작** — 가린 초안을 `.goldstack/feedback/<지문>.md`에 쌓는다(gitignore). `mode = "auto"`면 `gs go`가 시작과 끝에 보낸다. `gh`가 실패하면 쌓아 두었다가 다음 `gs` 실행 때 다시 보낸다. 같은 지문의 열린 issue에는 새 issue 없이 하루 한 번 횟수 댓글만 단다. 하루 새 issue는 `max_per_day`(5)건까지다. 지문에는 gs 버전이 들어 있다. 피드백 코드가 실패해도 `gs go`의 결과는 바뀌지 않는다. `gs go` 끝에 `■ goldstack 피드백: 보냄 N · 대기 M`이 한 줄 나온다.
+
+**프로젝트별로 끄기** — `.goldstack/config.toml`에서:
+```toml
+[feedback]
+mode = "off"      # off | draft | auto
+detail = "errors" # errors | minimal
+```
+- `off`: 아무것도 쓰지도 보내지도 않는다. 회사 레포에 권한다. `[feedback]` 절이 아예 없는 옛 config도 `off`다.
+- `draft`: 로컬 초안만 쌓고 `gs feedback send`나 `/feedback send`로 직접 보낸다. `gs init`이 만든 config의 기본값이다.
+- `auto` + `errors`: 개인 프로젝트용. 자동으로 오류 줄까지 보낸다. `minimal`이면 오류 줄 없이 항목만 보낸다.
+`/adopt`가 새 레포에서 한 번 묻고 이 값을 적는다. 받는 쪽은 `gs backlog`와 `/grill` 1단계가 열린 `field-report` issue를 후보로 보인다. 티켓 키 `closes: [12]`면 그 PR이 병합될 때 issue가 닫힌다.
+
+명령: `gs feedback "한 줄"`(초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태), `gs feedback send`(쌓인 것 전송). skill은 `/feedback <한 줄 | list | send>`.
+
+## `/overnight`: 자는 동안 이어 돌리기
+
+자러 가기 전에 한 번 부르면 여러 feature를 병합까지 이어 돌리고 아침에 한 장으로 보고한다. 범위는 병합까지다(force push나 원격 브랜치 수동 삭제는 안 한다).
+```
+/overnight csv-export csv-import     # 시작
+/overnight resume                    # 세션이 죽었거나 멈춘 밤을 잇는다
+```
+1. **시작 라운드**(사람이 앞에 있다): 순서와 feature끼리의 독립 여부, 사소한 수정 허락 범위, 텔레그램 켤지를 한 번에 묻는다. 답은 `.goldstack/overnight/<날짜>.md`에 적힌다(gitignore).
+2. **사전 점검**: 원격 앞섬, `gs check`, 미커밋 grill, 세션 권한 모드(승인 창이 안 뜨는지), 디스크, CLI 로그인을 사람이 있을 때 확인한다. "자도 된다"가 나오면 그때부터 묻지 않는다.
+3. **밤사이**: 그 파일에 적힌 허락만으로 feature를 차례로 잇는다. gs를 고친 feature 뒤에는 `git pull`과 재설치를 하고 다음을 돌린다. 앞 feature가 실패하면 시작 라운드의 독립 답대로 계속하거나 멈춘다. 허락 밖의 일을 만나면 멈추고 `아침에 물을 것`에 적는다.
+4. **깨어 있기**: 맥은 `caffeinate`, 리눅스는 `systemd-inhibit`(없으면 건너뜀). 맥북은 전원을 연결하고 덮개를 연다.
+5. **아침**: 같은 파일의 `결과` 표(feature, 상태, 다시 띄움 횟수, PR, 이유와 재개 명령)를 읽는다. 텔레그램이 켜져 있으면 요약 한 통이 온다.
+
+시험은 skill 지침이 있는지만 확인한다. 실제 동작은 첫 사용에서 확인한다.
+
+## 리눅스 서버에서 쓰기
+
+herdr 없이도 된다. `gs go`를 herdr 밖에서 돌리면 worker가 화면 없는 프로세스로 돌고, 진행은 `gs status`와 `worker.log`로 본다. SSH가 끊겨도 돌게 하려면 tmux 안에서 띄운다:
+```sh
+tmux new -s gs
+claude    # 여기서 /go 나 /overnight
+# 떼어 놓기: Ctrl-b d · 다시 붙기: tmux attach -t gs
+```
+`gs go`가 죽었으면 다시 치면 같은 자리에서 잇는다. 설치는 README와 같고 `uv`, `git`, `gh`, `claude`가 필요하다. 이 레포의 시험은 GitHub Actions ubuntu에서도 돈다.
 
 ## 기존 레포 옮기기(`gs migrate`)
 

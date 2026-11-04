@@ -19,7 +19,7 @@
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
-| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글, `gs feedback` |
+| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글, `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
 | `notify.py` | 텔레그램 전송 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
@@ -202,7 +202,8 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 2. 세우기(`_net_hold`): `failures`와 등급을 그대로 두고 `transient_errors`를 올린다. 이유 `네트워크 대기: <이유>`, phase `network`, `network_resume`을 남긴다. 다른 worker가 잡아 둔 대기가 있으면 거기에 함께 탄다. 다음 대기가 없으면(`Backoff.next`가 `None`) `NetworkAbort`다.
 3. 끊김 동안(`Outage.active`: 기다리는 worker나 회복을 확인하는 worker가 있을 때): 새 worker·리뷰를 시작하지 않는다. 도는 worker는 그대로 두고, 성공으로 끝난 worker(수정 worker 포함)의 리뷰·재리뷰는 미룬다(`_net_park`, `network_resume.done`). 진행 줄은 `네트워크 대기(2회, 3분 뒤)`, 회복 확인 중이면 `네트워크 회복 확인(2회)`.
 4. 다시 띄우기(`_resume`): 같은 worktree·브랜치에서 새 worker를 띄운다. 구현은 새 시도 디렉터리 `run/<NN>/<시도>`, 수정 worker는 `fix-net<k>`(`fix2-net<k>`)다. brief에 `worker.NETWORK_RESUME`("지난 시도가 네트워크로 끊겼다…")가 붙는다. 처음 base를 그대로 쓰므로 앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정이다.
-5. 회복: 다시 띄운 worker가 `RECOVERY_MINUTES`(5분) 넘게 일시 오류 없이 돌거나 끝나면 끝이다(claude 자체 재시도가 약 3분 넘게 걸린다). 함께 기다리던 worker를 바로 띄우고 일정을 새로 시작하고 미룬 리뷰를 돌려놓는다. `■ 네트워크 회복: 다른 티켓 시작을 재개한다`.
+5. 회복(`go._net_recovered`): 회복은 다시 띄운 worker로만 판정한다. 기다리는 worker가 없을 때 다시 띄운 worker 중 하나가 일시 오류 없이 끝나거나, 마지막 일시 오류 뒤로 `RECOVERY_MINUTES`(5분) 넘게 일시 오류 없이 돌면 회복이다(claude 자체 재시도가 약 3분 넘게 걸린다). 이미 잡힌 대기는 다른 티켓이 끝나도 끝까지 간다. 회복하면 함께 기다리던 worker를 바로 띄우고 미룬 리뷰를 돌려놓는다. `■ 네트워크 회복: 다른 티켓 시작을 재개한다`.
+6. 같은 끊김으로 잇기(`transient.SAME_OUTAGE_MINUTES`, 30분): 회복해도 대기 일정과 합계는 남는다. 끊김이 끝난 뒤 30분 안에 다시 끊기면 같은 끊김으로 누계를 잇고, 30분을 넘겨 정상으로 돌았으면 새 끊김으로 새로 센다. 그래서 끊겼다 붙었다를 반복해도 합계가 `network_wait_minutes`를 넘으면 `중단(네트워크)`로 실제로 멈춘다.
 
 **codex**(`transient.ReconnectWatch`) — codex worker는 끊겨도 죽지 않고 `Reconnecting...` 이벤트를 찍으며 기다린다. `_wait_any`가 로그를 이어 읽어, `Reconnecting`만 `network_wait_minutes` 넘게 이어지면 `NetworkAbort`다. 다른 이벤트가 나오면 처음부터 다시 잰다. 회복 시간도 마지막 `Reconnecting`부터 잰다.
 
@@ -418,6 +419,16 @@ same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이
 
 `backlog.py`는 설정된 원격의 GitHub 저장소가 `feedback.repo`와 같을 때만 열린 `field-report` issue를 조회한다. 번호·제목·횟수(본문과 횟수 댓글의 최댓값)를 보이며 gh 실패는 한 줄 경고로 끝낸다. 기존 아이디어·범위 밖 출력과 종료 코드는 그대로다.
 
+## 피드백 수집 (`feedback.py`, `cli.py`)
+
+gs 결함만 규칙으로 골라 초안(`record`)으로 넘긴다. 판단 모델은 없다. 대상 프로젝트의 실패(티켓 구현 실패, 패턴에 안 걸린 "커밋 없음", 시험 실패, 리뷰 지적, `transient.py`가 가리는 일시 오류)는 올리지 않는다. `mode = "off"`이거나 `GS_ROLE=worker`면 아무것도 하지 않는다.
+
+- **내부 예외**: `cli.main`이 처리되지 않은 `Exception`을 `collect_exception`으로 넘긴 뒤 그대로 다시 던진다. 단계는 명령 이름이다. `gs go`의 예외는 `cmd_go`가 요약 전에 먼저 수집한다. 끊긴 파이프, 네트워크 중단, 메시지가 일시·환경 오류인 외부 오류(`OSError`, `GitError` 등)는 만들지 않는다.
+- **마무리 이상**(단계 `finish`): `cmd_go`가 `go()` 전후로 state를 읽는다. `finish.run`이 이번에 돌았을 때(`metrics`의 `total` 단계가 늘었을 때)만 본다. 그래서 검사 오류·잠금 실패·준비 실패로 보존된 재개 phase는 갇힘이 아니다. `finish-error`(새 오류와 outcome `마무리 실패: …`), `unexpected-revert`(reverted인데 integration 통과·base 실패 기록이 없다), `stuck-phase`(`merge_requested`·`merged`·`main_failed`로 들어가 그대로 나왔다) 중 하나를 올린다. base 검증이 실패해 되돌린 것은 설계된 동작이자 시험 실패라 올리지 않는다. `finish.run`이 예외로 끝난 실행, 네트워크 중단, 일시·환경 오류, 사람·CI를 기다리는 phase도 보지 않는다. 보고서 커밋·push처럼 `finish.error`를 남기지 않는 단계의 git 오류는 환경 탓과 구별할 글이 state에 없어 보이지 않는다.
+- **어댑터 실패**(단계 `worker`): `go()` 전후로 새로 쓰인 `run/<티켓>/<시도>/failure.log`만 본다. `worker.log` 끝의 CLI 오류 이벤트와 마지막 이벤트 뒤 stderr(`warning:` 제외)가 일시·환경 오류(인증, 사용량 한도, 권한, 없는 모델)를 말하면 패턴과 상관없이 올리지 않는다. 도구 출력과 모델 응답은 보지 않는다. 그다음 이유와 `worker.log` 끝으로 `ADAPTER_PATTERNS`를 앞에서부터 맞춘다: `codex-cannot-lock-ref`, `agy-no-result`, `worker-runner-lost`. 표에 없어도 어댑터가 낸 오류 모양이면 `unknown`이다. 오류 줄은 `detail`을 따른다. 수정 worker의 실패는 `failure.log`를 남기지 않아 보이지 않는다.
+- **전송과 요약**: `cmd_go`가 시작에 `send`로 쌓인 초안을 다시 보내고, 끝에 새 초안을 보낸 뒤 `■ goldstack 피드백: 보냄 N · 대기 M`을 낸다. 둘 다 0이거나 `off`면 줄이 없다. `draft`는 쌓기만 한다.
+- **격리**: 수집의 오류는 `cli._quiet`에서 경고 한 줄이 되고 종료 코드·결과는 그대로다. 초안에 넣는 CLI 버전 확인은 빈 임시 디렉터리에서 돌아 레포와 검증 중인 worktree에 닿지 않는다.
+
 ## 텔레그램 알림
 
 `gs go`가 끝날 때(요약 출력 직후) `notify.telegram = true`면 코디네이터가 한 통 보낸다. worker(`GS_ROLE=worker`)는 보내지 않는다.
@@ -510,6 +521,10 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
                       integration-verify.log, integration-final-verify.log, integration-recheck-verify.log,
                       main-verify.log, main-recheck-verify.log
 ```
+
+## Actions 시험(리눅스)
+
+`.github/workflows/tests.yml`이 `main` push와 PR마다 ubuntu-latest에서 `uv run python -m unittest discover -s tests`를 돈다(시간 제한 30분, 사용자 이름·이메일은 job에서 git 전역 설정으로 넣는다). 리눅스에서도 시험이 통과하는지 보는 용도이고 병합을 막지 않는다: 이 레포의 `git.wait_checks`는 `false`이고 필수 검사도 없다. 실패하면 PR·커밋의 검사 표시와 Actions 로그에서 보고 고친다. macOS 전용 동작(`caffeinate` 등)은 코드가 아니라 `/overnight` skill의 안내에만 있다.
 
 ## 시험 seam
 

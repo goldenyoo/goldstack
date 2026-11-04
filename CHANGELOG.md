@@ -64,3 +64,26 @@
 함께 확인할 것:
 - `verify_ticket`이 이제 병합 트리에서 돈다. gitignore 밖에 빌드 결과를 쓰는 명령은 "worktree가 바뀌었다"로 실패하니 출력 위치를 레포 밖으로 옮긴다.
 - `gs go`를 감싼 스크립트는 종료 코드 3을 "실패"가 아니라 "다시 돌리면 이어 간다"로 다룬다.
+
+### goldstack-v8
+
+- 목표: 여러 머신·프로젝트에서 버전을 맞추고, 현장의 gs 결함이 손 없이 이 저장소 issue로 오고, 자기 전 한 번 불러 feature들이 밤사이 끝까지 가게 한다.
+- 버전: `gs self-update`(main 채널, `--version <태그>`)가 CLI와 플러그인을 갱신한다. `gs go`·`gs doctor`는 설치본이 main보다 뒤처졌으면 경고만 한다(조회 실패는 건너뜀). 레포 config의 `[goldstack] requires`보다 낮으면 `gs check`·`gs go`가 오류로 멈춘다. `gs go`가 도는 머신에서 `gs self-update`는 거부한다.
+- 피드백: gs 내부 예외, 마무리 이상(갇힘, 예상 밖 revert), 이름 붙은 어댑터 실패와 `unknown`을 규칙으로 골라 가린 초안으로 쌓고 `field-report` issue로 보낸다. 레포·파일·feature·사람 이름, 코드, 커밋 메시지, `local.env` 값은 나가지 않는다. 못 보내면 다음 실행에 재전송하고 같은 지문은 하루 한 번 횟수 댓글만 달고 하루 새 issue는 5건까지다. `gs feedback "한 줄"|list|send`, `/feedback`, `gs backlog`의 `field-report` 표시, 티켓 `closes`를 추가했다.
+- `/overnight` skill: 시작 라운드에서 허락을 받아 `.goldstack/overnight/<날짜>.md`에 적고, 사전 점검 뒤 밤사이 사람 없이 feature들을 병합까지 잇고(`caffeinate`·`systemd-inhibit`) 아침 결과 한 장을 남긴다. `/overnight resume`으로 잇는다. `/adopt`가 피드백 모드를 한 번 묻고, `/retro` 후보를 issue로 올릴 수 있다.
+- 고침: codex worker가 커밋 도중 ref 디렉터리가 사라져 실패하던 것(sandbox 쓰기 범위), 네트워크 대기 상한이 실제로 지켜지게(회복은 다시 띄운 worker로만 판정, 회복 뒤 30분 안에 다시 끊기면 같은 끊김으로 누계), 미커밋 변경이 남은 worktree로 첫 리뷰를 하지 않고 병합될 커밋을 읽으며 `reviewed_head`와 대조, 다른 티켓·커밋 본문의 `gs-ticket` 문구로 merged가 되지 않게 정확히 비교.
+- worker 차단과 push 전 대조: worker의 `git remote` 변경·`git config` 쓰기·자기 브랜치 밖 ref 옮기기를 막고, gs는 push 전에 원격 URL·pushurl·`core.hooksPath`가 시작 때와 같은지 대조해 다르면 push하지 않는다.
+- GitHub Actions ubuntu에서 시험을 돌린다(병합은 막지 않는다). README·가이드·내부 문서에 리눅스 서버(herdr 없이, tmux) 사용법을 적었다.
+
+**레포에서 할 일** — 새 키는 모두 선택이다. `gs`를 다시 설치한 뒤 필요한 레포만 `.goldstack/config.toml`을 손으로 고친다(`gs init`은 있는 파일을 그대로 두고 `gs doctor --write`는 이 키를 채우지 않는다).
+
+| 새 config 키 | 넣을 값 | 안 넣으면 |
+|---|---|---|
+| `[goldstack] requires` | `">=0.1"`처럼 최소 gs 버전 하나 | 최소 버전을 검사하지 않는다 |
+| `[feedback] mode` | `off`·`draft`·`auto`. 개인 프로젝트 `auto`, 회사 레포 `off`. `/adopt`가 한 번 물어 적는다 | `[feedback]` 절이 없으면 `off`: 아무것도 쓰지도 보내지도 않는다. (`gs init`이 새로 만든 config만 `draft`) |
+| `[feedback] detail` | `errors`(가린 오류 줄 최대 20줄까지 보냄) 또는 `minimal`(오류 줄 없음) | `errors` |
+| `[feedback] repo`, `max_per_day` | issue 저장소, 하루 새 issue 수 | `gs init`이 적은 값 / `5` |
+
+- `.gitignore`에 `.goldstack/feedback/`, `.goldstack/overnight/` 줄이 없는 옛 레포는 `gs init`을 다시 쳐서 줄을 더한다(있는 파일은 그대로 둔다). 피드백 디렉터리는 스스로도 git에서 가리지만 줄을 넣어 둔다.
+- worker가 `git config`·`git remote`를 쓰는 티켓은 이제 막힌다. 한 명령에만 필요하면 `git -c 키=값 <명령>`을 쓴다. `worktree.setup`이 `core.hooksPath`를 바꾸는 도구(husky 등)면 push 전 대조가 멈추게 하니 `docs/guide.md`의 "push 설정이 바뀌어 멈췄을 때"를 본다.
+- `gs go`를 감싼 스크립트는 종료 코드 3을 계속 "다시 돌리면 이어 간다"로 다룬다. 대기 상한이 실제로 지켜져 `중단(네트워크)`가 더 자주 날 수 있다.
