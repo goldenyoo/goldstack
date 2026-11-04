@@ -178,6 +178,27 @@ class WriteTest(Unit):
         idea = backlog.read_idea(self.repo / rel)
         self.assertEqual(idea.source, 'My_Feature "x" 리뷰 A 1')
 
+    def test_tickets_with_same_slug_get_a_file_each(self):
+        self.r.order = ["A_1", "A-1"]
+        self.r.st.ticket("A_1").review = {"findings": [finding("밑줄 티켓의 지적")]}
+        self.r.st.ticket("A-1").review = {"findings": [finding("줄표 티켓의 지적", location="b.py:1")]}
+        rels = [IDEA.format("a-1-1"), IDEA.format("a-1-2")]
+        self.assertEqual(self.write(), rels)
+        self.assertEqual(self.warnings, "")
+        self.assertEqual(findings.paths(self.r), set(rels))
+        for tail, tid, claim in (("a-1-1", "A_1", "밑줄 티켓의 지적"), ("a-1-2", "A-1", "줄표 티켓의 지적")):
+            idea = backlog.read_idea(self.idea(tail))
+            self.assertEqual((idea.source, idea.summary), (f"demo 리뷰 {tid}", claim))
+        self.reload()  # 재개: 번호가 그대로라 더 생기지 않는다
+        self.assertEqual(self.write(), [])
+        self.assertEqual(self.names(), ["demo-a-1-1", "demo-a-1-2"])
+
+    def test_same_slug_ticket_out_of_scope_keeps_its_number(self):
+        self.r.order = ["A-1"]
+        self.r.st.ticket("A_1").review = {"findings": [{**finding("범위 밖 티켓의 지적"), findings.NUMBER: 1}]}
+        self.r.st.ticket("A-1").review = {"findings": [finding("줄표 티켓의 지적", location="b.py:1")]}
+        self.assertEqual(self.write(), [IDEA.format("a-1-2")])  # 1번 파일은 아직 없어도 A_1의 번호다
+
     def test_longer_ticket_id_is_not_mistaken_for_a_number(self):
         (self.repo / ".goldstack/ideas").mkdir(parents=True)
         self.idea("01-2-1").write_text(HUMAN, encoding="utf-8")  # 티켓 01-2의 1번

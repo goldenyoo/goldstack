@@ -7,6 +7,7 @@
 id는 겹친다)에서 시작하고, 이미 쓴 번호면 다음으로 간다. 재리뷰가 앞 기록에 지적을 더해 순번이 밀려도, 재시도의 새 기록이
 앞 파일의 번호를 만나도 다른 지적의 파일을 건드리지 않는다. 번호를 저장한 뒤에 파일을 쓰므로 재개가 같은 지적을 새 번호로 쓰지 않는다.
 재시도의 새 기록이 같은 지적(첫 줄·위치가 같음)을 또 내면 그 파일의 번호를 쓴다.
+slug가 같아지는 티켓(A_1, A-1)은 파일 이름을 나눠 쓰므로 state에 있는 서로의 번호도 피한다.
 
 있는 파일은 다시 쓰지 않는다. `taken`·`dropped`와 사람이 고친 내용이 남는다. 사람이 지운 파일은 번호가 state에 남아 있으면
 다음 보고서가 다시 만든다. 버릴 때는 `dropped`로 둔다.
@@ -94,9 +95,11 @@ def _bodies(directory: Path, prefix: str) -> dict[int, str]:
 
 def _assign(r, tid: str) -> bool:
     """번호 없는 대상 지적에 번호를 정한다. 정한 것이 있으면 True."""
+    prefix = _prefix(r.name, tid)
     records = _findings(r.st.tickets[tid])
-    bodies = _bodies(r.iwt / IDEAS, _prefix(r.name, tid))
-    used = {*bodies, *(f[NUMBER] for f in records if NUMBER in f)}
+    bodies = _bodies(r.iwt / IDEAS, prefix)
+    sharing = [ts for other, ts in r.st.tickets.items() if _prefix(r.name, other) == prefix]
+    used = {*bodies, *(f[NUMBER] for ts in sharing for f in _findings(ts) if NUMBER in f)}
     changed = False
     for ordinal, finding in enumerate(records, 1):
         if NUMBER in finding or not _target(finding):
