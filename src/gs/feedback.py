@@ -116,7 +116,8 @@ _WORDS = frozenset("""
     streaming unexpectedly curl
 
     traceback calledprocesserror timeoutexpired jsondecodeerror tomldecodeerror
-    adaptererror frontmattererror giterror herdrerror networkabort reviewerror reviewtimeout reviewtransient
+    adaptererror frontmattererror giterror herdrerror networkabort pushsettingschanged reviewerror reviewtimeout
+    reviewtransient
 
     gs git gh uv claude codex agy gemini toml darwin linux windows arm64 aarch64 x86_64 amd64
 
@@ -124,7 +125,7 @@ _WORDS = frozenset("""
     네트워크 중단 종료 코드 명령 실행 수 못 못했다 읽을 쓸 찾을 찾지 만들 없는 잘못된 알 모름 다시 끊김 대기 일시 내부 예외
 """.split()) | {name.lower() for name in _BUILTIN_EXCEPTIONS}
 # 오류 종류(gs 코드가 정한 값)에만 쓰는 gs 자신의 낱말.
-_KIND_WORDS = _WORDS | frozenset("adapter frontmatter herdr review reviewer worker runner judge setup feedback note".split())
+_KIND_WORDS = _WORDS | frozenset("adapter frontmatter herdr review reviewer worker runner judge setup feedback note settings".split())
 
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")

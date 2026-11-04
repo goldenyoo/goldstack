@@ -21,7 +21,7 @@ class Removed:
 
 
 def _remove(repo: Path, paths: list[Path], branches: list[str], remote: str,
-            prefix: str, out: TextIO, err: TextIO, *, exact: bool = False) -> Removed:
+            prefix: str, out: TextIO, err: TextIO, *, record: dict, exact: bool = False) -> Removed:
     removed = Removed()
 
     def warn(e: Exception) -> None:
@@ -50,12 +50,13 @@ def _remove(repo: Path, paths: list[Path], branches: list[str], remote: str,
             warn(e)
     # tracking ref는 오래됐거나 fetch refspec 밖일 수 있다. 실제 원격의 heads에서 찾는다.
     try:
+        git.check_push(repo, remote, record)  # 실행 시작 때와 다른 주소에는 묻지도 지우지도 않는다
         refs = git.out(repo, "ls-remote", "--heads", remote).splitlines()
         names = [line.split()[1].removeprefix("refs/heads/") for line in refs]
         names = [name for name in names if name == prefix] if exact else [name for name in names if name.startswith(prefix)]
         for name in names:
             try:
-                git.run(repo, "push", remote, "--delete", name)
+                git.push(repo, remote, record, "--delete", name)
                 removed.remote += 1
             except (git.GitError, OSError) as e:
                 warn(e)
@@ -77,7 +78,7 @@ def integration(r) -> None:
         branch = f"gs/{r.name}/integration"
         paths = [r.iwt] if r.iwt.exists() or r.iwt.resolve() in git.worktrees(r.repo) else []
         _remove(r.repo, paths, _local_branches(r.repo, branch, exact=True), r.remote,
-                branch, sys.stdout, sys.stdout, exact=True)
+                branch, sys.stdout, sys.stdout, record=r.st.push_record, exact=True)
     except Exception as e:  # noqa: BLE001 — 자동 정리는 최선. verified 결과를 바꾸지 않는다
         print(f"경고: integration 정리 실패: {e}", flush=True)
 
@@ -108,7 +109,8 @@ def clean(repo: Path, name: str, force: bool, out: TextIO, err: TextIO) -> int:
             paths = set(wt.iterdir()) if wt.exists() else set()
             paths.update(path for path in git.worktrees(repo) if path.parent == wt)
             prefix = f"gs/{name}/"
-            removed = _remove(repo, sorted(paths), _local_branches(repo, prefix), cfg.git.remote, prefix, out, err)
+            removed = _remove(repo, sorted(paths), _local_branches(repo, prefix), cfg.git.remote, prefix, out, err,
+                              record=st.push_record)
             # 지우지 못한 경로와 다른 feature의 경로는 남긴다. 이미 사라진 state 경로도 정리한다.
             # resolve()로 symlink 대상을 따라가면 지운 링크 대신 바깥 worktree 기록을 지울 수 있다.
             gone = set(removed.paths)

@@ -10,6 +10,7 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 수정은 티켓당 최�
 리뷰한다(_review_to_head). catch-up은 그 뒤라 합친 최신 integration은 worker 변경으로 세지 않는다.
 gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 state에 세고 config `[agy] max_calls_per_run`에 닿으면 더 띄우지 않는다.
 끝에는 보고서·PR·base 검증·revert를 한다(08). 지난 마무리가 남았으면 그것만 끝내고 멈춘다. 남은 티켓은 다음 gs go가 한다.
+worker를 띄우기 전에 push 설정을 state에 기록한다(_begin). 재개해도 유지하고, gs의 push마다 대조한다(git.push).
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 
@@ -157,6 +158,9 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
             print(f"gs go: git 오류: {e}", file=sys.stderr)
             finished = False
             url = r.st.finish.get("url") if r.st else None
+            if isinstance(e, git.PushSettingsChanged):
+                # 알림·`■ 마무리:`는 한 줄을 쓴다. 바뀐 값과 되돌릴 명령은 위 stderr와 finish.error에 남는다
+                r.st.finish.update(error=str(e), outcome=str(e).splitlines()[0])
         except herdr.HerdrError as e:
             # git 오류처럼 요약·알림까지 간다. 종료 코드는 1(finished가 False라 ok도 False).
             print(f"gs go: herdr 오류: {e}", file=sys.stderr)
@@ -239,6 +243,8 @@ def _begin(r: Run) -> None:
     st.agy_calls = 0  # 상한은 실행마다다(spec 1-9)
     st.network.pop("wait", None)
     st.network.pop("aborted", None)
+    if st.push_record.get("remote") != r.remote:  # 재개는 첫 기록을 유지한다. worker가 바꾼 값을 기준으로 삼지 않게
+        st.push_record = git.push_settings(r.repo, r.remote)
     r.st = st
     metrics.runtime(r)
     r.history_median_s = state.load_eta_history(r.repo, r.name)

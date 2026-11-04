@@ -5,12 +5,15 @@
 
 막는 것은 되돌릴 수 없는 일뿐이다(ORIGINS 실패 10: 분류기가 정상 작업을 막음).
 - `git push`(모든 형태), force 계열(`--force`, `--force-with-lease`)
+- 공용 git 설정 쓰기(`git remote` 변경, `git config` 쓰기), 자기 브랜치 밖의 ref를 옮기는 `update-ref`·`branch -f`·`symbolic-ref`.
+  worktree는 설정과 ref를 주 레포와 공유한다. 임시 디렉터리의 버리는 레포는 공유하지 않아 통과한다(`--global`·`--system` 제외)
 - `gh` 쓰기 명령(읽기 전용 명령만 통과)
 - worktree 밖 쓰기(임시 디렉터리와 /dev는 통과)
 - 비밀 파일 읽기(`~/.ssh`, `.env` 등)
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
+공용 git 설정은 `python -c`로도 고칠 수 있어, gs가 push 직전에 실행 시작 때 기록과 대조한다(`git.check_push`).
 worker 역할에서 hook 입력을 해석하지 못하면(JSON 아님, 객체 아님) 막는다(fail closed).
 알려진 경로·glob·재귀 검색 시작점을 검사한다. 인터프리터 코드·스크립트 본문·심볼릭 링크까지 추적하는 보안 경계는 아니다.
 """
@@ -21,8 +24,9 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 
@@ -35,6 +39,22 @@ GIT_WRITES = {
     "rebase", "reset", "restore", "revert", "rm", "stash", "switch", "tag", "update-ref", "worktree",
 }
 GIT_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"}
+
+# `git remote`에서 공용 설정을 바꾸지 않는 하위 명령. 여기 없는 것은 쓰기로 본다
+GIT_REMOTE_KEEPS = {"show", "get-url", "update", "prune"}
+# `git config`의 읽기. 여기 없는 옵션(`--add`, `--unset`, 모르는 줄임말)은 쓰기로 본다
+GIT_CONFIG_READ_ACTIONS = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool",
+                           "--list", "-l"}
+GIT_CONFIG_READ_FLAGS = {"--global", "--system", "--local", "--worktree", "--null", "-z", "--name-only", "--show-origin",
+                         "--show-scope", "--includes", "--no-includes", "--bool", "--int", "--bool-or-int",
+                         "--bool-or-str", "--path", "--expiry-date", "--no-type", "--all", "--regexp", "--fixed-value",
+                         "--help", "-h"}
+GIT_CONFIG_READ_VALUED = {"-f", "--file", "--blob", "--type", "--default", "--value", "--url"}
+GIT_CONFIG_READ_VERBS = {"get", "list"}  # git 2.46의 `git config get`·`git config list`
+GIT_CONFIG_WRITE_VERBS = {"set", "unset", "rename-section", "remove-section", "edit"}
+GIT_CONFIG_WRITE = ("`git config` 쓰기는 공용 git 설정(gs의 push 목적지, 실행될 git hook)을 바꾼다. "
+                    "명령 하나에만 필요하면 `git -c 키=값 <명령>`을 쓴다")
+GIT_LOCATION_ENV = ("GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_CONFIG")  # 명령 앞에 붙으면 git이 볼 곳이 바뀐다
 
 # gh 읽기 전용 명령. 여기 없는 것은 쓰기로 본다(되돌릴 수 없는 쪽으로 기울인다)
 GH_READ = {
@@ -307,6 +327,8 @@ def segments(text: str, cwd: str, ctx: Ctx) -> Iterator[tuple[list[str], list[tu
     while i < len(toks):
         tok = toks[i]
         if is_redirect(tok):
+            if argv and argv[-1].isdigit():
+                argv.pop()  # `2>/dev/null`의 2는 인자가 아니다. 토큰으로는 `echo 2 > f`와 구별되지 않지만 인자 하나를 잃는 쪽이 낫다
             target = toks[i + 1] if i + 1 < len(toks) else ""
             redirects.append((tok, target))
             i += 2
@@ -362,7 +384,7 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
         return check_bash(" ".join(args), seg, depth + 1)
 
     if name == "git":
-        reason = check_git(args, seg)
+        reason = check_git(args, seg, argv[:len(argv) - len(rest)])
         if reason:
             return reason
     if name == "gh":
@@ -512,7 +534,8 @@ def in_place_files(name: str, args: list[str]) -> list[str]:
     return files if has_script else files[1:]
 
 
-def check_git(args: list[str], ctx: Ctx) -> str | None:
+def check_git(args: list[str], ctx: Ctx, prefix: Iterable[str] = ()) -> str | None:
+    """prefix: 명령 앞에 붙은 단어들(`GIT_DIR=x`, `env` 등). 볼 곳을 바꾸는 환경 변수만 읽는다."""
     gitdir = ctx.cwd
     paths: list[str] = []  # --work-tree, --git-dir: git이 이 경로를 바꾼다
     i = 0
@@ -544,7 +567,150 @@ def check_git(args: list[str], ctx: Ctx) -> str | None:
     for p in paths:
         if sub in GIT_WRITES and outside(p, there):
             return f"worktree 밖 `{p}`를 가리켜 `git {sub}`를 한다(worker는 `{ctx.worktree}` 안만 바꾼다)"
+    located = [a.split("=", 1)[1] for a in prefix if a.startswith(tuple(f"{name}=" for name in GIT_LOCATION_ENV))]
+    return check_shared_git(sub, rest, gitdir, [*paths, *located], ctx)
+
+
+# ---------------------------------------------------------------- 공용 git 설정·ref
+# worktree는 설정과 ref를 주 레포와 공유한다. gs의 push 목적지, gs의 git 명령이 실행할 hook, 다른 티켓의 브랜치가 거기 있다.
+
+def check_shared_git(sub: str, rest: list[str], gitdir: str, paths: list[str], ctx: Ctx) -> str | None:
+    """공용 설정이나 자기 브랜치 밖의 ref를 바꾸는 명령이면 그 이유. 임시 디렉터리의 버리는 레포는 공유하지 않아 통과한다."""
+    if sub == "remote":
+        reason = _remote_write(rest)
+    elif sub == "config":
+        reason = _config_write(rest)
+        if reason and any(_is_long(a, "--global", "--system") for a in rest):
+            return reason  # 어느 레포에서 해도 레포 밖 설정에 남는다
+        paths = [*paths, *_config_files(rest)]
+    elif sub == "update-ref":
+        reason = _update_ref_write(rest, ctx)
+    elif sub == "branch":
+        reason = _branch_write(rest, ctx)
+    elif sub == "symbolic-ref":
+        reason = _symbolic_ref_write(rest, ctx)
+    else:
+        return None
+    return None if reason is None or _scratch_repo(gitdir, paths, ctx) else reason
+
+
+def _scratch_repo(gitdir: str, paths: list[str], ctx: Ctx) -> bool:
+    """git이 볼 곳이 전부 임시 디렉터리인가. 모르는 변수가 낀 경로는 아니라고 본다."""
+    there = Ctx(worktree=ctx.worktree, cwd=gitdir, env=ctx.env)
+    temp = allowed_outside(ctx)
+    return all(real is not None and not _within(real, ctx.worktree) and any(_within(real, root) for root in temp)
+               for real in (resolve(gitdir, ctx), *(resolve(path, there) for path in paths)))
+
+
+def _is_long(arg: str, *names: str) -> bool:
+    """긴 옵션 names 중 하나인가. git은 `--x=값`과 모호하지 않은 줄임말(`--glob`)도 받는다."""
+    option = arg.partition("=")[0]
+    return option.startswith("--") and len(option) > 2 and any(name.startswith(option) for name in names)
+
+
+def _short_flags(rest: list[str]) -> str:
+    """짧은 옵션 글자들(`-fv` → fv). `--sort -committerdate` 같은 값은 묶음 길이로 걸러 낸다."""
+    return "".join(a[1:] for a in rest if re.fullmatch(r"-[A-Za-z]{1,4}", a))
+
+
+def _ref_operands(rest: list[str]) -> list[str]:
+    """`update-ref`·`symbolic-ref`에서 옵션과 `-m <이유>`를 뺀 단어들."""
+    words: list[str] = []
+    skip = False
+    for a in rest:
+        if skip:
+            skip = False
+        elif a == "-m":
+            skip = True
+        elif not a.startswith("-"):
+            words.append(a)
+    return words
+
+
+def own_branch(ctx: Ctx) -> str:
+    """worktree가 가리키는 ref(`refs/heads/…`). 분리 HEAD거나 못 읽으면 빈 문자열이고, 그러면 어떤 브랜치도 자기 것이 아니다."""
+    try:
+        cp = subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=ctx.worktree, capture_output=True, text=True,
+                            stdin=subprocess.DEVNULL)
+    except OSError:
+        return ""
+    return cp.stdout.strip() if cp.returncode == 0 else ""
+
+
+def _remote_write(rest: list[str]) -> str | None:
+    action = next((a for a in rest if not a.startswith("-")), "")
+    if not action or action in GIT_REMOTE_KEEPS:
+        return None
+    return f"`git remote {action}`는 공용 git 설정(gs의 push 목적지)을 바꾼다"
+
+
+def _config_write(rest: list[str]) -> str | None:
+    words: list[str] = []
+    reads = False
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        i += 1
+        option = a.partition("=")[0]
+        if a == "--":
+            words += rest[i:]
+            break
+        if not a.startswith("-") or a == "-":
+            words.append(a)
+        elif option in GIT_CONFIG_READ_ACTIONS:
+            reads = True
+        elif option in GIT_CONFIG_READ_VALUED:
+            i += 0 if "=" in a else 1
+        elif option not in GIT_CONFIG_READ_FLAGS:
+            return GIT_CONFIG_WRITE  # 모르는 옵션은 쓰기로 본다
+    verb = words[0] if words else ""
+    if reads or verb in GIT_CONFIG_READ_VERBS:
+        return None
+    # 이름 하나는 읽기다(`git config user.name`). `$X`는 몇 단어로 풀릴지 모른다
+    return GIT_CONFIG_WRITE if verb in GIT_CONFIG_WRITE_VERBS or len(words) > 1 or "$" in verb else None
+
+
+def _config_files(rest: list[str]) -> list[str]:
+    """`git config -f`·`--file`의 대상."""
+    files = []
+    for k, a in enumerate(rest):
+        if a == "-f" or (_is_long(a, "--file") and "=" not in a):
+            files += rest[k + 1:k + 2]
+        elif _is_long(a, "--file"):
+            files.append(a.split("=", 1)[1])
+    return files
+
+
+def _update_ref_write(rest: list[str], ctx: Ctx) -> str | None:
+    if any(_is_long(a, "--stdin") for a in rest):
+        return "`git update-ref --stdin`은 어떤 ref를 옮기는지 볼 수 없다"
+    ref = next(iter(_ref_operands(rest)), "")
+    if not ref or ref == "HEAD" or ref == own_branch(ctx):
+        return None
+    return f"`git update-ref {ref}`는 자기 브랜치 밖의 ref를 옮긴다"
+
+
+def _branch_write(rest: list[str], ctx: Ctx) -> str | None:
+    """-f와 삭제·이름 바꾸기·복사. 새 브랜치를 만드는 일과 목록은 통과한다."""
+    short = _short_flags(rest)
+    moves = set(short) & set("dDmMcC") or any(_is_long(a, "--delete", "--move", "--copy") for a in rest)
+    if not moves and "f" not in short and not any(_is_long(a, "--force") for a in rest):
+        return None
+    names = [a for a in rest if not a.startswith("-")]  # 여기의 `-m`은 이유가 아니라 이름 바꾸기다
+    own = own_branch(ctx)
+    for name in names if moves else names[:1]:  # `-f <브랜치> <시작점>`: 옮기는 것은 첫 단어뿐이다
+        if f"refs/heads/{name}" != own:
+            return f"`git branch {' '.join(rest)}`는 자기 브랜치 밖의 ref `{name}`을 옮긴다"
     return None
+
+
+def _symbolic_ref_write(rest: list[str], ctx: Ctx) -> str | None:
+    if "d" in _short_flags(rest) or any(_is_long(a, "--delete") for a in rest):
+        return f"`git symbolic-ref {' '.join(rest)}`는 ref를 지운다"
+    words = _ref_operands(rest)
+    if len(words) < 2 or (words[0] == "HEAD" and words[1] == own_branch(ctx)):
+        return None  # 이름 하나는 읽기다
+    return f"`git symbolic-ref {' '.join(words)}`는 자기 브랜치 밖의 ref를 옮긴다"
 
 
 def check_gh(args: list[str]) -> str | None:
