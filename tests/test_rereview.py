@@ -20,6 +20,14 @@ if grep -q '^## 리뷰 지적(고칠 것)' "$GS_BRIEF"; then
   echo "fix $GS_TICKET $n" >> "$here/fix.log"
   if [ -f "$here/fixfail_$n" ]; then echo bad > "bad${n}_$GS_TICKET"; git add -A; git commit -qm "bad fix $n"; exit 3; fi
   if [ -f "$here/fixempty_$n" ]; then git commit -q --allow-empty -m "empty fix $n"; exit 0; fi
+  if [ -f "$here/fixdirty_$n" ]; then  # 일부만 커밋하고 진짜 수정은 미커밋으로 남긴다
+    echo partial > "partial${n}_$GS_TICKET"; git add -A; git commit -qm "partial fix $n"
+    echo real > pending_fix; echo changed >> "file_$GS_TICKET"; exit 0
+  fi
+  if [ -f "$here/fixmoved_$n" ]; then  # 티켓 브랜치에 커밋한 뒤 worktree를 다른 브랜치로 옮긴다
+    echo fixed > "fix${n}_$GS_TICKET"; git add -A; git commit -qm "fix $n"
+    git checkout -qb "moved$n"; echo off > off_branch; git add -A; git commit -qm "off branch"; exit 0
+  fi
   echo fixed > "fix${n}_$GS_TICKET"; git add -A; git commit -qm "fix $n"; exit 0
 fi
 echo "$GS_TICKET" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
@@ -39,6 +47,7 @@ n=$(( $(cat "$here/rereview_n_$who" 2>/dev/null || echo 0) + 1 )); echo $n > "$h
 echo "$who $n" >> "$here/rereview.calls"
 echo "start $who" >> "$here/rereview.events"
 cp "$in" "$here/rereview.prompt.$who.$n"
+{ pwd -P; git rev-parse HEAD; git status --porcelain; } > "$here/rereview.tree.$who.$n"
 cp "$(grep -o '/[^ `]*fix\\.patch' "$in" | head -n 1)" "$here/rereview.diff.$who.$n"
 cp "$(grep -o '/[^ `]*fix-findings\\.json' "$in" | head -n 1)" "$here/rereview.findings.$who.$n"
 if [ -f "$here/rereview.barrier" ]; then  # 다른 재리뷰가 시작할 때까지 기다린다(최대 5초): 동시 실행의 증거
@@ -47,6 +56,8 @@ fi
 [ -f "$here/refail_$who" ] && { echo "boom $who" >&2; exit 1; }
 [ -f "$here/rehang_$who" ] && exec sleep 5
 echo "end $who" >> "$here/rereview.events"
+# 미커밋 변경이 보이면 파일을 읽고 고쳐졌다고 믿는 리뷰어: 커밋된 트리를 받아야 속지 않는다
+[ -f pending_fix ] && [ -f "$here/rereview_${who}_dirty.json" ] && exec cat "$here/rereview_${who}_dirty.json"
 if [ -f "$here/rereview_${who}_$n.json" ]; then cat "$here/rereview_${who}_$n.json"; else echo 'not json'; fi
 """
 
@@ -311,6 +322,106 @@ class SecondFixTest(Base):
         [a] = self.ts().review["findings"]
         self.assertEqual((a["fix_attempt"], a["fix_round"], a["rereview"]), (review.ATTEMPTED, 1, review.UNRESOLVED))
         self.assertIn("띄우지 못함", a["fix_reason"])
+
+
+class RereviewTreeTest(Base):
+    """재리뷰는 병합될 커밋(수정 뒤 head)을 읽는다. worktree에 남은 미커밋 변경은 병합되지 않으니 보여 주지 않는다."""
+
+    def seen(self, who="codex", n=1):
+        path, head, *status = self.lines(f"rereview.tree.{who}.{n}")
+        return path, test_go.sh(self.repo, "git", "log", "-1", "--format=%s", head).strip(), status
+
+    def dirty_fix(self):
+        self.findings("codex", finding("FIX A: 값이 틀렸다"))
+        (self.bin / "fixdirty_1").touch()
+        self.answer("codex", "dirty", [(1, "resolved", "pending_fix를 읽어 확인")])
+
+    def assert_no_snapshot_left(self):
+        self.assertEqual(list(self.rundir.glob("gs-rereview-*")), [])
+        self.assertNotIn("gs-rereview-", test_go.sh(self.repo, "git", "worktree", "list"))
+
+    def test_clean_worktree_is_rereviewed_in_place(self):
+        self.findings("codex", finding("FIX A: 값이 틀렸다"))
+        self.answer("codex", 1, [(1, "resolved", "확인")])
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.seen(), (str((self.rundir / "wt/01").resolve()), "fix 1", []))
+
+    def test_uncommitted_fix_is_not_seen_so_second_fix_runs(self):
+        self.dirty_fix()
+        self.answer("codex", 1, [(1, "unresolved", "커밋에 수정이 없다")])
+        self.answer("codex", 2, [(1, "resolved", "확인")])
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        path, subject, status = self.seen()
+        self.assertNotEqual(path, str((self.rundir / "wt/01").resolve()))
+        self.assertEqual((subject, status), ("partial fix 1", []))
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
+        self.assertEqual(self.ts().review["findings"][0]["rereview"], review.RESOLVED)
+        self.assertEqual(self.seen(n=2), (str((self.rundir / "wt/01").resolve()), "fix 2", []))  # 2차가 다 커밋했다
+        self.assertIn("pending_fix", self.files())
+        self.assert_no_snapshot_left()
+
+    def test_uncommitted_changes_stay_in_worktree_and_out_of_merge(self):
+        self.dirty_fix()
+        self.answer("codex", 1, [(1, "resolved", "커밋된 partial로 충분하다")])
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        self.assertIn("재리뷰는 커밋된 트리", out + err)
+        wt = self.rundir / "wt/01"
+        self.assertEqual(self.ts().kept_worktrees, [str(wt)])
+        self.assertTrue((wt / "pending_fix").exists())
+        self.assertIn("changed", (wt / "file_01").read_text())
+        self.assertNotIn("pending_fix", self.files())
+        self.assert_no_snapshot_left()
+
+    def test_worktree_moved_to_other_branch_is_rereviewed_at_ticket_head(self):
+        self.findings("codex", finding("FIX A: 값이 틀렸다"))
+        (self.bin / "fixmoved_1").touch()
+        self.answer("codex", 1, [(1, "resolved", "확인")])
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        path, subject, status = self.seen()
+        self.assertNotEqual(path, str((self.rundir / "wt/01").resolve()))
+        self.assertEqual((subject, status), ("fix 1", []))
+        self.assertNotIn("off_branch", self.files())
+        self.assert_no_snapshot_left()
+
+    def test_snapshot_failure_is_unchecked_and_merge_continues(self):
+        self.dirty_fix()
+        real = go.git.run
+
+        def fail_add(cwd, *args, **kw):
+            if args[:2] == ("worktree", "add") and any("gs-rereview-" in a for a in args):
+                raise go.git.GitError("worktree add 실패")
+            return real(cwd, *args, **kw)
+
+        with mock.patch.object(go.git, "run", side_effect=fail_add):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("rereview.calls"), [])
+        found = self.ts().review["findings"][0]
+        self.assertEqual((found["rereview"], found["rereview_reason"]), (review.UNCHECKED, review.REASON_FAILED))
+        self.assertEqual(self.merged(), ["01"])
+        self.assert_no_snapshot_left()
+
+    def test_snapshot_removal_failure_keeps_verdicts(self):
+        self.dirty_fix()
+        self.answer("codex", 1, [(1, "resolved", "커밋된 partial로 충분하다")])
+        real = go.git.remove_worktree
+
+        def fail_remove(repo, path, branch=None):
+            if "gs-rereview-" in str(path):
+                raise go.git.GitError("worktree remove 실패")
+            return real(repo, path, branch)
+
+        with mock.patch.object(go.git, "remove_worktree", side_effect=fail_remove):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("worktree remove 실패", out + err)
+        self.assertEqual(self.ts().review["findings"][0]["rereview"], review.RESOLVED)
+        self.assertEqual(self.merged(), ["01"])
 
 
 class UncheckedTest(Base):

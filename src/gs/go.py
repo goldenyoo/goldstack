@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -929,7 +932,8 @@ def _rereview(r: Run, a: Active) -> list[dict]:
     try:
         head = git.sha(r.repo, a.branch)
         if git.out(r.repo, "diff", "--no-ext-diff", "--name-only", f"{a.base}..{head}"):
-            _run_rereviews(r, a, targets, head)
+            with _rereview_tree(r, a, head) as tree:
+                _run_rereviews(r, a, targets, head, tree)
         else:  # 부를 것도 없다: 바뀐 것이 없으니 고쳐졌을 수 없다
             for rec, found in targets:
                 review.mark_rereview(found, nth, review.UNRESOLVED, "", "수정 커밋의 diff가 비었다")
@@ -943,7 +947,31 @@ def _rereview(r: Run, a: Active) -> list[dict]:
     return _todo(r, t, nth + 1) if nth == 1 else []  # 수정은 티켓당 최대 2회다
 
 
-def _run_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]], head: str) -> None:
+@contextmanager
+def _rereview_tree(r: Run, a: Active, head: str) -> Iterator[Path]:
+    """재리뷰가 읽을 트리. 병합되는 것은 커밋(head)뿐이니 리뷰어도 그것만 보게 한다.
+
+    티켓 worktree가 head 그대로면 그곳을 쓴다(setup 산출물이 있다). 미커밋 변경이 남았거나 다른 곳으로 옮겨 갔으면
+    head의 임시 worktree를 쓴다: 병합되지 않을 수정을 resolved로 확인하지 않게. 티켓 worktree의 변경은 지우지 않는다.
+    임시 worktree를 못 만든 오류는 _rereview가 unchecked(재리뷰 실패)로 적는다. 치우기 실패는 경고뿐이다.
+    """
+    if git.sha(a.wt, "HEAD") == head and setup.is_clean(a.wt):
+        yield a.wt.resolve()
+        return
+    say(f"[{a.t.id}] 티켓 worktree가 수정 커밋과 달라 재리뷰는 커밋된 트리({head[:8]})에서 한다")
+    with tempfile.TemporaryDirectory(prefix="gs-rereview-", dir=r.rundir, ignore_cleanup_errors=True) as tmp:
+        tree = Path(tmp).resolve() / "wt"
+        git.run(r.repo, "worktree", "add", "--detach", str(tree), head)
+        try:
+            yield tree
+        finally:
+            try:
+                git.remove_worktree(r.repo, tree)
+            except git.GitError as e:
+                say(f"[{a.t.id}] 경고: 재리뷰 임시 worktree를 치우지 못했다: {_err(e)}")
+
+
+def _run_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]], head: str, tree: Path) -> None:
     """리뷰어마다 재리뷰를 띄운다. 둘 다 냈으면 run_together로 동시에. agy는 상한에 닿았으면 띄우지 않고 unchecked(한도)다."""
     t, nth = a.t, a.fix
     launch = []
@@ -962,7 +990,7 @@ def _run_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]], he
     names = "+".join(rec["reviewer"] for rec, _ in launch)
     _phase(r, t.id, "rereview", names)
     say(f"[{t.id}] 재리뷰 {nth}차: {names}")
-    jobs = [dict(repo=r.repo, worktree=a.wt.resolve(), rdir=_attempt_dir(a) / f"rereview{nth}-{rec['reviewer']}",
+    jobs = [dict(repo=r.repo, worktree=tree, rdir=_attempt_dir(a) / f"rereview{nth}-{rec['reviewer']}",
                  base=a.base, head=head, found=found, ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(),
                  reviewer=rec["reviewer"], cfg=r.cfg, nth=nth) for rec, found in launch]
     for (rec, found), res in zip(launch, review.run_together(jobs, review.rereview)):
