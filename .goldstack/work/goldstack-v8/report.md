@@ -2,47 +2,38 @@
 
 ## Summary
 
-## Summary
+goldenyoo의 여러 머신에서 goldstack을 손 덜 가게 쓰도록 하는 변경이다.
+- **버전:** 설치본이 뒤처지거나 플러그인과 어긋나면 경고하고, `gs self-update`로 CLI와 플러그인을 함께 올린다.
+- **피드백:** 현장의 gs 결함은 이름과 경로를 가린 초안으로 쌓이고, 프로젝트 설정에 따라 이 저장소 issue로 자동 전송된다.
+- **밤샘 실행:** `/overnight`를 자기 전에 한 번 부르면 feature를 밤사이 잇는다.
+- **실행 결함 수정:** 네트워크 대기 상한, 첫 리뷰 대상, `gs-ticket` 표시 비교, worker의 git 설정 변경 차단과 push 전 대조, codex 커밋 실패를 고쳤다.
 
-v8의 15개 티켓 중 13개가 integration에 병합됐지만, **현장 결함이 손 없이 issue로 오는 경로는 아직 연결되지 않았다.** 수집을 맡은 06이 검증에 실패했고, 06에 막힌 문서·CHANGELOG 티켓 11도 건너뛰었다. 그래서 spec 완료 조건 중 티켓 01–15 병합과 CHANGELOG의 v8 항목을 채우지 못했다.
+이번 diff 통계(9개 파일, +1232/−21)에는 피드백 수집과 문서 변경만 보이고, 다른 티켓의 변경은 나오지 않는다.
 
-**바뀐 것**
-- **버전 관리:** 설치본이 뒤처지면 경고하고 `requires`보다 낮으면 오류를 낸다. `gs self-update`도 생겼다.
-- **실행 안전:** 네트워크 대기 상한, 병합될 커밋 기준의 첫 리뷰, `gs-ticket` 줄 정확 비교, worker의 git 설정 변경 차단과 push 전 대조, codex 커밋 실패 수정이 들어갔다.
-- **피드백:** 조립·가림·전송과 `gs feedback`, `/adopt`·`/retro` 연결, `gs backlog`·grill의 후보 표시, 티켓 `closes`가 들어갔다.
-- **기타:** `/overnight`와 GitHub Actions ubuntu 시험이 추가됐다.
+**남은 위험**
 
-**06이 빠져 생긴 공백**
-- 병합된 코드에서 전송은 `gs feedback`으로 직접 부를 때만 일어난다. `gs go`는 수집도 재전송도 하지 않는다.
-- 따라서 `mode = "auto"`여도 자동으로 나가는 것이 없고, 못 보낸 초안은 `gs feedback send`로 직접 보내야 한다.
-- 06의 마지막 검증에서는 `test_network_wait`의 `test_transient_waits_and_continues_in_same_worktree`가 실패했다. 원인이 06의 변경인지 시험 불안정인지는 확인하지 못했다.
+보고만 된 지적이 23건(medium 10, low 13) 남았고, high는 없다.
 
-**남은 위험: 보고만 21건(high 0, medium 8, low 13)**
+- **리눅스 codex 커밋:** `refs/heads/gs` 디렉터리 자체가 사라지면 sandbox 안에서 다시 만들지 못할 수 있다. sandbox 소스에 근거한 지적이고, 리눅스에서 실행해 확인하지는 않았다.
+- **피드백 누락과 지연:**
+  - 마무리 초반의 보고서 커밋·push·PR 생성 오류와 수정 worker의 어댑터 실패는 수집되지 않는다.
+  - draft 모드에서 `gs feedback "한 줄"` 전송이 실패하면 안내와 달리 자동으로 재전송되지 않는다.
+  - 자동 재전송은 `gs go`에서만 도는데, 문서에는 다음 `gs` 실행 때라고 적혀 있다.
+- **issue 상태 불일치:**
+  - 앞선 PR 기록이 있으면 PR 없이 base에 들어간 티켓의 issue를 닫지 않는다.
+  - base에서 되돌려진 티켓의 issue를 닫을 수 있다.
+  - PR 병합으로 닫힌 issue는 뒤에 수정이 되돌려져도 다시 열리지 않는다.
+- **리뷰와 병합 사이의 틈:** head 대조 뒤 병합 전까지 티켓 브랜치가 움직이면 재리뷰 없이 병합된다. 몇 개의 git 명령 동안만 열리는 짧은 틈이다.
+- **자동 정리의 push 설정 대조:** 설정 변경을 감지하면 push는 막지만, 경고만 내고 `gs go`는 종료 코드 0으로 끝난다.
+- **low 13건:** 주로 드문 조건의 결함과 시험 빈틈이다. 예를 들어 공백이 든 경로에서는 `gs self-update`가 실행 중인 `gs go`를 놓칠 수 있고, 프리릴리스 버전에서는 `requires` 검사가 traceback으로 죽는다.
 
-병합된 코드의 medium 7건:
-- **01 — Linux 커밋 실패:** `refs/heads/gs` 자체가 사라지면 Linux sandbox에서 여전히 커밋하지 못할 수 있다. 소스 근거이고 Linux에서 실행해 보지는 않았다.
-- **13 — 리뷰 뒤 틈:** head 대조와 병합 사이에 티켓 브랜치가 움직이면 재리뷰 없이 병합된다.
-- **12 — 설정 변경 경고:** 자동 integration 정리에서 push 설정 변경을 감지해도 경고만 내고 종료 코드 0으로 끝난다. push 자체는 막힌다.
-- **05 — 틀린 안내:** `draft` 모드에서 `gs feedback "한 줄"` 전송이 실패하면 다음 실행 때 다시 보낸다고 안내하지만, 실제로는 다시 보내지 않는다.
-- **07 — issue 닫기 어긋남(3건):**
-  - PR url이 남아 있으면 PR 없이 base에 들어간 티켓의 issue를 닫지 않는다.
-  - base에서 revert된 티켓의 issue를 닫을 수 있다.
-  - PR 병합 뒤 revert돼도 닫힌 issue를 다시 열지 않는다.
+**아직 확인하지 못한 것**
 
-나머지 medium 1건은 병합되지 않은 06의 지적이다. 마무리 단계의 `GitError`가 수집되지 않는 문제로, 06을 다시 할 때 함께 봐야 한다.
+- `/overnight`는 지침의 존재만 시험했으므로 실제 동작은 첫 사용에서 확인해야 한다.
+- 이 자료의 검증 로그는 맥 경로에서 돈 것뿐이다. ubuntu CI는 병합을 막지 않고, 그 결과도 이 자료에 없어 리눅스 동작은 아직 확인되지 않았다.
 
-low 13건은 대부분 드문 경계 조건이다.
-- 버전 비교와 `gs go` 판별의 빈틈: 공백이 든 경로에서는 실행 중인 `gs go`를 놓쳐 재설치가 진행될 수 있다.
-- 전송 한도와 중복 issue
-- CI 시험의 느슨한 확인
-- 종료 키워드 예외
-
-**실제로 확인되지 않은 것**
-- `/overnight`는 지침의 존재만 시험했고, 실제 동작은 첫 사용에서 확인해야 한다.
-- Linux 시험은 CI에서 돌지만 병합을 막지 않는다. 이번 검증 기록은 모두 이 맥에서 나온 것이다.
-
-마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/11 병합 · main 검증 통과
-리뷰 지적: 수정됨 15 · 보고만 21
+마무리: preparing · 병합 전
+리뷰 지적: 수정됨 16 · 보고만 23
 
 ## Evidence
 
@@ -50,6 +41,7 @@ low 13건은 대부분 드문 경계 조건이다.
 
 - gs 0.1.0 · 설치 commit: 기록 없음 · 시작 2026-11-04T21:11:27+09:00
 - gs 0.1.0 · 설치 commit: 기록 없음 · 시작 2026-11-04T22:30:12+09:00
+- gs 0.1.0 · 설치 commit: 기록 없음 · 시작 2026-11-05T02:15:33+09:00
 - 일시 오류 0회 · 대기 0.0초
 - 01: 일시 오류 0회 · 대기 0.0초
 - 02: 일시 오류 0회 · 대기 0.0초
@@ -103,6 +95,12 @@ worker 시도별 실제 모델·effort와 소요
 | 12/2/fix | claude | opus/xhigh | 1108.136662 | 0.887934 |
 | 07/1/worker | codex | gpt-6.1-sol/medium | 363.787443 | 1.644212 |
 | 07/1/fix | codex | gpt-6.1-sol/medium | 133.454624 | 1.722271 |
+| 06/3/worker | claude | sonnet/high | 1144.187877 | 1.201015 |
+| 06/3/fix | claude | sonnet/high | 327.678452 | 1.205547 |
+| 06/4/worker | claude | opus/xhigh | 1606.542643 | 1.269283 |
+| 06/4/fix | claude | opus/xhigh | 548.912457 | 1.076483 |
+| 11/1/worker | claude | sonnet/medium | 102.754148 | 1.889442 |
+| 11/1/fix | claude | sonnet/medium | 19.302405 | 1.189246 |
 
 리뷰어별 소요와 채택(판단이 fix인 지적, 해결 수와 다름)
 
@@ -141,6 +139,12 @@ worker 시도별 실제 모델·effort와 소요
 | codex/1 | 12 | gpt-6.1-sol/medium | 92.556811 | 0 | 0 |
 | claude/0 | 07 | opus/xhigh | 714.0293 | 8 | 2 |
 | claude/1 | 07 | sonnet/high | 90.623385 | 0 | 0 |
+| codex/0 | 06 | gpt-6.1-sol/high | 207.394055 | 3 | 3 |
+| codex/1 | 06 | gpt-6.1-sol/medium | 119.139911 | 1 | 0 |
+| codex/0 | 06 | gpt-6.1-sol/high | 245.199991 | 3 | 1 |
+| codex/1 | 06 | gpt-6.1-sol/medium | 63.243217 | 0 | 0 |
+| codex/0 | 11 | gpt-6.1-sol/high | 134.775442 | 2 | 1 |
+| codex/1 | 11 | gpt-6.1-sol/medium | 38.026917 | 0 | 0 |
 
 리뷰 호출별 시간(재호출 포함)
 
@@ -180,6 +184,12 @@ worker 시도별 실제 모델·effort와 소요
 | codex | 12 | gpt-6.1-sol/medium | 92.529426 | passed |
 | claude | 07 | opus/xhigh | 602.80218 | passed |
 | claude | 07 | sonnet/high | 90.60101 | passed |
+| codex | 06 | gpt-6.1-sol/high | 155.063657 | passed |
+| codex | 06 | gpt-6.1-sol/medium | 99.255039 | passed |
+| codex | 06 | gpt-6.1-sol/high | 175.558534 | passed |
+| codex | 06 | gpt-6.1-sol/medium | 63.216579 | passed |
+| codex | 11 | gpt-6.1-sol/high | 106.435189 | passed |
+| codex | 11 | gpt-6.1-sol/medium | 38.00106 | passed |
 
 gs 검증별 측정
 
@@ -203,21 +213,27 @@ gs 검증별 측정
 | ticket-07/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | c6085ab792f9436d0c9e9c5fb62a8da48efd01b2 | 256.872008 | passed |
 | integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | a417dd37a89b7a73e3692808c8c39bacbcb7eb09 | 253.768537 | passed |
 | main/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | c0b197fa098a5bdeee7c428bbfdd2812ea46309f | 256.528872 | passed |
+| ticket-06/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | f897d48fd5b628e256f849be3bbf0b76c262b836 | 257.737519 | failed |
+| ticket-06/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | f897d48fd5b628e256f849be3bbf0b76c262b836 | 263.785982 | passed |
+| ticket-11/1 | uv run python -m unittest discover -s tests -p test_version.py && claude plugin validate . && uv build -q -o "$(mktemp -d)" | bd8f22fcf5462fc55fe08cbdf61f408de32e8367 | 1.45052 | passed |
+| integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 44303ed448f5ecd5c331b4c5b39e8130d2023346 | 262.615853 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 630.0 |
-| verify | 510.429 |
-| summary | 105.422 |
-| report | 0.067 |
-| push | 2.085 |
+| total | 976.246 |
+| verify | 773.106 |
+| summary | 174.656 |
+| report | 1.133 |
+| push | 4.98 |
 | publish | 4.393 |
 | merge-pr | 3.904 |
 | confirm-merge | 0.007 |
 | postmerge | 257.816 |
-| restore-reverts | 0.019 |
+| restore-reverts | 0.038 |
+| report-to-base | 2.467 |
+| sync-integration | 2.25 |
 
 ### 티켓별 결과
 
@@ -228,7 +244,7 @@ gs 검증별 측정
 | 03 | gs self-update: CLI와 플러그인을 한 번에 main으로 | merged | integration에 병합·검증됨 |
 | 04 | 피드백 조립: 정해진 항목과 가린 오류 줄, 지문, 로컬 저장, config | merged | integration에 병합·검증됨 |
 | 05 | 피드백 전송: 자동 전송, 재전송, 중복 처리, gs feedback, /feedback | merged | integration에 병합·검증됨 |
-| 06 | 피드백 수집: gs 내부 예외, 마무리 이상, 어댑터 실패 패턴 | failed | 검증 실패(로그 /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/06/2/fix/verify.log) |
+| 06 | 피드백 수집: gs 내부 예외, 마무리 이상, 어댑터 실패 패턴 | merged | integration에 병합·검증됨 |
 | 08 | /adopt가 피드백 mode·detail을 묻고, /retro 후보를 issue로 올리게 | merged | integration에 병합·검증됨 |
 | 09 | /overnight skill: 시작에 다 묻고, 밤사이 잇고, 아침에 한 장 보고 | merged | integration에 병합·검증됨 |
 | 10 | GitHub Actions ubuntu에서 시험 돌리기(병합은 막지 않음) | merged | integration에 병합·검증됨 |
@@ -237,14 +253,14 @@ gs 검증별 측정
 | 15 | gs-ticket 표시를 트레일러 줄로 정확히 비교한다 | merged | integration에 병합·검증됨 |
 | 12 | worker의 git 설정 변경을 막고, gs의 push 전에 원격 설정을 대조한다 | merged | integration에 병합·검증됨 |
 | 07 | 받는 쪽: gs backlog와 grill이 field-report를 보이고, 티켓 closes로 닫는다 | merged | integration에 병합·검증됨 |
-| 11 | 문서, CHANGELOG 미출시 항목 | skipped | 막힘: 06 |
+| 11 | 문서, CHANGELOG 미출시 항목 | merged | integration에 병합·검증됨 |
 
 - 01 단계별 소요: worker 11분 · 리뷰 3분 · 검증 4분
 - 02 단계별 소요: worker 18분 · 리뷰 7분 · 수정 12분 · 재리뷰 1분 · 검증 4분
 - 03 단계별 소요: worker 4분 · 리뷰 10분 · 수정 1분 · 검증 7분
 - 04 단계별 소요: worker 48분 · 리뷰 7분 · 수정 9분 · 재리뷰 1분 · 검증 4분
 - 05 단계별 소요: worker 8분 · 리뷰 7분 · 수정 4분 · 재리뷰 1분 · 검증 4분
-- 06 단계별 소요: worker 29분 · 리뷰 8분 · 수정 11분 · 재리뷰 2분 · 검증 8분
+- 06 단계별 소요: worker 75분 · 리뷰 16분 · 수정 26분 · 재리뷰 5분 · 검증 16분
 - 08 단계별 소요: worker 5분 · 리뷰 2분 · 수정 1분 · 재리뷰 1분
 - 09 단계별 소요: worker 16분 · 리뷰 4분 · 수정 4분 · 재리뷰 1분
 - 10 단계별 소요: worker 1분 · 리뷰 4분
@@ -253,6 +269,7 @@ gs 검증별 측정
 - 15 단계별 소요: worker 8분 · 리뷰 5분 · 수정 16분 · 재리뷰 1분 · 검증 4분
 - 12 단계별 소요: worker 53분 · 리뷰 14분 · 수정 33분 · 재리뷰 5분 · 수정 2 7분 · 검증 8분
 - 07 단계별 소요: worker 6분 · 리뷰 12분 · 수정 2분 · 재리뷰 2분 · 검증 4분
+- 11 단계별 소요: worker 2분 · 리뷰 2분 · 재리뷰 1분
 
 ### 리뷰 지적
 
@@ -295,10 +312,12 @@ gs 검증별 측정
 - 05 리뷰(claude) [low] src/gs/feedback.py:651: 이미 만든 issue 번호를 초안에 저장하고도 쓰지 않고 검색 결과만 믿는다. 방금 만든 issue가 검색에 아직 안 잡히면 같은 지문으로 issue가 또 생긴다. — 상태: 보고만
   근거: 코드 추적(미실행). 실제 GitHub 검색의 색인 지연은 재현하지 않았으므로 그 부분은 전제다. 685행이 `"issue": str(number)`를 쓰지만 이 값을 읽는 코드가 없고, 중복 판정은 651-655행의 `issue list --search` 결과뿐이다. 만든 직후 같은 오류가 재발해 다시 `send`가 돌 때 검색이 비면 `number is None`이 되어 `issue create`로 간다(673행). 저장된 번호로 해당 issue가 열려 있는지 먼저 확인하면 이 창이 닫힌다. 어긴 명세는 spec 완료 조건 `같은 지문은 새 issue 없이 횟수 댓글만 단다`이다. 가짜 gh는 만든 issue를 즉시 검색 결과에 돌려주므로 시험으로는 드러나지 않는다.; 판단: 저장한 issue 번호를 읽지 않는 것은 사실이지만 중복 생성의 전제인 GitHub 검색 색인 지연이 확인되지 않았다.
 - 06 리뷰(codex): 수정 커밋 1개(fix 지적 1): 재리뷰로 확인한다 / 재리뷰 1차: resolved 1 · unresolved 0 · unchecked 0 · 새 지적 0
-- 06 리뷰(codex) [medium] src/gs/feedback.py:914: 예외 메시지에 환경 오류 관련 단어가 있으면 KeyError 같은 gs 내부 결함까지 수집에서 제외한다. — 상태: 수정됨(재리뷰 확인)
-  근거: 읽기 전용으로 `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c ...`를 실행해 config.load와 record를 mock하고 collect_exception에 KeyError를 전달했다. KeyError('missing_key')는 record 호출 1회였지만 KeyError('authentication')와 KeyError('permission denied')는 각각 0회였다. `_environmental("\n".join(lines))`가 예외 종류와 무관하게 조기 반환하기 때문이다. 티켓의 'gs 내부 예외(처리되지 않고 cli.main까지 온 것)를 잡아 초안을 만든 뒤 원래대로 오류로 끝낸다'를 위반한다.; 판단: diff의 `collect_exception`은 예외 종류를 보지 않고 메시지 전체를 `_environmental`에 넘겨 `KeyError: 'authentication'` 같은 gs 내부 결함도 조기 반환하므로(재현은 돌리지 않고 코드로 확인) 티켓 완료 조건 위반이며, `feedback.py`에서 KeyError·TypeError·AttributeError 같은 프로그래밍 오류를 이 필터에서 빼면 범위 안에서 고칠 수 있다.; 재리뷰 근거: src/gs/feedback.py:918이 `isinstance(exc, _EXTERNAL_ERRORS) and _environmental("\n".join(lines))`일 때만 수집을 제외하도록 변경됐다. `PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src .venv/bin/python -c ...`로 config.load와 record를 mock하고 collect_exception을 직접 호출했다(종료 코드 0). KeyError('missing_key'), KeyError('authentication'), KeyError('permission denied') 모두 record 호출이 각각 1회였다. 환경 관련 문구를 넣은 TypeError·ValueError·RuntimeError·AttributeError도 각각 1회였다. 반면 연결·인증 오류를 담은 GitError·HerdrError·AdapterError·ReviewTransient·NetworkAbort 및 PermissionError는 각각 0회였고, GitError('git rev-parse: fatal: bad revision')는 1회였다. 전체 시험은 실행하지 않았다.
-- 06 리뷰(codex) [medium] src/gs/feedback.py:881: 마무리 준비·보고서 커밋·게시 단계에서 발생한 GitError는 초안으로 수집되지 않는다. — 상태: 보고만
-  근거: 읽기 전용 좁은 재현으로 `PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -c ...`에서 파일 작업을 mock하고 실제 finish.run.__wrapped__를 실행했다. _push가 GitError('fatal: invalid refspec')를 내도록 하자 finish 상태는 {'phase': 'preparing', 'outcome': 'integration 검증 중', 'integration_ok': True}였고 finish_anomalies({}, st)는 []를 반환했다. finish.py의 _commit_report·_push·_publish는 error/outcome을 저장하는 try 바깥에 있으며, go.py는 GitError를 잡아 종료 코드 1로 반환하므로 cli.main의 예외 수집에도 도달하지 않는다. 수집 조건이 `error`와 `outcome.startswith('마무리 실패')`를 요구해 이 경로를 놓친다. 티켓의 '마무리 이상을 잡는다: … 마무리 오류로 끝남'을 충족하지 못한다.; 판단: `finish.py:820-823`이 try 밖이고 `go.py:156`이 GitError를 잡아 수집을 놓치는 것은 코드로 확인했지만, 오류 문구가 state에 남지 않아 `cli.py`·`feedback.py`만으로는 phase `preparing`을 잡아도 인증·네트워크 같은 환경 오류를 거를 수 없고, 제대로 고치려면 티켓 touches 밖이자 마무리 동작인 `finish.py`를 바꿔야 한다.
+- 06 리뷰(codex) [medium] src/gs/feedback.py:824-835: agy의 인증·사용량 한도 오류도 agy-no-result로 수집된다. 환경 오류 검사가 이름 붙은 패턴보다 뒤에 있고, 실제 원인이 담긴 worker 로그에는 적용되지 않는다. — 상태: 수정됨(재리뷰 확인)
+  근거: 읽기 전용 `.venv/bin/python -B -c` 재현에서 Path.read_text를 'error: authentication failed\n'로 대체하고 실제 Agy.outcome(1, inp)을 호출했다. 결과는 'worker 종료 코드 1 (agy: result 이벤트가 없다)'였고 classify_adapter_failure는 ('agy-no-result', [...])를 반환했다. 'usage limit reached', 'permission_denied'도 동일했다. 같은 로그의 _environmental 결과는 모두 True였다. 824행은 일시 오류만 제외하고 831행에서 곧바로 패턴을 반환한다. 티켓 목표 'gs 결함을 규칙으로 잡아 초안으로 넘긴다'에 어긋난다.; 판단: `Agy.outcome`은 result 이벤트가 없으면 항상 'agy: result 이벤트가 없다'를 내고 `classify_adapter_failure`는 이 패턴을 환경 오류 검사 없이 반환하므로, 인증·사용량 한도 실패가 diff의 docstring이 올리지 않겠다고 한 환경 오류인데도 gs 결함으로 수집되며, `feedback.py`에서 agy의 오류 이벤트와 시작 stderr 줄만 `_PERMANENT`로 보면 worker가 읽은 내용을 건드리지 않고 고칠 수 있다.; 재리뷰 근거: 읽기 전용 `.venv/bin/python -B -c` 재현에서 Path.read_text를 대체하여 실제 Agy.outcome(1, inp)을 호출했다. 'error: authentication failed', 'error: usage limit reached', 'permission_denied' 모두 outcome은 (1, 'agy: result 이벤트가 없다')였으나 classify_adapter_failure는 None을 반환했다. 임시 디렉터리 생성은 mock으로 대체했다. 수정된 진입 조건 `if not reason or _transient_log(log) or _environmental_log(log): return None`이 이름 붙은 패턴보다 먼저 실행된다. 대조 재현에서도 빈 로그·step_update 안의 인증 오류 문구·인증 오류 뒤 SUCCESS 이벤트는 agy-no-result로 유지되고, CLI 인증 오류 이벤트는 None으로 제외됐다.
+- 06 리뷰(codex) [medium] src/gs/feedback.py:891-899: 마무리 초반의 보고서 커밋·push·PR 생성 오류는 초안 없이 누락된다. finish.error와 특정 outcome이 남은 경우만 검사하므로 preparing 단계에서 실패한 실행을 감지하지 못한다. — 상태: 보고만
+  근거: 읽기 전용 `.venv/bin/python -B -c` 재현에서 실제 finish.run을 실행하되 파일 쓰기와 외부 작업을 mock하고 _publish가 GitError('PR URL이 비었다')를 내게 했다. 출력은 finish state={'phase': 'preparing', 'outcome': 'integration 검증 중', 'integration_ok': True}, finish total runs=1이었다. 이 state로 Session.after를 호출한 결과 record 호출은 0회였다. 실제 _publish도 src/gs/finish.py:445에서 이 오류를 발생시키며, go.py:157-160이 GitError를 잡으므로 cli.main의 예외 수집에도 도달하지 않는다. 티켓 완료 조건 '마무리 오류로 끝남' 수집을 충족하지 못한다.; 판단: `_publish`의 `GitError`가 state에 흔적 없이 `go.py`에서 삼켜지는 것은 코드로 확인했지만, 원인 글이 state에 없어 환경 오류와 구별할 수 없고 고치려면 티켓이 금지한 `go.py`나 touches 밖의 `finish.py`를 바꿔야 하며, diff의 문서도 이 한계를 밝히고 있다.
+- 06 리뷰(codex) [medium] src/gs/feedback.py:839-845: failure.log만 탐색하므로 수정 worker에서 발생하는 이름 붙은 어댑터 실패는 수집되지 않는다. 수정 worker의 agy-no-result나 codex ref 잠금 실패도 같은 패턴 수집 대상에 포함되어야 한다. — 상태: 보고만
+  근거: 수집 대상은 rundir.glob('*/*/failure.log')뿐이다. go.py:1035-1042는 수정 worker를 _end_fix로 보내며, _end_fix(1397-1425)는 실패를 리뷰 state에 기록하고 failure.log를 만들지 않는다. 읽기 전용 `.venv/bin/python -B -c`에서 note='agy: result 이벤트가 없다'인 수정 worker를 실제 _end_fix에 종료 코드 1로 전달하고 git·쓰기 작업을 mock했다. 결과는 '수정 worker 실패(종료 코드 1)', failure.record 호출 0회였으며, 이후 Session.after의 초안 기록도 0회였다. 티켓의 '어댑터 실패 중 이름 붙은 패턴을 잡는다'에는 수정 worker 제외 조건이 없다.; 판단: `_end_fix`가 failure.log를 남기지 않고 어댑터 note도 받지 않는 것은 확인했지만, 수집하려면 티켓이 금지한 `go.py`를 바꾸거나 수정 worker 로그를 따로 해석해야 하고, 티켓이 수정 worker를 대상으로 명시하지 않아 범위가 애매하다.
 - 08 리뷰(codex): 수정 커밋 1개(fix 지적 1, 2): 재리뷰로 확인한다 / 재리뷰 1차: resolved 2 · unresolved 0 · unchecked 0 · 새 지적 0
 - 08 리뷰(codex) [medium] skills/adopt/SKILL.md:20: 새 레포에서 /adopt를 실행하면 피드백 설정을 한 번도 묻지 않는다. 2단계의 gs init이 만든 기본 [feedback]까지 기존 설정으로 취급하므로, 사용자가 mode·detail을 선택하는 단계가 항상 생략된다. — 상태: 수정됨(재리뷰 확인)
   근거: 명세 §3 2-3은 '/adopt가 한 번 묻고 [feedback] mode·detail을 config에 남긴다'고 정한다. adopt 17줄은 config가 없으면 gs init을 실행하지만, 20줄은 'gs init이 만든 기본 draft도 이미 있는 것으로 본다'며 질문을 생략한다. src/gs/config.py:339는 DEFAULT_CONFIG를 저장한다. `.venv/bin/python -B -c 'import sys,tomllib; sys.path.insert(0,"src"); from gs import config; print(tomllib.loads(config.DEFAULT_CONFIG.format(base="\"main\""))["feedback"])'`로 확인한 기본값은 {'mode': 'draft', 'detail': 'errors', 'repo': 'goldenyoo/goldstack', 'max_per_day': 5}다.; 판단: `config.py`의 `DEFAULT_CONFIG`에 `[feedback]`이 있어 `/adopt`가 2단계에서 `gs init`을 돌린 새 레포에서는 질문이 항상 생략되고, 이는 '한 번 묻는다'는 티켓 완료 조건과 spec 2-3 위반이며 `skills/adopt/SKILL.md`만 고치면 해결된다.; 재리뷰 근거: skills/adopt/SKILL.md:20이 '2단계를 하기 전' [feedback] 절의 존재로 질문 생략 여부를 판단하도록 바뀌었다. 또한 'gs init이 방금 만든 config의 기본값(draft·errors)은 사람이 고른 것이 아니니 묻는다'고 명시해 신규 레포에서도 질문한다. 24줄은 답을 mode·detail에 저장하도록 유지한다. `.venv/bin/python -B -m unittest tests.test_skills.IdeaFlowTest.test_adopt_asks_feedback_once` 실행 결과: 1개 테스트 OK.
@@ -335,50 +354,6 @@ gs 검증별 측정
 - 07 리뷰(claude) [low] src/gs/finish.py:411: 보고서가 상한에 가까우면 _pr_body의 자르기가 보고서 끝 코드 블록의 닫는 fence를 지워, 종료 키워드가 열린 코드 블록 안에 들어간다. 그러면 merge 방식 PR에서 issue가 닫히지 않을 수 있다. — 상태: 보고만
   근거: 코드 추적과 산수이며 실행하지 않았다. report._render는 '```sh ... ```\n'로 끝난다(report.py:404-411). `path.read_text(encoding="utf-8")[:report.MAX_BODY - len(suffix)] + suffix`에서 두 자리 번호 하나면 suffix가 12자라 59988자만 남는다. 보고서가 59990~60000자면 닫는 fence가 깨지고, 그 뒤에 키워드 줄이 붙는다. 이 함수의 docstring은 '보고서 길이 제한에도 종료 키워드가 잘리지 않게'라고 적었지만 fence는 고려하지 않았다. 해당 길이 구간은 좁다. GitHub가 코드 블록 안의 키워드를 무시한다는 것은 여기서 확인하지 못한 가정이다.; 판단: 해당 보고서 길이 구간이 좁고 GitHub가 코드 블록 안의 키워드를 무시한다는 전제도 확인되지 않았다.
 - 07 리뷰(claude) [low] src/gs/report.py:99: PR 본문은 보고서 전체를 평문으로 싣는다. 실패한 티켓의 제목·이유나 리뷰 지적 글에 종료 키워드와 issue 번호가 있으면, closes 목록에 없어도 PR 병합 때 그 issue가 닫힐 수 있다. — 상태: 보고만
-  근거: 코드 추적이며 실행하지 않았다. report.py:99는 표 행에 티켓 제목·상태·이유를 코드 블록 없이 넣고, report.py:108은 리뷰 지적의 claim을 평문 목록으로 넣는다. _pr_body는 그 보고서를 그대로 앞에 붙인다(finish.py:411). 시험은 fixture에 그런 글이 없는 경우만 본다(tests/test_feedback_inbox.py의 assertNotIn). 이 feature는 closes를 다루므로 리뷰 글에 그런 표현이 나오기 쉽다. 이 지적도 같은 경로로 보고서에 실리므로 키워드와 번호를 붙여 쓰지 않았다. GitHub가 표·목록 속 키워드를 인식한다는 것은 여기서 확인하지 못한 가정이다. 보고서를 PR 본문에 싣는 동작은 이 diff 전부터 있었고, closes가 생기면서 영향이 커졌다. 어긴 문장: 티켓 '병합되지 않은 티켓의 번호는 닫지 않는다'.; 판단: GitHub가 표·목록 속 키워드를 인식한다는 전제가 확인되지 않았고, 보고서를 PR 본문에 싣는 동작은 이 diff 전부터 있었으며 보고서 글을 거르는 일은 이 티켓의 범위를 넘는다.
-- 07 리뷰(claude) [low] src/gs/finish.py:441: git.base가 저장소 기본 브랜치가 아니면 종료 키워드가 작동하지 않는다. PR url이 있어 직접 닫기도 건너뛰므로, 병합돼도 issue가 닫히지 않는다. — 상태: 보고만
-  근거: 코드 추적이며 실행하지 않았다. PR은 `_gh(r, "create", "--base", r.base, ...)`로 설정된 base를 향하고, 기본 브랜치가 아닌 base도 지원한다(tests/test_go_finish.py:384 `BASE, REMOTE = "trunk", "upstream"`). 병합 뒤에는 finish.py:419가 url 때문에 직접 닫기를 건너뛴다. GitHub 문서에 따르면 종료 키워드는 기본 브랜치로 병합될 때만 작동한다. 이것은 기억에 의존한 내용이고 여기서 확인하지 못했다. 어긴 문장: spec 2-5 '티켓 키 `closes: [12]`면 PR 병합 때 닫힌다'. goldstack 자신은 base가 main이라 지금 당장 영향은 없다.; 판단: 종료 키워드가 기본 브랜치에서만 작동한다는 근거가 기억에 의존해 확인되지 않았고, 이 저장소의 base는 main이라 지금 영향이 없다.
-
-### verify 출력
-
-명령: `ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"`
-
-티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/<티켓>/`
-
-티켓 검증 명령(08): `uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate .`
-
-티켓 검증 명령(09): `uv run python -m unittest discover -s tests -p test_overnight_skill.py && claude plugin validate .`
-
-티켓 검증 명령(10): `uv run python -m unittest discover -s tests -p test_ci_workflow.py && claude plugin validate .`
-
-티켓 검증 명령(11): `uv run python -m unittest discover -s tests -p test_version.py && claude plugin validate . && uv build -q -o "$(mktemp -d)"`
-
-#### 01/1/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/01/1/verify.log`
-
-#### 02/1/fix/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/02/1/fix/verify.log`
-
-#### 03/1/fix/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/03/1/fix/verify.log`
-
-#### 04/2/fix/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/04/2/fix/verify.log`
-
-#### 05/1/fix/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/05/1/fix/verify.log`
-
-#### 06/2/fix/verify.log
-
-전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run/06/2/fix/verify.log`
-
-#### 08/1/fix/verify.log
-
-전체 로그: `/Users/go
+  근거: 코드 추적이며 실행하지 않았다. report.py:99는 표 행에 티켓 제목·상태·이유를 코드 블록 없이 넣고, report.py:108은 리뷰 지적의 claim을 평문 목록으로 넣는다. _pr_body는 그 보고서를 그대로 앞에 붙인다(finish.py:411). 시험은 fixture에 그런 글이 없는 경우만 본다(tests/test_feedback_inbox.py의 assertNotIn). 이 feature는 closes를 다루므로 리뷰 글에 그런 표현이 나오기 쉽다. 이 지적도 같은 경로로 보고서에 실리므로 키워드와 번호를 붙여 쓰지 않았다. GitHub가 표·목록 속 키워드를 인식한다는 것은 여기서 확인하지 못한 가정이다. 보고서를 PR 본문에 싣는 동작은 이 diff 전부터 있었고, closes가 생기면서 영향이 커졌다. 어긴 문장: 티켓 '병합되지 않은 티켓의 번호는 닫지 않는다'.; 판단: GitHub가 
 
 …(보고서가 길어 잘랐다. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v8/run`)
