@@ -202,7 +202,8 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 2. 세우기(`_net_hold`): `failures`와 등급을 그대로 두고 `transient_errors`를 올린다. 이유 `네트워크 대기: <이유>`, phase `network`, `network_resume`을 남긴다. 다른 worker가 잡아 둔 대기가 있으면 거기에 함께 탄다. 다음 대기가 없으면(`Backoff.next`가 `None`) `NetworkAbort`다.
 3. 끊김 동안(`Outage.active`: 기다리는 worker나 회복을 확인하는 worker가 있을 때): 새 worker·리뷰를 시작하지 않는다. 도는 worker는 그대로 두고, 성공으로 끝난 worker(수정 worker 포함)의 리뷰·재리뷰는 미룬다(`_net_park`, `network_resume.done`). 진행 줄은 `네트워크 대기(2회, 3분 뒤)`, 회복 확인 중이면 `네트워크 회복 확인(2회)`.
 4. 다시 띄우기(`_resume`): 같은 worktree·브랜치에서 새 worker를 띄운다. 구현은 새 시도 디렉터리 `run/<NN>/<시도>`, 수정 worker는 `fix-net<k>`(`fix2-net<k>`)다. brief에 `worker.NETWORK_RESUME`("지난 시도가 네트워크로 끊겼다…")가 붙는다. 처음 base를 그대로 쓰므로 앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정이다.
-5. 회복: 다시 띄운 worker가 `RECOVERY_MINUTES`(5분) 넘게 일시 오류 없이 돌거나 끝나면 끝이다(claude 자체 재시도가 약 3분 넘게 걸린다). 함께 기다리던 worker를 바로 띄우고 일정을 새로 시작하고 미룬 리뷰를 돌려놓는다. `■ 네트워크 회복: 다른 티켓 시작을 재개한다`.
+5. 회복(`go._net_recovered`): 회복은 다시 띄운 worker로만 판정한다. 기다리는 worker가 없을 때 다시 띄운 worker 중 하나가 일시 오류 없이 끝나거나, 마지막 일시 오류 뒤로 `RECOVERY_MINUTES`(5분) 넘게 일시 오류 없이 돌면 회복이다(claude 자체 재시도가 약 3분 넘게 걸린다). 이미 잡힌 대기는 다른 티켓이 끝나도 끝까지 간다. 회복하면 함께 기다리던 worker를 바로 띄우고 미룬 리뷰를 돌려놓는다. `■ 네트워크 회복: 다른 티켓 시작을 재개한다`.
+6. 같은 끊김으로 잇기(`transient.SAME_OUTAGE_MINUTES`, 30분): 회복해도 대기 일정과 합계는 남는다. 끊김이 끝난 뒤 30분 안에 다시 끊기면 같은 끊김으로 누계를 잇고, 30분을 넘겨 정상으로 돌았으면 새 끊김으로 새로 센다. 그래서 끊겼다 붙었다를 반복해도 합계가 `network_wait_minutes`를 넘으면 `중단(네트워크)`로 실제로 멈춘다.
 
 **codex**(`transient.ReconnectWatch`) — codex worker는 끊겨도 죽지 않고 `Reconnecting...` 이벤트를 찍으며 기다린다. `_wait_any`가 로그를 이어 읽어, `Reconnecting`만 `network_wait_minutes` 넘게 이어지면 `NetworkAbort`다. 다른 이벤트가 나오면 처음부터 다시 잰다. 회복 시간도 마지막 `Reconnecting`부터 잰다.
 
@@ -520,6 +521,10 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
                       integration-verify.log, integration-final-verify.log, integration-recheck-verify.log,
                       main-verify.log, main-recheck-verify.log
 ```
+
+## Actions 시험(리눅스)
+
+`.github/workflows/tests.yml`이 `main` push와 PR마다 ubuntu-latest에서 `uv run python -m unittest discover -s tests`를 돈다(시간 제한 30분, 사용자 이름·이메일은 job에서 git 전역 설정으로 넣는다). 리눅스에서도 시험이 통과하는지 보는 용도이고 병합을 막지 않는다: 이 레포의 `git.wait_checks`는 `false`이고 필수 검사도 없다. 실패하면 PR·커밋의 검사 표시와 Actions 로그에서 보고 고친다. macOS 전용 동작(`caffeinate` 등)은 코드가 아니라 `/overnight` skill의 안내에만 있다.
 
 ## 시험 seam
 
