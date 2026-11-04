@@ -7,7 +7,7 @@ worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰�
 worker를 한 번 더 띄우고 다시 재리뷰한다. 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
 순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(마지막에 한 번) → 병합.
 gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 state에 세고 config `[agy] max_calls_per_run`에 닿으면 더 띄우지 않는다.
-끝에는 보고서·PR·base 검증·revert를 한다(08).
+끝에는 보고서·PR·base 검증·revert를 한다(08). 지난 마무리가 남았으면 그것만 끝내고 멈춘다. 남은 티켓은 다음 gs go가 한다.
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 """
@@ -127,13 +127,9 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
                 if not prepared:
                     finished = False
-                elif r.st.finish.get("phase") in finish.RESUME_PHASES:
-                    r.ihead = git.sha(r.iwt, "HEAD")
-                    # 회복 뒤 새 범위를 이어 돌릴 수 있어, 마지막 마무리까지 integration을 둔다.
-                    url, finished = _finish_run(r, cleanup=False)
+                elif _resuming(r):
+                    url, finished = _resume_finish(r)
                 else:
-                    finished = True
-                if finished:
                     _loop(r)
                     url, finished = _finish_run(r)
         except git.GitError as e:
@@ -160,6 +156,29 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         if cfg.notify.telegram:
             _notify(r, url, ok)
     return 0 if ok else 1
+
+
+def _resuming(r: Run) -> bool:
+    """지난 마무리가 끝나지 않았다. 새 worker보다 그것을 먼저 끝낸다. verified·reverted여도 base 보고서를 아직 시도하지 않았으면 그렇다."""
+    phase = r.st.finish.get("phase")
+    return phase in finish.RESUME_PHASES or (phase in finish.BASE_REPORT_PHASES
+                                             and not r.st.finish.get("base_report_tried"))
+
+
+def _resume_finish(r: Run) -> tuple[str | None, bool]:
+    """지난 마무리만 끝내고 이 실행은 멈춘다(_loop·두 번째 마무리 없음). 남은 티켓은 다음 gs go가 base를 합친
+    integration 위에서 한다. 그래서 남은 티켓이 있으면 integration을 정리하지 않는다."""
+    r.ihead = git.sha(r.iwt, "HEAD")
+    left = _pending(r)
+    result = _finish_run(r, cleanup=not left)
+    if left and r.st.finish.get("phase") in finish.BASE_REPORT_PHASES:
+        say(f"■ 남은 티켓 {left}개 → 다음 gs go")
+    return result
+
+
+def _pending(r: Run) -> int:
+    """이번 범위에서 아직 시작하지 않은 티켓 수."""
+    return sum(r.st.tickets[tid].status == state.PENDING for tid in r.order)
 
 
 def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
@@ -1122,6 +1141,8 @@ def _message(r: Run, url: str | None, ok: bool) -> str:
               for tid in r.order if r.st.tickets[tid].status == state.FAILED]
     if failed:
         tickets += f" ({', '.join(failed)})"
+    if f.get("phase") in finish.BASE_REPORT_PHASES and (left := _pending(r)):
+        tickets += f" · 남은 티켓 {left}개 → 다음 gs go"
     return f"❌ {r.name} · {outcome} · {tickets} · 보고서 {work_rel(r.name)}/report.md"
 
 
