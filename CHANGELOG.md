@@ -41,3 +41,26 @@
 - 목표: 보호된 base의 재개 시 보고서 충돌과 setup의 추적 파일 변경으로 인한 잘못된 revert를 고친다.
 - 수정 뒤 재리뷰와 최대 두 번의 수정을 도입하고 지적별 확인 상태·개수와 진행 단계를 표시한다.
 - squash 되살림·CI 등록 대기·정리 상태·격리 실패 보고를 보강하고, 버전·설명·설치 문서·wheel을 0.1.0 릴리스에 맞춘다.
+
+### goldstack-v7
+
+- 목표: feature 한 번의 시간을 줄이고, 짧은 네트워크 끊김이 티켓을 잃거나 리뷰 없는 병합으로 이어지지 않게 하고, 티켓 크기에 맞춰 모델·effort를 고르게 한다.
+- 티켓 검증은 어떤 명령이든 커밋된 내용의 병합 트리에서 돌고, 트리를 바꾸면 실패다. 티켓 `verify` 키를 더했고(티켓 `verify` → spec `verify_ticket` → spec `verify`), worker에게 개발 중에는 관련 시험만, 커밋 전에 검증 한 번을 시킨다.
+- 끊기면(연결·DNS·5xx·429) 실패로 세지 않고 1→2→5→10…분 기다렸다 같은 worktree에서 새 worker로 잇는다. 대기 상한을 넘기면 `중단(네트워크)`(종료 코드 3)로 멈추고 다음 `gs go`가 잇는다.
+- 리뷰·재리뷰·판단 호출도 일시 오류와 시간 초과면 다시 부른다. 끊겼다는 이유로 리뷰 없이 병합하지 않는다. 호출이 끝나면 프로세스 그룹째 끝내고, 리뷰어에게 전체 시험 대신 좁은 재현만 시킨다.
+- 티켓 `tier`와 config 등급표로 모델·effort를 CLI 인자까지 넘긴다. 실패 재시도는 한 등급 올리고, 첫 리뷰는 large, 재리뷰는 medium, 실패 요약은 `models.failure_summary`를 쓴다.
+- 보고서에 실행 측정(worker 처리 대기, 검증별 명령·SHA·시간, 리뷰어별 시간·채택 수, 마무리 단계, gs 버전·설치 commit, 실제 모델·effort)과, 마무리 전체 검증이 실패하면 실패 줄·후보 티켓(추정)을 남긴다.
+- `/grill`이 가중 일렬 경로·평균 동시 실행 수, 순서 이유, 등급과 이유를 티켓 표에 적는다. 이 레포의 `test_go.py`를 주제별로 쪼개고 전체 시험을 6프로세스로 나눠 돌린다.
+
+**레포에서 할 일** — `gs`를 다시 설치한 뒤 기존 `.goldstack/config.toml`을 손으로 고친다. `gs init`은 있는 파일을 그대로 두고 `gs doctor --write`는 빠진 키를 채우지 않는다. 키를 안 넣어도 오류는 아니다.
+
+| 새 config 키 | 넣을 값 | 안 넣으면 |
+|---|---|---|
+| `[tiers.claude]`, `[tiers.codex]`, `[tiers.agy]` | `small`·`medium`·`large` 셋 다 `"모델/effort"`(effort 생략 가능). `gs init` 새 config의 값을 참고하되, 쓰는 CLI에 있는 모델 이름으로 적는다 | 그 계열은 v6처럼 돈다: 티켓 `tier`와 재시도 승급을 무시하고 claude worker는 CLI 기본값, 그 밖은 `models.codex`·`models.agy`·`models.claude_review`, effort는 CLI 기본값. 그 계열이 티켓 `model`이면 `gs check`가 경고한다 |
+| `[tiers] review`, `rereview` | `small`·`medium`·`large` 중 하나 | 첫 리뷰 `large`, 재리뷰 `medium`. 리뷰어 계열의 표가 없으면 이 값을 쓰지 않는다 |
+| `models.failure_summary` | 모델 이름. `gs init` 새 config는 `"haiku"` | 실패 요약도 `models.judge`로 부른다 |
+| `timeouts.network_wait_minutes` | 끊김 하나의 대기 합계(분) | 60분 |
+
+함께 확인할 것:
+- `verify_ticket`이 이제 병합 트리에서 돈다. gitignore 밖에 빌드 결과를 쓰는 명령은 "worktree가 바뀌었다"로 실패하니 출력 위치를 레포 밖으로 옮긴다.
+- `gs go`를 감싼 스크립트는 종료 코드 3을 "실패"가 아니라 "다시 돌리면 이어 간다"로 다룬다.

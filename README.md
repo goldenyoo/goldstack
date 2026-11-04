@@ -132,7 +132,7 @@ PR https://github.com/you/tally/pull/7
 | `gs doctor [--write]` | GitHub의 병합 방식, base 보호, 필수 승인, 필수 검사를 읽어 표와 맞는 config 줄을 보인다. 못 읽으면 `모름`. `--write`는 제안한 `git.merge_method`·`direct_push`·`wait_checks`만 config에 쓴다(`gs init` 끝에는 `--write` 없이 돈다). `worktree.setup`이 lockfile을 바꾸는 명령이면 `npm ci` 같은 명령을 권한다 | 레포에 들일 때, 저장소 설정이 바뀌었을 때 |
 | `gs config <섹션.키>` | 설정 값 한 줄(`gs config git.base` → `main`) | 값 확인, skill이 base를 읽을 때 |
 | `gs check <f> [--only 01,02]` | spec·티켓 그래프·config·CLI 검사. `touches` 겹침, agy 배정이 상한을 넘으면 경고 | grill 끝, `gs go` 전 |
-| `gs go <f> [--only 01,02]` | 티켓 실행 → 리뷰 → 수정·재리뷰(수정 최대 2회) → integration 병합·검증 → PR 병합 → main 재검증(실패하면 revert). 지난 마무리(승인·CI 대기 등)가 남았으면 그것만 끝내고 멈추고, 남은 티켓은 다음 `gs go`가 한다 | `/go`가 부른다 |
+| `gs go <f> [--only 01,02]` | 티켓 실행 → 리뷰 → 수정·재리뷰(수정 최대 2회) → integration 병합·검증 → PR 병합 → main 재검증(실패하면 revert). 지난 마무리(승인·CI 대기 등)가 남았으면 그것만 끝내고 멈추고, 남은 티켓은 다음 `gs go`가 한다. 네트워크가 끊기면 기다렸다 잇고, 상한을 넘기면 `중단(네트워크)`(종료 코드 3)로 멈춘다. 다시 치면 같은 worktree에서 잇는다 | `/go`가 부른다 |
 | `gs go <a> <b> …` | 여러 feature를 차례로. 앞 것이 `verified`가 아니면 거기서 멈춘다. `--only`와 함께 못 쓴다 | 이어 돌릴 feature가 여럿일 때 |
 | `gs clean <f> [--force]` | 그 feature의 worktree(`run/wt/*`)와 `gs/<f>/*` 브랜치(로컬·원격)를 지운다. 실행 기록은 남긴다 | 끝난 feature의 남은 흔적(실패 worktree, 옛 integration 브랜치)을 치울 때 |
 | `gs status [<f>]` | 실행 상태 표와 진행 줄(읽기 전용) | 실행 중 언제든 |
@@ -162,6 +162,27 @@ low     2026-11-03  status-review-count  gs status가 끝난 티켓의 리뷰 �
 gitlab-support  GitHub 밖 레포에 goldstack을 쓰려 할 때.
 ```
 
+## 모델·검증 키
+
+모델과 검증을 고르는 키다. 전체 표는 [config](docs/guide.md#config-키), [spec](docs/guide.md#spec-frontmatter-키), [티켓](docs/guide.md#티켓-선택-키와-agy-한도).
+
+| 어디 | 키 | 없으면 | 뜻 |
+|---|---|---|---|
+| config | `[tiers.claude]`, `[tiers.codex]`, `[tiers.agy]` | `gs init` 새 config에는 있다. 키가 없으면 그 계열은 `models.*`·CLI 기본값 | `small`·`medium`·`large`마다 `"모델/effort"`(effort 생략 가능) |
+| config | `[tiers] review`, `rereview` | `large`, `medium` | 첫 리뷰·재리뷰의 등급 |
+| config | `models.failure_summary` | `models.judge` | 재시도 brief용 실패 요약 모델. `gs init` 새 config는 `haiku` |
+| config | `timeouts.network_wait_minutes` | `60` | 끊김 하나의 대기 합계. 넘기면 `중단(네트워크)` |
+| spec | `verify` | 필수 | 마무리(integration, 병합 뒤 main)의 전체 검증. 아래 둘이 없으면 티켓 검증도 |
+| spec | `verify_ticket` | `verify` | 티켓 검증 명령 |
+| 티켓 | `verify` | spec `verify_ticket` → spec `verify` | 이 티켓만의 검증 명령. 문서·설정 티켓을 좁힐 때 쓴다 |
+| 티켓 | `tier` | `medium` | `small`·`medium`·`large`. 등급표에서 이 worker의 모델·effort를 고른다. 재시도는 한 등급 올린다 |
+
+티켓 검증은 명령과 상관없이 integration에 합친 **병합 트리**에서 돈다. worktree의 커밋 안 된 파일로는 통과할 수 없고, 검증이 트리를 바꾸면 실패다. `verify_ticket`을 따로 두기 전에 전체 시험을 프로세스로 나눠 빠르게 만들 수 있는지 먼저 본다. 이 레포는 파일마다 프로세스 하나로 순차 약 11분 걸리던 시험을 약 4분에 돌린다:
+```yaml
+verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p
+```
+조건과 다른 도구의 예는 [docs/guide.md](docs/guide.md#예시-전체-시험을-프로세스로-나누기).
+
 ## 아이디어 흐름
 
 한 실행에서 나온 생각이 다음 feature로 이어진다. `/go <f>`가 끝나면 `/retro <f>`가 그 실행 기록을 읽어 후보를 제안하고, 사람이 고른 것은 아이디어 함 `.goldstack/ideas/<slug>.md`에 파일 하나씩 들어간다(대화 중 떠오른 것은 `/idea <한 줄>`로 바로). 다음 feature 전에 `gs backlog`로 열린 아이디어와 범위 밖의 다시 볼 조건을 훑고, `/grill <다음 feature>`를 부르면 라운드 1 첫 질문이 그 아이디어 중 이번에 넣을 것을 묻는다. 고른 아이디어는 `status: taken`이 되어 목록에서 빠지고, 아이디어 파일은 `/grill`·`/go`의 커밋에 함께 담긴다. 자세히는 [docs/guide.md](docs/guide.md#아이디어-흐름), 파일 형식은 [docs/internals.md](docs/internals.md#아이디어-함).
@@ -171,15 +192,15 @@ gitlab-support  GitHub 밖 레포에 goldstack을 쓰려 할 때.
 1. 레포마다 한 번: `/adopt`(`gs init`, `gs doctor`, profile) → `gs doctor --write` 확인 → 커밋 → 필요하면 `[worktree] setup`(텔레그램을 쓰면 `local.env`).
 2. feature마다: `gs backlog`로 후보를 본다 → `/grill <f>`(첫 질문에서 넣을 아이디어를 고른다) → `/go <f>`(여럿이면 `/go <a> <b>`) → 진행 바나 `gs status <f>`로 지켜본다 → 세 줄 요약·PR·텔레그램 → `/retro <f>`로 돌아보고 고른 후보를 아이디어 함에.
 3. 끝난 feature에 실패 worktree나 옛 브랜치가 남았으면 `gs clean <f>`(verified면 integration 흔적은 이미 지워져 있다).
-4. 실패하면 `report.md`를 읽고, 고칠 것이 있으면 `/grill <f>`로 spec·티켓을 고친 뒤 다시 `/go <f>`(병합된 티켓은 건너뛴다).
+4. 실패하면 `report.md`를 읽고, 고칠 것이 있으면 `/grill <f>`로 spec·티켓을 고친 뒤 다시 `/go <f>`(병합된 티켓은 건너뛴다). `중단(네트워크)`면 고칠 것 없이 네트워크가 돌아온 뒤 다시 돌린다.
 5. 곁에서: 떠오른 생각은 `/idea <한 줄>`, 말을 놓치면 `/wait-what`, 버그는 "진단해"(`diagnosing-bugs`), 세션을 넘길 때 `/handoff`, 세션을 돌아볼 때 `/retro`, skill·`CLAUDE.md`를 쓸 때 `/writing-for-agents`.
 
 ## 문서 지도
 
 | 문서 | 내용 |
 |---|---|
-| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 기존 레포에 들이기(`/adopt`, `gs doctor`, squash만 허용·보호된 main·느린 시험 예시, config·spec 키 표, 한계), 새 feature, 티켓 선택 키(`touches`, `second_reviewer`)와 agy 한도, 리뷰와 재리뷰(지적 상태 5가지), 실행 중 보기, 실패했을 때, 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
-| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, `gs doctor`, 상태, 병렬, 실패 처리, 리뷰(재리뷰와 state 필드, 두 리뷰 합치기, agy 횟수), 마무리(순서와 재개 뒤 멈춤, squash 확인·revert·되살림, CI 대기, 보호된 base, 준비 실패, integration-final 건너뛰기)와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
+| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 기존 레포에 들이기(`/adopt`, `gs doctor`, squash만 허용·보호된 main·느린 시험·전체 시험 나누기 예시, config·spec 키 표, 한계), 새 feature, 티켓 키(`tier`, `verify`, `touches`, `second_reviewer`)와 agy 한도, 리뷰와 재리뷰(지적 상태 5가지), 실행 중 보기, 실패했을 때(네트워크 끊김 포함), 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
+| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, `gs doctor`, 상태와 측정 필드, 병렬, 실패 처리, 리뷰(재리뷰와 state 필드, 두 리뷰 합치기, agy 횟수), 네트워크 끊김(대기, `중단(네트워크)`, 리뷰·판단 호출), 마무리(순서와 재개 뒤 멈춤, squash 확인·revert·되살림, CI 대기, 보호된 base, 준비 실패, integration-final 건너뛰기)와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
 | [.goldstack/ideas/README.md](.goldstack/ideas/README.md) | 아이디어 파일 형식 |
 | [skills/grill/templates/](skills/grill/templates/) | spec·티켓·범위 밖 파일 형식 |
 | [docs/ORIGINS.md](docs/ORIGINS.md) | 시작 배경과 요구사항, 지난 실패 목록 |
