@@ -10,13 +10,17 @@ Claude Code로 feature 하나를 끝까지 보내는 개인 운영 kit.
 
 필요한 것: Python 3.12+와 [uv](https://docs.astral.sh/uv/), `git`, 로그인한 `gh`(GitHub), `claude`(Claude Code). 대상 레포의 원격(`git.remote`, 기본 `origin`)은 GitHub 저장소여야 한다(PR·병합을 `gh pr … --repo <owner/repo>`로 한다). 한계(GitHub만, rebase 병합 미지원, 승인은 사람)는 [docs/guide.md](docs/guide.md#한계). 티켓이 쓰는 모델이 있으면 `codex`, `agy`. `herdr`(터미널 멀티플렉서)는 선택이다. `gs go`를 herdr 안에서 돌리면 worker마다 pane이 보이고, 아니면 worker가 화면 없는 프로세스로 돈다.
 
-**1. `gs` CLI** — 릴리스 태그에서 설치한다.
+**1. `gs` CLI** — 처음 설치는 릴리스 태그에서 한다.
 ```sh
 uv tool install git+https://github.com/goldenyoo/goldstack@v0.1.0
 gs --version
 ```
-태그가 생기기 전이면 `@v0.1.0` 대신 `@main`을 쓴다.
+태그 `v0.1.0`은 v8이 끝난 뒤 사람이 확인하고 만든다. 태그가 아직 없으면 `@v0.1.0` 대신 `@main`을 쓴다.
 저장소가 private이면 접근 권한(collaborator)이 필요하다.
+
+**이후 업데이트** — 태그가 아니라 main 채널이다. `gs self-update`가 CLI를 main으로 재설치하고 플러그인도 갱신한다(`--version v0.1.0`처럼 태그로 고정할 수도 있다). `gs go`·`gs doctor`는 시작할 때 설치본이 main보다 뒤처졌으면 경고하고, 이 머신에서 `gs go`가 돌고 있으면 `gs self-update`는 거부한다. 레포가 `[goldstack] requires = ">=0.1"`을 적어 두었는데 설치본이 더 낮으면 `gs check`·`gs go`가 멈춘다. 자세히는 [docs/guide.md](docs/guide.md#버전-맞추기gs-self-update-requires).
+
+**리눅스 서버** — 맥과 같은 설치다. `herdr` 없이 돈다(worker가 화면 없는 프로세스로 돌고 `gs status`로 본다). SSH가 끊겨도 돌게 하려면 `tmux new -s gs` 안에서 `claude`를 열어 `/go`나 `/overnight`를 친다. 떼어 놓기 `Ctrl-b d`, 다시 붙기 `tmux attach -t gs`. 자세히는 [docs/guide.md](docs/guide.md#리눅스-서버에서-쓰기).
 
 **2. Claude Code plugin** — `/grill`·`/go` 같은 skill, worker 차단 hook, 진행 바 mod가 들어 있다. Claude Code에서:
 ```
@@ -114,6 +118,8 @@ PR https://github.com/you/tally/pull/7
 | `/go` | `gs go`로 티켓 실행부터 main 병합·재검증까지 돌리고 세 줄 요약과 PR을 보인다. feature를 여러 개 주면 앞 것이 `verified`일 때만 다음을 돌린다 | grill이 끝나 커밋된 feature를 실행할 때, 밤새 둘 이상을 이어 돌릴 때 | `/go csv-export`, `/go csv-export csv-import` | 사용자 |
 | `/adopt` | 처음 들이는 레포를 훑어 `gs init`·`gs doctor`를 거치고 레포 요약 `.goldstack/profile.md`를 쓴다(있으면 갱신하고 바뀐 점을 보인다). `/grill`과 worker가 이것을 먼저 읽는다. 커밋 안 함 | 레포에 goldstack을 처음 들일 때, 레포 구조·시험 명령이 바뀌었을 때 | `/adopt` → `gs doctor` 표를 보고 "제안대로 config에 쓸까"에 답 | 사용자 |
 | `/idea` | 생각 하나를 `.goldstack/ideas/<slug>.md` 아이디어 파일로 쓴다. 비슷한 열린 아이디어가 있으면 거기 덧붙일지 묻는다. 커밋 안 함 | 실행·대화 중 다음에 할 일이 떠올랐을 때 | `/idea gs status가 끝난 티켓의 리뷰 지적 수를 보이면 좋겠다` | 사용자 |
+| `/overnight` | 자러 가기 전에 한 번 부르면 feature 여러 개를 밤사이 병합까지 잇는다. 시작할 때 순서·독립 여부·사소한 수정 허락·텔레그램을 한 번에 받아 `.goldstack/overnight/<날짜>.md`에 적고, 사전 점검 뒤에는 묻지 않는다. 맥은 `caffeinate`, 리눅스는 `systemd-inhibit`으로 깨어 있게 하고 아침에 결과 한 장을 남긴다 | 여러 feature를 자는 동안 돌릴 때 | `/overnight csv-export csv-import`, 죽었으면 `/overnight resume` | 사용자 |
+| `/feedback` | 사람이 쓴 한 줄을 `gs feedback`으로 goldstack 저장소 issue로 보낸다(`list`는 초안 상태, `send`는 쌓인 것 전송). `[feedback] mode = "off"`면 거부한다. gs 결함 자동 수집은 [guide](docs/guide.md#피드백-gs-결함을-goldstack에-알리기) | gs가 이상하게 동작했을 때, 불편을 알리고 싶을 때 | `/feedback gs status가 끝난 실행을 실행 중으로 보여` | 사용자 |
 | `/wait-what` | 방금 설명을 맥락부터, 쉬운 말로, 선택지마다 예시를 붙여 다시 하게 한다 | Claude의 말을 못 따라갔을 때(grill 질문 포함) | `/wait-what` | 사용자 |
 | `/handoff` | 지금 대화를 다른 agent가 이어받을 인계 문서로 줄여 임시 디렉터리에 쓴다 | 세션을 바꾸거나 곁가지 일을 떼어 줄 때 | `/handoff 03 실패 원인을 이어서 찾는다` | 사용자 |
 | `/retro` | feature 실행 기록(report.md, state.json, worker 로그·리뷰, 다른 feature 보고서와의 반복)이나 세션 하나를 돌아보고 agent 환경(검사, 포인터, 리뷰 기준, 도구, goldstack 자체)을 고칠 후보를 심각한 순으로 제안한다. worker 로그 합계가 200KB 이상이면 먼저 한 줄로 알리고 Gemini(agy)에게 로그 요약을 맡긴다. feature면 고른 후보를 아이디어 함에 쓴다. 고르기 전에는 아무것도 바꾸지 않는다 | `/go`가 끝난 뒤, 실행이 꼬였거나 같은 실수가 반복될 때 | `/retro csv-export`(feature), `/retro`(지금 세션) | 사용자 |
@@ -136,7 +142,9 @@ PR https://github.com/you/tally/pull/7
 | `gs go <a> <b> …` | 여러 feature를 차례로. 앞 것이 `verified`가 아니면 거기서 멈춘다. `--only`와 함께 못 쓴다 | 이어 돌릴 feature가 여럿일 때 |
 | `gs clean <f> [--force]` | 그 feature의 worktree(`run/wt/*`)와 `gs/<f>/*` 브랜치(로컬·원격)를 지운다. 실행 기록은 남긴다 | 끝난 feature의 남은 흔적(실패 worktree, 옛 integration 브랜치)을 치울 때 |
 | `gs status [<f>]` | 실행 상태 표와 진행 줄(읽기 전용) | 실행 중 언제든 |
-| `gs backlog [--all]` | 열린 아이디어와 범위 밖의 다시 볼 조건(읽기 전용) | 다음 feature를 고르기 전 |
+| `gs self-update [--version <태그>]` | CLI를 main(또는 태그)으로 재설치하고 플러그인을 갱신한다. 이 머신에서 `gs go`가 돌면 거부한다 | 설치본이 뒤처졌다는 경고가 나올 때 |
+| `gs feedback "한 줄"\|list\|send` | 피드백 초안을 쓰고 보내거나, 초안·전송 상태를 보거나, 쌓인 것을 보낸다 | gs 문제를 알릴 때 |
+| `gs backlog [--all]` | 열린 아이디어, 열린 `field-report` issue, 범위 밖의 다시 볼 조건(읽기 전용) | 다음 feature를 고르기 전 |
 | `gs migrate` | 옛 위치(`.work/` 등)를 `.goldstack/` 아래로 옮긴다 | v2 전 레포를 옮길 때 한 번 |
 | `gs hook <pretooluse\|agy-pretooluse>` | worker 차단 hook 진입점 | 직접 치지 않는다(plugin·agy가 부른다) |
 
@@ -199,8 +207,8 @@ verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest dis
 
 | 문서 | 내용 |
 |---|---|
-| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 기존 레포에 들이기(`/adopt`, `gs doctor`, squash만 허용·보호된 main·느린 시험·전체 시험 나누기 예시, config·spec 키 표, 한계), 새 feature, 티켓 키(`tier`, `verify`, `touches`, `second_reviewer`)와 agy 한도, 리뷰와 재리뷰(지적 상태 5가지), 실행 중 보기, 실패했을 때(네트워크 끊김 포함), 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
-| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, `gs doctor`, 상태와 측정 필드, 병렬, 실패 처리, 리뷰(재리뷰와 state 필드, 두 리뷰 합치기, agy 횟수), 네트워크 끊김(대기, `중단(네트워크)`, 리뷰·판단 호출), 마무리(순서와 재개 뒤 멈춤, squash 확인·revert·되살림, CI 대기, 보호된 base, 준비 실패, integration-final 건너뛰기)와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
+| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 기존 레포에 들이기(`/adopt`, `gs doctor`, squash만 허용·보호된 main·느린 시험·전체 시험 나누기 예시, config·spec 키 표, 한계), 새 feature, 티켓 키(`tier`, `verify`, `touches`, `second_reviewer`)와 agy 한도, 리뷰와 재리뷰(지적 상태 5가지), 실행 중 보기, 실패했을 때(네트워크 끊김 포함), 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, 버전 맞추기(`gs self-update`, `requires`), 피드백(보내는 것·안 보내는 것·끄는 법), `/overnight`, 리눅스 서버, `gs migrate`, skill 사용 장면 |
+| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, `gs doctor`, 상태와 측정 필드, 병렬, 실패 처리, 리뷰(재리뷰와 state 필드, 두 리뷰 합치기, agy 횟수), 네트워크 끊김(대기, `중단(네트워크)`, 리뷰·판단 호출), 마무리(순서와 재개 뒤 멈춤, squash 확인·revert·되살림, CI 대기, 보호된 base, 준비 실패, integration-final 건너뛰기)와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 피드백 수집, 버전·self-update, Actions 시험, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
 | [.goldstack/ideas/README.md](.goldstack/ideas/README.md) | 아이디어 파일 형식 |
 | [skills/grill/templates/](skills/grill/templates/) | spec·티켓·범위 밖 파일 형식 |
 | [docs/ORIGINS.md](docs/ORIGINS.md) | 시작 배경과 요구사항, 지난 실패 목록 |
