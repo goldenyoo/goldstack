@@ -3,6 +3,7 @@ id: "<NN>"
 title: "<한 줄 제목>"
 blocked_by: []
 touches: []
+# closes: [12]  # 이 티켓이 고치는 issue 번호 목록(선택)
 tier: medium  # small|medium|large
 model: claude
 reviewer: codex

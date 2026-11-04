@@ -6,6 +6,8 @@ base 브랜치와 원격은 `.goldstack/config.toml`의 `git.base`·`git.remote`
 병합 방식은 `git.merge_method`(merge·squash)다. 병합을 요청할 때 finish에 남기고(`merge_method`) 그 PR의
 확인·revert·재개는 남긴 방식을 따른다. merge는 병합 커밋이 검증한 integration(`merge_head`)을 조상으로 갖는지,
 squash는 squash 커밋(부모 하나)의 tree가 `merge_head`의 tree와 같은지로 확인한다. revert는 둘 다 그 커밋 하나다.
+merged 티켓의 closes 번호는 PR 본문과 squash 메시지에 종료 키워드로 남긴다. PR 없이 base에 직접 반영된
+티켓은 base의 표시를 확인해 issue를 직접 닫는다.
 squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에서도 병합된 티켓·이 feature의 병합을 알아본다.
 
 보호된 base(`git.direct_push = false`)에는 아무것도 직접 push하지 않는다. revert는 `gs/<f>/revert`, 병합 뒤 최종
@@ -34,7 +36,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from . import clean, doctor, git, metrics, report, review, setup, state, verify
+from . import clean, doctor, feedback, git, metrics, report, review, setup, state, verify
 from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
@@ -389,8 +391,48 @@ def _push(r) -> None:
     git.push(r.iwt, r.remote, r.st.push_record, f"HEAD:refs/heads/gs/{r.name}/integration", flags=("-u",))
 
 
+def _closing_numbers(r, tids=None) -> list[int]:
+    allowed = set(r.feat.tickets) if tids is None else set(tids)
+    return sorted({number for tid, ticket in r.feat.tickets.items()
+                   if tid in allowed and tid in r.st.tickets and r.st.tickets[tid].status == state.MERGED
+                   for number in ticket.closes})
+
+
+def _closing_lines(r, tids=None) -> str:
+    return "\n".join(f"Closes #{number}" for number in _closing_numbers(r, tids))
+
+
+def _pr_body(r, path: Path) -> Path:
+    """보고서 길이 제한에도 종료 키워드가 잘리지 않게 별도 PR 본문을 만든다."""
+    closing = _closing_lines(r)
+    if not closing:
+        return path
+    suffix = "\n\n" + closing
+    body = path.read_text(encoding="utf-8")[:report.MAX_BODY - len(suffix)] + suffix
+    target = r.rundir / "finish" / "pr-body.md"
+    target.write_text(body, encoding="utf-8")
+    return target
+
+
+def _close_without_pr(r) -> None:
+    """PR 없이 직접 반영한 티켓은 base의 표시까지 확인한 뒤 닫는다."""
+    if r.st.finish.get("url") or not _closing_numbers(r):
+        return
+    landed = git.ticket_trailers(r.repo, r.name, r.base_ref, base_ref=r.base_ref)
+    numbers = _closing_numbers(r, landed)
+    if not numbers:
+        return
+    target = git.github_repo(r.repo, r.remote)
+    for number in numbers:
+        try:
+            feedback._gh(r.repo, target, "issue", "close", str(number))
+        except (OSError, subprocess.TimeoutExpired):
+            print(f"■ 경고: issue #{number} 닫기 실패(gh)", flush=True)
+
+
 @metrics.stage("publish")
 def _publish(r, path: Path) -> str:
+    path = _pr_body(r, path)
     branch = f"gs/{r.name}/integration"
     url = _gh(r, "list", "--head", branch, "--base", r.base, "--state", "open", "--json", "url", "--jq", ".[0].url")
     if url:
@@ -422,6 +464,8 @@ def _squash_message(r) -> tuple[str, str]:
     listing = [f"{tid} {r.feat.tickets[tid].title}" if tid in r.feat.tickets else tid for tid in tids]
     trailers = [f"gs-ticket: {r.name}/{tid}" for tid in tids]
     sections = ["\n".join(listing), "\n".join(trailers)]
+    if closing := _closing_lines(r, tids):
+        sections.append(closing)
     if restored:
         sections.append("\n".join(dict.fromkeys(restored)))
     return title, "\n\n".join(sections)
@@ -666,7 +710,7 @@ def _update(r, summary: str) -> None:
     _save(r, head=git.sha(r.iwt, "HEAD"))
     _push(r)
     if r.st.finish.get("url"):
-        _gh(r, "edit", r.st.finish["url"], "--body-file", str(path.resolve()))
+        _gh(r, "edit", r.st.finish["url"], "--body-file", str(_pr_body(r, path).resolve()))
 
 
 def _report_commit(r, rel: str, text: bytes, *, push: bool = True) -> str:
@@ -781,6 +825,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
     directory = r.rundir / "finish"
     directory.mkdir(parents=True, exist_ok=True)
     f = r.st.finish
+    _close_without_pr(r)
     # 외부 병합 후 재개. 최종 보고서 갱신 전이면 merge_head가 integration의 끝이다.
     anchor = f.get("head") or f.get("merge_head")
     # 정리 후 integration은 base에서 다시 만들 수 있다. 최종 integration 보고서 커밋은

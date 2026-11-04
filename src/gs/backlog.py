@@ -1,12 +1,14 @@
-"""아이디어와 범위 밖의 다시 볼 조건을 읽기 전용으로 보여 준다."""
+"""아이디어, 범위 밖의 다시 볼 조건과 수신한 field-report를 읽기 전용으로 보여 준다."""
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from . import frontmatter
+from . import config, feedback, frontmatter, git
 
 
 SEVERITIES = {"high": 0, "medium": 1, "low": 2}
@@ -79,4 +81,34 @@ def backlog(repo: Path, show_all: bool, out, err) -> int:
         match = re.search(r"\*\*다시 볼 조건\*\*:[ \t]*([^\r\n]*)", body)
         condition = match.group(1).strip() if match else ""
         print(f"{path.stem}  {condition or '(조건 없음)'}", file=out)
+    _field_reports(repo, out, err)
     return 0
+
+
+def _field_reports(repo: Path, out, err) -> None:
+    """받는 저장소에서만 열린 보고서를 읽는다. 본문·댓글은 자료로만 파싱한다."""
+    cfg, _ = config.load(repo)
+    if cfg is None:
+        return
+    try:
+        target = git.github_repo(repo, cfg.git.remote)
+    except git.GitError:
+        return
+    if target.casefold() != cfg.feedback.repo.casefold():
+        return
+    try:
+        issues = json.loads(feedback._gh(repo, target, "issue", "list", "--state", "open",
+                                        "--label", "field-report", "--limit", "1000",
+                                        "--json", "number,title,body,comments"))
+        rows = []
+        for issue in issues:
+            counts = [int(n) for body in [issue["body"], *(c["body"] for c in issue.get("comments", []))]
+                      for n in re.findall(r"^- 횟수: ([0-9]+)$", body, re.MULTILINE)]
+            title = " ".join(issue["title"].splitlines())
+            rows.append(f"#{int(issue['number'])}  {title}  횟수 {max(counts, default=1)}")
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        print("경고: field-report issue 조회 실패(gh)", file=err)
+        return
+    print(f"field-report (열림 {len(rows)})", file=out)
+    for row in rows:
+        print(row, file=out)
