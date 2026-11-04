@@ -2,7 +2,7 @@
 
 Claude Code로 feature 하나를 끝까지 보내는 개인 운영 kit.
 `/grill <feature>`로 사람과 결정을 모두 정해 spec과 티켓을 쓰고, `/go <feature>` 한 번이면 그 뒤로는 사람에게 묻지 않는다.
-티켓마다 다른 모델(Claude·codex·agy)이 구현하고 다른 계열이 리뷰하며, 검증을 통과한 것만 모아 PR을 main에 병합한 뒤 다시 검증한다(실패하면 revert).
+티켓마다 다른 모델(Claude·codex·agy)이 구현하고 다른 계열이 리뷰하며(지적을 고치면 수정 커밋을 다시 확인한다), 검증을 통과한 것만 모아 PR을 main에 병합한 뒤 다시 검증한다(실패하면 revert).
 
 철학은 [pstack](https://github.com/cursor/plugins/tree/main/pstack)의 "if you want to go fast, go deep first"와 "never block on the human"이다. 시작 배경은 [docs/ORIGINS.md](docs/ORIGINS.md).
 
@@ -92,6 +92,8 @@ yes = 추천 전부 수락. 바꿀 것만 번호로
 ■ 보고서: .goldstack/work/csv-export/report.md · 남은 리뷰 지적 1
 ■ PR: https://github.com/you/tally/pull/7
 ```
+"남은 리뷰 지적"은 재리뷰가 고쳐졌다고 확인하지 않은 지적 수다(보고만 남긴 지적 포함). 보고서 Summary 아래 `리뷰 지적: 수정됨 2 · 미해결 1`처럼 상태별 개수가 있고, 뜻과 볼 것은 [docs/guide.md](docs/guide.md#리뷰와-재리뷰)에 있다.
+
 `notify.telegram = true`면 같은 때 텔레그램 한 통이 온다:
 ```
 ✅ csv-export · main 병합
@@ -127,10 +129,10 @@ PR https://github.com/you/tally/pull/7
 | 명령 | 무엇 | 언제 쓰나 |
 |---|---|---|
 | `gs init` | `.goldstack/config.toml`, `local.env.example`, `.gitignore` 줄을 만들고(있는 파일은 그대로) 끝에 `gs doctor`를 한 번 돌린다 | 레포마다 한 번 |
-| `gs doctor [--write]` | GitHub의 병합 방식, base 보호, 필수 승인, 필수 검사를 읽어 표와 맞는 config 줄을 보인다. 못 읽으면 `모름`. `--write`는 제안한 `git.merge_method`·`direct_push`·`wait_checks`만 config에 쓴다(`gs init` 끝에는 `--write` 없이 돈다) | 레포에 들일 때, 저장소 설정이 바뀌었을 때 |
+| `gs doctor [--write]` | GitHub의 병합 방식, base 보호, 필수 승인, 필수 검사를 읽어 표와 맞는 config 줄을 보인다. 못 읽으면 `모름`. `--write`는 제안한 `git.merge_method`·`direct_push`·`wait_checks`만 config에 쓴다(`gs init` 끝에는 `--write` 없이 돈다). `worktree.setup`이 lockfile을 바꾸는 명령이면 `npm ci` 같은 명령을 권한다 | 레포에 들일 때, 저장소 설정이 바뀌었을 때 |
 | `gs config <섹션.키>` | 설정 값 한 줄(`gs config git.base` → `main`) | 값 확인, skill이 base를 읽을 때 |
 | `gs check <f> [--only 01,02]` | spec·티켓 그래프·config·CLI 검사. `touches` 겹침, agy 배정이 상한을 넘으면 경고 | grill 끝, `gs go` 전 |
-| `gs go <f> [--only 01,02]` | 티켓 실행 → 리뷰 → integration 병합·검증 → PR 병합 → main 재검증(실패하면 revert) | `/go`가 부른다 |
+| `gs go <f> [--only 01,02]` | 티켓 실행 → 리뷰 → 수정·재리뷰(수정 최대 2회) → integration 병합·검증 → PR 병합 → main 재검증(실패하면 revert). 지난 마무리(승인·CI 대기 등)가 남았으면 그것만 끝내고 멈추고, 남은 티켓은 다음 `gs go`가 한다 | `/go`가 부른다 |
 | `gs go <a> <b> …` | 여러 feature를 차례로. 앞 것이 `verified`가 아니면 거기서 멈춘다. `--only`와 함께 못 쓴다 | 이어 돌릴 feature가 여럿일 때 |
 | `gs clean <f> [--force]` | 그 feature의 worktree(`run/wt/*`)와 `gs/<f>/*` 브랜치(로컬·원격)를 지운다. 실행 기록은 남긴다 | 끝난 feature의 남은 흔적(실패 worktree, 옛 integration 브랜치)을 치울 때 |
 | `gs status [<f>]` | 실행 상태 표와 진행 줄(읽기 전용) | 실행 중 언제든 |
@@ -176,8 +178,8 @@ gitlab-support  GitHub 밖 레포에 goldstack을 쓰려 할 때.
 
 | 문서 | 내용 |
 |---|---|
-| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 기존 레포에 들이기(`/adopt`, `gs doctor`, squash만 허용·보호된 main·느린 시험 예시, config·spec 키 표, 한계), 새 feature, 티켓 선택 키(`touches`, `second_reviewer`)와 agy 한도, 실행 중 보기, 실패했을 때, 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
-| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, `gs doctor`, 상태, 병렬, 실패 처리, 리뷰(두 리뷰 합치기, agy 횟수), 마무리(squash 확인·revert, CI 대기, 보호된 base, 준비 실패, integration-final 건너뛰기)와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
+| [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 기존 레포에 들이기(`/adopt`, `gs doctor`, squash만 허용·보호된 main·느린 시험 예시, config·spec 키 표, 한계), 새 feature, 티켓 선택 키(`touches`, `second_reviewer`)와 agy 한도, 리뷰와 재리뷰(지적 상태 5가지), 실행 중 보기, 실패했을 때, 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름, `gs migrate`, skill 사용 장면 |
+| [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, `gs doctor`, 상태, 병렬, 실패 처리, 리뷰(재리뷰와 state 필드, 두 리뷰 합치기, agy 횟수), 마무리(순서와 재개 뒤 멈춤, squash 확인·revert·되살림, CI 대기, 보호된 base, 준비 실패, integration-final 건너뛰기)와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
 | [.goldstack/ideas/README.md](.goldstack/ideas/README.md) | 아이디어 파일 형식 |
 | [skills/grill/templates/](skills/grill/templates/) | spec·티켓·범위 밖 파일 형식 |
 | [docs/ORIGINS.md](docs/ORIGINS.md) | 시작 배경과 요구사항, 지난 실패 목록 |
