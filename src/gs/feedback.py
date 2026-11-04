@@ -8,7 +8,7 @@
 2. 따옴표 안은 이름으로 본다(`<name>`). git과 Python 오류는 파일·브랜치 이름을 따옴표로 감싼다. `'HEAD'`만 남긴다.
 3. 남은 낱말은 오류 문구에 흔한 일반 낱말(`_WORDS`)과 작은 숫자만 두고 모두 `<name>`으로 바꾼다.
    `_WORDS`에는 파일·디렉터리·브랜치 이름으로 흔한 낱말(config, main, test …)을 넣지 않으며,
-   이 레포의 파일·디렉터리 이름과 같은 낱말은 레포마다 뺀다.
+   이 레포의 파일·디렉터리 이름과 같은 낱말·숫자·문장 부호는 이 허용을 받지 못한다.
 
 3번이 있어 레포를 몰라도 파일·브랜치·사람 이름이 나가지 않는다. 진단 정보가 줄어도 이름이 나가는 쪽보다 낫다.
 단계, 오류 종류, 프레임은 레포의 값을 보지 않고 모양과 gs 소스만으로 거른다. 그래서 지문이 레포마다 같다.
@@ -227,15 +227,35 @@ def _home_paths() -> list[Path]:
         return []
 
 
-def _file_stems(paths: Iterable[str]) -> set[str]:
-    """경로 각 부분의 소문자 이름(첫 점 앞). `uv.lock`은 `uv`이지 `lock`이 아니다."""
-    return {part.lstrip(".").split(".")[0].lower() for path in paths for part in path.split("/")}
+def _normalize(text: str) -> str:
+    """제어 문자와 ANSI를 지우고 따옴표를 하나로 모은다. 파일 이름도 오류 줄과 같은 모양으로 맞춰 비교한다."""
+    return _CONTROL.sub(" ", _ANSI.sub("", text)).translate(_QUOTES)
+
+
+def _strip_punctuation(token: str) -> str:
+    return token.lstrip(_LEADING_PUNCTUATION).rstrip(_TRAILING_PUNCTUATION)
+
+
+def _file_names(paths: Iterable[str]) -> set[str]:
+    """경로의 이름이 오류 줄에서 낱말로 보일 모양(소문자).
+
+    오류 줄을 공백으로 나눠 보므로 이름도 공백으로 나눈다. `network error`는 두 낱말을 모두 막는다.
+    조각마다 그대로와 점 앞부분을 넣는다. `1.2.3.txt`는 `1`·`1.2`·`1.2.3`을 막고, `uv.lock`은 `uv`를 막지만 `lock`은 막지 않는다.
+    """
+    names: set[str] = set()
+    for path in paths:
+        for token in _normalize(path.lower().replace("/", " ")).split():
+            pieces = _strip_punctuation(token).lstrip(".").split(".")
+            names.add(token)
+            names.update(".".join(pieces[:end]) for end in range(1, len(pieces) + 1))
+    names.discard("")
+    return names
 
 
 class Redactor:
     """오류 줄을 가린다. 이름은 알려진 만큼만 쓰이고, 몰라도 3겹째에서 가려진다.
 
-    files는 레포 안 경로다. 규모가 커도 되도록 정규식이 아니라 허용 낱말에서 빼는 데만 쓴다.
+    files는 레포 안 경로다. 규모가 커도 되도록 정규식을 만들지 않고, 3겹째의 허용을 막는 집합으로만 쓴다.
     """
 
     def __init__(self, *, repo_paths: Iterable[str | Path] = (), repo_names: Iterable[str] = (),
@@ -244,7 +264,7 @@ class Redactor:
         self._repo = _root_pattern(repo_paths)
         self._home = _root_pattern(_home_paths())
         self._secrets = _literal_pattern(secrets)
-        self._words = _WORDS - _file_stems(files)
+        self._file_names = _file_names(files)
         self._placeholders: dict[str, str] = {}
         for placeholder, names in (("<name>", others), ("<feature>", features), ("<repo>", repo_names)):
             self._placeholders.update({name.strip().lower(): placeholder for name in names if name.strip()})
@@ -252,19 +272,22 @@ class Redactor:
 
     def _keep_quoted(self, match: re.Match) -> str:
         inner = match[2]
-        return match[0] if inner in _PLACEHOLDERS or (inner == "HEAD" and "head" in self._words) else "<name>"
+        return match[0] if inner in _PLACEHOLDERS or (inner == "HEAD" and "head" not in self._file_names) else "<name>"
 
     def _allowed(self, token: str) -> bool:
-        if _ONLY_PUNCTUATION.fullmatch(token):
-            return True
-        core = token.lstrip(_LEADING_PUNCTUATION).rstrip(_TRAILING_PUNCTUATION)
+        core = _strip_punctuation(token)
         if len(core) > 1 and core[0] in "'\"" and core[-1] == core[0]:  # _keep_quoted가 남긴 것
             core = core[1:-1]
-        return core in _PLACEHOLDERS or _NUMBER.fullmatch(core) is not None or core.lower() in self._words
+        if core in _PLACEHOLDERS:
+            return True
+        if token.lower() in self._file_names or core.lower() in self._file_names:
+            return False  # 아래 허용보다 먼저 본다. 파일 이름은 낱말이든 숫자든 문장 부호든 나가지 않는다
+        return (_ONLY_PUNCTUATION.fullmatch(token) is not None or _NUMBER.fullmatch(core) is not None
+                or core.lower() in _WORDS)
 
     def line(self, raw: str) -> str:
         """한 줄을 가린다. 알아볼 것이 남지 않으면 빈 문자열이다."""
-        text = _CONTROL.sub(" ", _ANSI.sub("", raw[:MAX_RAW_CHARS])).translate(_QUOTES)
+        text = _normalize(raw[:MAX_RAW_CHARS])
         if self._secrets is not None:
             text = self._secrets.sub("<secret>", text)
         text = _SECRET.sub("<secret>", text)
@@ -312,12 +335,15 @@ def _raw_lines(error_lines: Iterable[str]) -> list[str]:
 
 def redactor_for(repo: Path) -> Redactor:
     """이 레포에서 아는 이름을 모은다. 못 읽는 것은 건너뛴다(3겹째가 남아 있다)."""
-    def git_lines(*args: str) -> list[str]:
+    def git_text(*args: str) -> str:
         try:
             cp = git.run(repo, *args, check=False)
         except OSError:
-            return []
-        return cp.stdout.splitlines() if cp.returncode == 0 else []
+            return ""
+        return cp.stdout if cp.returncode == 0 else ""
+
+    def git_lines(*args: str) -> list[str]:
+        return git_text(*args).splitlines()
 
     repo_names = {repo.name, Path(os.path.realpath(repo)).name}
     others = {home.name for home in _home_paths()}
@@ -340,9 +366,9 @@ def redactor_for(repo: Path) -> Redactor:
         for value in git_lines("config", "--get", key):
             others.update((value, *value.split()))
     # 추적하거나 무시되지 않은 파일만 본다. `.venv`의 `lock.py`나 gs 자신의 `.goldstack/…/run/lock`은 이 레포를 드러내지 않으면서
-    # `cannot lock ref` 같은 진단을 지운다. 특수 문자가 있어 따옴표로 나온 이름은 어차피 일반 낱말이 아니다.
-    files = git_lines("-c", "core.quotePath=false", "ls-files", "--cached", "--others", "--exclude-standard",
-                      "--", ".", ":(exclude).goldstack")
+    # `cannot lock ref` 같은 진단을 지운다. `-z`로 따옴표 없는 이름을 받는다. 탭이 든 이름은 오류 줄에서 공백으로 나뉜 낱말이 된다.
+    files = git_text("ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                     "--", ".", ":(exclude).goldstack").split("\0")
     try:
         features = [p.name for p in (repo / ".goldstack/work").iterdir() if p.is_dir()]
     except OSError:

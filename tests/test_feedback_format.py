@@ -217,6 +217,30 @@ class RedactionTest(unittest.TestCase):
         # 확장자는 이름이 아니다. `uv.lock`이 `lock`을 가리면 흔한 오류를 알아볼 수 없다
         self.assertEqual(feedback.Redactor(files=["uv.lock"]).line("cannot lock ref"), "cannot lock ref")
 
+    def test_file_names_made_of_allowed_pieces_are_masked(self):
+        for name in ("network error", "Network Error", "42", "v2", "10s", "1.2.3", "(42)", "---", "don’t",
+                     "src/network error/x.txt", "release 7/notes.txt"):
+            with self.subTest(name):
+                issue = feedback.compose(phase="finish", kind="GitError", frames=[gs_frame()],
+                                         error_lines=[f"fatal: cannot open {piece}" for piece in (name, *name.split("/"))],
+                                         cfg=cfg(), redactor=feedback.Redactor(files=[name]), env=ENV)
+                section = issue.body.split("```text\n")[1].split("\n```")[0]
+                self.assertEqual(set(section.splitlines()), {"fatal: cannot open <name>"})
+
+    def test_number_and_word_pieces_of_file_names_are_masked_alone(self):
+        for files, raw in ((["network error"], "fatal: network failed"), (["network error"], "fatal: error failed"),
+                           (["42.txt"], "fatal: 42 failed"), (["1.2.3.txt"], "fatal: 1.2.3 failed"),
+                           (["V2"], "fatal: v2 failed"), (["7"], "fatal: (7) failed"), (["7"], "fatal: 7, failed"),
+                           (["---"], "fatal: ---, failed")):
+            with self.subTest(files=files, raw=raw):
+                self.assertEqual(feedback.Redactor(files=files).line(raw), "fatal: <name> failed")
+
+    def test_other_numbers_and_marks_stay_when_file_names_have_numbers(self):
+        redactor = feedback.Redactor(files=["42", "1.2.3", "---"])
+        for raw in ("exit code 128", "version 1.3", "failed: === 43", "<repo> failed"):
+            with self.subTest(raw):
+                self.assertEqual(redactor.line(raw), raw)
+
     def test_case_folding_of_known_names_does_not_crash(self):
         self.assertEqual(feedback.Redactor(repo_names=["is"]).line("fatal: ıs failed"), "fatal: <name> failed")
 
@@ -584,6 +608,19 @@ class DraftTest(unittest.TestCase):
                               ("fatal: origin 'HEAD' failed", "fatal: origin 'HEAD' failed")):  # 원격 이름과 HEAD는 이름으로 치지 않는다
             with self.subTest(raw):
                 self.assertEqual(redactor.line(raw), expected)
+
+    def test_recorded_body_hides_file_names_made_of_allowed_pieces(self):
+        (self.repo / "network error").write_text("x")
+        (self.repo / "42").write_text("x")  # 추적하지 않는 파일
+        (self.repo / "release 7").mkdir()
+        (self.repo / "release 7/notes.txt").write_text("x")
+        (self.repo / "fatal\tpush").write_text("x")  # ls-files가 따옴표로 감싸는 이름
+        subprocess.run(["git", "add", "network error", "release 7"], cwd=self.repo, check=True, capture_output=True)
+        subprocess.run(["git", "commit", "-qm", "files"], cwd=self.repo, check=True, capture_output=True)
+        draft = feedback.read_draft(self.record(lines=[
+            "cannot open network error", "cannot open 42", "cannot open release 7", "cannot open fatal\tpush"]), cfg())
+        section = draft.body.split("```text\n")[1].split("\n```")[0]
+        self.assertEqual(section.splitlines(), ["cannot open <name>"])
 
     def test_recorded_body_hides_names_made_of_common_words(self):
         repo = self.root / "network"
