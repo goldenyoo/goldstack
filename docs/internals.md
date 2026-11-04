@@ -114,14 +114,14 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 1. reviewer에게 diff·티켓·spec·worktree 경로를 준다. 답은 고정 JSON `{"findings": [{"severity": "high|medium|low", "location", "claim", "evidence"}]}`. 시간 제한 `timeouts.review_minutes`.
 2. 새 판단 모델 호출(`models.judge`, 파일 경로만 받는다, 제한 `timeouts.judge_minutes`)이 지적마다 `fix`·`report`를 정한다. 근거(evidence)가 빈 지적은 늘 `report`다(코드 규칙: 취향은 고치지 않는다). 판단 모델이 실패하면 모두 `report`.
 3. `fix`가 있으면 같은 구현 모델로 수정 worker를 같은 브랜치·worktree에 띄운다(지적을 brief 끝에 붙인다). 커밋하면 재리뷰로 간다(아래). 수정 worker가 실패하면(종료 코드, 멈춤, 커밋 없음, 이전 커밋을 지움) 이번 수정 커밋만 버리고 수정 전 head로 되돌려 병합·검증한다. 재리뷰하지 않고 티켓 실패로 세지 않는다.
-4. reviewer·재리뷰·판단 모델 호출이 실패하거나 답의 형식이 틀려도 티켓은 그대로 간다(병합 관문은 verify). 그 사실은 리뷰 기록의 `note`나 지적의 `rereview_reason`에 남는다.
+4. reviewer·재리뷰·판단 모델 호출이 실패하거나 답의 형식이 틀려도 티켓은 그대로 간다(병합 관문은 verify). 그 사실은 리뷰 기록의 `note`나 지적의 `rereview_reason`에 남는다. 일시 오류·시간 초과는 실패가 아니다: 기다렸다 다시 부르고, 대기 상한을 넘기면 `중단(네트워크)`다("리뷰·판단 호출의 대기").
 
 기록은 state의 `review`(`reviewer`, `dir`, `merge_base`, `note`, `fix`, `rereviews`, `findings`), 두 번째 리뷰는 `second_review`, 그리고 시도 디렉터리의 `review/`(두 번째 리뷰는 `review-<계열>/`, 예 `review-agy/`)(`diff.patch`, `prompt.md`, `review.txt`, `reviewer.log`, `findings.json`, `judge-prompt.md`, `judge.txt`, `judge.log`), `fix/`·`fix2/`(수정 worker), `rereview<회차>-<계열>/`(재리뷰).
 
 **재리뷰**(`go._rereview`, `review.rereview`) — 순서는 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → catch-up·verify → 병합이고 verify는 마지막에 한 번이다. 수정은 티켓당 최대 2회, 리뷰를 깨끗해질 때까지 돌리지 않는다.
 - **대상**(`review.fix_targets`): 1차는 `fix` 지적 전부. 2차는 1차 재리뷰의 `unresolved`와 1차 재리뷰가 새로 낸 `fix` 지적. `resolved`·`unchecked`는 다시 고치지 않는다. 대상이 있는 리뷰 기록의 리뷰어만 부르고, 둘이면 `review.run_together`로 동시에 띄운다. 각자 자기 지적을 확인하고 새 문제는 부른 리뷰어 모두가 본다.
 - **입력**: 수정 커밋 diff `fix.patch`(수정 전 브랜치 head..수정 뒤 head), 그 리뷰어의 지적 `fix-findings.json`, 티켓, spec. 제한은 `timeouts.rereview_minutes`. 답은 고정 JSON `{"verdicts": [{"id", "status": "resolved|unresolved", "evidence"}], "findings": […]}`. 디렉터리에는 `prompt.md`, `review.txt`, `reviewer.log`도 남고, 새 지적을 분류했으면 판단 모델 파일도 남는다.
-- **판정**: 답을 못 받으면 그 리뷰어의 지적이 모두 `unchecked`다(시간 초과면 이유 `시간 초과`, 호출 실패·형식 오류면 `재리뷰 실패`). 판정이 빠졌거나 근거가 빈 지적도 `unchecked`(`재리뷰 실패`)다. 수정 커밋 diff가 비면 부르지 않고 `unresolved`다. 재리뷰 중 어떤 오류도 병합을 막지 않는다.
+- **판정**: 답을 못 받으면 그 리뷰어의 지적이 모두 `unchecked`(`재리뷰 실패`)다. 시간 초과와 일시 오류는 다시 부르고, 대기 상한을 넘기면 `중단(네트워크)`다(아래 "리뷰·판단 호출의 대기"). 옛 state에는 이유 `시간 초과`가 남아 있을 수 있다. 판정이 빠졌거나 근거가 빈 지적도 `unchecked`(`재리뷰 실패`)다. 수정 커밋 diff가 비면 부르지 않고 `unresolved`다. 재리뷰 중 어떤 오류도 병합을 막지 않는다.
 - **새 지적**: 기록의 `findings` 뒤에 번호를 이어 `found_round`를 적는다. 1차면 판단 모델이 나누고(`fix`면 2차 수정 대상), 2차면 판단 모델을 부르지 않고 `report`다.
 - **읽는 트리**(`go._rereview_tree`): 티켓 worktree가 수정 head 그대로이고 깨끗하면(setup 산출물 제외) 그곳, 미커밋 변경이 있거나 다른 곳으로 옮겨 갔으면 임시 worktree `run/gs-rereview-*/wt`다. 병합되지 않을 변경을 `resolved`로 확인하지 않게 한다.
 - **2차 수정을 못 하면**: 띄우지 못했으면(한도 포함) 그대로, 실패하면 이번 수정 커밋만 버리고 1차 수정까지를 병합·검증한다. 2차 재리뷰는 없다.
@@ -136,19 +136,19 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 | 지적 | `fix_round` | 이 지적을 받은 마지막 수정 회차(0이면 받은 적 없음) |
 | 지적 | `fix_reason` | 수정 못 한 이유: `한도`, `띄우지 못함: …`, `수정 worker 실패: …` |
 | 지적 | `rereview` | `""`, `resolved`, `unresolved`, `unchecked` |
-| 지적 | `rereview_reason` | `unchecked`의 이유: `시간 초과`, `한도`, `재리뷰 실패` |
+| 지적 | `rereview_reason` | `unchecked`의 이유: `한도`, `재리뷰 실패`(옛 state는 `시간 초과`도) |
 | 지적 | `rereview_evidence` | 판정 근거 또는 재리뷰를 못 한 자세한 내용 |
 | 지적 | `rereview_round` | 그 결과를 낸 재리뷰 회차 |
 | 지적 | `found_round` | 0 첫 리뷰, 1·2 그 회차 재리뷰가 새로 낸 지적 |
 
 **보고서의 지적 상태**(`report.finding_status`, 위에서부터 먼저 맞는 것): `action`이 `report`이거나 `found_round`가 2면 `보고만` → `rereview`가 `resolved`면 `수정됨(재리뷰 확인)`, `unresolved`면 `미해결`, `unchecked`면 `확인 못 함(<rereview_reason>)` → `fix_reason`이 있으면 `수정 못 함(<fix_reason>)`. 그래서 2차 수정을 못 했거나 버렸어도 1차 재리뷰의 `unresolved`는 `미해결`이다. 재리뷰 도입 전 state는 `수정 못 함(수정 버림)`(`discarded`), `확인 못 함(재리뷰 없음)`(`attempted`), `수정 못 함(수정 기록 없음)`으로 읽는다. 커밋만으로 해결됐다고 보지 않는다. 지적 줄은 `- <NN> 리뷰(<계열>) [<심각도>] <위치>: <주장> — 상태: <상태>`, Summary의 마무리 상태 줄 아래 `리뷰 지적: 수정됨 n · 미해결 n · 보고만 n · 수정 못 함 n · 확인 못 함 n`(`report.finding_counts`, 0개인 상태는 뺀다). 요약·알림의 남은 지적 수(`review.remaining`)는 `resolved`가 아닌 지적 전부다. 판단 모델의 Summary 프롬프트는 수정됨을 남은 위험에 넣지 말고, 수정 커밋만으로 해결됐다고 쓰지 말라고 한다.
 
-**두 리뷰 합치기**(`second_reviewer`, `go._review`) — 두 리뷰를 `review.run_together`로 동시에 띄우고(스레드 둘), 둘 다 끝날 때까지 기다린다. 각자 `timeouts.review_minutes`·`judge_minutes` 제한이 있어 한쪽이 무한히 붙잡지 않는다. 판단 모델은 리뷰마다 따로 부른다. 그 뒤:
+**두 리뷰 합치기**(`second_reviewer`, `go._review`) — 두 리뷰를 `review.run_together`로 동시에 띄우고(스레드 둘), 둘 다 끝날 때까지 기다린다. 각자 `timeouts.review_minutes`·`judge_minutes`·`network_wait_minutes` 제한이 있어 한쪽이 무한히 붙잡지 않는다. 판단 모델은 리뷰마다 따로 부른다. 그 뒤:
 - 두 기록의 `fix` 지적을 합쳐(`review.labeled_fixes`, 지적 번호가 리뷰마다 1부터라 `codex-1`, `agy-1`처럼 계열을 붙인다) 수정 worker를 **하나** 띄운다. 2차 수정도 같다. 재리뷰는 리뷰어마다 따로다(위).
-- 한쪽이 같은 계열이라 거부되거나, 실패·시간 초과·형식 오류·`건너뜀(한도)`이면 그 기록에 `note`만 남기고 다른 쪽 결과로 간다. 둘 다 거부면 하나일 때처럼 티켓 실패, 띄운 리뷰가 모두 git 오류여도 티켓 실패다.
+- 한쪽이 같은 계열이라 거부되거나, 실패·형식 오류·`건너뜀(한도)`이면 그 기록에 `note`만 남기고 다른 쪽 결과로 간다. 시간 초과·일시 오류는 그 리뷰어를 다시 부르고, 대기 상한을 넘기면 다른 쪽 결과를 버리고 `중단(네트워크)`다. 둘 다 거부면 하나일 때처럼 티켓 실패, 띄운 리뷰가 모두 git 오류여도 티켓 실패다.
 - 출력은 `[NN] 리뷰: codex+agy`, 리뷰마다 `[NN] 리뷰 끝(<계열>): 지적 n개(fix a, report b)[ — note]`. 보고서 "리뷰 지적"은 리뷰마다 `NN 리뷰(<계열>)`로 나뉜다(`state.reviews`).
 
-**agy 호출 세기**(spec 1-9, 2-5) — gs가 agy를 띄우기 직전에 `state.agy_calls`를 1 올리고 저장한다(`go._count_agy`). 1회 = agy worker 한 번(첫 시도, 재시도, 1·2차 수정 worker 각각), agy 리뷰 한 번(첫 리뷰든 두 번째든), agy 재리뷰 한 번(회차마다) 중 하나다. 그래서 재시도가 없으면 agy 리뷰어는 티켓 하나에 최대 3회(리뷰 1 + 재리뷰 2), agy 구현도 최대 3회(worker 1 + 수정 2)다. `gs check`의 차단 장치 확인(`agy -p /hooks`, 모델 호출 없음)과 `/retro`의 agy 요약은 세지 않는다. 값은 `gs go`가 실행을 시작할 때(`_begin`) 0으로 돌린다: 상한은 feature 하나의 실행마다다. `agy_calls >= max_calls_per_run`(`state.agy_reached`)이면:
+**agy 호출 세기**(spec 1-9, 2-5) — gs가 agy를 띄우기 직전에 `state.agy_calls`를 1 올리고 저장한다(`go._count_agy`). 1회 = agy worker 한 번(첫 시도, 재시도, 1·2차 수정 worker 각각), agy 리뷰 한 번(첫 리뷰든 두 번째든), agy 재리뷰 한 번(회차마다), 끊겨서 다시 부른 agy 리뷰·재리뷰 한 번 중 하나다. 다시 부를 때는 상한을 보지 않는다. 그래서 재시도가 없으면 agy 리뷰어는 티켓 하나에 최대 3회(리뷰 1 + 재리뷰 2), agy 구현도 최대 3회(worker 1 + 수정 2)다. `gs check`의 차단 장치 확인(`agy -p /hooks`, 모델 호출 없음)과 `/retro`의 agy 요약은 세지 않는다. 값은 `gs go`가 실행을 시작할 때(`_begin`) 0으로 돌린다: 상한은 feature 하나의 실행마다다. `agy_calls >= max_calls_per_run`(`state.agy_reached`)이면:
 - agy worker: 띄우지 않고 `agy 한도: 이번 실행의 agy 호출이 상한 <n>/<m>에 닿아 worker를 띄우지 않았다(config agy.max_calls_per_run)`로 실패, 재시도 없음(`retry=False`, 다시 해도 같은 이유로 막힌다). 막힌 티켓은 `skipped`.
 - agy 리뷰: 띄우지 않고 기록 `note`를 `건너뜀(한도): 이번 실행의 agy 호출이 상한 <n>/<m>에 닿았다`로 둔다. 다른 리뷰가 없으면 verify만으로 병합한다.
 - agy 재리뷰: 띄우지 않고 그 리뷰어의 대상 지적을 `unchecked`(이유 `한도`)로 둔다. 보고서 `확인 못 함(한도)`. 다른 리뷰어의 재리뷰는 그대로 돈다.
@@ -159,8 +159,8 @@ reviewer 명령(모두 읽기 전용, worker와 같은 push·gh 차단 환경):
 
 | reviewer | 명령 |
 |---|---|
-| claude | `claude -p --model <models.claude_review> --permission-mode bypassPermissions --tools Read,Grep,Glob` (stdin = 프롬프트) |
-| codex | `codex exec [--model <models.codex>] -s read-only --skip-git-repo-check -C <wt> --output-last-message <review.txt> -` |
+| claude | `claude -p --model <models.claude_review> --output-format json --permission-mode bypassPermissions --tools Read,Grep,Glob` (stdin = 프롬프트) |
+| codex | `codex exec --json [--model <models.codex>] -s read-only --skip-git-repo-check -C <wt> --output-last-message <review.txt> -` |
 | agy | `agy -p <프롬프트> --sandbox --dangerously-skip-permissions --disable-slash-commands --settings '<deny 규칙>' --model <models.agy>` |
 
 ## 마무리
@@ -310,7 +310,9 @@ spec `verify_ticket`, `verify_retries`. 티켓 검증 명령은 티켓 `verify` 
 
 gs가 state를 쓸 때마다 `progress`를 계산해 같이 쓴다(`state.calculate_progress`, Python 시험). mod는 그리기만 한다.
 
-**heartbeat** — state는 상태가 바뀔 때(`Run.save()`)만 쓰이므로, worker가 10분 넘게 단계를 바꾸지 않으면 mod의 10분 기준에 걸려 바가 사라졌다. 그래서 `go._wait_any`의 polling 루프가 상태 변화가 없어도 마지막 저장에서 `HEARTBEAT_SECONDS`(60초)가 지나면 `Run.save()`를 다시 불러 `updated_at`·`progress`(경과 시간 포함)와 파일 수정 시각을 새로 쓴다. mod 기준(10분)은 그대로다. heartbeat는 `_wait_any` 안에만 있으므로, 코디네이터가 동기로 기다리는 리뷰(`review.run`, 제한 `timeouts.review_minutes` 기본 30분)·재리뷰(`review.rereview`, 제한 `timeouts.rereview_minutes` 기본 10분)·검증(`verify.run`, 제한 `verify_minutes` 기본 20분)·병합·feature 마무리 동안에는 state가 다시 쓰이지 않는다(CI 대기만 10초마다 읽을 때 저장한다). 그 단계가 10분을 넘으면 정상 실행이어도 바가 사라졌다가 단계가 끝나 `save()`하면 돌아온다. 그러니 10분 넘게 안 바뀐 state가 곧 `gs go`가 죽었다는 뜻은 아니다. 죽었는지는 `gs status`가 `pid`의 생존으로 가린다(`실행 중`/`중단됨`).
+**리뷰·판단 호출의 대기**(`review._call`, `review.call_waiting`, `review.CallWait`) — `review._call`은 새 프로세스 그룹에서 돌고, 끝날 때(시간 초과, 정상 종료, 코디네이터 중단 모두) `verify.stop`으로 그룹에 남은 프로세스를 끝낸다(SIGTERM, 5초 뒤 SIGKILL). 그래서 다시 부르는 호출은 앞 호출의 프로세스가 끝난 뒤 시작한다. 호출이 일시 오류(`transient.reason`)나 시간 초과로 끝나면 `call_waiting`이 worker와 같은 일정(1→2→5→10→10…분, 호출마다 새로 센다)으로 기다렸다 다시 부른다. 대기 합계는 대기만 센다. 호출이 시간 초과까지 쓴 시간은 넣지 않으므로, 계속 시간 초과인 리뷰어는 기본값으로 대기 60분에 호출 10번 × 30분을 더 쓴 뒤 중단된다. 상한을 넘기면: 리뷰·재리뷰·지적 분류는 `NetworkAbort`로 `_loop`까지 올라가 `중단(네트워크)`가 되고 다음 `gs go`가 리뷰·재리뷰부터 잇는다. 끊겼다는 이유로 리뷰 없이 병합하지 않는다. 보고서 Summary와 실패 요약은 중단하지 않고 대체 문구로 간다(병합 안전과 무관하다). 일시 오류가 아닌 실패(인증, 구독 한도, 형식 오류, 모르는 오류)는 다시 부르지 않고 지금처럼 `리뷰 실패(리뷰 없음, verify만으로 병합한다)`, `unchecked(재리뷰 실패)`, 모두 report, 대체 문구다. 판별의 입력은 CLI 출력 형식에 달렸다: claude는 `--output-format json`의 result(답도 그 `result`에서 꺼낸다), codex는 `--json`의 이벤트(답은 `--output-last-message` 파일. 시도마다 지우고 시작한다), agy는 stderr다. 실패한 호출의 stdout은 `reviewer.log`·`judge.log`에 덧붙는다. 다시 부르면 로그는 새로 쓴다. 대기 중에는 `CallWait`가 state의 `network`(`wait`, `errors`, `waited_seconds`)와 티켓의 `transient_errors`·`network_wait_seconds`를 쓰고 60초마다 저장해, 진행 바에 `01 리뷰 중(codex) · 네트워크 대기(2회, 3분 뒤)`가 보인다. 코디네이터 스레드에서 기다리므로 그동안 새 worker를 띄우지 않고 끝난 worker도 처리하지 않는다. 돌던 worker는 각자 돈다.
+
+**heartbeat** — state는 상태가 바뀔 때(`Run.save()`)만 쓰이므로, worker가 10분 넘게 단계를 바꾸지 않으면 mod의 10분 기준에 걸려 바가 사라졌다. 그래서 `go._wait_any`의 polling 루프가 상태 변화가 없어도 마지막 저장에서 `HEARTBEAT_SECONDS`(60초)가 지나면 `Run.save()`를 다시 불러 `updated_at`·`progress`(경과 시간 포함)와 파일 수정 시각을 새로 쓴다. mod 기준(10분)은 그대로다. heartbeat는 `_wait_any` 안에만 있으므로, 코디네이터가 동기로 기다리는 리뷰(`review.run`, 제한 `timeouts.review_minutes` 기본 30분)·재리뷰(`review.rereview`, 제한 `timeouts.rereview_minutes` 기본 10분)·검증(`verify.run`, 제한 `verify_minutes` 기본 20분)·병합·feature 마무리 동안에는 state가 다시 쓰이지 않는다(CI 대기만 10초마다 읽을 때 저장한다. 리뷰·판단 호출의 네트워크 대기도 60초마다 저장한다). 그 단계가 10분을 넘으면 정상 실행이어도 바가 사라졌다가 단계가 끝나 `save()`하면 돌아온다. 그러니 10분 넘게 안 바뀐 state가 곧 `gs go`가 죽었다는 뜻은 아니다. 죽었는지는 `gs status`가 `pid`의 생존으로 가린다(`실행 중`/`중단됨`).
 ```json
 {"done": 3, "total": 8, "running": [{"id": "04", "phase": "review", "model": "codex"}],
  "elapsed_s": 1440, "eta_s": 2400, "line": "▓▓▓░░░░░ goldstack-v2 3/8 · 04 리뷰 중(codex) · 24분 · 약 40분 남음"}

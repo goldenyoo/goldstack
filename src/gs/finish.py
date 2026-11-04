@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from urllib.parse import quote
 
-from . import clean, doctor, git, report, setup, state, verify
+from . import clean, doctor, git, report, review, setup, state, verify
 from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
@@ -806,7 +806,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         # verify가 남긴 변경은 보고서 커밋에 섞이지 않게 한다(gs 전용 worktree).
         if not ok:
             _restore_integration(r, r.ihead)
-        summary = report.summarize(r)
+        summary = report.summarize(r, review.CallWait(r.st, r.save))
         path = _commit_report(r, summary)
         _push(r)
         _publish(r, path)

@@ -1,7 +1,6 @@
 """설정 파일을 바꾸면 실제 모델 인자와 subprocess 시간 제한이 바뀐다."""
 import os
 import shlex
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -88,7 +87,7 @@ telegram = false
     def test_failure_summary_uses_configured_judge_and_seconds(self):
         for value in (1, 2):
             cfg = self.configured(value)
-            with mock.patch.object(failure.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "ok")) as call:
+            with mock.patch.object(review, "_call", return_value="ok") as call:
                 path = failure.summarize(self.repo, self.repo / "failure.log", cfg)
             self.assertIn("ok", path.read_text())
             self.assert_model(call.call_args.args[0], cfg.models.judge)
