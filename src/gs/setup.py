@@ -33,9 +33,10 @@ def _restore_tracked(wt: Path) -> str:
     # setup이 stage까지 했더라도 되돌린다. 새 설치 파일은 untracked로 남긴다.
     git.run(wt, "--literal-pathspecs", "reset", "-q", "HEAD", "--", *paths)
     tracked = [p for p in paths if p in original]
-    if tracked:
-        git.run(wt, "--literal-pathspecs", "checkout", "--", *tracked)
-    names = [json.dumps(p, ensure_ascii=False) if any(c in p for c in "\r\n\t") else p for p in paths]
+    if not tracked:
+        return ""
+    git.run(wt, "--literal-pathspecs", "checkout", "--", *tracked)
+    names = [json.dumps(p, ensure_ascii=False) if any(c in p for c in "\r\n\t") else p for p in tracked]
     return WARNING + ", ".join(names)
 
 

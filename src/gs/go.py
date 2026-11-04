@@ -699,7 +699,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), runner=
             return fail(why + (f" ({note})" if note else ""))
         if commits == 0:
             return fail("커밋 없음")
-        if not git.is_clean(wt):
+        if not setup.is_clean(wt):
             say(f"[{t.id}] 경고: worktree에 커밋 안 된 변경이 남았다(병합에 들어가지 않는다)")
         try:
             todo = _review(r, a)
@@ -929,7 +929,7 @@ def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> l
     why = error or ("" if code == 0 else f"종료 코드 {code}") or ("" if kept else "이전 커밋을 지웠다") \
         or ("" if commits else "커밋 없음")
     if not why:
-        if not git.is_clean(wt):
+        if not setup.is_clean(wt):
             say(f"[{t.id}] 경고: 수정 worker가 커밋 안 된 변경을 남겼다(병합에 들어가지 않는다)")
         _mark_fixes(r, t, nth, review.ATTEMPTED)
         ids = ", ".join(str(f["id"]) for f in _todo(r, t, nth))

@@ -41,6 +41,19 @@ class SetupRestoreTest(unittest.TestCase):
         self.assertIn(setup.WARNING, out.getvalue())
         for name in names:
             self.assertIn(name, self.log.read_text())
+        for name in ("installed", "moved.txt"):
+            self.assertNotIn(name, out.getvalue())
+            self.assertNotIn(name, self.log.read_text())
+
+    def test_staged_install_artifact_is_preserved_without_restore_warning(self):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            result = self.run_setup("echo ready > installed; git add installed")
+        self.assertTrue(result.ok)
+        self.assertEqual((self.wt / "installed").read_text(), "ready\n")
+        self.assertIn("?? installed", sh(self.wt, "git", "status", "--porcelain"))
+        self.assertNotIn(setup.WARNING, out.getvalue())
+        self.assertNotIn(setup.WARNING, self.log.read_text())
+        self.assertEqual(setup.warnings([self.log]), [])
 
     def test_failed_and_timed_out_setup_also_restore_tracked_files(self):
         self.track("lock.txt")
@@ -102,10 +115,29 @@ git add file_01 && git commit -qm 'worker 01'
         self.install_unignored()
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
+        self.assertNotIn("커밋 안 된 변경", out)
         ts = state.load(self.rundir, "demo").tickets["01"]
         self.assertEqual(ts.kept_worktrees, [])
         self.assertFalse(Path(ts.worktree).exists())
         self.assertEqual(sh(self.repo, "git", "branch", "--list", ts.branch), "")
+
+    def test_fix_worker_with_setup_artifacts_has_no_uncommitted_warning(self):
+        self.install_unignored()
+        worker = self.bin / "worker.sh"
+        worker.write_text(worker.read_text().replace(
+            "echo done > file_01", """\
+if grep -q '^## 리뷰 지적(고칠 것)' "$GS_BRIEF"; then
+  echo fixed > fixed_01; git add fixed_01; git commit -qm 'fix 01'; exit 0
+fi
+echo done > file_01"""))
+        with test_go.GoTest.review_with(self, [
+            {"severity": "high", "location": "file_01", "claim": "FIX: 값이 틀렸다", "evidence": "e"},
+        ]):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("수정 커밋 1개", out)
+        self.assertNotIn("커밋 안 된 변경", out)
+        self.assertEqual(state.load(self.rundir, "demo").tickets["01"].status, state.MERGED)
 
     def test_drop_kept_only_ignores_remembered_artifacts_and_preserves_new_changes(self):
         self.install_unignored()
