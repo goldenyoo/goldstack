@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import json
+import re
 import tomllib
 from dataclasses import MISSING, dataclass, fields as dataclass_fields
 from pathlib import Path
 from typing import TextIO, get_type_hints
 
 from . import git
-from .feature import Problem
+from .feature import FAMILIES, TIERS, Problem
 
 CONFIG_PATH = ".goldstack/config.toml"
 IGNORE_LINES = (".goldstack/local.env", ".goldstack/work/*/run/")
@@ -27,6 +28,26 @@ judge = "opus"
 claude_review = "opus"
 agy = "gemini-4-argon-high"
 codex = ""
+failure_summary = "haiku"
+
+[tiers]
+review = "large"
+rereview = "medium"
+
+[tiers.claude]
+small = "sonnet/medium"
+medium = "sonnet/high"
+large = "opus/xhigh"
+
+[tiers.codex]
+small = "gpt-6-luna/medium"
+medium = "gpt-6.1-sol/medium"
+large = "gpt-6.1-sol/high"
+
+[tiers.agy]
+small = "gemini-3.8-flash-medium"
+medium = "gemini-4-argon-medium"
+large = "gemini-4-argon-high"
 
 [agy]
 max_calls_per_run = 3
@@ -72,6 +93,36 @@ class ModelsConfig:
     claude_review: str
     agy: str
     codex: str
+    failure_summary: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.failure_summary:
+            object.__setattr__(self, "failure_summary", self.judge)
+
+
+@dataclass(frozen=True)
+class ModelEffort:
+    model: str
+    effort: str = ""
+
+
+@dataclass(frozen=True)
+class TiersConfig:
+    claude: dict[str, ModelEffort] | None = None
+    codex: dict[str, ModelEffort] | None = None
+    agy: dict[str, ModelEffort] | None = None
+    review: str = "large"
+    rereview: str = "medium"
+
+    def worker(self, family: str, tier: str | None = None, *, failures: int = 0) -> tuple[str, ModelEffort | None]:
+        """표가 없으면 옛 CLI 선택을 유지한다. 첫 실패 뒤 한 단계 올리며 일시 오류는 세지 않는다."""
+        table = getattr(self, family)
+        if table is None:
+            return "", None
+        tier = tier or "medium"
+        if failures:
+            tier = TIERS[min(TIERS.index(tier) + 1, len(TIERS) - 1)]
+        return tier, table[tier]
 
 
 @dataclass(frozen=True)
@@ -104,6 +155,7 @@ class Config:
     notify: NotifyConfig
     agy: AgyConfig = AgyConfig()
     worktree: WorktreeConfig = WorktreeConfig()
+    tiers: TiersConfig = TiersConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -123,6 +175,9 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
     sections = {}
     names = {str: "문자열", int: "정수", bool: "불리언"}
     for section, cls in schema.items():
+        if section == "tiers":
+            sections[section] = _load_tiers(data.get(section, {}), problems)
+            continue
         if section not in data and section not in ("agy", "worktree"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
             continue
@@ -131,6 +186,8 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`는 테이블이어야 한다"))
             continue
         raw = {**{f.name: f.default for f in dataclass_fields(cls) if f.default is not MISSING}, **raw}
+        if section == "models" and "failure_summary" not in data.get(section, {}):
+            raw["failure_summary"] = raw.get("judge", "")
         fields = get_type_hints(cls)
         for key in raw.keys() - fields.keys():
             problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `{section}.{key}`"))
@@ -148,7 +205,8 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, "`git.merge_method`는 merge 또는 squash이어야 한다"))
             elif section == "agy" and raw[key] < 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0 이상이어야 한다"))
-            elif section == "models" and key != "codex" and not raw[key].strip():
+            elif (section == "models" and key != "codex" and not raw[key].strip()
+                  and (key != "failure_summary" or key in data[section])):
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 비어 있으면 안 된다"))
             else:
                 values[key] = raw[key]
@@ -157,6 +215,51 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
     if any(p.level == "오류" for p in problems):
         return None, problems
     return Config(**sections), problems
+
+
+def _load_tiers(raw, problems: list[Problem]) -> TiersConfig:
+    """중첩 등급표만 별도로 읽고 다른 절의 스칼라 타입 검사는 그대로 둔다."""
+    def error(key: str, message: str) -> None:
+        problems.append(Problem("오류", CONFIG_PATH, f"`tiers{key}`{message}"))
+
+    if not isinstance(raw, dict):
+        error("", "는 테이블이어야 한다")
+        return TiersConfig()
+    values = {}
+    for key in raw.keys() - {*FAMILIES, "review", "rereview"}:
+        problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `tiers.{key}`"))
+    for key in ("review", "rereview"):
+        if key in raw:
+            if not isinstance(raw[key], str) or raw[key] not in TIERS:
+                error(f".{key}", "는 small|medium|large 중 하나여야 한다")
+            else:
+                values[key] = raw[key]
+    for family in FAMILIES:
+        if family not in raw:
+            continue
+        table = raw[family]
+        if not isinstance(table, dict):
+            error(f".{family}", "는 테이블이어야 한다")
+            continue
+        parsed = {}
+        for key in table.keys() - set(TIERS):
+            problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `tiers.{family}.{key}`"))
+        for tier in TIERS:
+            value = table.get(tier)
+            # 공백·빈 조각·여러 슬래시는 CLI 인자로 쓸 수 있는 모델/effort 형식이 아니다.
+            if not isinstance(value, str) or not re.fullmatch(r"[^\s/]+(?:/[^\s/]+)?", value):
+                error(f".{family}.{tier}", '는 "모델/effort" 또는 "모델"이어야 한다')
+                continue
+            model, _, effort = value.partition("/")
+            if effort and effort not in ("none", "minimal", "low", "medium", "high", "xhigh", "max"):
+                error(f".{family}.{tier}", "의 effort가 올바르지 않다")
+                continue
+            if family != "codex" and effort in ("none", "minimal"):
+                error(f".{family}.{tier}", "의 effort는 low|medium|high|xhigh|max 중 하나여야 한다")
+                continue
+            parsed[tier] = ModelEffort(model, effort)
+        values[family] = parsed
+    return TiersConfig(**values)
 
 
 def read_local_env(repo: Path) -> dict[str, str]:

@@ -10,12 +10,13 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from . import frontmatter
 
+TIERS = ("small", "medium", "large")
 FAMILIES = ("claude", "codex", "agy")
 SPEC_REQUIRED = ("feature", "verify")
 SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20, "verify_retries": 0}
 SPEC_OPTIONAL = ("verify_ticket",)
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
-TICKET_OPTIONAL = ("touches", "second_reviewer", "verify")
+TICKET_OPTIONAL = ("touches", "second_reviewer", "verify", "tier")
 WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
 
 
@@ -71,6 +72,7 @@ class Ticket:
     touches: list[str] = field(default_factory=list)
     second_reviewer: str | None = None
     verify: str | None = None
+    tier: str | None = None
 
 
 @dataclass
@@ -236,8 +238,10 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
             valid_touches.append(value)
     if "verify" in data and not _valid_command(data["verify"]):
         err("`verify`는 비어 있지 않은 한 줄 셸 명령이어야 한다")
+    if "tier" in data and data["tier"] not in TIERS:
+        err("`tier`는 small|medium|large 중 하나여야 한다")
     # 값 오류가 있어도 그래프에는 넣는다. 빼면 이 티켓을 참조하는 티켓마다 "없는 id" 오류가 덧붙는다.
     return Ticket(id=tid, title=data["title"], blocked_by=list(deps), model=data["model"],
                   reviewer=data["reviewer"], path=path, body=body, touches=valid_touches,
-                  second_reviewer=second_reviewer,
+                  second_reviewer=second_reviewer, tier=data.get("tier"),
                   verify=data["verify"] if _valid_command(data.get("verify")) else None)

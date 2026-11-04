@@ -188,6 +188,11 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
         if external:
             ext = ", ".join(f"{t} ← {' '.join(ds)}" for t, ds in external.items())
             lines.append(f"범위 밖 의존(끝났다고 가정): {ext}")
+    for family in sorted({feat.tickets[tid].model for tid in g} & set(featmod.FAMILIES)):
+        if getattr(cfg.tiers, family) is None:
+            feat.problems.append(featmod.Problem(
+                "경고", config.CONFIG_PATH,
+                f"`tiers.{family}` 표가 없다. 모델·effort가 사용자 설정을 따른다"))
     feat.problems.extend(touches_problems(feat, full_graph, g))
     feat.problems.extend(agy_problems(cfg, feat, g))
     feat.problems.extend(environment_problems(repo, cfg, feat, g))

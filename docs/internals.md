@@ -101,7 +101,7 @@ frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max
 
 - **멈춤**: worker의 로그 출력도 브랜치의 새 커밋도 없이 spec의 `idle_minutes`가 지나면 프로세스와 pane을 끝낸다(`시간 초과: <N>분 동안 로그 출력·새 커밋 없음`).
 - **verify 시간 제한**: 티켓 병합 전, `integration`, `integration-final`, `integration-recheck`, `main`, `main-recheck` 검증이 모두 `verify.py`를 쓴다. `verify_retries`가 있으면 시간 초과도 그만큼 다시 돈 뒤의 결과다. 명령은 새 프로세스 그룹에서 `bash -c`로 돈다. 제한은 `GS_VERIFY_TIMEOUT`(초)이 있으면 그것, 없으면 spec `verify_minutes`. 넘기면 그룹 전체에 SIGTERM, 5초 뒤 남았으면 SIGKILL을 보내 자손까지 끝내고, 로그 끝에 `시간 초과: <N>분`을 남겨 검증 실패로 친다: 티켓이면 `검증 시간 초과(<N>분, 로그 <경로>)`로 재시도, integration이면 병합 안 함, base면 병합 커밋 revert.
-- **재시도**: 티켓 실패(종료 코드, 커밋 없음, 멈춤, 검증 실패(시간 초과 포함), 병합 충돌, 띄우기 실패 등)는 같은 모델로 한 번 재시도한다. `준비 실패`와 `agy 한도`만 재시도 없이 바로 실패다. 최신 integration에서 새 브랜치·worktree를 만들고, 새 판단 모델 호출이 요약한 실패 로그(`failure-summary.md`)를 brief에 붙인다. 요약 호출이 실패하면 증거 파일 경로를 붙인다. 실패 횟수는 요약 호출 전에 state에 적어 중간에 죽어도 재시도 한도가 늘지 않는다.
+- **재시도**: 티켓 실패(종료 코드, 커밋 없음, 멈춤, 검증 실패(시간 초과 포함), 병합 충돌, 띄우기 실패 등)는 같은 계열에서 한 등급 올려 한 번 재시도한다(등급표가 없으면 기존 모델 선택 유지). `준비 실패`와 `agy 한도`만 재시도 없이 바로 실패다. 최신 integration에서 새 브랜치·worktree를 만들고, 새 판단 모델 호출이 요약한 실패 로그(`failure-summary.md`)를 brief에 붙인다. 요약 호출이 실패하면 증거 파일 경로를 붙인다. 실패 횟수는 요약 호출 전에 state에 적어 중간에 죽어도 재시도 한도가 늘지 않는다.
 - 두 번째 실패는 `failed`, 그 티켓에 직접·간접으로 막힌 티켓은 `skipped`(`막힘: <id>`)로 두고 나머지는 계속한다.
 - 증거: 시도마다 `failure.log`(이유 + worker·verify·merge 로그 끝 64KiB), `failure-summary.md`, `judge.log`. 실패 worktree는 지우지 않고 `failed_worktrees`에 남긴다.
 - 한 티켓의 준비·확인·병합 중 오류(git, herdr, 파일, 어댑터)는 그 티켓의 실패로 한정한다. 예상 못 한 오류로 루프를 떠나도 띄운 worker를 끝낸다.
@@ -371,6 +371,10 @@ PR <url>
 ## 모델 어댑터
 
 `adapters.py`. 어댑터마다 같은 입력(brief, worktree, 로그 경로)을 받아 준비(`prepare`), 환경(`env`, 모두 `GS_ROLE=worker`, `GS_BRIEF`, `GS_WORKTREE`), 셸 명령(`command`), 종료 판정(`outcome`)을 한다. 실행 스크립트(`run.sh`)가 명령을 감싸 `worker.log`에 남기고 종료 코드를 `exit` 파일에 원자적으로 쓴다. 끝은 이 파일로 안다(화면을 읽어 추측하지 않는다).
+
+worker의 모델·effort는 `.goldstack/config.toml`의 `[tiers.claude]`, `[tiers.codex]`, `[tiers.agy]`에서 고른다. 각 표는 `small`, `medium`, `large`를 `"모델/effort"`(effort 생략 가능)로 적는다. 티켓 frontmatter의 선택 키 `tier: small|medium|large`를 쓰며 생략하면 medium이다. 첫 실패 뒤 재시도는 한 단계 올린다(small→medium→large, large는 그대로). 수정 worker는 해당 구현 시도의 등급을 쓰고, 일시 오류 재시작은 등급을 올리지 않는다. 해당 계열의 표가 없으면 기존 선택(claude는 CLI 기본값, codex·agy는 `models.codex`·`models.agy`)을 보존하고 `gs check`가 경고한다. 표가 있으면 `models.codex`·`models.agy`보다 우선한다.
+
+어댑터의 선택 인자 `ModelEffort`는 claude·agy에 `--model <모델> [--effort <effort>]`, codex에 `--model <모델> [-c model_reasoning_effort=<effort>]`를 넣는다. `state.json`의 티켓 `phases`에서 구현·수정 실행마다 `tier`, `actual_model`, `effort`를 보존한다(빈 모델·effort는 CLI 사용자 기본값, 기존 `model`은 계열). 옛 state의 항목에는 이 키가 없어도 된다. `[tiers] review`·`rereview`는 기본 large·medium, `[models] failure_summary`는 생략하면 `models.judge`를 읽는다. 이 세 설정은 읽기만 하며 리뷰·실패 요약 호출은 기존 경로를 쓴다.
 
 `transient_reason(inp)`은 종료 판정과 별개로 `transient.reason(family, text, model=..., cwd=...)`에 로그를 넘겨 일시 오류 이유를 돌려준다(없으면 빈 문자열). 연결·DNS·5xx·429만 인정하고 인증·구독 한도·모르는 오류는 제외한다. claude는 마지막 result, codex는 error·turn.failed 이벤트를 읽어 도구 출력 속 문자열을 무시한다. agy의 `invalid model selection`은 `agy models`(`GS_AGY` seam, 15초 제한)가 실패하거나 선택한 모델이 목록에 있을 때 일시 오류다. 목록에 모델이 없으면 설정 오류다. 이 판별 자체는 대기나 재시작을 하지 않는다.
 
