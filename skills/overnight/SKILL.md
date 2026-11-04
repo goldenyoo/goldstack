@@ -55,10 +55,10 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 - **텔레그램**: 답이 지금 값과 다르면 `.goldstack/config.toml`의 `telegram`을 고쳐 그 파일만 커밋한다. 켰으면 7단계 명령을 `sendMessage` 대신 `getMe`로, `--data-urlencode` 없이 쳐서 통과해야 한다.
 - **`gs check` 전부**: feature마다 오류 0. 경고는 첫 feature가 0이다. 뒤 feature의 경고는 앞 feature가 gs를 고쳐야 사라지는 것(`알 수 없는 키`)만 남겨 두고 6단계에서 다시 본다.
 - **미커밋 grill**: feature마다 `/go` 2단계로 커밋하고 push한다. 뒤 feature 것도 지금 한다. 다른 미커밋 변경은 다른 세션 것일 수 있어 건드리지 않고 사람에게 보인다.
-- **세션 권한 모드**: 승인 창이 뜨면 세션은 아침까지 서 있다. 모드는 읽을 수 없으니 밤에 칠 모양 그대로 지금 친다: `git show <remote>/<base>:<파일>`, `git pull --ff-only <remote> <base>`, `git add -- .goldstack/work/<f>`, `git commit --dry-run`, `git push <remote> <base>`, 4단계의 사이 단계 명령, 6단계의 실행 확인과 재설치(gs 자신을 고친 레포만). 창이 뜨면 사람이 허용 규칙을 더하거나 모드를 바꾼 뒤 다시 친다. 창 없이 다 지나가야 통과다. `gs go`와 묶기 명령은 5단계가 사람 앞에서 처음 친다.
+- **세션 권한 모드**: 승인 창이 뜨면 세션은 아침까지 서 있다. 모드는 읽을 수 없으니 밤에 칠 모양 그대로 지금 친다: `git show <remote>/<base>:<파일>`, `git pull --ff-only <remote> <base>`, `git add -- .goldstack/work/<f>`, `git commit --dry-run`, `git push <remote> <base>`, 4단계의 사이 단계 명령, 6단계의 재설치 `gs self-update`(gs 자신을 고친 레포만). 창이 뜨면 사람이 허용 규칙을 더하거나 모드를 바꾼 뒤 다시 친다. 창 없이 다 지나가야 통과다. `gs go`와 묶기 명령은 5단계가 사람 앞에서 처음 친다.
 - **디스크**: `df -h .`와 `du -sh .`. worktree가 티켓마다 생기므로 남은 공간이 레포 크기 × 전체 티켓 수보다 작으면 사람이 치운다.
 - **CLI 로그인**: `gh auth status`, `claude auth status`, 티켓의 `model`·`reviewer`·`second_reviewer`가 쓰면 `codex login status`. 상태 명령이 없는 CLI(agy)는 짧은 호출 한 번으로 본다.
-- **버전 경고**: `gs doctor`의 `경고:` 줄(설치본 뒤처짐, 플러그인 버전 다름)을 gs 자신을 고친 레포면 재설치로, 아니면 `gs self-update`로 없앤다.
+- **버전 경고**: `gs doctor`의 `경고:` 줄(설치본 뒤처짐, 플러그인 버전 다름)을 `gs self-update`로 없앤다. `설치 commit 모름(로컬 설치)`는 `uv tool install --reinstall .`로 설치했다는 뜻이다. 설치 기록에 git 주소가 없어 뒤처짐을 비교하지 못하고 `gs self-update`도 거부하므로 `gs self-update --from <원격 주소>`를 한 번 친다. 그 뒤 설치 commit이 남아 경고가 사라진다.
 
 ## 4. 깨어 있기
 
@@ -96,7 +96,7 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 **사이 단계.** verified이거나 멈출 조건이 넘겨 주면 순서대로 밟는다. 어느 단계든 실패하면 멈출 조건으로 간다. base는 여기서만 움직인다: 실행 중에 base가 움직이면 squash 병합이 멈춘다.
 
 1. `git pull --ff-only <remote> <base>`.
-2. **재설치**(gs 자신을 고친 레포, 곧 `pyproject.toml`의 `name`이 `goldstack`일 때만): 먼저 `uv run python -c 'from gs.selfupdate import running_go; print(*running_go())'`로 이 머신의 다른 `gs go`를 본다. `gs self-update`와 같은 확인이라 `gs --repo <경로> go`, `python -m gs.cli go`도 찾는다. pid가 나오면 설치본을 바꾸지 않고 첫 pid에 묶기 명령을 걸어 그 완료 알림 뒤 다시 본다. 안 나오면 `uv tool install --reinstall .`, `claude plugin marketplace update goldstack`, `claude plugin update goldstack@goldstack`를 이 순서로 따로 친다.
+2. **재설치**(gs 자신을 고친 레포, 곧 `pyproject.toml`의 `name`이 `goldstack`일 때만): `gs self-update`. 이 머신의 다른 `gs go`(`gs --repo <경로> go`, `python -m gs.cli go` 포함)를 스스로 찾고, 있으면 설치본을 바꾸지 않고 `거부: … (PID N)`와 종료 1로 끝난다. 그때는 첫 PID에 묶기 명령을 걸어 그 완료 알림 뒤 다시 친다. 통과하면 CLI를 설치 commit이 남게 main으로 재설치하고 marketplace와 플러그인도 갱신하며, 종료 0이 성공이다. 로컬 설치라 "설치 기록에 git 주소가 없다"고 거부하면 `gs self-update --from <원격 주소>`로 한 번 친다.
 3. 다음 spec의 환경 사실(§6)을 병합된 코드로 문장마다 다시 확인한다. 어긋남이 `사소한 수정` 허락 안이면 고치고 `쓴 허락`에 적는다. 허락 밖이면 멈출 조건이다.
 4. `gs check <다음>`이 오류·경고 0이다.
 5. `/go` 2단계로 고친 spec을 커밋하고 push한다. 거기서 "말하고 끝낸다"는 경우는 멈출 조건이다.
