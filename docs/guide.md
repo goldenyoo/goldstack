@@ -218,6 +218,12 @@ PR #8을 승인하고 한 번 더 치면 끝난다(종료 0):
 ```
 승인 뒤 `gs go`는 revert를 병합하고 마무리를 `main 검증 실패 → revert <sha>를 PR https://github.com/you/tally/pull/8로 main에 병합함`으로 적은 뒤 보고서 PR로 간다. 그러니 feature 하나에 사람 승인은 보통 2번(feature, 보고서), revert가 있으면 3번이다.
 
+**revert PR이 승인을 기다리는 동안 main이 바뀌면** — 사람이 그 사이 main을 고쳤을 수 있다. 다음 `gs go`는 revert PR이 이미 병합됐는지 먼저 보고, 병합됐으면 재검증 없이 `reverted`로 끝낸다. 아직이고 main이 검증 실패 때 그대로면 PR을 다시 읽고 기다린다. main이 움직였으면 옛 revert를 병합하지 않고 최신 main을 다시 검증한다(`main-recheck`):
+- **통과** — 되돌릴 필요가 없다. gs가 그 revert PR을 닫고 `gs/csv-export/revert` 원격 브랜치를 지운 뒤 `verified`로 끝낸다. `■ 최신 main 재검증 통과: revert PR #8을 닫았다`가 나오고 마무리와 보고서에 닫은 PR 번호가 남는다. PR을 닫거나 브랜치를 지우지 못하면 열린 PR이 남았다고 마무리에 적고 그 PR은 병합하지 않으며, 다음 `gs go`가 닫기를 다시 시도한다.
+- **실패** — 최신 main 위에 revert를 다시 만들어 같은 `gs/csv-export/revert` 브랜치를 갱신한다. 옛 revert 커밋은 쓰지 않는다. 다시 만든 PR이 승인을 기다리면 지금처럼 `revert_pending`으로 멈춘다.
+
+사람이 revert PR을 병합하지 않고 닫았고 main이 그대로면 gs는 PR을 다시 연다(이 동작은 그대로다).
+
 **승인·CI를 기다릴 때 report.md** — 기다리는 PR의 head를 바꾸지 않으려고 feature PR 대기 중에는 보고서를 다시 쓰지 않는다. 그래서 report.md·PR 본문의 마무리 줄은 `마무리: preparing · 병합 전`이다. 지금 상태는 `■ 마무리:` 줄, 알림, `jq .finish .goldstack/work/csv-export/run/state.json`으로 본다.
 
 ### 예시: 느린 시험(`verify_ticket`, `verify_retries`)
@@ -401,7 +407,7 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 3. `gs go csv-export`를 백그라운드로 돌리고 끝날 때까지 기다린다. 사람에게 묻지 않는다.
 4. 결과: `report.md`의 세 줄 요약과 PR 링크(README "5분 따라 하기" 3). 끝나면 `/retro csv-export`로 실행을 돌아볼 수 있다([아이디어 흐름](#아이디어-흐름)).
 
-일부 티켓만 돌릴 때(wave를 나눌 때)는 터미널에서 `gs check csv-export --only 01,02`로 범위를 보고 `gs go csv-export --only 01,02`. 범위 밖 의존은 끝났다고 본다.
+일부 티켓만 먼저 돌려 볼 때는 터미널에서 `gs check csv-export --only 01,02`로 범위를 보고 `gs go csv-export --only 01,02`. 범위 밖 의존은 끝났다고 본다. **`--only`는 병합하지 않고 멈춘다.** 티켓을 돌려 integration에 병합·검증까지만 하고, 범위가 모든 티켓이어도 PR을 만들지 않고 base를 바꾸지 않으며 최종 보고서도 쓰지 않는다. 끝에 `■ --only 범위만 돌았다: 병합하지 않음 → 이어서 gs go csv-export`가 나온다(범위 안 티켓이 모두 병합됐으면 종료 0, 아니면 1). base 병합은 옵션 없는 `gs go csv-export`가 한다. 이미 병합된 티켓은 다시 돌지 않고 남은 티켓만 돌린 뒤 PR을 병합하며, 보고서 표에 `--only`로 돌린 티켓도 나온다. 반쪽 기능이 main에 들어가지 않는다.
 
 ## 티켓 선택 키와 agy 한도
 

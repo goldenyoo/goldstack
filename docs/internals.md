@@ -18,6 +18,7 @@
 | `transient.py` | 일시 오류 판별, 대기 일정(`Backoff`), 중단 예외(`NetworkAbort`), codex `Reconnecting` 감시 |
 | `verify.py`, `setup.py`, `failure.py` | verify 명령(시간 제한, 프로세스 그룹, 재시도), worktree 준비 명령, 실패 증거와 요약 |
 | `finish.py`, `report.py` | 보고서, PR, CI 대기, 병합 확인(merge·squash), base 재검증, revert, 보호된 base의 PR |
+| `revert_decision.py` | `finish._postmerge`의 되돌리기 판단. 이미 읽은 사실(`Facts`)을 받아 다음 단계 이름을 돌려주는 순수 함수(git·gh·파일·시각을 부르지 않는다). 사실 읽기와 단계 실행은 `_postmerge`가 한다. 승인 대기 중 base 이동의 재검증·PR 닫기 분기가 여기 있다 |
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
@@ -55,7 +56,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 
 `gs config <섹션.키>`는 값 한 줄을 출력한다(불리언은 `true`/`false`). 없는 키는 종료 1. `/go` skill이 `gs config git.base`, `gs config git.remote`로 base를 읽는다.
 
-**`local.env`** — `KEY=value` 줄, `#` 주석. gs는 이 파일만 읽고 `os.environ`은 보지 않는다(원천 하나). 토큰은 출력·로그에 쓰지 않는다. worker 차단 hook이 이 파일 읽기를 막는다.
+**`local.env`** — `KEY=value` 줄, `#` 주석. gs는 이 파일만 읽고 `os.environ`은 보지 않는다(원천 하나). 토큰은 출력·로그에 쓰지 않는다. 이 파일 읽기는 계열마다 다르다: claude·agy worker는 차단 hook이 막는다. codex worker는 hook이 없어 sandbox가 쓰기와 네트워크만 막고 비밀 파일 읽기는 막지 못한다(2026-11-05 `codex sandbox` 측정에서 비밀 모양 파일의 `cat`이 성공했다. `codex exec`에서 잰 것은 아니다). 읽은 내용은 모델에게 전달될 수 있으니 codex worker를 쓰는 레포는 `local.env`에 값어치 낮은 비밀만 둔다. hook을 겹치는 일은 범위 밖 `codex-secret-hook`이다(`.goldstack/out-of-scope/codex-secret-hook.md`).
 
 **spec frontmatter**(feature마다, [guide.md의 표](guide.md#spec-frontmatter-키)) — `feature`(디렉터리 이름과 같아야 한다), `verify`(비어 있지 않은 한 줄 셸 명령)는 필수. 선택: `verify_ticket`(같은 형식), 1 이상 정수 `max_workers`(기본 3)·`idle_minutes`(기본 20)·`verify_minutes`(기본 20), 0 이상 정수 `verify_retries`(기본 0). 그 밖의 키는 경고, 범위 밖·정수 아닌 값은 오류.
 
@@ -110,7 +111,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 
 ## 병렬 실행
 
-frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max_workers`개까지 위상 순서대로 띄운다. worker 하나가 끝날 때마다 state에서 frontier를 다시 계산해 빈자리를 채운다. `max_workers: 1`이면 위상 순서로 하나씩 돈다. `--only`면 그 부분 그래프만 돌고, 범위 밖 의존은 끝났다고 본다.
+frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max_workers`개까지 위상 순서대로 띄운다. worker 하나가 끝날 때마다 state에서 frontier를 다시 계산해 빈자리를 채운다. `max_workers: 1`이면 위상 순서로 하나씩 돈다. `--only`면 그 부분 그래프만 돌고, 범위 밖 의존은 끝났다고 본다. **`--only`는 병합하지 않는다**(`go._only_stops`): 범위가 모든 티켓이어도 티켓을 integration에 병합·검증한 뒤 멈추고, PR·base 병합·최종 보고서가 없으며 원격 base를 바꾸지 않는다. 끝에 `■ --only 범위만 돌았다: 병합하지 않음 → 이어서 gs go <f>`를 쓰고 범위 안 티켓이 모두 병합됐으면 종료 0, 아니면 1이다. 요약·알림도 병합된 것처럼 읽히지 않는다. base 병합은 옵션 없는 `gs go`가 하고, 이미 integration에 병합된 티켓은 다시 돌지 않는다. `--only` 앞의 지난 마무리 회복은 그대로 먼저 한다. 시험 전용 환경 변수 `GS_TEST_ONLY_MERGES`가 있으면 옛 동작(마무리까지)을 낸다.
 
 - worker마다 최신 integration 끝에서 브랜치 `gs/<f>/<NN>`과 worktree `run/wt/<NN>`을 만들고, `[worktree] setup`이 있으면 worker 전에 돌린다. 재시도는 `gs/<f>/<NN>-retry-<k>`, `run/wt/<NN>-retry-<k>`. 번호는 시도 디렉터리 `run/<NN>/<시도>`로 정한다.
 - herdr 안이면(`HERDR_SOCKET_PATH`·`HERDR_SESSION`) 지금 workspace(없으면 새 workspace `gs:<f>`)의 탭 `gs:<f>`에 worker마다 새 pane을 연다. 성공한 pane은 닫고 실패한 pane은 남긴다. herdr 밖이면 subprocess로 돈다.
@@ -334,7 +335,7 @@ gs는 base에 아무것도 push하지 않는다. base로 갈 gs 커밋(revert, �
 | phase | 무엇을 기다리나 | `outcome` | 다음 `gs go` |
 |---|---|---|---|
 | `merge_pending` | feature PR. 큐·보호 규칙(`direct_push`와 무관하게 같다) | `사람 승인 필요: <url>. <base> 검증은 미실행`, 또는 `병합 명령 뒤 PR이 아직 MERGED가 아니다…` | PR을 다시 읽어 병합을 다시 시도하고, 병합됐으면 base 검증 |
-| `revert_pending` | base 검증이 실패해 만든 revert PR. **깨진 코드가 base에 남아 있다** | `사람 승인 필요: <url>`, `revert PR 병합 대기: <url>`, `revert PR CI 실패: <이름>: <url>`, `revert PR CI 대기 시간 초과: <url>`, `revert PR 확인 실패: <브랜치> (…)` | 같은 PR을 다시 읽어 병합되면 `reverted` → 보고서 PR |
+| `revert_pending` | base 검증이 실패해 만든 revert PR. **깨진 코드가 base에 남아 있다** | `사람 승인 필요: <url>`, `revert PR 병합 대기: <url>`, `revert PR CI 실패: <이름>: <url>`, `revert PR CI 대기 시간 초과: <url>`, `revert PR 확인 실패: <브랜치> (…)` | 같은 PR을 다시 읽어 병합되면 `reverted` → 보고서 PR. 아직 병합 전인데 base가 검증 실패 때(`main_head`)와 다르면 옛 revert를 병합하지 않고 최신 base를 `main-recheck`로 재검증한다. 통과하면 phase `revert_closing`을 남기고 gs가 PR을 닫고 `gs/<f>/revert` 브랜치를 지운 뒤 `verified`(닫기가 실패해도 병합하지 않고 다음 `gs go`가 다시 닫는다). 실패하면 최신 base 위에 revert를 다시 만들어 같은 브랜치를 갱신한다 |
 | `report_pending` | 최종 보고서 PR. 코드는 병합·검증됐다 | `사람 승인 필요: <url>`, `report PR 병합 대기: <url>`, `report PR CI 실패…`, `report PR 확인 실패: <url 또는 브랜치> (…)` | 같은 PR을 다시 읽어 병합되면 기다리던 `verified`·`reverted`로 돌아간다(`finish.report_result`) |
 
 - 셋 다 종료 1, 알림(`사람 승인 필요: <url>` 포함)이고 worker를 다시 띄우지 않는다(`RESUME_PHASES`). `gs go a b`는 여기서 멈춘다. `report_pending`도 `verified`가 아니라서 멈춘다.
@@ -510,7 +511,7 @@ worktree는 설정과 ref를 주 레포와 공유해서 이 둘을 막는다. �
 
 worker worktree는 주 레포의 `.goldstack/work/<f>/run/wt/` 아래에 있지만, 조상에 `.goldstack`이 있다는 이유로 막지는 않는다. 검색 시작점의 자손만 검사하므로 worktree 안에 비밀이 없으면 `rg foo`, `grep -r foo src`, Grep·Glob 검색은 통과하고, `.goldstack/work/<f>/spec.md`도 읽을 수 있다. 반대로 주 레포나 주 레포의 `.goldstack`에서 시작한 재귀 검색은 그 아래 `local.env`가 있으면 막는다.
 
-막으면 이유와 "이 일은 `gs`가 한다"를 돌려준다. worker에서 hook 입력을 해석하지 못하면 막는다(fail closed). **hook은 안전띠이며 비밀을 격리하는 보안 경계가 아니다.** `python -c "open(...)"`처럼 코드 안에서 파일을 여는 일, 다른 인터프리터·스크립트 본문의 읽기, 셸에서 동적으로 만든 경로는 모두 해석하지 못한다. 심볼릭 링크 대상도 비밀 읽기 판정에서 보장하지 않으며, 디렉터리 재귀 검사에서는 링크를 따라가지 않는다. 검사 후 파일이 바뀌는 경우도 막지 못한다. 따라서 **값어치 낮은 비밀만 `local.env`에 둔다.** claude worker 명령의 도구 차단 옵션과 push·gh 차단 환경을 함께 두고(여러 겹), codex는 sandbox, agy는 deny 규칙과 `gs hook agy-pretooluse`를 쓴다. codex의 비밀 읽기를 이 hook으로 막는 것은 범위 밖이다.
+막으면 이유와 "이 일은 `gs`가 한다"를 돌려준다. worker에서 hook 입력을 해석하지 못하면 막는다(fail closed). **hook은 안전띠이며 비밀을 격리하는 보안 경계가 아니다.** `python -c "open(...)"`처럼 코드 안에서 파일을 여는 일, 다른 인터프리터·스크립트 본문의 읽기, 셸에서 동적으로 만든 경로는 모두 해석하지 못한다. 심볼릭 링크 대상도 비밀 읽기 판정에서 보장하지 않으며, 디렉터리 재귀 검사에서는 링크를 따라가지 않는다. 검사 후 파일이 바뀌는 경우도 막지 못한다. 따라서 **값어치 낮은 비밀만 `local.env`에 둔다.** claude worker 명령의 도구 차단 옵션과 push·gh 차단 환경을 함께 두고(여러 겹), codex는 sandbox, agy는 deny 규칙과 `gs hook agy-pretooluse`를 쓴다. **codex worker에는 이 hook이 없다.** sandbox는 쓰기와 네트워크만 막고 비밀 파일 읽기는 막지 못하며, 읽기를 hook으로 막는 일은 범위 밖 `codex-secret-hook`이다.
 
 **`/adopt`와 profile** — `/adopt`는 `.goldstack/profile.md`를 쓴다(절: 구조, 빌드·시험, 관례, 주의점, CI). 커밋하지 않는다. `/grill` 1단계가 가장 먼저 읽고, `/grill` 6단계·`/go` 2단계의 커밋 경로에 들어 있다. worker brief에는 내용 대신 포인터 한 줄 "먼저 `.goldstack/profile.md`를 읽어라"가 들어간다(`worker.py`, 그 worktree에 파일이 있을 때만).
 
