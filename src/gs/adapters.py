@@ -170,12 +170,13 @@ class Codex(Adapter):
     `cannot lock ref 'HEAD': unable to create directory`로 커밋이 실패한다(v6 02에서 측정, v8 01).
     열린 디렉터리 자신과 그 아래는 만들 수 있으므로 `gs`를 열어 둔다. push는 네트워크를 꺼서 막는다.
 
-    sandbox 안에서 못 도는 시험(localhost, 홈 디렉터리 쓰기 등: ORIGINS 실패 13)은 gs가 verify로 다시 돌린다.
-    그래서 그런 실패로 멈추지 말고 커밋하라는 한 줄을 brief 앞에 붙인다(brief는 stdin으로 들어가 뒤에 붙는다).
+    sandbox 안에서 못 도는 시험(네트워크, localhost, 홈 디렉터리 쓰기: ORIGINS 실패 13)은 gs가 verify로 다시 돌린다.
+    그 밖의 실패는 sandbox 탓으로 돌리지 말고 고치도록, 그런 실패만으로 멈추지 말고 커밋하라는 한 줄을 brief 앞에 붙인다(brief는 stdin으로 들어가 뒤에 붙는다).
     """
     name = "codex"
     NOTE = ("아래 <stdin>의 brief대로 일한다. sandbox 때문에 검증 명령 일부가 못 도는 것(네트워크, localhost, "
-            "홈 디렉터리 쓰기)은 실패로 보지 말고 커밋한다. gs가 sandbox 밖에서 검증을 다시 돌린다.")
+            "홈 디렉터리 쓰기)은 실패로 보지 말고, 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친 뒤 커밋한다. "
+            "gs가 sandbox 밖 병합 트리에서 검증을 다시 돌린다.")
 
     def writable_dirs(self, worktree: Path) -> list[Path]:
         common = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
