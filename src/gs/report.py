@@ -256,7 +256,7 @@ def summarize(r, on_wait=None) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     argv = review.judge_argv(r.cfg, cwd=r.iwt, on_wait=on_wait)
     facts = directory / "report-input.md"
-    facts.write_text(evidence(r) + failing_tests(r) + "\n## 마무리 상태\n\n" + block(json.dumps(r.st.finish, ensure_ascii=False)),
+    facts.write_text(evidence(r) + (failing_tests(r) or "") + "\n## 마무리 상태\n\n" + block(json.dumps(r.st.finish, ensure_ascii=False)),
                      encoding="utf-8")
     diff = directory / "diff-stat.txt"
     diff.write_text(git.out(r.iwt, "diff", "--stat", f"{r.base_ref}...HEAD") + "\n", encoding="utf-8")
@@ -348,9 +348,10 @@ def _excerpts(lines: list[str]) -> list[str]:
             for line in lines]
 
 
-def failing_tests(r) -> str:
+@metrics.best_effort
+def failing_tests(r) -> str | None:
     """판단 입력용: 통과하지 못한 검증의 로그에서 실패한 시험 줄. 검증 표만으로는 원인을 모른다.
-    티켓 로그는 시도 디렉터리마다 마지막 검증만 남는다. 로그가 없으면 없다고 적는다."""
+    티켓 로그는 시도 디렉터리마다 마지막 검증만 남는다. 로그가 없으면 없다고 적는다. 읽기 오류는 보고서를 막지 않는다(None)."""
     failed = [x for x in r.st.metrics.get("validations", []) if x.get("result") != "passed"]
     command = r.feat.spec.verify
     out = []
