@@ -663,6 +663,19 @@ class StepWorkerFailureTest(CollectTest):
                 with self.subTest(reason=reason, worker=worker, step=step):
                     self.assertEqual(self.collect(reason, worker, step=step), [])
 
+    def test_what_the_os_refused_while_starting_a_worker_is_not_reported(self):
+        for why in ("[Errno 1] Operation not permitted", "[Errno 30] Read-only file system", "[Errno 28] No space left on device"):
+            for reason in (f"worker를 띄우지 못했다: OSError: {why}", f"worker를 다시 띄우지 못했다: OSError: {why}",
+                           f"worker를 띄우지 못했다: GitError: git rev-parse x\nfatal: {why}",
+                           f"agy: .agents/hooks.json를 쓰지 못했다: {why}", f"`claude plugin list --json`을 돌리지 못했다: {why}",
+                           f"codex: worktree의 git 디렉터리를 찾지 못했다: {why}"):
+                with self.subTest(reason=reason):
+                    self.assertEqual(self.collect(reason), [])
+
+    def test_sandbox_denial_in_the_worker_log_stays_an_adapter_failure(self):
+        locked = f"{LOCK_REF}: Operation not permitted\nfatal: Operation not permitted\n"
+        self.assertEqual(self.collect("커밋 없음", locked), ["codex-cannot-lock-ref"])
+
     def test_a_record_from_an_earlier_run_is_not_counted_again(self):
         self.step_failure(NO_RESULT, step="repair")
         self.go()
@@ -1182,6 +1195,75 @@ class RealStepWorkerTest(RealGoTest):
         self.assert_merged_without_a_failure()
         self.assertEqual(self.record("repair"), "실패 이유: worker를 띄우지 못했다: OSError: boom\n")
         self.assertEqual(self.titles(), ["unknown"])
+
+    def test_worker_refused_by_the_os_at_start_is_not_reported(self):
+        self.worker()
+        with self.launch_fails("fix", PermissionError(1, "Operation not permitted")):
+            code, out, err = self.go_with_a_finding()
+        self.assertEqual(code, 0, out + err)
+        self.assert_merged_without_a_failure()
+        self.assertIn("Operation not permitted", self.record("fix"))
+        self.assertEqual(self.drafts(), [])
+
+    @contextlib.contextmanager
+    def cut_then(self, failing):
+        """지난 worker가 일시 오류로 끝나 대기 뒤 다시 띄운다. 가짜 worker의 `custom` 어댑터는 일시 오류를 보지 않아 codex로 세운다."""
+        with mock.patch.object(adapters.Custom, "name", "codex"), mock.patch("gs.transient.Backoff.next", return_value=0.01), failing:
+            yield
+
+    def test_fix_worker_that_cannot_restart_after_a_network_wait(self):
+        self.worker(fix=f"echo '{STREAM_ERROR}'; exit 1")
+        with self.cut_then(self.launch_fails("fix-net1", OSError("boom"))):
+            code, out, err = self.go_with_a_finding()
+        self.assertEqual(code, 0, out + err)
+        self.assert_merged_without_a_failure()
+        self.assertEqual(self.ts().transient_errors, 1)
+        # 지난 디렉터리의 worker.log는 대기를 일으킨 일시 오류다. 거기에 남기면 수집이 걸러 낸다
+        self.assertEqual(self.record("fix-net1"), "실패 이유: worker를 다시 띄우지 못했다: OSError: boom\n")
+        self.assertFalse((self.rundir / "01/1/fix" / feedback.WORKER_FAILURE).exists())
+        self.assertEqual(self.titles(), ["unknown"])
+        self.assertEqual(self.drafts()[0].count, 1)
+        self.assertEqual(self.go("--only", "01")[0], 0)  # 재실행이 다시 세지 않는다
+        self.assertEqual(self.drafts()[0].count, 1)
+
+    def test_repair_worker_that_cannot_restart_after_a_network_wait(self):
+        self.flaky_verify()
+        self.worker(repair=f"echo '{STREAM_ERROR}'; exit 1")
+        with self.cut_then(self.launch_fails("repair-net1", OSError("boom"))):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assert_merged_without_a_failure()
+        self.assertEqual(self.ts().transient_errors, 1)
+        self.assertEqual(self.record("repair-net1"), "실패 이유: worker를 다시 띄우지 못했다: OSError: boom\n")
+        self.assertFalse((self.rundir / "01/1/repair" / feedback.WORKER_FAILURE).exists())
+        self.assertTrue((self.rundir / "01/1/repair-net1/verify.log").exists())
+        self.assertEqual(self.titles(), ["unknown"])
+
+    def test_restart_refused_by_the_os_is_not_reported(self):
+        self.worker(fix=f"echo '{STREAM_ERROR}'; exit 1")
+        with self.cut_then(self.launch_fails("fix-net1", PermissionError(1, "Operation not permitted"))):
+            code, out, err = self.go_with_a_finding()
+        self.assertEqual(code, 0, out + err)
+        self.assert_merged_without_a_failure()
+        self.assertEqual(self.ts().transient_errors, 1)
+        self.assertIn("Operation not permitted", self.record("fix-net1"))
+        self.assertEqual(self.drafts(), [])
+
+    def test_restart_without_a_new_directory_stays_in_the_last_one(self):
+        self.worker(fix=f"echo '{STREAM_ERROR}'; exit 1")
+        real = Path.mkdir
+
+        def mkdir(path, *args, **kwargs):
+            if path.name == "fix-net1":
+                raise OSError("boom")
+            return real(path, *args, **kwargs)
+        with self.cut_then(mock.patch.object(Path, "mkdir", mkdir)):
+            code, out, err = self.go_with_a_finding()
+        self.assertEqual(code, 0, out + err)
+        self.assert_merged_without_a_failure()
+        self.assertEqual(self.ts().transient_errors, 1)
+        self.assertFalse((self.rundir / "01/1/fix-net1").exists())
+        self.assertIn("다시 띄우지 못했다", self.record("fix"))
 
     def test_refusal_by_the_adapter_is_not_a_defect(self):
         self.worker()

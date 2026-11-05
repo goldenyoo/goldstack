@@ -820,9 +820,12 @@ _ENVIRONMENTAL = re.compile(
     r"resource not accessible|must have admin rights|permission to \S+ denied|could not read (?:username|password)|"
     r"repository not found|repository '[^'\n]*' not found|host key verification failed|ssl certificate problem|"
     r"error connecting to|check your internet connection|context deadline exceeded|unexpected disconnect", re.I)
+# 운영체제가 gs의 일을 거부했다: 디스크·파일 권한. gs가 받은 오류(마무리 오류, worker를 띄우다 난 실패 이유)에만 본다.
+# worker 로그에는 쓰지 않는다: sandbox가 worker의 ref 쓰기를 막은 것은 gs가 고칠 어댑터 실패다.
+_OS_REFUSED = re.compile(r"no space left on device|read-only file system|operation not permitted", re.I)
 # 마무리 오류에만 보는 대상 레포·머신의 일: base·revert와의 충돌(finish._merge, _restore_reverts), 보고서 커밋을 막은 hook·서명·신원 설정(gs는 바뀐 것이
-# 있을 때만 커밋한다), 디스크·파일 권한. worker 로그에는 쓰지 않는다: sandbox가 worker의 ref 쓰기를 막은 것은 gs가 고칠 어댑터 실패다.
-_TARGET_FINISH = re.compile(r"(?:합치다|되돌리다) 충돌했다|^git commit |no space left on device|read-only file system|operation not permitted", re.I)
+# 있을 때만 커밋한다), 운영체제의 거부.
+_TARGET_FINISH = re.compile(rf"(?:합치다|되돌리다) 충돌했다|^git commit |{_OS_REFUSED.pattern}", re.I)
 
 
 def _environmental(error: str) -> bool:
@@ -880,7 +883,7 @@ def classify_adapter_failure(reason: str, log: str) -> tuple[str, list[str]] | N
     """worker 실패 이유와 worker 로그로 (오류 종류, 오류 줄)을 돌려준다. 올리지 않을 실패는 None.
 
     로그가 말하는 일시·환경 오류를 먼저 뺀다. 인증·한도로 죽은 agy는 `result 이벤트가 없다`로 끝나 이유만으로는 구별되지 않는다.
-    이름 붙은 패턴이 그다음이고, 아니면 어댑터가 낸 오류 모양일 때만 `unknown`이다.
+    이름 붙은 패턴이 그다음이고, 아니면 어댑터가 낸 오류 모양일 때만 `unknown`이다. 이유가 환경 오류이거나 운영체제의 거부(`_OS_REFUSED`)면 그 모양이어도 뺀다.
     그 밖의 실패(구현 실패, 패턴에 안 걸린 "커밋 없음", 검증·병합 실패)는 대상 프로젝트의 일이다.
     오류 줄에는 이유 첫 줄과 로그에서 맞은 부분만 싣는다. 로그의 한 줄은 worker가 읽은 내용일 수 있다.
     """
@@ -895,7 +898,7 @@ def classify_adapter_failure(reason: str, log: str) -> tuple[str, list[str]] | N
             return pattern.name, [first]
         if found := pattern.log.search(log):
             return pattern.name, [first, found.group()]
-    if _ADAPTER_ERROR.search(reason) and not _environmental(reason):
+    if _ADAPTER_ERROR.search(reason) and not _environmental(reason) and not _OS_REFUSED.search(reason):
         return UNKNOWN, [first]
     return None
 

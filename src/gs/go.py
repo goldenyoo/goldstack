@@ -1240,21 +1240,22 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정으로 처리한다(수정 전 구현을 병합·검증한다).
     수리(repair)도 수정과 같다: 도중이면 같은 worktree에 다시 띄우고, 띄우지 못하면 실패한 수리로 처리한다(수리 전 브랜치를 다시 검증한다). 시도 수를 올리지 않는다.
     수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish).
+    다시 띄우지 못한 수정·수리의 자리는 새 실행 디렉터리를 쓴다: 결함 수집은 실패 이유를 옆의 worker.log와 함께 읽는데, 지난 디렉터리의 로그는 이 대기를 일으킨 일시 오류라 이유까지 걸러 낸다.
     """
     ts = r.st.ticket(t.id)
     wt, branch, base, nth = Path(mark["worktree"]), mark["branch"], mark["base"], mark.get("fix", 0)
     repair = mark.get("repair", "")
     last = Path(mark["rundir"])
 
-    def stand_in(code: int, note: str = "") -> Active:
+    def stand_in(code: int, note: str = "", rundir: Path = last) -> Active:
         _set(r, t.id, status=state.RUNNING, branch=branch, worktree=str(wt), pane="", reason="", ended_at="",
-             started_at=state.now(), log=str(last / "worker.log"))
-        return Active(t, worker.Finished(worker.Job(t, wt, last), code, note), branch, wt, base, fix=nth, repair=repair)
+             started_at=state.now(), log=str(rundir / "worker.log"))
+        return Active(t, worker.Finished(worker.Job(t, wt, rundir), code, note), branch, wt, base, fix=nth, repair=repair)
 
-    def give_up(why: str, *, retry: bool = True) -> Active | None:
+    def give_up(why: str, *, retry: bool = True, rundir: Path = last) -> Active | None:
         if nth or repair:
             say(f"[{t.id}] {'수리' if repair else _ordinal(nth) + '수정'} worker를 다시 띄우지 못했다: {why}")
-            return stand_in(1, why)
+            return stand_in(1, why, rundir)
         _fail(r, t, why, retry=retry)
         return None
 
@@ -1270,7 +1271,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     if _is_agy(t.model) and state.agy_reached(r.st, _agy_limit(r)):
         return give_up(f"agy 한도: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿아 worker를 다시 띄우지 않았다"
                        "(config agy.max_calls_per_run)", retry=False)
-    proc = None
+    proc, made = None, last  # 새 디렉터리를 만들지 못했으면 지난 디렉터리가 그대로 자리다(병합 로그도 거기 쓴다)
     try:
         if nth or repair:
             step = "repair" if repair else "fix" if nth == 1 else f"fix{nth}"
@@ -1282,6 +1283,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
             rundir = worker.attempt_dir((r.rundir / t.id).resolve())
             phase, attempt = "worker", int(rundir.name)
         rundir.mkdir(parents=True)
+        made = rundir
         job = worker.Job(ticket=t, worktree=wt, rundir=rundir)
         state.begin_phase(ts, phase, t.model, attempt=attempt)
         _set(r, t.id, status=state.RUNNING, attempts=ts.attempts + (0 if nth or repair else 1), branch=branch, pane="",
@@ -1300,11 +1302,11 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:{rundir.name}", adapter)
         _set(r, t.id, pane=proc.where)
     except adapters.AdapterError as e:
-        return give_up(str(e))
+        return give_up(str(e), rundir=made)
     except Exception as e:  # noqa: BLE001 — 한 티켓의 오류로 코디네이터가 멈추지 않게
         if proc is not None:
             proc.stop()
-        return give_up(f"worker를 다시 띄우지 못했다: {_err(e)}")
+        return give_up(f"worker를 다시 띄우지 못했다: {_err(e)}", rundir=made)
     say(f"[{t.id}] 네트워크 끊김 뒤 같은 worktree에서 다시 시작 ({adapter.name}, {proc.where}, 로그 {job.log})")
     a = Active(t, proc, branch, wt, base, fix=nth, repair=repair, watch=_watch(adapter, job))
     _mark_resume(r, a)  # 이 worker도 끊기거나 gs가 죽으면 여기서 잇는다
