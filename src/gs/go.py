@@ -1508,7 +1508,8 @@ def _plan_review(r: Run, a: Active) -> ReviewPlan:
     wait = _review_wait(r, t.id)
     # branch에 커밋을 준다: 트리와 diff가 같은 head를 본다
     jobs = [dict(repo=r.repo, rdir=rdir, base=r.ihead, branch=head, ticket=t.path.resolve(),
-                 spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg, on_wait=wait)
+                 spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg, on_wait=wait,
+                 worker_log=_attempt_dir(a) / "worker.log")
             for _, who, rdir in launch]
     return ReviewPlan(slots, launch, recs, head, jobs)
 
@@ -1720,7 +1721,8 @@ def _to_rereview(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
 
 
 def _attempt_dir(a: Active) -> Path:
-    """이 티켓 시도의 실행 디렉터리. 수정 worker는 그 아래 fix·fix2에서 돈다."""
+    """이 티켓 시도의 실행 디렉터리. 수정 worker는 그 아래 fix·fix2(네트워크로 이으면 fix-net1 …)에서 돈다.
+    네트워크로 이은 구현 worker는 새 시도 디렉터리라 a.proc.job.rundir가 늘 가장 최근 것이다."""
     return a.proc.job.rundir.parent if a.fix else a.proc.job.rundir
 
 
@@ -1941,7 +1943,7 @@ def _plan_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]],
     # found는 사본이다: 호출이 읽는 지적과 반영이 고치는 state의 지적이 섞이지 않게
     jobs = [dict(repo=r.repo, rdir=_rereview_dir(a, rec, nth), base=a.base, head=head, found=[dict(f) for f in found],
                  ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), reviewer=rec["reviewer"], cfg=r.cfg, nth=nth,
-                 on_wait=wait) for rec, found in launch]
+                 on_wait=wait, worker_log=a.proc.job.log) for rec, found in launch]
     return launch, jobs
 
 

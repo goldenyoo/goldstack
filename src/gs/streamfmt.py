@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 
 def render(line: str) -> str | None:
@@ -92,6 +93,62 @@ def _short(value, limit: int = 160) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     text = " ".join(text.split())
     return text if len(text) <= limit else text[:limit] + "…"
+
+
+def last_message(log: Path) -> str | None:
+    """worker 로그(tee로 남긴 원본 JSON 줄)에서 worker의 마지막 메시지를 뽑는다. 없거나 읽을 수 없으면 None.
+
+    claude는 `result` 이벤트의 `result`, 없으면 마지막 assistant 글. codex는 마지막 `agent_message`. agy는 `result.response`.
+    JSON이 아닌 줄과 모양이 다른 줄은 건너뛴다. 로그는 몇 MB일 수 있어 한 줄씩 읽는다.
+    """
+    result = assistant = codex = agy = ""
+    try:
+        with Path(log).open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                text = _message_of(ev)
+                if text is None:
+                    continue
+                kind, text = text
+                if kind == "result":
+                    result = text
+                elif kind == "assistant":
+                    assistant = text
+                elif kind == "codex":
+                    codex = text
+                else:
+                    agy = text
+    except OSError:
+        return None
+    return result or assistant or codex or agy or None
+
+
+def _message_of(ev: dict) -> tuple[str, str] | None:
+    """이벤트 하나의 (형식, 글). 메시지가 아니거나 글이 비면 None."""
+    kind = ev.get("type")
+    if ev.get("event") == "result":
+        res = ev.get("result")
+        text = res.get("response") if isinstance(res, dict) else None
+        return ("agy", text.strip()) if isinstance(text, str) and text.strip() else None
+    if kind == "item.completed":
+        item = ev.get("item")
+        text = item.get("text") if isinstance(item, dict) and item.get("type") == "agent_message" else None
+        return ("codex", text.strip()) if isinstance(text, str) and text.strip() else None
+    if kind == "result":
+        text = ev.get("result")
+        return ("result", text.strip()) if isinstance(text, str) and text.strip() else None
+    if kind == "assistant":
+        msg = ev.get("message")
+        blocks = msg.get("content") if isinstance(msg, dict) else None
+        parts = [b["text"].strip() for b in blocks if isinstance(b, dict) and b.get("type") == "text"
+                 and isinstance(b.get("text"), str) and b["text"].strip()] if isinstance(blocks, list) else []
+        return ("assistant", "\n".join(parts)) if parts else None
+    return None
 
 
 def main() -> None:
