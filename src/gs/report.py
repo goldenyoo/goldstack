@@ -352,10 +352,22 @@ def _excerpts(lines: list[str]) -> list[str]:
 def failing_tests(r) -> str | None:
     """판단 입력용: 통과하지 못한 검증의 로그에서 실패한 시험 줄. 검증 표만으로는 원인을 모른다.
     티켓 로그는 시도 디렉터리마다 마지막 검증만 남는다. 로그가 없으면 없다고 적는다. 읽기 오류는 보고서를 막지 않는다(None)."""
-    failed = [x for x in r.st.metrics.get("validations", []) if x.get("result") != "passed"]
+    recorded = r.st.metrics.get("validations", [])
+    failed = [x for x in recorded if x.get("result") != "passed"]
     command = r.feat.spec.verify
     out = []
-    for tid in r.order:
+    if not recorded:  # 측정 이력이 없는 옛 state: 어떤 검증이 실패했는지 모르니 남은 티켓 로그에서 실패 줄을 찾는다
+        for tid in r.order:
+            for log in sorted((r.rundir / tid).glob("**/verify.log"), key=lambda p: p.stat().st_mtime):
+                try:
+                    lines = _failure_lines(log, command)
+                except OSError as e:
+                    out.append(f"- 티켓 {tid}: `{log.relative_to(r.rundir)}`\n  로그를 읽지 못함: {e}\n")
+                    continue
+                if lines:
+                    out.append(f"- 티켓 {tid}: `{log.relative_to(r.rundir)}` (측정 이력 없음)\n"
+                               + block("\n".join(_excerpts(lines))))
+    for tid in r.order if recorded else ():
         mine = [x for x in failed if x["label"] == f"ticket-{tid}" or x["label"].startswith(f"ticket-{tid}-")]
         if not mine:
             continue
@@ -374,7 +386,7 @@ def failing_tests(r) -> str | None:
         if item not in out:
             out.append(item)
     return ("## 실패한 검증의 시험 줄\n\n" + "\n".join(out) + "\n\n") if out else \
-        "## 실패한 검증의 시험 줄\n\n통과하지 못한 검증 없음\n\n"
+        "## 실패한 검증의 시험 줄\n\n" + ("측정 이력 없음, 실패 줄이 있는 티켓 로그 없음" if not recorded else "통과하지 못한 검증 없음") + "\n\n"
 
 
 def _failure_block(log: Path, command: str) -> str:

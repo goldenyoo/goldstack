@@ -257,6 +257,19 @@ class MetricsTest(unittest.TestCase):
         self.assertIn('마무리 `main`(failed): verify.log 없음', text)
         self.assertIn('통과하지 못한 검증 없음', report.failing_tests(self.failing_run([dict(label='ticket-09', result='passed')])))
 
+    def test_report_input_reads_ticket_logs_when_state_has_no_validations(self):
+        r = self.failing_run([])
+        for rel, body in [('09/1/verify.log', '$ check\nFAIL: test_regression\n'), ('09/2/verify.log', '$ check\nOK\n')]:
+            path = r.rundir / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+        text = report.failing_tests(r)
+        self.assertIn('FAIL: test_regression', text)
+        self.assertIn('`09/1/verify.log`', text)
+        self.assertNotIn('통과하지 못한 검증 없음', text)
+        r.st.metrics = {}
+        self.assertIn('FAIL: test_regression', report.failing_tests(r))
+
     def test_summarize_writes_failing_lines_into_report_input(self):
         r = self.failing_run([dict(label='ticket-09', result='failed')])
         log = r.rundir / '09/1/verify.log'
