@@ -28,14 +28,17 @@ max_workers: 3
 <!-- 파일·명령·출력 형식처럼 티켓 여러 장이 같이 따를 것. 없으면 절을 지운다 -->
 
 ## 5. 티켓 그래프
-<!-- 마지막 라운드에서 확정. 티켓 frontmatter 초안을 쓰고 `gs check <feature>`를 통과시킨 뒤 값을 옮긴다. 사람이 표를 고치면 초안도 고쳐 재검사한다
-blocked_by: 같은 파일을 건드릴 쌍은 줄 세운다. 이유는 "같은 파일" 또는 "앞 결과 필요"
-tier: small|medium|large와 이유 한 줄
+<!-- 표 작성 규칙은 이 주석 한 곳에 있다. 마지막 라운드에서 확정한다. 티켓 frontmatter 초안을 쓰고 `gs check <feature>`를 통과시킨 뒤 값을 옮긴다. 사람이 표를 고치면 초안도 고쳐 재검사한다
+blocked_by: 같은 파일을 건드릴 쌍은 줄 세운다. 이유는 "같은 파일" 또는 "앞 결과 필요"로 구분해 적는다
+묶기: 강하게 엮인 작은 직렬 티켓은 한 장으로 묶는다
+tier: small|medium|large와 이유 한 줄. 예: 문서 small, 재개 흐름 large
 예상: 티켓 하나에 걸릴 시간
 구현·리뷰 계열: `gs check`의 계열 모델/effort를 옮긴다. effort가 없으면 모델만, 표가 없으면 CLI 기본값(리뷰는 models 값)을 쓴다. 두 번째 리뷰어는 +로 잇는다
+두 번째 리뷰어(`second_reviewer`): 틀리면 바로 사고인 티켓에만 붙인다(`docs/guide.md`와 같은 기준). 상태 전이·재개·revert, 파일·브랜치 삭제, 차단 hook, 비밀, 데이터 마이그레이션. 문서·문구·시험으로 다 확인되는 변경에는 붙이지 않는다
 touches: 레포 루트 기준 경로, glob 허용
 verify: 문서·설정 티켓은 좁은 명령, 코드 티켓은 `전체`
-일렬 경로: 예상 합이 가장 긴 blocked_by 사슬. 평균 동시: 전체 예상 합 ÷ 일렬 경로 예상 -->
+skill 글(`skills/*/SKILL.md`)을 고치는 티켓: 완료 조건에 `tests/test_skills.py` `WORD_LIMITS`의 상한과 지금 단어 수를 적고(예: `grill` 상한 420, 지금 405), 좁은 verify에 `test_skills.py`를 넣는다. 단어 수는 frontmatter를 뺀 본문 `split()`이다
+일렬 경로: 예상 합이 가장 긴 blocked_by 사슬. 평균 동시: 전체 예상 합 ÷ 일렬 경로 예상. 표 아래에 둘을 함께 보인다. 예: `일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1` -->
 | id | 제목 | blocked_by(이유) | wave | tier(이유) | 예상 | 구현 | 리뷰 계열 | touches | verify |
 |---|---|---|---|---|---|---|---|---|---|
 | 01 | <제목> | – | 1 | small(<이유. 예: 문서>) | 20분 | claude sonnet/medium | codex gpt-6.1-sol/high | `<경로>` | `<좁은 명령>` |
