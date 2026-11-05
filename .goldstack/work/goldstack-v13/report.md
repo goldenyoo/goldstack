@@ -12,7 +12,7 @@
 - **공백 있는 머신 라벨(low):** 저장된 머신을 찾지 못해 잘못된 안내가 나올 수 있다. herdr가 이런 라벨을 허용하는지는 확인하지 못했다.
 - **원격 `claude plugin list`의 8초 제한(low):** 원격이 느리면 플러그인이 있어도 빠졌다고 잘못 판정할 수 있다. 실제 소요 시간은 재지 못했다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/28 병합 · main 검증 통과
 리뷰 지적: 수정됨 5 · 보고만 4
 
 ## Evidence
@@ -66,15 +66,22 @@ gs 검증별 측정
 | ticket-02/1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 05ec58ebfea9cea2638fe24754c14f03eb29db03 | 397.436838 | passed |
 | ticket-03/1 | uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate . | 1e4d3c497ddd58d095732e9e81c853bf0c889727 | 0.785243 | passed |
 | integration/1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 0122c62ae4fba16501af8a03cf8289007553f8b7 | 408.552397 | passed |
+| main/1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 02c58d262ce22744c3e9e39da9ecce8606bb43c0 | 408.941686 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 426.0 |
-| verify | 408.611 |
+| total | 848.0 |
+| verify | 817.611 |
 | summary | 17.297 |
-| report | 0 |
+| report | 0.091 |
+| push | 2.065 |
+| publish | 3.947 |
+| merge-pr | 3.918 |
+| confirm-merge | 0.002 |
+| postmerge | 410.34 |
+| restore-reverts | 0.022 |
 
 ### 티켓별 결과
 
@@ -419,6 +426,29 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.15
+Creating virtual environment at: .venv
+Resolved 1 package in 2ms
+   Building goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/gs-main-nh0cfmm_/base
+      Built goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/gs-main-nh0cfmm_/base
+Prepared 1 package in 216ms
+Installed 1 package in 1ms
+ + goldstack==0.1.0 (from file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/gs-main-nh0cfmm_/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 9123자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/finish/integration-verify.log`
@@ -517,18 +547,118 @@ The directory also runs a safety scan and a policy review that this command does
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+앞 9151자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/finish/main-verify.log`
+
+```text
+--------
+Ran 13 tests in 0.054s
+
+OK
+...
+----------------------------------------------------------------------
+Ran 3 tests in 0.067s
+
+OK
+...........
+----------------------------------------------------------------------
+Ran 37 tests in 91.840s
+
+OK
+............................................
+----------------------------------------------------------------------
+Ran 37 tests in 179.892s
+
+OK
+................
+----------------------------------------------------------------------
+Ran 15 tests in 53.858s
+
+OK
+......
+----------------------------------------------------------------------
+Ran 4 tests in 1.213s
+
+OK
+..........
+----------------------------------------------------------------------
+Ran 20 tests in 5.090s
+
+OK
+.........
+----------------------------------------------------------------------
+Ran 28 tests in 50.630s
+
+OK
+..
+----------------------------------------------------------------------
+Ran 13 tests in 32.291s
+
+OK
+.................................................
+----------------------------------------------------------------------
+Ran 70 tests in 35.287s
+
+OK
+....................................
+----------------------------------------------------------------------
+Ran 49 tests in 132.606s
+
+OK
+Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/gs-main-nh0cfmm_/base/.claude-plugin/marketplace.json
+
+⚠ Found 1 warning:
+
+  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
+
+Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/gs-main-nh0cfmm_/base/.claude-plugin/plugin.json
+
+  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
+  ❯ types ./types/index.d.ts declares state: goldstack.line
+
+Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/gs-main-nh0cfmm_/base/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
+  ❯ ./register.tsx state writes: goldstack.line
+  ❯ ./register.tsx state reads: goldstack.line
+
+Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v13/run/gs-main-nh0cfmm_/base. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
+
+⚠ Found 1 plugin directory warning:
+
+  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
+    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
 
 agy 사용: 0/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/28
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `02c58d262ce22744c3e9e39da9ecce8606bb43c0`
 
 ### 되돌리는 법
 
@@ -538,7 +668,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 02c58d262ce22744c3e9e39da9ecce8606bb43c0
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v13/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
