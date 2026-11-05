@@ -89,11 +89,13 @@ class MetricsTest(unittest.TestCase):
         with mock.patch.object(verify, '_run_once', side_effect=[verify.Result(1, False, '1'), verify.Result(0, False, '1')]), \
                 mock.patch.object(metrics, 'monotonic', side_effect=[10, 13, 13, 20]):
             result = verify.run(spec, self.root, io.StringIO())
-        metrics.validation(self.run, 'ticket-01', spec.verify, 'head-sha', result, tree_sha='merged-tree', merge_head='ticket-sha')
+        metrics.validation(self.run, 'ticket-01', spec.verify, 'head-sha', result, tree_sha='merged-tree',
+                           ticket_head='ticket-sha', ticket_attempt=2)
         rows = state.load(self.root, 'demo').metrics['validations']
-        self.assertEqual([(r['seconds'], r['result'], r['attempt']) for r in rows], [(3, 'failed', 1), (7, 'passed', 2)])
-        self.assertTrue(all((r['label'], r['command'], r['sha'], r['tree_sha'], r['merge_head']) ==
-                            ('ticket-01', 'test command', 'head-sha', 'merged-tree', 'ticket-sha') for r in rows))
+        self.assertEqual([(r['seconds'], r['result'], r['retry']) for r in rows], [(3, 'failed', 1), (7, 'passed', 2)])
+        self.assertTrue(all((r['label'], r['command'], r['integration_head'], r['tree_sha'], r['ticket_head'],
+                             r['ticket_attempt']) ==
+                            ('ticket-01', 'test command', 'head-sha', 'merged-tree', 'ticket-sha', 2) for r in rows))
 
     def test_timeout_and_changed_tree_remain_failed_in_metrics(self):
         for result, changed, expected in [(verify.Result(-15, True, '1'), False, 'timeout'),
@@ -178,8 +180,8 @@ class MetricsTest(unittest.TestCase):
                              seconds=60, processing_wait_seconds=30)],
             'reviewers': [dict(ticket='01', reviewer='claude', round=0, actual_model='review-model', effort='xhigh',
                                seconds=50, findings_count=3, fix_count=2)],
-            'validations': [dict(label='integration', attempt=1, command='check | tee log', sha='verify-sha', seconds=20,
-                                 result='passed')],
+            'validations': [dict(label='integration', retry=1, command='check | tee log', integration_head='verify-sha',
+                                 seconds=20, result='passed')],
             'finish_stages': [dict(label='summary', seconds=5)],
         }
         self.st.network = dict(errors=3, waited_seconds=123)
@@ -191,6 +193,97 @@ class MetricsTest(unittest.TestCase):
                          'summary | 5', 'verify-sha', 'check \\| tee log', '일시 오류 3회 · 대기 123.0초',
                          '01: 일시 오류 2회 · 대기 60.0초']:
             self.assertIn(expected, text)
+
+    def validation_rows(self, validations):
+        self.st.metrics = {'validations': validations}
+        text = report.measurements(SimpleNamespace(st=self.st, order=[]))
+        head, *_ = [x for x in text.split('\n\n') if '| 순번 |' in x] or ['']
+        return text, [[c.strip() for c in line.strip('|').split(' | ')] for line in head.splitlines()[2:]]
+
+    def test_report_validation_table_separates_ticket_attempt_retry_and_heads(self):
+        # goldstack-v11의 09: 네 번의 검증이 모두 같은 integration 끝(2064f3b)에서 시작했다.
+        def v(attempt, ticket_head, result):
+            return dict(label='ticket-09', ticket_attempt=attempt, retry=1, command='check', integration_head='2064f3b',
+                        ticket_head=ticket_head, seconds=1, result=result)
+        text, rows = self.validation_rows([v(1, 'aaa', 'failed'), v(1, 'bbb', 'failed'), v(2, 'ccc', 'failed'),
+                                           v(2, 'ddd', 'passed')])
+        self.assertNotIn('ticket-09/1', text)
+        header = text.split('| 순번 |')[1].splitlines()[0]
+        for column in ('티켓 시도', '재시도', 'integration head', '티켓 head'):
+            self.assertIn(column, header)
+        self.assertEqual([(r[0], r[2], r[3], r[5], r[6], r[8]) for r in rows],
+                         [('1', '1', '1', '2064f3b', 'aaa', 'failed'), ('2', '1', '1', '2064f3b', 'bbb', 'failed'),
+                          ('3', '2', '1', '2064f3b', 'ccc', 'failed'), ('4', '2', '1', '2064f3b', 'ddd', 'passed')])
+
+    def test_report_validation_table_reads_old_state_names_and_finish_rows(self):
+        old = dict(label='ticket-01', attempt=2, command='check', sha='oldsha', merge_head='oldticket', seconds=3,
+                   result='passed')
+        text, rows = self.validation_rows([old, dict(label='integration', retry=1, command='check',
+                                                     integration_head='fin', seconds=4, result='passed')])
+        self.assertEqual([(r[1], r[2], r[3], r[5], r[6]) for r in rows],
+                         [('ticket-01', '-', '2', 'oldsha', 'oldticket'), ('integration', '-', '1', 'fin', '-')])
+        raw = json.loads(json.dumps({'feature': 'demo', 'metrics': {'validations': [old]}}))
+        path = self.root / 'state.json'
+        path.write_text(json.dumps(raw))
+        self.assertEqual(state.load(self.root, 'demo').metrics['validations'], [old])
+
+    def failing_run(self, validations, order=('09',)):
+        rundir = self.root / 'run'
+        self.st.metrics = {'validations': validations}
+        spec = SimpleNamespace(verify='check')
+        return SimpleNamespace(st=self.st, order=list(order), rundir=rundir, feat=SimpleNamespace(spec=spec))
+
+    def test_report_input_has_failing_test_lines_per_attempt_and_finish(self):
+        r = self.failing_run([dict(label='ticket-09', result='failed'), dict(label='ticket-09', result='passed'),
+                              dict(label='integration', result='failed')])
+        for rel, body in [('09/1/verify.log', '$ check\ncwd: x\nFAIL: test_grill_words (test_skills)\nok\n'),
+                          ('09/2/verify.log', '$ check\ncwd: x\nRan 3 tests\nOK\n'),
+                          ('finish/integration-verify.log', '$ check\nHEAD: abc\nERROR: test_x\n')]:
+            path = r.rundir / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+        text = report.failing_tests(r)
+        self.assertIn('FAIL: test_grill_words (test_skills)', text)
+        self.assertIn('`09/1/verify.log`', text)
+        self.assertIn('`09/2/verify.log`', text)
+        self.assertIn('해당 실패 줄 없음', text)  # 통과한 시도의 로그
+        self.assertIn('ERROR: test_x', text)
+        self.assertIn('마무리 `integration`', text)
+
+    def test_report_input_says_when_verify_log_is_missing_or_nothing_failed(self):
+        r = self.failing_run([dict(label='ticket-09-repair', result='timeout'), dict(label='main', result='failed')])
+        text = report.failing_tests(r)
+        self.assertIn('티켓 09: 실패한 검증 1회, verify.log 없음', text)
+        self.assertIn('마무리 `main`(failed): verify.log 없음', text)
+        self.assertIn('통과하지 못한 검증 없음', report.failing_tests(self.failing_run([dict(label='ticket-09', result='passed')])))
+
+    def test_report_input_reads_ticket_logs_when_state_has_no_validations(self):
+        r = self.failing_run([])
+        for rel, body in [('09/1/verify.log', '$ check\nFAIL: test_regression\n'), ('09/2/verify.log', '$ check\nOK\n')]:
+            path = r.rundir / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+        text = report.failing_tests(r)
+        self.assertIn('FAIL: test_regression', text)
+        self.assertIn('`09/1/verify.log`', text)
+        self.assertNotIn('통과하지 못한 검증 없음', text)
+        r.st.metrics = {}
+        self.assertIn('FAIL: test_regression', report.failing_tests(r))
+
+    def test_summarize_writes_failing_lines_into_report_input(self):
+        r = self.failing_run([dict(label='ticket-09', result='failed')])
+        log = r.rundir / '09/1/verify.log'
+        log.parent.mkdir(parents=True)
+        log.write_text('$ check\nFAIL: test_grill_words\n')
+        r.cfg = config.Config(config.GitConfig('origin', 'main'), config.ModelsConfig('opus', 'opus', 'agy', 'codex'),
+                              config.TimeoutsConfig(30, 30, 60), config.NotifyConfig(False))
+        r.iwt, r.base_ref = self.root, 'main'
+        r.st.finish = {}
+        r.feat.spec.path = self.root / 'spec.md'
+        with mock.patch.object(report.git, 'out', return_value=''), mock.patch.object(report, 'evidence', return_value='E\n'), \
+                mock.patch.object(review, '_call', return_value='요약'):
+            report.summarize(r)
+        self.assertIn('FAIL: test_grill_words', (r.rundir / 'finish/report-input.md').read_text())
 
     def test_measurement_errors_do_not_change_verification_result(self):
         class Broken(dict):
@@ -267,9 +360,12 @@ class MetricsExecutionTest(support.GoTest):
             self.assertGreaterEqual(x['seconds'], 0)
             self.assertGreaterEqual(x['processing_wait_seconds'], 0)
         self.assertEqual([x['label'] for x in data['validations']], ['ticket-01', 'integration', 'main'])
-        self.assertTrue(all(x['result'] == 'passed' and x['sha'] for x in data['validations']))
+        self.assertTrue(all(x['result'] == 'passed' and x['integration_head'] for x in data['validations']))
         self.assertTrue(data['validations'][0]['tree_sha'])
-        self.assertTrue(data['validations'][0]['merge_head'])
+        self.assertTrue(data['validations'][0]['ticket_head'])
+        self.assertNotEqual(data['validations'][0]['ticket_head'], data['validations'][0]['integration_head'])
+        self.assertEqual(data['validations'][0]['ticket_attempt'], 1)
+        self.assertIsNone(data['validations'][1]['ticket_attempt'])
         self.assertEqual(data['reviewers'][0]['fix_count'], 1)
         self.assertEqual(data['reviewers'][0]['findings_count'], 1)
         self.assertGreaterEqual(st.ticket('01').review['seconds'], 0)
@@ -281,7 +377,7 @@ class MetricsExecutionTest(support.GoTest):
             self.assertIsInstance(x['seconds'], float)
         text = self.final_report()
         self.assertEqual(sum(line.startswith('| 01 |') for line in text.splitlines()), 1)
-        for s in ['worker 시도별', '리뷰어별 소요와 채택', '마무리 단계별 시간', 'gs 0.1.0', '일시 오류', 'integration/1']:
+        for s in ['worker 시도별', '리뷰어별 소요와 채택', '마무리 단계별 시간', 'gs 0.1.0', '일시 오류', 'integration head', '티켓 head']:
             self.assertIn(s, text)
 
     def test_measurement_clock_and_metadata_errors_still_merge(self):
