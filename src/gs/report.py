@@ -353,6 +353,8 @@ def status_line(r) -> str:
         parts = [f"{pr} 병합", f"{r.base} 검증 대기"]
     elif phase == "revert_pending":
         parts = [f"{r.base} 검증 실패", f"revert PR {f.get('revert_pr', '')} 병합 대기"]
+    elif phase == "revert_closing":
+        parts = [f"{pr} 병합", f"{r.base} 재검증 통과", f"revert PR {f.get('revert_pr', '')} 닫기 대기"]
     elif phase == "report_pending":
         parts = [f"{pr} 병합", f"보고서 PR {f.get('report_pr', '')} 병합 대기"]
     elif phase == "main_failed":

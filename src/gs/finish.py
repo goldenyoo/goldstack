@@ -14,6 +14,9 @@ squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에�
 보고서는 `gs/<f>/report` 브랜치의 PR로 올려 같은 병합 방식(`wait_checks`면 그 PR의 검사도)으로 병합을 시도한다.
 승인 등 보호 규칙에 막히면 PR을 열어 둔 채 phase `revert_pending`·`report_pending`("사람 승인 필요: <url>")으로
 멈추고, 다음 `gs go`가 그 PR을 다시 읽어 병합됐으면 이어 간다. feature PR이 막히면 `merge_pending`이다.
+revert PR을 기다리는 동안 base가 움직였으면 옛 revert를 병합하지 않고 최신 base를 재검증한다(`main-recheck`). 통과하면 gs가 그 PR을 닫고
+브랜치를 지운 뒤 verified다(`revert_closing`이 닫기가 남았다는 뜻이고 다음 `gs go`가 재검증 없이 이어 간다). 실패하면 최신 base 위에 revert를
+다시 만들어 같은 브랜치를 갱신한다.
 
 verified·reverted의 마무리 순서: integration에 보고서 커밋 → base에 보고서 커밋(직접 push·보고서 PR) → base를
 integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base판과 같다. 그래서 다음 PR이 report.md에서 충돌하지 않는다.
@@ -49,9 +52,9 @@ BASE_REPORT_PHASES = ("verified", "reverted")
 CHECK_PHASES = ("checks_pending", "checks_failed", "checks_timeout")
 # 보호된 base에서 gs의 revert·보고서 PR이 사람을 기다린다. 다음 gs go가 그 PR을 다시 읽는다.
 PENDING_PHASES = ("revert_pending", "report_pending")
-# gs go가 새 worker보다 먼저 마무리를 회복하는 phase.
+# gs go가 새 worker보다 먼저 마무리를 회복하는 phase. revert_closing: 재검증을 통과했고 revert PR 닫기가 남았다.
 RESUME_PHASES = (*CHECK_PHASES, "merge_requested", "merge_pending", "merged", "main_failed", "base_unverified",
-                 *PENDING_PHASES)
+                 "revert_closing", *PENDING_PHASES)
 CHECK_INTERVAL = 10
 
 
@@ -628,6 +631,63 @@ def _revert_pr(r, sha: str) -> bool:
     return False
 
 
+def _read_revert_pr(r, head: str) -> dict:
+    """지난 실행이 head로 올린 revert 브랜치의 PR을 읽는다. url을 모르면 브랜치에서 찾아 남긴다. 없으면 빈 dict."""
+    url = r.st.finish.get("revert_pr") or _find_side_pr(r, f"gs/{r.name}/revert", head)
+    if not url:
+        return {}
+    _save(r, revert_pr=url)
+    return _view(r, url)
+
+
+def _reread_revert_pr(r, view: dict) -> bool:
+    """지난 실행이 올린 revert PR로 이어 간다. 브랜치를 올리고 revert_head를 남기기 전에 끊긴 뒤 병합됐으면 PR head가 revert_sha다."""
+    f = r.st.finish
+    sha = f.get("revert_sha")
+    head = sha if sha and view.get("headRefOid") == sha else f["revert_head"]
+    _save(r, revert_sha=head, revert_head=head)
+    return _revert_pr(r, head)
+
+
+def _close_revert_pr(r) -> bool:
+    """재검증을 통과해 쓰지 않는 revert PR을 닫고 `gs/<f>/revert` 원격 브랜치를 지운 뒤 verified로 끝낸다.
+
+    부르기 전에 phase `revert_closing`을 남긴다. 끊기거나 실패하면 다음 gs go가 재검증 없이 여기로 돌아온다. 할 일은 PR·브랜치의 지금
+    상태를 읽어 정하므로 같은 PR을 두 번 닫지 않는다. 재검증 도중이나 닫기를 기다리는 동안 사람이 병합했으면 그 PR로 reverted다.
+    실패하면 phase 그대로 False다. 이 phase에서는 PR을 병합하지 않는다."""
+    f = r.st.finish
+    head, branch = f["revert_head"], f"gs/{r.name}/revert"
+    closed = False
+    try:
+        view = _read_revert_pr(r, head)
+        if view.get("state") != "MERGED":
+            if view.get("state") == "OPEN":
+                _gh(r, "close", f["revert_pr"], "--comment", f"gs: 최신 {r.base} 재검증을 통과해 되돌리지 않는다.")
+                print(f"■ 최신 {r.base} 재검증 통과: revert PR {f['revert_pr']}을 닫았다", flush=True)
+            closed = True
+            git.check_push(r.repo, r.remote, r.st.push_record)  # 실행 시작 때와 다른 주소에는 묻지도 지우지도 않는다
+            if git.out(r.repo, "ls-remote", "--heads", r.remote, f"refs/heads/{branch}"):
+                git.push(r.repo, r.remote, r.st.push_record, "--delete", branch)
+    except git.PushSettingsChanged:
+        raise
+    except (git.GitError, OSError) as e:
+        where = f.get("revert_pr") or branch
+        _save(r, error=str(e), outcome=f"최신 {r.base} 재검증 통과, " + (
+            f"revert PR은 닫혔지만 {branch}를 지우지 못했다. 다음 gs go가 다시 지운다: {e}" if closed else
+            f"revert PR {where}을 닫지 못했다(열린 채 남음, 병합하지 않음). 다음 gs go가 다시 닫는다: {e}"))
+        print(f"■ 경고: {f['outcome']}", flush=True)
+        return False
+    if view.get("state") == "MERGED":
+        return _reread_revert_pr(r, view)
+    url = f.get("revert_pr", "")
+    number = url.rstrip("/").rsplit("/", 1)[-1]
+    f.pop("revert_sha", None)
+    f.pop("revert_head", None)
+    _save(r, phase="verified", outcome=f"{r.base} 검증 실패 뒤 {r.base}가 바뀌었고 최신 {r.base} 재검증 통과 → revert하지 않음, "
+          + (f"revert PR #{number} 닫힘" if url else "닫을 revert PR 없음") + f"(쓰지 않은 revert {head})")
+    return True
+
+
 def _prepare_base(r, wt: Path) -> str | None:
     """임시 base worktree를 준비하고 검증할 끝 커밋을 돌려준다. setup이 실패하면 None(끝 커밋을 읽지 않는다)."""
     if r.cfg.worktree.setup.strip():
@@ -649,9 +709,9 @@ def _prepare_base(r, wt: Path) -> str | None:
 def _postmerge(r) -> bool:
     """사실을 읽어 `revert_decision.next_step`에 묻고 답한 단계를 실행한다. 판단 규칙은 그 함수에 있다."""
     f = r.st.finish
-    sha = f.get("revert_sha")
+    sha, pushed = f.get("revert_sha"), f.get("revert_head")
     facts = revert_decision.Facts(phase=f["phase"], direct_push=r.cfg.git.direct_push, has_revert=bool(sha),
-                                  revert_head_matches=f.get("revert_head") == sha)
+                                  revert_head_matches=pushed == sha, revert_pushed=bool(pushed))
     step = revert_decision.next_step(facts)
     if step == revert_decision.ALREADY_VERIFIED:
         return True
@@ -664,19 +724,33 @@ def _postmerge(r) -> bool:
     _check_merge(r)
     tip = git.sha(r.repo, r.base_ref)
     theirs = _revert_of(r.repo, merge, f"{merge}..{r.base_ref}")
-    facts = replace(facts, revert_in_base=bool(sha) and _ancestor(r.repo, sha, r.base_ref), external_revert=bool(theirs))
+    facts = replace(facts, revert_in_base=bool(sha) and _ancestor(r.repo, sha, r.base_ref), external_revert=bool(theirs),
+                    base_moved=f.get("main_head") != tip)
     step = revert_decision.next_step(facts)
+    view = {}
+    if step == revert_decision.READ_REVERT_PR:
+        view = _read_revert_pr(r, pushed)
+        facts = replace(facts, revert_pr_merged=view.get("state") == "MERGED")
+        step = revert_decision.next_step(facts)
     if step == revert_decision.READ_REVERT_PARENT:
         facts = replace(facts, revert_parent_is_tip=git.sha(r.repo, f"{sha}^") == tip)
         step = revert_decision.next_step(facts)
-    if step in (revert_decision.REREAD_REVERT_PR, revert_decision.OPEN_REVERT_PR):
+    if step == revert_decision.CLOSE_REVERT_PR:
+        return _close_revert_pr(r)
+    if step == revert_decision.REREAD_REVERT_PR:
+        return _reread_revert_pr(r, view)
+    if step == revert_decision.OPEN_REVERT_PR:
         return _revert_pr(r, sha)
     if step == revert_decision.RECORD_PUSHED_REVERT:
         _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
         return False
     if step == revert_decision.RECORD_EXTERNAL_REVERT:
+        # 이 revert를 report가 revert PR의 커밋으로 적지 않게 PR 기록을 비운다. 이미 되돌렸으니 재검증도 닫기도 없이 끝낸다.
+        unused = f.pop("revert_pr", None) or (f"gs/{r.name}/revert" if pushed else "")
+        f.pop("revert_head", None)
         _save(r, phase="reverted", revert_sha=theirs,
-              outcome=f"{r.base}에서 이미 병합 커밋을 되돌렸다(revert {theirs}, gs가 아닌 다른 곳). gs는 revert를 push하지 않음")
+              outcome=f"{r.base}에서 이미 병합 커밋을 되돌렸다(revert {theirs}, gs가 아닌 다른 곳). gs는 revert를 push하지 않음"
+              + (f". 쓰지 않은 revert PR {unused}은 닫지 않았다. 사람이 닫아라" if unused else ""))
         return False
     if step == revert_decision.PUSH_REVERT:
         git.push(r.repo, r.remote, r.st.push_record, f"{sha}:refs/heads/{r.base}")
@@ -687,22 +761,29 @@ def _postmerge(r) -> bool:
         git.run(r.repo, "worktree", "add", "--detach", str(wt), tip)
         try:
             main_head = _prepare_base(r, wt)
-            facts = replace(facts, base_ready=main_head is not None, base_moved=f.get("main_head") != main_head)
+            # 받아 온 끝이 이미 움직였으면 재검증한다. setup이 HEAD를 옮겨도 "그대로"로 되돌리지 않는다.
+            facts = replace(facts, base_ready=main_head is not None,
+                            base_moved=facts.base_moved or f.get("main_head") != main_head)
             step = revert_decision.next_step(facts)
             if step == revert_decision.RECORD_UNVERIFIED:
                 _save(r, phase="base_unverified", main_ok=None, outcome="base 미검증(준비 실패)")
                 return False
             label = {revert_decision.VERIFY_MAIN: "main", revert_decision.RECHECK_MAIN: "main-recheck"}.get(step)
             ok = bool(label) and _verify(r, wt, label)
-            _save(r, main_ok=ok, main_head=main_head)
             step = revert_decision.next_step(replace(facts, main_ok=ok))
+            # 결과와 다음 phase를 한 번에 저장한다. main_head만 남기고 끊기면 다음 실행이 base가 그대로라고 믿고 옛 revert를 병합한다.
+            if step == revert_decision.CLOSE_REVERT_PR:
+                _save(r, main_ok=ok, main_head=main_head, phase="revert_closing",
+                      outcome=f"최신 {r.base} 재검증 통과, revert PR 닫는 중")
+                return _close_revert_pr(r)
             if step == revert_decision.RECORD_VERIFIED:
                 stale = f.pop("revert_sha", None)
-                _save(r, phase="verified", outcome=f"integration·{r.base} 검증 통과, PR 병합 완료" if not stale else
+                _save(r, main_ok=ok, main_head=main_head, phase="verified",
+                      outcome=f"integration·{r.base} 검증 통과, PR 병합 완료" if not stale else
                       f"{r.base} 검증 실패 뒤 {r.base}가 바뀌었고 최신 {r.base} 검증 통과 → revert하지 않음(쓰지 않은 revert {stale})")
                 return True
-            _save(r, phase="main_failed", outcome=f"{r.base} 검증 실패, 병합 커밋 revert 중")
             f.pop("revert_sha", None)  # 옛 base 위에 만든 revert는 쓰지 않는다
+            _save(r, main_ok=ok, main_head=main_head, phase="main_failed", outcome=f"{r.base} 검증 실패, 병합 커밋 revert 중")
             # 검증이 파일·HEAD를 바꿨더라도 받아 온 base의 정확한 끝에서 revert한다.
             git.run(wt, "checkout", "--detach", "--force", main_head)
             git.run(wt, "clean", "-fd")
