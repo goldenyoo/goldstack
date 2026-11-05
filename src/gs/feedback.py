@@ -18,10 +18,11 @@
 보낼 내용은 `read_draft`로만 읽는다. 로컬 전용 부분을 돌려주지 않고 지금의 `detail`을 따른다.
 
 수집(맨 아래 절)은 규칙으로만 gs 결함을 골라 `record`에 넘긴다. 판단 모델은 없다.
-올리는 것: `cli.main`까지 온 gs 내부 예외, 마무리 이상(재개 phase에 갇힘, 예상 밖 revert, 마무리 오류),
-`ADAPTER_PATTERNS`에 이름이 붙은 어댑터 실패와 모르는 어댑터 오류(`unknown`).
+올리는 것: `cli.main`까지 온 gs 내부 예외, 마무리 이상(재개 phase에 갇힘, 예상 밖 revert, 마무리 오류. 준비·보고서·PR 단계의 오류도 든다),
+`ADAPTER_PATTERNS`에 이름이 붙은 어댑터 실패와 모르는 어댑터 오류(`unknown`). 어댑터 실패는 구현·수정·수리 worker를 가리지 않는다.
 올리지 않는 것: 티켓 구현 실패, 패턴에 안 걸린 "커밋 없음", 시험 실패, 리뷰 지적, 일시 오류(`transient.py`),
-대상 환경의 오류(인증·사용량 한도·권한·보호 규칙). 수집·전송의 오류는 `gs go`의 결과를 바꾸지 못한다(`cli.py`가 막는다).
+대상 환경의 오류(인증·네트워크·사용량 한도·권한·보호 규칙), base와의 충돌, 이미 올린 마무리 오류.
+수집·전송의 오류는 `gs go`의 결과를 바꾸지 못한다(`cli.py`가 막는다).
 """
 from __future__ import annotations
 
@@ -132,7 +133,7 @@ _WORDS = frozenset("""
     네트워크 중단 종료 코드 명령 실행 수 못 못했다 읽을 쓸 찾을 찾지 만들 없는 잘못된 알 모름 다시 끊김 대기 일시 내부 예외
 """.split()) | {name.lower() for name in _BUILTIN_EXCEPTIONS}
 # 오류 종류(gs 코드가 정한 값)에만 쓰는 gs 자신의 낱말.
-_KIND_WORDS = _WORDS | frozenset("adapter frontmatter herdr review reviewer worker runner judge setup feedback note settings".split())
+_KIND_WORDS = _WORDS | frozenset("adapter frontmatter herdr review reviewer worker runner judge setup feedback note settings preparing".split())
 
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -725,13 +726,16 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path
     return sent
 
 
-def command(repo: Path, args: list[str], out, err) -> int:
-    """gs feedback [list|status|send|사람의 문장]. 전송 실패는 다른 gs 실행을 막지 않는다."""
+def command(repo: Path, args: list[str], out, err, *, body_file: Path | None = None) -> int:
+    """gs feedback [list|status|send|사람의 문장|--body-file 파일]. 파일도 같은 수동 전송 경로를 쓴다."""
     cfg, problems = config.load(repo)
     for problem in problems:
         print(problem, file=err)
     if cfg is None:
         return 1
+    if body_file is not None and args:
+        print("gs feedback: --body-file은 글·하위 명령과 함께 쓸 수 없습니다.", file=err)
+        return 2
     if args in (["list"], ["status"]):
         for path in sorted((repo / FEEDBACK_DIR).glob("*.md")):
             try:
@@ -748,16 +752,26 @@ def command(repo: Path, args: list[str], out, err) -> int:
     if os.environ.get("GS_ROLE") == "worker":
         print("gs feedback: worker는 수동 피드백을 저장·전송할 수 없습니다.", file=err)
         return 1
-    if not args:
-        print('사용: gs feedback "한 줄" | list | send', file=err)
+    if not args and body_file is None:
+        print('사용: gs feedback "한 줄" | --body-file <파일> | list | status | send', file=err)
         return 2
-    if len(args) == 1 and args != ["send"] and not any(char.isspace() for char in args[0]):
-        print('gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"', file=err)
+    message = " ".join(args)
+    if body_file is not None:
+        try:
+            message = body_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            print(f"gs feedback: 본문 파일을 읽지 못했습니다: {exc}", file=err)
+            return 1
+    if (body_file is not None or args != ["send"]) and len(message.split()) < 2:
+        if body_file is not None:
+            print("gs feedback: 본문 파일이 비었거나 한 단어입니다. 파일에 증상·근거·제안을 채워 --body-file로 다시 보내세요.", file=err)
+        else:
+            print('gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"', file=err)
         return 2
     only_path = None
-    if args != ["send"]:
+    if body_file is not None or args != ["send"]:
         try:
-            only_path = record_manual(repo, cfg, " ".join(args))
+            only_path = record_manual(repo, cfg, message)
         except (OSError, ValueError) as exc:
             print(f"gs feedback: 초안을 저장하지 못했습니다: {exc}", file=err)
             return 1
@@ -772,7 +786,8 @@ def command(repo: Path, args: list[str], out, err) -> int:
 STUCK_PHASES = frozenset({"merge_requested", "merged", "main_failed"})
 # 오류 줄은 가림을 거쳐 일반 낱말만 남으므로 phase 이름을 낱말로 푼다.
 _PHASE_WORDS = {"merge_requested": "merge requested", "merged": "merged", "main_failed": "base failed"}
-_FINISH_FAILED = "마무리 실패"
+FINISH_FAILED = "마무리 실패"  # 마무리를 멈춘 오류의 outcome 머리말(finish._note_failure)
+WORKER_FAILURE = "worker-failure.log"  # 수정·수리 worker의 실패 이유. `_fail`의 failure.log와 다른 파일이다(note_worker_failure)
 _FAMILIES = ("claude", "codex", "agy")
 _TAIL_BYTES = 64 * 1024
 _WORKER_END = re.compile(r"^(?:커밋 없음|worker 종료 코드 -?\d+)")
@@ -796,12 +811,21 @@ ADAPTER_PATTERNS = (
 # 이름은 없지만 어댑터가 낸 오류의 모양: `agy: …`(종료 코드 뒤 괄호 안 포함), 어댑터 없음, worker를 띄우다 난 예기치 않은 예외.
 # "agy 차단 장치가 없다"는 넣지 않는다. worker를 띄우기 전의 의도된 거부이고 `gs check`가 미리 경고하는 이 머신의 설정 문제다.
 _ADAPTER_ERROR = re.compile(r"(?:^|\()(?:agy|codex|claude): |어댑터가 없다|^`claude plugin list|^worker를 (?:다시 )?띄우지 못했다")
-# 일시 오류 판별(transient)에 없는 대상 환경의 오류: 인증·권한·보호 규칙, git의 연결 실패, worker나 검증이 바꾼 push 설정, 없는 모델.
+# 일시 오류 판별(transient)에 없는 대상 환경의 오류: 인증·권한·보호 규칙, git·gh의 연결 실패, worker나 검증이 바꾼 push 설정, 없는 모델.
 _ENVIRONMENTAL = re.compile(
     r"authentication|auth(?:orization)? failed|not logged in|gh auth|permission denied|not authorized|"
     r"could not resolve to|\bHTTP (?:401|403|404)\b|protected branch|required status check|review required|"
     r"사람 승인|repository rule|could not resolve host|could not read from remote repository|remote end hung up|"
-    r"i/o timeout|dial tcp|tls handshake|push 설정이|invalid model selection", re.I)
+    r"i/o timeout|dial tcp|tls handshake|push 설정이|invalid model selection|"
+    r"resource not accessible|must have admin rights|permission to \S+ denied|could not read (?:username|password)|"
+    r"repository not found|repository '[^'\n]*' not found|host key verification failed|ssl certificate problem|"
+    r"error connecting to|check your internet connection|context deadline exceeded|unexpected disconnect", re.I)
+# 운영체제가 gs의 일을 거부했다: 디스크·파일 권한. gs가 받은 오류(마무리 오류, worker를 띄우다 난 실패 이유)에만 본다.
+# worker 로그에는 쓰지 않는다: sandbox가 worker의 ref 쓰기를 막은 것은 gs가 고칠 어댑터 실패다.
+_OS_REFUSED = re.compile(r"no space left on device|read-only file system|operation not permitted", re.I)
+# 마무리 오류에만 보는 대상 레포·머신의 일: base·revert와의 충돌(finish._merge, _restore_reverts), 보고서 커밋을 막은 hook·서명·신원 설정(gs는 바뀐 것이
+# 있을 때만 커밋한다), 운영체제의 거부.
+_TARGET_FINISH = re.compile(rf"(?:합치다|되돌리다) 충돌했다|^git commit |{_OS_REFUSED.pattern}", re.I)
 
 
 def _environmental(error: str) -> bool:
@@ -859,7 +883,7 @@ def classify_adapter_failure(reason: str, log: str) -> tuple[str, list[str]] | N
     """worker 실패 이유와 worker 로그로 (오류 종류, 오류 줄)을 돌려준다. 올리지 않을 실패는 None.
 
     로그가 말하는 일시·환경 오류를 먼저 뺀다. 인증·한도로 죽은 agy는 `result 이벤트가 없다`로 끝나 이유만으로는 구별되지 않는다.
-    이름 붙은 패턴이 그다음이고, 아니면 어댑터가 낸 오류 모양일 때만 `unknown`이다.
+    이름 붙은 패턴이 그다음이고, 아니면 어댑터가 낸 오류 모양일 때만 `unknown`이다. 이유가 환경 오류이거나 운영체제의 거부(`_OS_REFUSED`)면 그 모양이어도 뺀다.
     그 밖의 실패(구현 실패, 패턴에 안 걸린 "커밋 없음", 검증·병합 실패)는 대상 프로젝트의 일이다.
     오류 줄에는 이유 첫 줄과 로그에서 맞은 부분만 싣는다. 로그의 한 줄은 worker가 읽은 내용일 수 있다.
     """
@@ -874,16 +898,33 @@ def classify_adapter_failure(reason: str, log: str) -> tuple[str, list[str]] | N
             return pattern.name, [first]
         if found := pattern.log.search(log):
             return pattern.name, [first, found.group()]
-    if _ADAPTER_ERROR.search(reason) and not _environmental(reason):
+    if _ADAPTER_ERROR.search(reason) and not _environmental(reason) and not _OS_REFUSED.search(reason):
         return UNKNOWN, [first]
     return None
 
 
+def note_worker_failure(rundir: Path, reason: str) -> None:
+    """수정·수리 worker가 실패한 이유를 그 실행 디렉터리(`<티켓>/<시도>/<단계>`)에 남긴다. 옆의 worker.log와 함께 수집이 읽는다.
+
+    `_fail`을 지나지 않는 실패라 failure.log가 없고, 있어도 쓰면 안 된다: 수리 뒤 다시 검증이 실패하면 `_fail`이 같은 디렉터리의 failure.log를 덮는다.
+    증거일 뿐이라 쓰지 못해도 티켓 처리를 바꾸지 않는다.
+    """
+    try:
+        rundir.mkdir(parents=True, exist_ok=True)
+        (rundir / WORKER_FAILURE).write_text(f"실패 이유: {reason}\n", encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+
+
 def failure_logs(rundir: Path) -> dict[Path, int]:
-    """티켓 시도마다 `_fail`이 남긴 failure.log와 그 수정 시각. 수정 worker의 실패는 이 파일을 남기지 않아 보이지 않는다."""
+    """티켓 시도마다 `_fail`이 남긴 failure.log, 수정·수리 worker의 실패 이유(`WORKER_FAILURE`)와 그 수정 시각."""
     logs: dict[Path, int] = {}
     for log in rundir.glob("*/*/failure.log"):
         if log.relative_to(rundir).parts[0] != "wt":  # worktree 안의 파일은 대상 프로젝트의 것이다
+            logs[log] = log.stat().st_mtime_ns
+    for log in rundir.glob(f"*/*/*/{WORKER_FAILURE}"):
+        parts = log.relative_to(rundir).parts  # 시도 디렉터리는 번호다. 임시 worktree(`gs-main-*/base/…`)도 여기서 걸러진다
+        if parts[0] != "wt" and parts[1].isdigit():
             logs[log] = log.stat().st_mtime_ns
     return logs
 
@@ -896,7 +937,7 @@ def _tail(path: Path) -> str:
 
 
 def adapter_failures(rundir: Path, before: Mapping[Path, int]) -> list[tuple[str, list[str]]]:
-    """`before` 뒤로 새로 쓰인 failure.log에서 올릴 어댑터 실패를 모은다. 읽지 못한 로그는 건너뛴다."""
+    """`before` 뒤로 새로 쓰인 실패 기록(`failure_logs`)에서 올릴 어댑터 실패를 모은다. 그대로인 기록은 지난 실행의 것이라 다시 올리지 않는다. 읽지 못한 로그는 건너뛴다."""
     found = []
     for log, stamp in sorted(failure_logs(rundir).items()):
         if before.get(log) == stamp:
@@ -919,21 +960,32 @@ def _finish_runs(st) -> int:
     return sum(rec.get("label") == "total" for rec in st.metrics.get("finish_stages", []))
 
 
-def finish_anomaly(before: Mapping, after: Mapping) -> tuple[str, list[str]] | None:
+def _error_key(error: str) -> str:
+    """같은 오류인가를 볼 값. 임시 디렉터리·커밋 해시처럼 실행마다 달라지는 것은 가림이 지운다. 아무것도 남지 않으면 글 그대로다."""
+    return "\n".join(Redactor().lines(error.splitlines())) or error
+
+
+def finish_anomaly(before: Mapping, after: Mapping, seen: Iterable[str] = ()) -> tuple[str, list[str]] | None:
     """마무리를 실제로 돈 실행의 전후 `finish`로 이상 하나를 고른다: (오류 종류, 오류 줄). 없으면 None.
 
-    - finish-error: `마무리 실패`로 끝났고 새 오류다. 같은 원인을 갇힘으로 또 올리지 않게 먼저 본다.
+    seen은 이 실행 전까지 마무리를 멈춘 오류들(`state.finish_errors`)이다. 옛 state에는 없어 지난 `error`도 함께 본다.
+    - preparing-error·finish-error: 마무리를 멈춘 새 오류다. 같은 원인을 갇힘으로 또 올리지 않게 먼저 본다. 멈춘 오류는 `마무리 실패` outcome으로 알고,
+      결과가 정해진 verified·reverted에서는 error만 남으므로 그것으로 안다(거부·PR 확인 실패의 error는 이 phase에 남지 않는다).
+      preparing은 지문이 따로다: 처음 PR까지 가는 길의 오류가 앞선 재개 오류의 초안에 횟수로만 묻히지 않게.
     - unexpected-revert: 이번 실행에서 reverted가 됐는데 "integration 통과, base 검증 실패"라는 기록이 없다.
       그 기록이 있으면 설계된 동작이고 대상 프로젝트의 시험 실패다. 없는 경우는 다른 곳에서 되돌렸거나 gs가 검증 없이 되돌린 것이다.
     - stuck-phase: `STUCK_PHASES`로 들어가 같은 phase로 나왔다.
-    일시·환경 오류가 원인이면 finish-error와 stuck-phase로 보지 않는다.
+    일시·환경 오류와 대상 레포 때문인 오류가 원인이면 마무리 오류와 stuck-phase로 보지 않는다.
     """
+    from . import state
     phase, was = after.get("phase"), before.get("phase")
     error = str(after.get("error") or "")
-    environmental = bool(error) and _environmental(error)
-    if (error and not environmental and error != str(before.get("error") or "")
-            and str(after.get("outcome") or "").startswith(_FINISH_FAILED)):
-        return "finish-error", error.splitlines()
+    environmental = bool(error) and (_environmental(error) or _TARGET_FINISH.search(error) is not None)
+    stopped = str(after.get("outcome") or "").startswith(FINISH_FAILED) or phase in state.FINISHED_PHASES
+    if error and not environmental and stopped:
+        known = {_error_key(str(text)) for text in (*seen, before.get("error")) if text}
+        if _error_key(error) not in known:
+            return "preparing-error" if phase == "preparing" else "finish-error", error.splitlines()
     if phase == "reverted" and was != "reverted" and not (
             after.get("integration_ok") is True and after.get("main_ok") is False):
         return "unexpected-revert", [f"unexpected revert: merged check passed: {after.get('integration_ok')}, "
@@ -981,6 +1033,7 @@ class _Before:
     finish: dict
     finish_runs: int
     logs: dict[Path, int]
+    finish_errors: tuple[str, ...] = ()
 
 
 class Session:
@@ -1010,7 +1063,7 @@ class Session:
         from . import state
         rundir = self._rundir(name)
         st = state.load(rundir, name)
-        self._before[name] = _Before(dict(st.finish), _finish_runs(st), failure_logs(rundir))
+        self._before[name] = _Before(dict(st.finish), _finish_runs(st), failure_logs(rundir), tuple(st.finish_errors))
 
     def after(self, name: str, raised: bool = False) -> None:
         """새 초안을 쓴다. `go()`가 예외로 끝났으면 그 예외가 곧 보고이므로 마무리 이상은 보지 않는다."""
@@ -1023,7 +1076,7 @@ class Session:
             record(self.repo, self.cfg, phase="worker", kind=kind, frames=[], error_lines=lines)
         st = state.load(rundir, name)
         if (not raised and not st.network.get("aborted") and _finish_runs(st) > before.finish_runs
-                and (anomaly := finish_anomaly(before.finish, st.finish))):
+                and (anomaly := finish_anomaly(before.finish, st.finish, before.finish_errors))):
             record(self.repo, self.cfg, phase="finish", kind=anomaly[0], frames=[], error_lines=anomaly[1])
 
     def report(self) -> None:

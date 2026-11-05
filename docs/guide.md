@@ -399,11 +399,16 @@ $ gs check csv-export
 csv-export: 티켓 3장, 오류 0, 경고 0
 순서: 01 02 03
 지금 시작 가능: 01
-01 small codex gpt-6-luna/medium · 리뷰 claude opus/xhigh
-02 medium claude sonnet/high · 리뷰 codex gpt-6.1-sol/high
-03 large claude opus/xhigh · 리뷰 codex gpt-6.1-sol/high + agy gemini-4-argon-high
+실측(지난 실행): small 9분(14) · medium 38분(14) · large 69분(13)
+공통 모델: 판단 claude opus · 실패 요약 claude haiku
+01 small 구현 codex gpt-6-luna/medium · 수정 codex gpt-6-luna/medium · 수리 codex gpt-6-luna/medium · 첫 리뷰 claude opus/xhigh · 재리뷰 claude sonnet/high
+02 medium 구현 claude sonnet/high · 수정 claude sonnet/high · 수리 claude sonnet/high · 첫 리뷰 codex gpt-6.1-sol/high · 재리뷰 codex gpt-6.1-sol/medium
+03 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6.1-sol/high + agy gemini-4-argon-high · 재리뷰 codex gpt-6.1-sol/medium + agy gemini-4-argon-medium
 ```
-오류가 없으면 `gs check`는 끝에 티켓마다 한 줄을 더해, `gs go`가 그 티켓의 **첫 시도**에 쓸 등급과 구현 모델/effort, 리뷰어(두 번째 리뷰어가 있으면 `+`로 이어 붙인다)를 보인다. 실행이 쓰는 선택 함수와 같은 값이고, 재시도·수정·재리뷰와 승급은 미리 알 수 없어 넣지 않는다. 그 계열의 `[tiers]` 표가 없으면 모델은 `CLI 기본값`이다. `/grill`은 spec의 티켓 표에 이 값을 그대로 옮긴다.
+오류가 없으면 `gs check`는 `순서`와 `지금 시작 가능` 뒤에 세 가지를 더 보인다.
+- `실측(지난 실행): small 9분(14) · …` — 같은 레포 다른 feature의 지난 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값(괄호는 표본 수)이다. 소요는 티켓의 첫 단계 시작부터 끝까지이고 재시도를 포함한다. 등급이 없는 옛 티켓과 읽을 수 없는 state는 건너뛴다. 표본이 없으면 `실측 기록 없음`이다. `/grill`은 티켓 표의 예상에 그 티켓 tier의 중앙값을 쓰고, 값이 없으면 `–`로 둔다.
+- `공통 모델: 판단 claude … · 실패 요약 claude …` — 지적 분류·보고서 Summary에 쓰는 `models.judge`와 실패 요약에 쓰는 `models.failure_summary`다.
+- 티켓마다 한 줄 — 등급과 구현·수정·수리·첫 리뷰·재리뷰의 계열 모델/effort다(두 번째 리뷰어가 있으면 `+`로 잇는다). 실행이 쓰는 선택 함수와 같은 값이고, 재시도·승급은 미리 알 수 없어 넣지 않는다. 그 계열의 `[tiers]` 표가 없으면 모델은 `CLI 기본값`이다. `/grill`은 이 값을 spec의 티켓 표(구현·수정·수리·첫 리뷰·재리뷰 열)와 그 아래 `계열:`(고른 이유)·`공통 모델:` 줄에 그대로 옮긴다.
 
 파일 형식은 [skills/grill/templates/](../skills/grill/templates/). 중간에 세션이 끊겨도 `/grill csv-export`를 다시 부르면 spec의 기록에서 이어 간다.
 
@@ -525,7 +530,7 @@ second_reviewer: agy
 [04] 리뷰 끝(codex): 지적 2개(fix 1, report 1)
 [04] 리뷰 끝(agy): 지적 1개(fix 1, report 0)
 ```
-보고서 "리뷰 지적"에는 리뷰마다 계열이 붙는다: `- 04 리뷰(codex) [medium] src/tally/cleanup.py:12: … — 상태: 미해결`, `- 04 리뷰(agy) [high] … — 상태: 수정됨(재리뷰 확인)`. 원본은 `run/04/<시도>/review/`(첫 리뷰), `run/04/<시도>/review-agy/`(두 번째 리뷰), `run/04/<시도>/rereview1-codex/`(재리뷰).
+보고서 "리뷰 지적"에는 리뷰마다 계열이 붙는다: `- 04 리뷰(codex) [medium] src/tally/cleanup.py:12: … — 상태: 미해결`, `- 04 리뷰(agy) [high] … — 상태: 수정됨(재리뷰 확인)`. 원본은 `run/04/<시도>/review/`(첫 리뷰), `run/04/<시도>/review-agy/`(두 번째 리뷰), `run/04/<시도>/rereview1-codex/`(재리뷰). 각 디렉터리에는 리뷰어 stdout 원본이 파싱 전 그대로 `reviewer.stdout`으로 남는다(재호출은 `reviewer.2.stdout`처럼 번호가 붙어 앞 것을 덮지 않는다).
 
 ### `[agy] max_calls_per_run` — Gemini 호출 상한
 ```toml
@@ -652,13 +657,14 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | 절 | 볼 것 |
 |---|---|
 | Summary | 판단 모델이 쓴 짧은 요약: 변경의 의미, 남은 위험. 판단이지 증거가 아니다. 병합 여부는 쓰지 않는다 |
+| `문서 미반영: <티켓>`(있을 때만, 제목 바로 아래) | 코드 티켓이 병합됐는데 `touches`에 `docs/`나 `CHANGELOG.md`가 든 티켓이 `failed`·`skipped`로 남았다는 표시다. 문서 티켓마다 한 줄이다. 코드만 main에 들어가고 문서는 빠졌으니 그 티켓을 다시 돌리거나 직접 문서를 고친다. 실패한 티켓을 되돌려 다시 돌려도 이 줄은 마무리가 끝날 때까지 남는다 |
 | 마무리 상태 줄(Summary 바로 아래) | gs가 state에서 쓴 한 줄. 예 `마무리: verified · PR https://github.com/you/tally/pull/7 병합 · main 검증 통과`, `마무리: reverted · main 검증 실패 → revert 1a2b3c4d`, `마무리: not_merged · integration 검증 실패` |
 | 지적 개수 줄(마무리 상태 줄 아래) | `리뷰 지적: 수정됨 1 · 미해결 1 · …`. 상태마다 뜻과 볼 것은 [리뷰와 재리뷰](#리뷰와-재리뷰) |
 | Evidence → 남은 위험(있을 때만, 맨 앞) | `- 01: 플러그인 격리 못 함: …`. claude worker의 플러그인 끄기가 빠진 채 돌았다는 뜻이다(worker를 막지는 않는다). `claude plugin list`가 되는지 본다 |
-| Evidence → 실행 측정 | gs 버전·설치 commit, 일시 오류 수·대기 시간(전체, 티켓별), 표: worker 시도별 실제 모델·effort·소요·처리 대기, 리뷰어별 소요·결과 대기·지적·채택(fix, 해결 수와 다르다), 리뷰 호출별 시간(재호출 포함), gs 검증별 명령·SHA·소요·결과, 마무리 단계별 시간. `결과 대기(초)`는 리뷰 호출이 돌아온 뒤 `gs go`가 그 결과를 받기까지다. 검증이 `gs go`를 붙잡는 동안 끝난 리뷰가 기다린 시간이고, 기록이 없는 옛 실행은 `기록 없음`이다. 어디서 시간을 썼는지 볼 때 읽는다. 뜻은 [internals](internals.md#상태) |
+| Evidence → 실행 측정 | gs 버전·설치 commit, 일시 오류 수·대기 시간(전체, 티켓별), 표: worker 시도별 실제 모델·effort·소요·처리 대기, 리뷰어별 소요·결과 대기·지적·채택(fix, 해결 수와 다르다), 리뷰 호출별 시간(재호출 포함), gs 검증별 티켓 시도·재시도·명령·integration head·티켓 head·소요·결과(integration head는 검증한 integration 끝이라 같은 티켓의 여러 검증이 같을 수 있다), 마무리 단계별 시간. `결과 대기(초)`는 리뷰 호출이 돌아온 뒤 `gs go`가 그 결과를 받기까지다. 검증이 `gs go`를 붙잡는 동안 끝난 리뷰가 기다린 시간이고, 기록이 없는 옛 실행은 `기록 없음`이다. 어디서 시간을 썼는지 볼 때 읽는다. 뜻은 [internals](internals.md#상태) |
 | Evidence → 검증 실패(마무리 전체 검증이 실패했을 때만) | 실패한 단계(`integration`, `integration-final`), 로그 경로, 실패 줄 최대 10줄, `후보 티켓(추정)`. 추정이라 틀릴 수 있다. 로그로 확인하고 `/grill`로 고칠 티켓을 더한다 |
 | Evidence → 티켓별 결과 | 티켓마다 결과(`merged`, `failed`, `skipped`)와 이유. 단계별 소요(`worker 9분 · 리뷰 4분 · 수정 2분 · 재리뷰 1분 · 검증 3분`, 0분인 단계는 빼고 모두 1분 미만이면 `모두 1분 미만`). 미커밋 변경 때문에 남긴 worktree(`--only` 범위 밖 티켓 것도). `경고: setup이 추적 파일을 바꿨다 → 되돌림: …`, 플러그인 격리 경고 |
-| Evidence → 리뷰 지적 | 다른 계열 reviewer의 지적 전부와 지적마다의 상태·근거·판단·재리뷰 근거. 고쳐졌다고 확인된 지적도 `수정됨(재리뷰 확인)`으로 남는다. `second_reviewer`가 있으면 리뷰마다 `04 리뷰(codex)`, `04 리뷰(agy)`로 나뉜다. 리뷰 자체가 실패했거나 `건너뜀(한도)`이면 그 메모, 수정·재리뷰 경과 메모 |
+| Evidence → 리뷰 지적 | 다른 계열 reviewer의 지적 전부와 지적마다의 상태·근거·판단·재리뷰 근거. 리뷰어가 `checked`(확인한 완료 조건·돌린 명령과 결과)를 냈으면 `04 리뷰(codex) checked(믿을 수 없는 자료)` 목록이 붙는다. 리뷰어가 쓴 글이라 증거가 아니라 단서로 읽는다. 고쳐졌다고 확인된 지적도 `수정됨(재리뷰 확인)`으로 남는다. `second_reviewer`가 있으면 리뷰마다 `04 리뷰(codex)`, `04 리뷰(agy)`로 나뉜다. 리뷰 자체가 실패했거나 `건너뜀(한도)`이면 그 메모, 수정·재리뷰 경과 메모 |
 | Evidence 끝 `agy 사용: N/상한` | 이번 실행에서 gs가 띄운 agy 호출 수 |
 | Evidence → verify 출력 | 티켓마다 가장 최근 verify 로그와 integration·main 검증 로그의 끝부분(원본 그대로) |
 | Merge Danger | 마무리 결과, PR, integration·main verify 결과, 병합·revert 커밋, 아직 남은 오류(뒤에 성공하면 지워진다), integration·main worktree의 setup 추적 파일 경고, 되돌리는 법(명령) |
@@ -887,9 +893,9 @@ detail = "errors" # errors | minimal
 - `auto` + `errors`: 개인 프로젝트용. 자동으로 오류 줄까지 보낸다. `minimal`이면 오류 줄 없이 항목만 보낸다.
 `/adopt`가 새 레포에서 한 번 묻고 이 값을 적는다. 받는 쪽은 `gs backlog`와 `/grill` 1단계가 열린 `field-report` issue를 후보로 보인다. 티켓 키 `closes: [12]`면 그 PR이 병합될 때 issue가 닫힌다.
 
-명령: `gs feedback "문장"`(초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태. `status`도 같다), `gs feedback send`(쌓인 것 전송). skill은 `/feedback <문장 | list | send>`.
+명령: `gs feedback "문장"` 또는 `gs feedback --body-file <파일>`(확인한 UTF-8 본문으로 초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태. `status`도 같다), `gs feedback send`(쌓인 것 전송). skill은 `/feedback <문장 | --body-file 파일 | list | status | send>`.
 
-**한 단어는 보내지 않는다** — `list`·`send`·`status`는 정상 하위 명령이라 예외다. `gs feedback statsu`처럼 그 밖의 공백 없는 한 단어는 하위 명령을 잘못 친 것으로 보고 `gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"`을 내고 종료 코드 2로 끝난다. 초안도 만들지 않는다. 옛 판은 `status`를 글로 보고 `draft` 모드에서도 공개 issue를 올렸다. 일부러 한 단어를 보내려면 따옴표 안에 공백을 넣어 문장으로 쓴다.
+**한 단어는 보내지 않는다** — `list`·`send`·`status`는 정상 하위 명령이라 예외다. `gs feedback statsu`처럼 그 밖의 한 단어는 하위 명령을 잘못 친 것으로 보고 `gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"`을 내고 종료 코드 2로 끝난다. 초안도 만들지 않는다. 옛 판은 `status`를 글로 보고 `draft` 모드에서도 공개 issue를 올렸다. `"status "`·`status ""`처럼 공백이나 빈 인자를 더해도 거부한다. 본문 파일도 두 단어 이상이어야 한다.
 
 **`draft` 모드의 재전송** — 보내다 실패하면 초안은 남고 `gs feedback: 전송하지 못한 초안은 남겨 두고 gs feedback send로 보내세요.`가 나온다. `draft`는 사람이 보낼 때를 고르는 모드라 다음 `gs` 실행이 자동으로 다시 보내지 않는다. `auto`는 `다음 실행 때 다시 보냅니다.`로 알린다.
 

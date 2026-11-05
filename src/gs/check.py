@@ -8,26 +8,72 @@ from fnmatch import fnmatchcase
 from functools import lru_cache
 from itertools import combinations
 from pathlib import Path, PurePosixPath
+from statistics import median
 
 from . import feature as featmod
-from . import config, git, graph, version
+from . import adapters, config, git, graph, state, version
 from .review import reviewer_selection
 
 
 def ticket_model_line(ticket: featmod.Ticket, cfg: config.Config) -> str:
-    """실행과 같은 선택 함수로 첫 구현·리뷰 호출만 표시한다."""
-    def label(family: str, selection: config.ModelEffort | None) -> str:
-        model = selection.model if selection and selection.model else "CLI 기본값"
-        effort = f"/{selection.effort}" if selection and selection.effort else ""
+    """실행과 같은 선택 함수로 구현·수정·수리와 두 리뷰 단계의 모델을 표시한다."""
+    def label(family: str, selection: config.ModelEffort) -> str:
+        model = selection.model or "CLI 기본값"
+        effort = f"/{selection.effort}" if selection.effort else ""
         return f"{family} {model}{effort}"
 
     tier, selection = cfg.tiers.worker(ticket.model, ticket.tier)
+    worker = label(ticket.model, adapters.worker_selection(ticket.model, cfg.models, selection))
     reviewers = [ticket.reviewer]
     if ticket.second_reviewer:
         reviewers.append(ticket.second_reviewer)
-    reviews = " + ".join(label(family, reviewer_selection(family, cfg)[1])
-                         for family in reviewers)
-    return f"{ticket.id} {tier or ticket.tier or 'medium'} {label(ticket.model, selection)} · 리뷰 {reviews}"
+    reviews = []
+    for name, rereview in (("첫 리뷰", False), ("재리뷰", True)):
+        models = " + ".join(label(family, reviewer_selection(family, cfg, rereview=rereview)[1])
+                            for family in reviewers)
+        reviews.append(f"{name} {models}")
+    return (f"{ticket.id} {tier or ticket.tier or 'medium'} 구현 {worker} · 수정 {worker} · 수리 {worker} · "
+            + " · ".join(reviews))
+
+
+TIER_ORDER = ("small", "medium", "large")
+
+
+def tier_samples(repo: Path, feature: str) -> dict[str, list[float]]:
+    """같은 레포 다른 feature의 지난 실행(`run/state.json`)에서 등급별 merged 티켓 소요(초).
+
+    소요는 티켓의 첫 단계 시작부터 종료까지다(재시도 포함). 등급은 worker·수정 단계가 남긴 tier다.
+    등급이 없는 옛 티켓, 시각이 없거나 거꾸로인 기록, 읽을 수 없는 state는 건너뛴다. `run/`이 없어도 오류가 아니다.
+    """
+    samples: dict[str, list[float]] = {}
+    for p in sorted((repo / ".goldstack" / "work").glob("*/run/state.json")):
+        if p.parent.parent.name == feature:
+            continue
+        try:
+            st = state.load(p.parent, p.parent.parent.name)
+            found = []
+            for ts in st.tickets.values():
+                if ts.status != state.MERGED:
+                    continue
+                tier = next((ph["tier"] for ph in ts.phases if ph.get("tier") in TIER_ORDER), None)
+                starts = [s for ph in ts.phases if (s := state.parse_time(ph["started_at"]))]
+                start = min(starts) if starts else state.parse_time(ts.started_at)
+                end = state.parse_time(ts.ended_at)
+                if tier and start and end and end >= start:
+                    found.append((tier, (end - start).total_seconds()))
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            continue  # 깨진 기록은 check를 막지 않는다
+        for tier, seconds in found:
+            samples.setdefault(tier, []).append(seconds)
+    return samples
+
+
+def measured_line(repo: Path, feature: str) -> str:
+    """`실측(지난 실행): small 9분(14) · …`. 표본이 없으면 `실측 기록 없음`."""
+    samples = tier_samples(repo, feature)
+    parts = [f"{tier} {state.minutes(median(samples[tier]))}분({len(samples[tier])})"
+             for tier in TIER_ORDER if samples.get(tier)]
+    return "실측(지난 실행): " + " · ".join(parts) if parts else "실측 기록 없음"
 
 
 def _glob_tokens(pattern: str) -> list[str]:
@@ -217,6 +263,8 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
     feat.problems.extend(environment_problems(repo, cfg, feat, g))
     lines.append("순서: " + " ".join(graph.topo_order(g)))
     lines.append("지금 시작 가능: " + " ".join(graph.frontier(g)))
+    lines.append(measured_line(repo, name))
     if not feat.errors:
+        lines.append(f"공통 모델: 판단 claude {cfg.models.judge} · 실패 요약 claude {cfg.models.failure_summary}")
         lines.extend(ticket_model_line(feat.tickets[tid], cfg) for tid in sorted(g))
     return feat, lines

@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import shutil
 import tempfile
@@ -7,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import cli, config, git
+from gs import adapters, check, cli, config, git
 from gs import feature as featmod
 from support import isolate_git_env
 
@@ -23,6 +24,17 @@ verify: "true"
 
 def ticket(tid, blocked_by="[]", model="claude", reviewer="codex", extra=""):
     return f'---\nid: "{tid}"\ntitle: t{tid}\nblocked_by: {blocked_by}\nmodel: {model}\nreviewer: {reviewer}\n{extra}---\n## 목표\n'
+
+
+def past_ticket(tier, minutes, status="merged"):
+    """tier가 None이면 옛 형식(phases에 tier 없음)."""
+    phase = {"attempt": 1, "phase": "worker", "model": "claude",
+             "started_at": "2026-11-01T10:00:00+09:00", "ended_at": ""}
+    if tier:
+        phase["tier"] = tier
+    return {"status": status, "started_at": "2026-11-01T10:00:00+09:00",
+            "ended_at": f"2026-11-01T{10 + minutes // 60:02d}:{minutes % 60:02d}:00+09:00",
+            "phases": [phase]}
 
 
 class CheckTest(unittest.TestCase):
@@ -75,7 +87,7 @@ class CheckTest(unittest.TestCase):
         self.assertIn("지금 시작 가능: 01", out)
 
     def model_lines(self, out):
-        return [line for line in out.splitlines() if " · 리뷰 " in line]
+        return [line for line in out.splitlines() if " · 첫 리뷰 " in line]
 
     def test_actual_models_with_tiers(self):
         self.write("01-a.md", ticket("01", extra="tier: large\n"))
@@ -85,8 +97,8 @@ class CheckTest(unittest.TestCase):
         code, out, err = self.run_check()
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(self.model_lines(out), [
-            "01 large claude opus/xhigh · 리뷰 codex gpt-6.1-sol/medium",
-            "02 small codex gpt-6-luna/medium · 리뷰 claude sonnet/high",
+            "01 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6.1-sol/medium · 재리뷰 codex gpt-6.1-sol/medium",
+            "02 small 구현 codex gpt-6-luna/medium · 수정 codex gpt-6-luna/medium · 수리 codex gpt-6-luna/medium · 첫 리뷰 claude sonnet/high · 재리뷰 claude sonnet/high",
         ])
         self.assertLess(out.index("지금 시작 가능:"), out.index("01 large"))
 
@@ -99,8 +111,8 @@ class CheckTest(unittest.TestCase):
         code, out, err = self.run_check()
         self.assertEqual(code, 0, err)
         self.assertEqual(self.model_lines(out), [
-            "01 large claude CLI 기본값 · 리뷰 codex CLI 기본값 + agy gemini-4-argon-high",
-            "02 medium codex CLI 기본값 · 리뷰 claude opus",
+            "01 large 구현 claude CLI 기본값 · 수정 claude CLI 기본값 · 수리 claude CLI 기본값 · 첫 리뷰 codex CLI 기본값 + agy gemini-4-argon-high · 재리뷰 codex CLI 기본값 + agy gemini-4-argon-high",
+            "02 medium 구현 codex CLI 기본값 · 수정 codex CLI 기본값 · 수리 codex CLI 기본값 · 첫 리뷰 claude opus · 재리뷰 claude opus",
         ])
 
     def test_actual_models_second_reviewer_and_no_effort(self):
@@ -108,7 +120,7 @@ class CheckTest(unittest.TestCase):
         code, out, err = self.run_check()
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(self.model_lines(out), [
-            "01 large claude opus/xhigh · 리뷰 codex gpt-6.1-sol/high + agy gemini-4-argon-high",
+            "01 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6.1-sol/high + agy gemini-4-argon-high · 재리뷰 codex gpt-6.1-sol/medium + agy gemini-4-argon-medium",
         ])
 
     def test_actual_models_only_selected_tickets(self):
@@ -117,8 +129,49 @@ class CheckTest(unittest.TestCase):
         code, out, err = self.run_check("--only", "02")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(self.model_lines(out), [
-            "02 small claude sonnet/medium · 리뷰 codex gpt-6.1-sol/high",
+            "02 small 구현 claude sonnet/medium · 수정 claude sonnet/medium · 수리 claude sonnet/medium · 첫 리뷰 codex gpt-6.1-sol/high · 재리뷰 codex gpt-6.1-sol/medium",
         ])
+
+    def test_worker_display_matches_adapter_for_all_families(self):
+        path = self.repo / config.CONFIG_PATH
+        default = path.read_text()
+        for tables in (True, False):
+            for family in featmod.FAMILIES:
+                with self.subTest(tables=tables, family=family):
+                    text = default.replace('codex = ""', 'codex = "legacy-codex"')
+                    if not tables:
+                        text = text[:text.index("[tiers]")] + text[text.index("[agy]"):]
+                    path.write_text(text)
+                    cfg, problems = config.load(self.repo)
+                    self.assertEqual(problems, [])
+                    t = featmod.Ticket(id="01", title="test", blocked_by=[], model=family,
+                                       reviewer="codex", path=Path("01.md"), tier="small")
+                    line = check.ticket_model_line(t, cfg)
+                    _, selection = cfg.tiers.worker(family, "small")
+                    actual = adapters.ADAPTERS[family](cfg.models, selection).selection
+                    expected = f"{family} {actual.model or 'CLI 기본값'}"
+                    if actual.effort:
+                        expected += f"/{actual.effort}"
+                    for phase in ("구현", "수정", "수리"):
+                        self.assertIn(f"{phase} {expected}", line)
+                    if not tables and family == "codex":
+                        self.assertIn("구현 codex legacy-codex", line)
+                    if not tables and family == "agy":
+                        self.assertIn("구현 agy gemini-4-argon-high", line)
+
+    def test_common_models_once_and_summary_fallback(self):
+        self.write("01-a.md", ticket("01"))
+        self.write("02-b.md", ticket("02"))
+        path = self.repo / config.CONFIG_PATH
+        for summary in ('failure_summary = "haiku"', ''):
+            with self.subTest(summary=summary):
+                path.write_text(config.DEFAULT_CONFIG.format(base='"main"').replace(
+                    'failure_summary = "haiku"', summary))
+                code, out, err = self.run_check()
+                self.assertEqual((code, err), (0, ""))
+                model = "haiku" if summary else "opus"
+                self.assertEqual(out.count("공통 모델:"), 1)
+                self.assertIn(f"공통 모델: 판단 claude opus · 실패 요약 claude {model}", out)
 
     def test_actual_models_hidden_on_errors(self):
         self.write("01-a.md", ticket("01", extra="tier: large\n"))
@@ -303,6 +356,44 @@ class CheckTest(unittest.TestCase):
             with self.subTest(url=url):
                 git.run(self.repo, "remote", "set-url", "upstream", url)
                 self.assertEqual(self.run_check()[::2], (0, ""))
+
+    def past_run(self, feature, tickets):
+        rundir = self.repo / ".goldstack/work" / feature / "run"
+        rundir.mkdir(parents=True)
+        (rundir / "state.json").write_text(json.dumps(
+            {"feature": feature, "tickets": {f"{i:02d}": t for i, t in enumerate(tickets, 1)}}))
+
+    def measured(self):
+        self.write("01-a.md", ticket("01"))
+        code, out, err = self.run_check()
+        self.assertEqual((code, err), (0, ""))
+        return [line for line in out.splitlines() if line.startswith("실측")]
+
+    def test_no_history(self):
+        self.assertEqual(self.measured(), ["실측 기록 없음"])
+
+    def test_old_tickets_without_tier_are_not_samples(self):
+        self.past_run("old", [past_ticket(None, 30), past_ticket(None, 40)])
+        self.assertEqual(self.measured(), ["실측 기록 없음"])
+
+    def test_single_sample(self):
+        self.past_run("v1", [past_ticket("small", 9)])
+        self.assertEqual(self.measured(), ["실측(지난 실행): small 9분(1)"])
+
+    def test_median_per_tier_in_order_skipping_failed_and_current_feature(self):
+        self.past_run("v1", [past_ticket("large", 70), past_ticket("small", 8), past_ticket("small", 12),
+                             past_ticket("small", 99, status="failed"), past_ticket(None, 500)])
+        self.past_run("v2", [past_ticket("large", 60), past_ticket("small", 10), past_ticket("medium", 38)])
+        self.past_run("demo", [past_ticket("small", 400)])
+        self.assertEqual(self.measured(),
+                         ["실측(지난 실행): small 10분(3) · medium 38분(1) · large 65분(2)"])
+
+    def test_broken_state_is_skipped(self):
+        self.past_run("v1", [past_ticket("medium", 20)])
+        broken = self.repo / ".goldstack/work/bad/run"
+        broken.mkdir(parents=True)
+        (broken / "state.json").write_text("{not json")
+        self.assertEqual(self.measured(), ["실측(지난 실행): medium 20분(1)"])
 
 
 class RealRepoTest(unittest.TestCase):

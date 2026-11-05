@@ -37,15 +37,20 @@ class WorkerInput:
     log: Path
 
 
+def worker_selection(family: str, models: config.ModelsConfig,
+                     selection: config.ModelEffort | None = None) -> config.ModelEffort:
+    """실행과 표시가 공유하는 worker 선택. 표가 없으면 기존 models 설정을 쓴다."""
+    legacy = models.codex if family == "codex" else models.agy if family == "agy" else ""
+    return selection if selection is not None else config.ModelEffort(legacy)
+
+
 class Adapter:
     name = ""
     isolation_warning = ""
 
     def __init__(self, models: config.ModelsConfig, selection: config.ModelEffort | None = None):
         self.models = models
-        # 표가 있으면 models.codex·models.agy보다 우선한다. 없으면 기존 선택을 보존한다.
-        legacy = models.codex if self.name == "codex" else models.agy if self.name == "agy" else ""
-        self.selection = selection if selection is not None else config.ModelEffort(legacy)
+        self.selection = worker_selection(self.name, models, selection)
 
     def model_options(self) -> str:
         options = f"--model {q(self.selection.model)} " if self.selection.model else ""

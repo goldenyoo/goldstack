@@ -40,6 +40,7 @@ worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 �
 돌던 worker와 리뷰어를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴 network_resume으로 다음 `gs go`가 같은 worktree에서 잇는다. 합계는 그때 새로 센다.
 어떻게 루프를 떠나든(중단, Ctrl-C·SIGTERM·SIGHUP, 뜻밖의 오류) 돌던 리뷰어의 프로세스 그룹을 끝낸다(_stop_reviews). 리뷰 단계의 티켓은 network_resume이 있어 다음 `gs go`가 리뷰를 다시 한다.
 수리 worker가 끊기면 수정 worker처럼 같은 worktree에 새 실행 디렉터리(repair-net<n>)로 다시 띄운다. 수리 재리뷰의 끊김도 리뷰와 같다.
+수정·수리 worker의 실패는 티켓 실패가 아니라 _fail을 지나지 않는다. 이유는 그 실행 디렉터리에 따로 남겨 결함 수집이 읽는다(feedback.note_worker_failure).
 """
 from __future__ import annotations
 
@@ -56,7 +57,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import adapters, clean, config, failure, finish, git, graph, herdr, metrics, notify, report, review, setup, state, transient, verify, worker
+from . import adapters, clean, config, failure, feedback, finish, git, graph, herdr, metrics, notify, report, review, setup, state, transient, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -315,6 +316,19 @@ def _begin(r: Run) -> None:
     metrics.close_interrupted_stages(st)
     r.g = _graph(r)
     r.order = graph.topo_order(r.g)
+    # Keep the document warning across a finish-only resume. The retry loop
+    # below resets FAILED/SKIPPED tickets to PENDING before finish renders again.
+    merged = {tid for tid, ts in st.tickets.items() if ts.status == state.MERGED}
+    prior_docs = set(st.finish.get("docs_missing", []))
+    tickets = getattr(getattr(r, "feat", None), "tickets", {})
+    for tid, ticket in tickets.items():
+        ts = st.tickets.get(tid)
+        touches = getattr(ticket, "touches", [])
+        if (ts is not None and ts.status in (state.FAILED, state.SKIPPED) and merged - {tid}
+                and any(path == "CHANGELOG.md" or path.startswith(("docs/", "docs\\")) for path in touches)):
+            prior_docs.add(tid)
+    if prior_docs:
+        st.finish["docs_missing"] = sorted(prior_docs)
     for tid, ts in sorted(st.tickets.items()):
         state.end_phase(ts, st.updated_at or state.now())
         if ts.status == state.RUNNING:
@@ -367,6 +381,22 @@ def _stop_previous(tid: str, ts: state.TicketState) -> None:
 
 def _err(e: BaseException) -> str:
     return f"{type(e).__name__}: {e}"
+
+
+def _exit_reason(proc: worker.Proc | worker.Finished, code: int | None) -> str:
+    """0이 아닌 종료 코드로 끝난 worker의 실패 이유. 결함 수집의 패턴(feedback.ADAPTER_PATTERNS)이 이 말을 본다.
+
+    다시 띄우지 못한 자리(Finished)의 종료 코드는 정해 둔 값이다. 이유는 note에 있다.
+    """
+    if isinstance(proc, worker.Finished) and proc.note:
+        return proc.note
+    why = f"worker 종료 코드 {code}" if code is None or code >= 0 else "worker 실행기가 사라졌다"
+    return why + (f" ({proc.note})" if proc.note else "")
+
+
+def _launch_reason(e: Exception) -> str:
+    """띄우지 못한 worker의 실패 이유. 어댑터의 거부(agy 차단 장치 등)는 그 글 그대로다(_start와 같다)."""
+    return str(e) if isinstance(e, adapters.AdapterError) else f"worker를 띄우지 못했다: {_err(e)}"
 
 
 def _set(r: Run, tid: str, **fields) -> None:
@@ -1223,21 +1253,22 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정으로 처리한다(수정 전 구현을 병합·검증한다).
     수리(repair)도 수정과 같다: 도중이면 같은 worktree에 다시 띄우고, 띄우지 못하면 실패한 수리로 처리한다(수리 전 브랜치를 다시 검증한다). 시도 수를 올리지 않는다.
     수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish).
+    다시 띄우지 못한 수정·수리의 자리는 새 실행 디렉터리를 쓴다: 결함 수집은 실패 이유를 옆의 worker.log와 함께 읽는데, 지난 디렉터리의 로그는 이 대기를 일으킨 일시 오류라 이유까지 걸러 낸다.
     """
     ts = r.st.ticket(t.id)
     wt, branch, base, nth = Path(mark["worktree"]), mark["branch"], mark["base"], mark.get("fix", 0)
     repair = mark.get("repair", "")
     last = Path(mark["rundir"])
 
-    def stand_in(code: int, note: str = "") -> Active:
+    def stand_in(code: int, note: str = "", rundir: Path = last) -> Active:
         _set(r, t.id, status=state.RUNNING, branch=branch, worktree=str(wt), pane="", reason="", ended_at="",
-             started_at=state.now(), log=str(last / "worker.log"))
-        return Active(t, worker.Finished(worker.Job(t, wt, last), code, note), branch, wt, base, fix=nth, repair=repair)
+             started_at=state.now(), log=str(rundir / "worker.log"))
+        return Active(t, worker.Finished(worker.Job(t, wt, rundir), code, note), branch, wt, base, fix=nth, repair=repair)
 
-    def give_up(why: str, *, retry: bool = True) -> Active | None:
+    def give_up(why: str, *, retry: bool = True, rundir: Path = last) -> Active | None:
         if nth or repair:
             say(f"[{t.id}] {'수리' if repair else _ordinal(nth) + '수정'} worker를 다시 띄우지 못했다: {why}")
-            return stand_in(1, why)
+            return stand_in(1, why, rundir)
         _fail(r, t, why, retry=retry)
         return None
 
@@ -1253,7 +1284,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     if _is_agy(t.model) and state.agy_reached(r.st, _agy_limit(r)):
         return give_up(f"agy 한도: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿아 worker를 다시 띄우지 않았다"
                        "(config agy.max_calls_per_run)", retry=False)
-    proc = None
+    proc, made = None, last  # 새 디렉터리를 만들지 못했으면 지난 디렉터리가 그대로 자리다(병합 로그도 거기 쓴다)
     try:
         if nth or repair:
             step = "repair" if repair else "fix" if nth == 1 else f"fix{nth}"
@@ -1265,6 +1296,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
             rundir = worker.attempt_dir((r.rundir / t.id).resolve())
             phase, attempt = "worker", int(rundir.name)
         rundir.mkdir(parents=True)
+        made = rundir
         job = worker.Job(ticket=t, worktree=wt, rundir=rundir)
         state.begin_phase(ts, phase, t.model, attempt=attempt)
         _set(r, t.id, status=state.RUNNING, attempts=ts.attempts + (0 if nth or repair else 1), branch=branch, pane="",
@@ -1283,11 +1315,11 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         proc = worker.Proc(job, runner, f"gs:{r.name}:{t.id}:{rundir.name}", adapter)
         _set(r, t.id, pane=proc.where)
     except adapters.AdapterError as e:
-        return give_up(str(e))
+        return give_up(str(e), rundir=made)
     except Exception as e:  # noqa: BLE001 — 한 티켓의 오류로 코디네이터가 멈추지 않게
         if proc is not None:
             proc.stop()
-        return give_up(f"worker를 다시 띄우지 못했다: {_err(e)}")
+        return give_up(f"worker를 다시 띄우지 못했다: {_err(e)}", rundir=made)
     say(f"[{t.id}] 네트워크 끊김 뒤 같은 worktree에서 다시 시작 ({adapter.name}, {proc.where}, 로그 {job.log})")
     a = Active(t, proc, branch, wt, base, fix=nth, repair=repair, watch=_watch(adapter, job))
     _mark_resume(r, a)  # 이 worker도 끊기거나 gs가 죽으면 여기서 잇는다
@@ -1435,8 +1467,7 @@ def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error:
             return None
         return TO_REVIEW if _end_fix(r, a, code, commits, error) else TO_MERGE
     if code != 0:
-        why = f"worker 종료 코드 {code}" if code >= 0 else "worker 실행기가 사라졌다"
-        return _fail_worker(r, a, why + (f" ({note})" if note else ""))
+        return _fail_worker(r, a, _exit_reason(a.proc, code))
     if commits == 0:
         return _fail_worker(r, a, "커밋 없음")
     if not setup.is_clean(wt):
@@ -1854,6 +1885,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
     except Exception as e:  # noqa: BLE001 — 수정은 덤이다. 지금 브랜치의 구현은 그대로 병합한다
         if proc is not None:
             proc.stop()
+        feedback.note_worker_failure(job.rundir, _launch_reason(e))
         _skip_fix(r, t, nth, f"띄우지 못함: {_err(e)}", f"{_ordinal(nth)}수정 worker를 띄우지 못했다: {_err(e)}")
         return None
     say(f"[{t.id}] {_ordinal(nth)}수정 worker 시작: 지적 {len(todo)}개 ({adapter.name}, {proc.where}, 로그 {job.log})")
@@ -1906,6 +1938,7 @@ def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> b
         ids = ", ".join(str(f["id"]) for f in _todo(r, t, nth))
         _note_fix(r, t, nth, f"{_ordinal(nth)}수정 커밋 {commits}개(fix 지적 {ids}): 재리뷰로 확인한다")
         return True
+    feedback.note_worker_failure(a.proc.job.rundir, why if error or code == 0 else _exit_reason(a.proc, code))
     a.proc.finish(False)  # 들여다볼 수 있게 pane을 남긴다
     git.run(wt, "merge", "--abort", check=False)
     git.run(wt, "checkout", "-q", "-f", branch)
@@ -1984,6 +2017,7 @@ def _start_repair(r: Run, a: Active, runner) -> Active:
     except Exception as e:  # noqa: BLE001 — 수리는 덤이다. 지금 브랜치를 다시 검증한다
         if proc is not None:
             proc.stop()
+        feedback.note_worker_failure(job.rundir, _launch_reason(e))
         return skip(f"띄우지 못함: {_err(e)}")
     say(f"[{t.id}] 수리 worker 시작: 실패 로그 {ts.repairs[-1]['verify_log']} ({adapter.name}, {proc.where}, 로그 {job.log})")
     nxt = Active(t, proc, a.branch, a.wt, a.base, repair=REPAIR_RUN, watch=_watch(adapter, job))
@@ -1996,12 +2030,15 @@ def _end_repair(r: Run, a: Active, code: int | None, commits: int, error: str) -
 
     실패(종료 코드, 시간 초과, 이전 커밋을 지움)면 수리 커밋을 버리고 수리 전 head로 되돌린다. 실패해도 티켓은 실패가 아니다: 다시 검증이 판정한다.
     되돌리기 자체가 git 오류면 어느 트리를 병합할지 모르니 그 오류는 올린다(_loop가 티켓 실패로 처리해 다시 한다). 돌고 있던 worker는 _check_worker가 이미 끝냈다.
+    커밋 없음은 실패가 아니어도(불안정한 시험이면 고칠 것이 없다) 이유로 남긴다: ref 잠금으로 커밋하지 못한 worker도 이렇게 끝난다. 결함인지는 수집이 로그까지 보고 가린다.
     """
     t, wt, branch = a.t, a.wt, a.branch
     ts = r.st.ticket(t.id)
     kept = git.run(r.repo, "merge-base", "--is-ancestor", a.base, branch, check=False).returncode == 0
     note = a.proc.note
     failed = error or ("" if code == 0 else f"종료 코드 {code}" + (f": {note}" if note else "")) or ("" if kept else "이전 커밋을 지웠다")
+    if failed or not commits:
+        feedback.note_worker_failure(a.proc.job.rundir, (failed if error or code == 0 else _exit_reason(a.proc, code)) or "커밋 없음")
     if failed:
         a.proc.finish(False)  # 들여다볼 수 있게 pane을 남긴다
         git.run(wt, "merge", "--abort", check=False)
@@ -2330,7 +2367,9 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
     if res.timed_out:
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
     label = f"ticket-{t.id}" + ("-repair" if state.open_repair(r.st.ticket(t.id)) else "")
-    metrics.validation(r, label, command, before[0], res, changed, tree_sha=before[3], merge_head=before[2])
+    ts = r.st.ticket(t.id)
+    metrics.validation(r, label, command, before[0], res, changed, tree_sha=before[3], ticket_head=before[2],
+                       ticket_attempt=ts.phases[-1]["attempt"] if ts.phases else ts.attempts)
     return res, log, changed
 
 

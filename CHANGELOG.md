@@ -2,6 +2,15 @@
 
 ## 미출시
 
+### goldstack-v14
+
+- 보고서 "gs 검증별 측정" 표의 열을 바로잡았다: `티켓 시도`·`재시도`와 `integration head`(검증한 integration 끝. 티켓 검증이어도 티켓 코드가 아니라서 같은 티켓의 여러 검증이 같을 수 있다)·`티켓 head`(병합하려던 티켓 커밋)를 나눈다. 옛 state는 옛 이름(`sha`·`attempt`·`merge_head`)으로 읽는다. 판단 입력에는 실패한 검증의 시험 줄이 들어가고, 측정 이력이 없는 옛 state는 티켓 `verify.log`에서 찾는다.
+- 리뷰어 답의 선택 항목 `checked`(확인한 완료 조건·돌린 명령)를 리뷰·재리뷰 기록에 남기고 보고서에 믿을 수 없는 자료로 보인다. 리뷰어 stdout 원본은 `reviewer.stdout`에 파싱 전 그대로 저장한다(#23).
+- `gs check`가 `실측(지난 실행): small 9분(14) · …`(다른 feature 지난 실행의 등급별 병합 티켓 소요 중앙값, 표본이 없으면 `실측 기록 없음`), `공통 모델` 줄, 티켓마다 구현·수정·수리·첫 리뷰·재리뷰의 모델/effort를 보인다(#21, #22). `/grill`의 티켓 표는 이 값을 열별로 옮기고 예상은 실측 중앙값, 없으면 `–`로 둔다.
+- `gs feedback --body-file <파일>`로 확인한 UTF-8 본문을 보낸다. 글이 두 단어 미만이면(`"status "`·`status ""` 포함) 거부한다. `/retro`의 "issue로 올리기"는 증상·근거·제안을 채운 초안 전체를 사람에게 확인받은 뒤 본문 파일로 보낸다(#24).
+- 결함 수집이 마무리 준비 단계에서 멈춘 git 오류(`preparing-error`)와 수정·수리 worker 실패(`worker-failure.log`)도 본다. 재시작이 실패하면 이유를 새 디렉터리(`fix-net<k>`, `repair-net<k>`)에 남긴다.
+- 코드 티켓이 병합됐는데 `docs/`나 `CHANGELOG.md`를 고치는 티켓이 실패·건너뜀이면 보고서 맨 위에 `문서 미반영: <티켓>`을 적는다. 마무리만 재개해도 남는다.
+
 ### goldstack-v13
 
 - `gs remote check <머신>`이 herdr 원격 머신의 준비(연결, `gs`·플러그인 버전, gh·claude·codex 인증, 디스크, 레포, `local.env` 유무, grill 커밋 수신)를 항목별로 검사한다. 레포 경로는 `.goldstack/local.env`의 `GS_REMOTE_REPO_<머신>`이다.

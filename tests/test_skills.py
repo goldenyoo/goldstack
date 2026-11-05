@@ -116,6 +116,14 @@ class GrillBreakdownTest(unittest.TestCase):
         for text in ("templates/spec.md", "§5", "gs check <f>", "새 worker 한 문맥", "검증 가능한 문장"):
             self.assertIn(text, step)
 
+    def test_all_models_and_family_reason_are_copied(self):
+        step = steps((SKILLS / "grill" / "SKILL.md").read_text(encoding="utf-8"))[5]
+        section = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("## 6.")[0]
+        for text in ("구현·수정·수리·첫 리뷰·재리뷰", "공통 모델", "그대로", "계열을 고른 이유를 한 줄"):
+            self.assertIn(text, step)
+            self.assertIn(text, section)
+        self.assertNotIn("표가 없으면 CLI 기본값", section)
+
     def test_grill_argument_may_be_request(self):
         body = (SKILLS / "grill" / "SKILL.md").read_text(encoding="utf-8")
         head = body.partition("\n1. ")[0]
@@ -128,7 +136,7 @@ class GrillBreakdownTest(unittest.TestCase):
         rows = [[cell.strip() for cell in line.strip("|").split("|")]
                 for line in section.splitlines() if line.startswith("|")]
         self.assertEqual(rows[0], ["id", "제목", "blocked_by(이유)", "wave", "tier(이유)", "예상",
-                                   "구현", "리뷰 계열", "touches", "verify"])
+                                   "구현", "수정", "수리", "첫 리뷰", "재리뷰", "touches", "verify"])
         self.assertEqual({len(row) for row in rows}, {len(rows[0])})
         self.assertRegex(section, r"(?m)^일렬 경로 \S+ 예상 \S+분 · 평균 동시 \S+$")
 
@@ -268,8 +276,11 @@ class IdeaFlowTest(unittest.TestCase):
 
     def test_retro_can_file_issue(self):
         body = self.read("retro")
-        for text in ("issue로 올리기", '`gs feedback "<사람이 확인한 한 줄>"`', "레포 이름·파일 이름을 넣지 않는다"):
+        for text in ("issue로 올리기", 'gs feedback --body-file', "증상·근거·제안", "초안 전체를 보이고 확인받는다", "레포 이름·파일 이름을 넣지 않는다"):
             self.assertIn(text, body)
+
+    def test_feedback_documents_body_file(self):
+        self.assertIn("--body-file <파일>", self.read("feedback"))
 
 
 MATT_COMMIT = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"
