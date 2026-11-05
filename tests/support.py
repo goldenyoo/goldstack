@@ -29,10 +29,15 @@ def fake_clis(test, *names):
     test.addCleanup(patch.stop)
 
 
+ONLY_MERGES = "GS_TEST_ONLY_MERGES"  # 시험 전용(go.ONLY_MERGES_ENV). test_only_no_merge만 이 변수 없이 새 규칙을 본다
+
+
 def isolate_git_env(test):
+    """임시 레포 시험의 공통 환경. GoTest와 자체 fixture(test_adapters 등)의 `--only`가 마무리까지 가던 동작도 여기서 유지한다."""
     patch = mock.patch.dict(os.environ)
     patch.start()
     test.addCleanup(patch.stop)
+    os.environ[ONLY_MERGES] = "1"
     for name in tuple(os.environ):
         if name in ("GIT_CONFIG_COUNT", "GH_TOKEN") or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
             os.environ.pop(name)

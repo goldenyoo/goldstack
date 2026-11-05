@@ -20,6 +20,7 @@ gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 stat
 상한 검사와 세기는 호출을 보내기 전에 루프 스레드에서 한 번에 하므로 리뷰가 함께 돌아도 상한을 넘겨 띄우지 않는다.
 끊겨서 다시 부르는 agy 호출은 상한을 보지 않지만 루프가 센 뒤에 나간다(review.CallWait): 상한 판단은 이미 나간 호출을 모두 본다.
 끝에는 보고서·PR·base 검증·revert를 한다(08). 지난 마무리가 남았으면 그것만 끝내고 멈춘다. 남은 티켓은 다음 gs go가 한다.
+`--only`는 범위와 상관없이 그 앞에서 멈춘다: integration에 병합·검증까지만 하고 PR·병합·최종 보고서는 옵션 없는 gs go가 한다(_only_stops). 지난 마무리의 회복은 `--only`여도 먼저 한다.
 worker를 띄우기 전에 push 설정을 state에 기록한다(_begin). 재개해도 유지하고, gs의 push마다 대조한다(git.push).
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
@@ -58,6 +59,9 @@ HEARTBEAT_SECONDS = 60  # 상태가 그대로여도 이 간격마다 state.json�
 EXIT_NETWORK = 3  # `중단(네트워크)`의 종료 코드. 다음 gs go가 이어 간다
 NETWORK_ABORT = "중단(네트워크)"
 NETWORK_ABORT_LINE = f"■ {NETWORK_ABORT}: 다음 gs go가 이어 간다"
+ONLY_MERGES_ENV = "GS_TEST_ONLY_MERGES"  # 시험 전용. 있으면 --only도 마무리까지 간다(옛 시험이 그 동작을 본다)
+ONLY_NOT_MERGED = "병합하지 않음(--only)"
+ONLY_STOPPED = "only_stopped"  # 끝난 마무리 뒤에 --only가 새 티켓을 integration에 넣었다. 그 티켓은 base에 없으니 끝난 것으로 보지 않는다
 REVIEW_WAIT, FIX_WAIT = "review_wait", "fix_wait"  # 자리를 기다리는 단계(state.PHASE_LABELS)
 # 리뷰 단계: 루프 스레드에서 돌다가 루프 밖에서 부를 호출을 내고 멈춘다. 호출의 결과를 받아 잇고, 끝에 고칠 지적을 돌려준다.
 ReviewFlow = Generator[Callable[[], list], list, list[dict]]
@@ -91,6 +95,7 @@ class Run:
     history_median_s: float | None = None  # 실행 시작에 한 번 읽은 다른 feature의 ETA 표본 중앙값
     net: Outage | None = None  # 지금의 네트워크 끊김. _loop가 새로 만든다: 대기 합계는 gs go마다 새로 센다
     reviews: Reviews | None = None  # 루프 밖 리뷰. _loop가 만든다
+    no_merge: bool = False  # 지난 마무리를 회복하지 않는 --only 실행이다. 마무리 없이 멈추고, 지난 마무리의 기록을 이번 결과로 보이지 않는다
 
     @property
     def name(self) -> str:
@@ -158,6 +163,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 say(f"■ 이미 끝남: {r.name} ({r.st.finish['phase']})")
                 clean.integration(r)  # 지난 자동 정리가 원격 삭제에서만 실패했을 수 있다
             else:
+                r.no_merge = _only_stops(r)  # 준비 전에 정한다. 준비에서 끝나도 지난 마무리를 이번 결과로 보이지 않는다
                 prepared = _prepare_integration(r)
                 _resume_merged(r)
                 # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
@@ -168,7 +174,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 else:
                     with _stop_signals():
                         _loop(r)
-                    url, finished = _finish_run(r)
+                    url, finished = _stop_only(r) if r.no_merge else _finish_run(r)
         except transient.NetworkAbort as e:
             # 마무리를 하지 않는다. 남은 일은 다음 gs go가 티켓마다 남긴 network_resume으로 잇는다.
             aborted, finished = True, False
@@ -229,6 +235,27 @@ def _resume_finish(r: Run) -> tuple[str | None, bool]:
 def _pending(r: Run) -> int:
     """이번 범위에서 아직 시작하지 않은 티켓 수."""
     return sum(r.st.tickets[tid].status == state.PENDING for tid in r.order)
+
+
+def _only_stops(r: Run) -> bool:
+    """이 실행은 integration까지만 한다. 범위가 feature의 모든 티켓을 포함해도 같다: 병합은 옵션 없는 gs go만 한다.
+
+    지난 마무리를 회복하는 실행은 아니다(_resuming). 준비는 phase를 회복 대상으로 바꾸지 않으니 준비 전에 판단해도 그대로다.
+    """
+    return r.only is not None and not os.environ.get(ONLY_MERGES_ENV) and not _resuming(r)
+
+
+def _stop_only(r: Run) -> tuple[None, bool]:
+    """마무리 없이 멈춘다. push·PR·보고서가 없고, 이어서 치는 옵션 없는 gs go가 integration에서 잇는다. 종료 코드는 범위 안 티켓만 본다.
+
+    끝난 마무리(verified·reverted)는 끝난 범위를 뜻한다. 새 티켓을 넣었는데 그대로 두면 `gs clean`이 --force 없이
+    integration을 지우고, 그 뒤 gs go는 base에 없는 티켓을 두고 "이미 끝남"으로 멈춘다. 그때만 phase를 바꾼다.
+    다른 phase(closed 등)와 나머지 기록은 다음 마무리가 읽으니 그대로 둔다.
+    """
+    new = any(r.st.tickets[tid].status == state.MERGED and tid not in r.prior for tid in r.order)
+    if new and r.st.finish.get("phase") in finish.BASE_REPORT_PHASES:
+        r.st.finish.update(phase=ONLY_STOPPED, outcome=ONLY_NOT_MERGED)
+    return None, True
 
 
 def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
@@ -398,6 +425,9 @@ def _prepare_integration(r: Run) -> bool:
         finally:
             r.st.phase = ""
         if not res.ok:
+            if r.no_merge:  # 마무리가 아니다. 보고서를 쓰지 않고 지난 마무리 기록은 다음 마무리가 읽게 둔다
+                say(f"■ integration 준비 실패. setup.log를 확인하라: {directory / 'setup.log'}")
+                return False
             # 이미 진행한 병합·base 검증·revert·보고서의 재개 상태를 준비 실패로 덮지 않는다.
             if r.st.finish.get("phase") not in (*finish.RESUME_PHASES, *finish.BASE_REPORT_PHASES):
                 r.st.finish.update(phase="setup_failed", outcome="준비 실패 → 병합 안 함")
@@ -2024,6 +2054,7 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
 
 LABEL = {"merged": "병합", "already": "이미 병합", "failed": "실패", "skipped": "건너뜀", "pending": "대기",
          "running": "실행 중"}
+ONLY_LABEL = {**LABEL, "merged": "integration 병합", "already": "integration에 이미 병합"}  # --only는 base에 병합하지 않는다
 
 
 def _label(r: Run, tid: str) -> str:
@@ -2031,14 +2062,31 @@ def _label(r: Run, tid: str) -> str:
     return "already" if status == state.MERGED and tid in r.prior else status
 
 
-def _summary(r: Run, url: str | None) -> None:
+def _counts(r: Run, names: dict[str, str]) -> str:
     labels = {tid: _label(r, tid) for tid in r.order}
-    counts = {k: sum(v == k for v in labels.values()) for k in LABEL}
-    say("■ 요약: " + ", ".join(f"{LABEL[k]} {n}" for k, n in counts.items() if n))
+    counts = {k: sum(v == k for v in labels.values()) for k in names}
+    return "■ 요약: " + ", ".join(f"{names[k]} {n}" for k, n in counts.items() if n)
+
+
+def _summary(r: Run, url: str | None) -> None:
+    if r.no_merge:
+        return _only_summary(r)
+    say(_counts(r, LABEL))
     say(f"■ 마무리: {_outcome(r)}")
     left = _left(r)
     say(f"■ 보고서: {work_rel(r.name)}/report.md · 남은 리뷰 지적 {left}")
     say(f"■ PR: {url or '없음'}")
+
+
+def _only_summary(r: Run) -> None:
+    """--only로 티켓을 돈 실행의 요약. finish는 지난 마무리의 기록이라 읽지 않는다: 이번 실행은 병합하지 않았다."""
+    aborted = r.st.network.get("aborted")
+    say(_counts(r, ONLY_LABEL))
+    say(f"■ 마무리: {NETWORK_ABORT if aborted else ONLY_NOT_MERGED}")
+    say(f"■ 보고서: 쓰지 않음 · 남은 리뷰 지적 {_left(r)}")
+    say("■ PR: 만들지 않음")
+    if not aborted:  # 중단은 이미 다음 gs go를 말했다
+        say(f"■ --only 범위만 돌았다: 병합하지 않음 → 이어서 gs go {r.name}")
 
 
 def _outcome(r: Run) -> str:
@@ -2064,13 +2112,30 @@ def _message(r: Run, url: str | None, ok: bool) -> str:
                 f"PR {url or '없음'}")
     f = r.st.finish
     outcome = _outcome(r)
-    failed = [f"{tid} 실패: {(r.st.tickets[tid].reason.splitlines() or [''])[0]}"
-              for tid in r.order if r.st.tickets[tid].status == state.FAILED]
-    if failed:
+    if failed := _failed(r):
         tickets += f" ({', '.join(failed)})"
     if f.get("phase") in finish.BASE_REPORT_PHASES and (left := _pending(r)):
         tickets += f" · 남은 티켓 {left}개 → 다음 gs go"
     return f"❌ {r.name} · {outcome} · {tickets} · 보고서 {work_rel(r.name)}/report.md"
+
+
+def _failed(r: Run) -> list[str]:
+    return [f"{tid} 실패: {(r.st.tickets[tid].reason.splitlines() or [''])[0]}"
+            for tid in r.order if r.st.tickets[tid].status == state.FAILED]
+
+
+def _only_message(r: Run, ok: bool) -> str:
+    """--only로 티켓을 돈 실행의 알림. _only_summary처럼 finish를 읽지 않고 base 병합으로 읽히는 말을 쓰지 않는다."""
+    merged = sum(r.st.tickets[tid].status == state.MERGED for tid in r.order)
+    tickets = f"티켓 {merged}/{len(r.order)}"
+    if ok:
+        took = state.minutes(state.seconds_between(r.st.started_at, r.st.finished_at))
+        return (f"⏸ {r.name} · {ONLY_NOT_MERGED}\n{tickets} integration 병합 · {took}분 · 남은 지적 {_left(r)}\n"
+                f"이어서 gs go {r.name}")
+    if failed := _failed(r):
+        tickets += f" ({', '.join(failed)})"
+    outcome = NETWORK_ABORT if r.st.network.get("aborted") else ONLY_NOT_MERGED
+    return f"❌ {r.name} · {outcome} · {tickets} · 이어서 gs go {r.name}"
 
 
 def _notify(r: Run, url: str | None, ok: bool) -> None:
@@ -2083,7 +2148,8 @@ def _notify(r: Run, url: str | None, ok: bool) -> None:
         if missing:
             error = f"알림을 보내지 않았다: .goldstack/local.env에 {', '.join(missing)} 값이 없다"
         else:
-            sent, error = notify.send(token, env["TG_CHAT_ID"], _message(r, url, ok))
+            text = _only_message(r, ok) if r.no_merge else _message(r, url, ok)
+            sent, error = notify.send(token, env["TG_CHAT_ID"], text)
             if sent:
                 return
             error = f"알림 전송 실패: {error}"
