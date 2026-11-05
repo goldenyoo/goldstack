@@ -48,6 +48,10 @@ elif a[:2] == ['agent', 'start']:
 elif a[:2] == ['agent', 'prompt']:
     if os.environ.get('AGENT_FAIL') == 'prompt':
         refuse('agent_blocked')
+    if os.environ.get('AGENT_FAIL') == 'prompt_crash':
+        # 서버의 거절이 아니다. 연결이 끊긴 클라이언트처럼 오류 코드 없이 죽는다.
+        print('connection lost SECRET_HERDR_DETAIL', file=sys.stderr)
+        sys.exit(1)
 elif a[:2] == ['workspace', 'close']:
     if os.environ.get('CLOSE_FAIL'):
         refuse('close_failed')
@@ -512,6 +516,35 @@ class RemoteGoTest(RemoteGoFixture):
             code, output = self.go()
         self.assertEqual(code, 1, output)
         self.assertIn('herdr --machine runner workspace close remote:w1', output)
+
+    def assert_session_kept(self, code, output):
+        self.assertEqual(code, 1, output)
+        self.assertEqual(self.actions()[-1], ['agent', 'prompt'])
+        self.assertNotIn(['workspace', 'close'], self.actions())
+        self.assertIn('세션을 닫지 않았다', output)
+        self.assertNotIn('■', output)
+        self.assertIn('workspace: remote:w1', output)
+        self.assertIn('pane: remote:p1', output)
+        self.assertIn('gs remote status runner demo', output)
+        self.assertIn('herdr --machine runner pane read remote:p1', output)
+        self.assertIn('herdr --machine runner workspace close remote:w1', output)
+
+    def test_unconfirmed_prompt_keeps_session(self):
+        # 원격은 /go를 받았는데 응답만 유실된 경우다. 실제 시간을 기다리지 않는다.
+        real = subprocess.run
+        for failure in (subprocess.TimeoutExpired('herdr', 30), KeyboardInterrupt()):
+            def run(args, *a, failure=failure, **kw):
+                done = real(args, *a, **kw)
+                if isinstance(args, list) and args[3:5] == ['agent', 'prompt']:
+                    raise failure
+                return done
+            with self.subTest(failure=type(failure).__name__), mock.patch('subprocess.run', run):
+                (self.root / 'calls').unlink(missing_ok=True)
+                self.assert_session_kept(*self.go())
+
+    def test_prompt_failure_without_code_keeps_session(self):
+        with mock.patch.dict(os.environ, AGENT_FAIL='prompt_crash'):
+            self.assert_session_kept(*self.go())
 
     def test_pull_failure_hides_git_output(self):
         self.git(self.target, 'remote', 'set-url', 'origin', str(self.root / 'SECRET_URL_TOKEN'))

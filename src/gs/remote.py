@@ -32,6 +32,7 @@ MIN_FREE = 1024 ** 3  # 최소 1 GiB. worker 산출물을 위한 여유 공간.
 GUIDE = "docs/guide.md의 tmux 절"
 FEATURE_NAME = re.compile(r"\w[\w.-]*")  # `/go`의 인자는 공백으로 나뉘고 경로에도 들어간다.
 EXIT_PREFIX = "GS_REMOTE_EXIT="
+NOT_REFUSED = ("timeout", "remote", "unknown")  # 서버의 거절 코드가 아니다. 요청이 적용됐는지 모른다.
 
 # 원격 python3는 gs의 실행 환경과 독립적으로 준비 상태를 검사한다.
 # CLI 출력에는 인증 정보가 있을 수 있어 정해진 버전·참/거짓만 결과에 싣는다.
@@ -265,11 +266,12 @@ def prepare(machine: str, repo_path: str, feature: str, base: str, git_remote: s
                          label="gs remote prepare", timeout=TIMEOUT + PULL_TIMEOUT)
 
 
-def launch(machine: str, repo_path: str, feature: str) -> tuple[str, str]:
-    """원격 herdr 서버의 새 workspace에 claude를 띄우고 `/go`를 보낸 뒤 기다리지 않고 (workspace, pane)을 돌려준다.
+def launch(machine: str, repo_path: str, feature: str) -> tuple[str, str, bool]:
+    """원격 herdr 서버의 새 workspace에 claude를 띄우고 `/go`를 보낸 뒤 기다리지 않고 (workspace, pane, 전송 확인)을 돌려준다.
 
     pane은 원격 서버 소유이고 이 프로세스는 끝까지 붙어 있지 않는다. 환경 변수나 파일을 넘기지 않으므로
-    비밀은 건너가지 않는다(원격 비밀은 원격 local.env가 맡는다). 시작 도중 실패하면 만든 workspace를 닫는다.
+    비밀은 건너가지 않는다(원격 비밀은 원격 local.env가 맡는다). `/go`를 보내기 전에 실패하거나 서버가 `/go`를
+    거절하면 만든 workspace를 닫는다. `/go`를 받았는지 모르면 돌고 있을 수 있으니 닫지 않고 전송 확인 False를 돌려준다.
     """
     created = herdr.machine_call(machine, ["workspace", "create", "--cwd", repo_path,
                                            "--label", f"gs remote go {feature}", "--no-focus"], CREATE_TIMEOUT)
@@ -279,6 +281,14 @@ def launch(machine: str, repo_path: str, feature: str) -> tuple[str, str]:
     if not isinstance(workspace, str) or not workspace:
         raise herdr.HerdrError("remote", "workspace 응답에 workspace_id가 없다")
     marker = f"GS_REMOTE_READY_{uuid.uuid4().hex}"
+
+    def close(cause: BaseException) -> None:
+        try:
+            herdr.machine_run(machine, ["workspace", "close", workspace], 10)
+        except herdr.HerdrError:
+            if isinstance(cause, herdr.HerdrError):
+                cause.leftover = workspace
+
     try:
         # agent start는 셸 프롬프트에서만 받는다. 새 셸이 명령을 돌릴 수 있을 때까지 기다린다.
         herdr.machine_run(machine, ["pane", "run", pane, f"printf '\\n%s\\n' {marker}"], CREATE_TIMEOUT)
@@ -288,15 +298,19 @@ def launch(machine: str, repo_path: str, feature: str) -> tuple[str, str]:
         # 이름은 살아 있는 agent 사이에서 유일해야 하고 feature 이름의 문자를 다 받지 못한다. 이후는 pane id로 부른다.
         herdr.machine_run(machine, ["agent", "start", f"gs-go-{uuid.uuid4().hex[:8]}", "--kind", "claude",
                                     "--pane", pane, "--timeout", str(AGENT_READY_MS)], AGENT_READY_MS / 1000 + 5)
-        herdr.machine_run(machine, ["agent", "prompt", pane, f"/go {feature}"], CREATE_TIMEOUT)
     except BaseException as e:
-        try:
-            herdr.machine_run(machine, ["workspace", "close", workspace], 10)
-        except herdr.HerdrError:
-            if isinstance(e, herdr.HerdrError):
-                e.leftover = workspace
+        close(e)
         raise
-    return workspace, pane
+    try:
+        herdr.machine_run(machine, ["agent", "prompt", pane, f"/go {feature}"], CREATE_TIMEOUT)
+    except KeyboardInterrupt:
+        return workspace, pane, False
+    except herdr.HerdrError as e:
+        if e.code in NOT_REFUSED:
+            return workspace, pane, False
+        close(e)
+        raise
+    return workspace, pane, True
 
 
 def _not_pushed(repo: Path, cfg: config.Config, feature: str) -> str | None:
@@ -331,7 +345,10 @@ def _feature_problem(feature: str) -> str | None:
 
 
 def go(repo: Path, machine: str, feature: str, out: TextIO, err: TextIO) -> int:
-    """검사 → push 확인 → 원격 준비(실행 중 확인·pull) → 세션 띄우기. 앞이 실패하면 세션을 띄우지 않고 1이다."""
+    """검사 → push 확인 → 원격 준비(실행 중 확인·pull) → 세션 띄우기. 앞이 실패하면 세션을 띄우지 않고 1이다.
+
+    `/go` 전송을 확인하지 못하면 세션을 남기고 확인 방법을 출력한 뒤 1이다.
+    """
     problem = _feature_problem(feature)
     if problem:
         print(f"오류: {problem}", file=err)
@@ -372,7 +389,7 @@ def go(repo: Path, machine: str, feature: str, out: TextIO, err: TextIO) -> int:
         print("오류: 원격 결과에 레포 경로가 없다. 세션을 띄우지 않았다.", file=err)
         return 1
     try:
-        workspace, pane = launch(machine, path, feature)
+        workspace, pane, sent = launch(machine, path, feature)
     except herdr.HerdrError as e:
         print(f"오류: 원격 세션을 띄우지 못했다({_failure_text(e)}).", file=err)
         leftover = getattr(e, "leftover", None)
@@ -383,12 +400,19 @@ def go(repo: Path, machine: str, feature: str, out: TextIO, err: TextIO) -> int:
         else:
             print(f"남은 것이 있는지 본다 → herdr --machine {quoted} workspace list", file=err)
         return 1
-    print(f"■ {machine}에서 /go {feature} 시작", file=out)
-    print(f"workspace: {workspace}", file=out)
-    print(f"pane: {pane}", file=out)
-    print(f"상태: {status_command}", file=out)
-    print(f"화면: herdr --machine {quoted} pane read {shlex.quote(pane)} --lines 40", file=out)
-    return 0
+    stream = out if sent else err
+    if sent:
+        print(f"■ {machine}에서 /go {feature} 시작", file=out)
+    else:
+        print(f"오류: /go {feature}의 전송 응답을 받지 못했다. 전달됐을 수 있어 세션을 닫지 않았다.", file=err)
+    print(f"workspace: {workspace}", file=stream)
+    print(f"pane: {pane}", file=stream)
+    print(f"상태: {status_command}", file=stream)
+    print(f"화면: herdr --machine {quoted} pane read {shlex.quote(pane)} --lines 40", file=stream)
+    if sent:
+        return 0
+    print(f"화면에 /go가 없을 때만 닫고 다시 친다 → herdr --machine {quoted} workspace close {shlex.quote(workspace)}", file=err)
+    return 1
 
 
 def status(repo: Path, machine: str, feature: str, out: TextIO, err: TextIO) -> int:
