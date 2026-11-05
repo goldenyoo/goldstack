@@ -879,7 +879,7 @@ detail = "errors" # errors | minimal
 
 명령: `gs feedback "문장"`(초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태. `status`도 같다), `gs feedback send`(쌓인 것 전송). skill은 `/feedback <문장 | list | send>`.
 
-**한 단어는 보내지 않는다** — `gs feedback status`처럼 공백 없는 한 단어는 하위 명령을 잘못 친 것으로 보고 `gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"`을 내고 종료 코드 2로 끝난다. 초안도 만들지 않는다. 옛 판은 `status`를 글로 보고 `draft` 모드에서도 공개 issue를 올렸다. 일부러 한 단어를 보내려면 따옴표 안에 공백을 넣어 문장으로 쓴다.
+**한 단어는 보내지 않는다** — `list`·`send`·`status`는 정상 하위 명령이라 예외다. `gs feedback statsu`처럼 그 밖의 공백 없는 한 단어는 하위 명령을 잘못 친 것으로 보고 `gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"`을 내고 종료 코드 2로 끝난다. 초안도 만들지 않는다. 옛 판은 `status`를 글로 보고 `draft` 모드에서도 공개 issue를 올렸다. 일부러 한 단어를 보내려면 따옴표 안에 공백을 넣어 문장으로 쓴다.
 
 **`draft` 모드의 재전송** — 보내다 실패하면 초안은 남고 `gs feedback: 전송하지 못한 초안은 남겨 두고 gs feedback send로 보내세요.`가 나온다. `draft`는 사람이 보낼 때를 고르는 모드라 다음 `gs` 실행이 자동으로 다시 보내지 않는다. `auto`는 `다음 실행 때 다시 보냅니다.`로 알린다.
 

@@ -4,7 +4,7 @@
 
 ### goldstack-v11
 
-- `gs feedback status`처럼 공백 없는 한 단어는 보내지 않고 오류로 끝난다(`draft` 모드에서도 공개 issue를 올리던 결함, #19). `status`는 `list`의 별칭이다. `draft` 모드의 전송 실패는 `gs feedback send`로 보내라고 안내한다.
+- `gs feedback statsu`처럼 알 수 없는 공백 없는 한 단어는 보내지 않고 오류로 끝난다(`draft` 모드에서도 공개 issue를 올리던 결함, #19). `status`는 `list`의 별칭이다. `draft` 모드의 전송 실패는 `gs feedback send`로 보내라고 안내한다.
 - 검증 중 worktree가 바뀌면 `verify.log`에 바뀐 파일과 병합 상태 차이를 남기고, 실패 요약은 그 목록을 근거로 쓰며 근거 없는 원인을 추측하지 않는다. 티켓 검증이 integration에서 도는 것이 정상이라고 요약 지시문에 적었다(#20).
 - 끝난 실행(`verified`·`reverted`)에 새 티켓이 병합되는 순간 같은 저장에서 완료 상태를 `reopened`로 무효화한다. 병합 직후 중단돼도 `gs clean`이 integration을 지우거나 재실행이 "이미 끝남"으로 멈추지 않는다.
 - 부하에 약한 시험을 실제 시간과 초 단위 시각에 기대지 않게 고쳤다.
