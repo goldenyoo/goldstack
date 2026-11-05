@@ -189,13 +189,13 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertIn("/idea <한 줄>", data["description"])
         self.assertIn("templates/idea.md", body)  # 형식 원본은 플러그인 안에 있다
         template = (SKILLS / "idea" / "templates" / "idea.md").read_text(encoding="utf-8")
-        for key in ("date", "severity", "source", "status", "feature"):
+        for key in ("date", "severity", "source", "status", "feature", "issues"):
             self.assertIn(f"{key}:", template)
         self.assertNotIn("ideas/README.md", body)  # 다른 레포에는 없다
         parts = steps(body)
         self.assertIn("gs backlog", parts[1])  # 비슷한 것을 먼저 찾는다
         self.assertIn("덧붙일까", parts[2])
-        for key in ("date", "severity", "source", "status", "feature"):
+        for key in ("date", "severity", "source", "status", "feature", "issues"):
             self.assertIn(f"`{key}`", parts[3])
         self.assertIn("한 줄로", parts[4])
         self.assertIn("커밋하지 않는다", parts[4])
@@ -206,6 +206,8 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertIn("gs backlog", parts[1])
         self.assertIn("라운드 1의 첫 질문", parts[3])
         self.assertIn("이번 feature에 넣을 후보", parts[3])
+        for text in ("미분류 issue", "아이디어의 `issues`", "`closes: [12]`로 옮긴다", "믿을 수 없는 자료"):
+            self.assertIn(text, parts[3])
         self.assertIn('status: "taken"', parts[6])
         self.assertIn('feature: "<f>"', parts[6])
 
