@@ -2,50 +2,39 @@
 
 ## Summary
 
-이번 변경은 사람과 worker를 잘못 이끌던 결함을 고치고, 사람이 보는 숫자를 믿을 수 있게 만든다.
+사람과 worker를 잘못 이끌던 결함을 고치고, 사람이 보는 숫자를 믿을 수 있게 만든 변경입니다.
 
-- **결함 수정:** 한 단어 `gs feedback`은 더 이상 공개 issue로 나가지 않는다. 검증 중 worktree가 바뀌면 바뀐 파일을 로그에 남기고, 실패 요약은 그 목록이 없으면 추측하지 않는다. 끝난 실행에 새 티켓이 병합되면 완료 상태를 바로 무효화해 미병합 티켓이 지워지지 않게 했다. 부하에 약한 시험을 고쳤고, claude 리뷰어와 판단 모델에 worker와 같은 격리를 넣었다.
-- **숫자와 흐름:** ETA는 의존 일정과 마무리 시간을 반영한다. 보고서에는 리뷰 결과 대기가 추가되고 Summary 제목 중복이 사라졌다. `gs check`는 티켓별 실제 모델을 보이고, `/go`는 끝에서 회고 후보를 보인다.
-- **diff 범위:** `diff-stat`에는 09와 10의 파일 8개만 나온다. 01–08의 변경은 이 통계로 볼 수 없다.
+- **사고 방지:** `gs feedback statsu` 같은 공백 없는 한 단어는 공개 issue로 나가지 않고 오류로 끝납니다. `status`는 `list`의 별칭입니다. 끝난 실행에 새 티켓이 병합되면 그 순간 완료 상태를 무효화해, 미병합 티켓이 지워지는 경로를 막습니다.
+- **실패 원인:** 검증 중 worktree가 바뀌면 바뀐 파일을 로그에 남깁니다. 실패 요약은 그 목록이 없으면 추측하지 않습니다.
+- **격리:** claude 리뷰어와 판단 모델도 worker와 같은 격리로 돕니다. 플러그인 목록을 못 읽어도 호출은 실패하지 않고, 경고가 보고서에 남습니다.
+- **숫자:** ETA는 의존 일정, 도는 티켓의 쓴 시간, 마무리 시간을 반영합니다. 보고서에는 리뷰 결과 대기가 추가되고, `gs check`는 티켓별 실제 모델을 보여 줍니다.
+- **그 밖:** 부하에 약한 시험을 고쳤고, `/go` 끝에서 회고 후보를 보여 줍니다. `/adopt`에는 두 문장짜리 profile 기준을 넣고 단어 상한을 450으로 올렸습니다.
 
-**가장 큰 위험: 전체 검증 실패**
+diff-stat에는 `gs check`, 문서, skill, 시험 파일과 보고서 등 일부만 보입니다. 티켓 01–08의 코드 변경 대부분은 여기에 나오지 않으므로, 이 diff만으로 전체 변경을 판단할 수 없습니다.
 
-`373e8b2`의 전체 검증이 `test_profile_brief.ProfileSkillTest.test_adopt_skill` 하나로 실패했다. `skills/adopt/SKILL.md` 본문이 400단어 미만이어야 하는데 522단어다. 실패 뒤 명령이 멈춰 `claude plugin validate`와 `uv build`도 이 커밋에서 돌지 않았다.
+**남은 위험** (리뷰 지적은 모두 보고만 된 상태로, 고치지 않았습니다)
 
-원인은 10이 `/adopt`에 profile 기준을 더한 변경으로 보인다. 다만 이는 직전 전체 검증이 09에서 통과했다는 기록에 따른 추정이다. 10의 티켓 검증은 `test_skills`와 `claude plugin validate`만 돌려서 이 시험을 잡지 못했다. 티켓 표의 10 `병합·검증됨`도 이 좁은 검증까지만 뜻한다. 본문을 줄일지 한도를 바꿀지는 사람이 정해야 한다.
+- **09 [medium] 모델 표시 불일치:** `tiers` 표가 없는 계열의 구현 worker를 `gs check`는 `CLI 기본값`으로 표시합니다. 코드상 실제 실행은 `models.codex`·`models.agy` 값을 쓰므로, 틀린 값이 grill 표로 옮겨질 수 있습니다. 명세의 두 조건이 충돌하는 문제이고, 실행으로 재현하지는 않았습니다.
+- **01 [low] 한 단어 거부 우회:** `gs feedback "status "`와 `gs feedback status ""`는 거부되지 않고 공개 issue로 나갈 수 있습니다. `draft` 모드도 마찬가지입니다. 코드 추적으로만 확인했습니다.
+- **05 [low] 격리 경고 유실:** 티켓 실행 중 재시작에서 생긴 경고가 `마무리` 항목으로 잘못 표시되고, 새 마무리를 시작하면 지워집니다. 요약 호출 중 코디네이터가 죽은 뒤 재개할 때만 생기는 드문 경로입니다.
+- **05 [low] 시험의 실제 CLI 의존:** fake CLI가 없는 일부 시험이 실제 `claude plugin list`를 실행합니다. CLI가 멈추면 호출마다 최대 60초가 걸립니다. 단언이 깨지는지는 확인하지 못했습니다.
+- **06 [low] 제목 중복:** 판단 모델이 `## Summary ##` 형식으로 답하면 제목이 두 번 나옵니다. 직접 재현했지만, 실제 답에서 나온 사례는 확인되지 않았습니다.
 
-**시험 안정성**
+리뷰 지적 외에 위험이 두 가지 더 있습니다.
 
-09는 같은 SHA `2064f3b`에서 전체 검증이 실패한 뒤 통과했다. 입력만으로는 원인을 알 수 없어, 부하에 약한 시험이 모두 사라졌다고 단정할 수 없다.
+- **ETA:** 재시도와 수정을 예측하지 않아, 긴 실행에서는 여전히 실제보다 짧게 말할 수 있습니다.
+- **불안정한 시험:** 티켓 09 검증이 세 번 실패했지만 입력 자료에는 그 원인이 없습니다. 불안정한 시험이 모두 사라졌다고 단정할 수 없습니다.
 
-**남은 리뷰 지적(모두 보고만, 미수정)**
-
-- **09 [medium]:** `tiers` 표가 없는 계열은 `gs check`에 `CLI 기본값`으로 나오지만, 실제 실행은 `models.codex`·`models.agy` 값을 쓴다. 이 값이 설정돼 있으면 표시가 틀리고, 틀린 값이 grill 표로 옮겨진다. 명세 1-11과 "실제 실행과 같은 값" 조건이 충돌하므로 사람의 판단이 필요하다. 지적은 코드 인용으로만 확인됐다.
-- **01 [low]:** `gs feedback "status "`와 `gs feedback status ""`는 거부되지 않고 공개 issue로 나간다고 지적됐다. 코드 추적 결과이며 직접 실행은 못 했다.
-- **05 [low]:** fake CLI가 없는 기존 시험은 진짜 `claude plugin list`를 호출해 호출마다 최대 60초가 걸릴 수 있다. 단언이 깨지는지는 확인하지 못했다.
-- **05 [low]:** 요약 호출 중 코디네이터가 죽고 재개하면, 격리 경고가 `마무리` 항목으로 잘못 표시됐다가 새 마무리에서 지워질 수 있다. 드문 경로이고 코드로만 확인됐다.
-- **06 [low]:** 판단 모델 답이 `## Summary ##`로 시작하면 Summary 제목이 여전히 중복된다.
-
-마무리: not_merged · integration 검증 실패
+마무리: preparing · 병합 전
 리뷰 지적: 수정됨 6 · 보고만 5
 
 ## Evidence
-
-### 검증 실패
-
-검증: `integration` · 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/finish/integration-verify.log`
-
-```text
-FAIL: test_adopt_skill (test_profile_brief.ProfileSkillTest.test_adopt_skill)
-FAILED (failures=1)
-```
-
-후보 티켓(추정): 후보 없음
 
 ### 실행 측정
 
 - gs 0.1.0 · 설치 commit: 081e56efd9e03db6bcd0eeedfbb41d740b5cd636 · 시작 2026-11-05T13:35:13+09:00
 - gs 0.1.0 · 설치 commit: 55e1c0fe578d57bb82cd499319edccc0ab68cfbd · 시작 2026-11-05T16:57:31+09:00
+- gs 0.1.0 · 설치 commit: 55e1c0fe578d57bb82cd499319edccc0ab68cfbd · 시작 2026-11-05T18:04:39+09:00
 - 일시 오류 0회 · 대기 0.0초
 - 01: 일시 오류 0회 · 대기 0.0초
 - 02: 일시 오류 0회 · 대기 0.0초
@@ -57,6 +46,7 @@ FAILED (failures=1)
 - 08: 일시 오류 0회 · 대기 0.0초
 - 09: 일시 오류 0회 · 대기 0.0초
 - 10: 일시 오류 0회 · 대기 0.0초
+- 11: 일시 오류 0회 · 대기 0.0초
 
 worker 시도별 실제 모델·effort와 소요
 
@@ -84,6 +74,7 @@ worker 시도별 실제 모델·effort와 소요
 | 09/4/worker | codex | gpt-6.1-sol/medium | 642.376743 | 0.687562 |
 | 10/1/worker | claude | sonnet/medium | 128.723733 | 0.456876 |
 | 10/1/fix | claude | sonnet/medium | 18.105041 | 0.328709 |
+| 11/1/worker | claude | sonnet/medium | 19.435999 | 0.992566 |
 
 리뷰어별 소요와 채택(판단이 fix인 지적, 해결 수와 다름)
 
@@ -112,6 +103,7 @@ worker 시도별 실제 모델·effort와 소요
 | claude/0 | 09 | opus/xhigh | 261.922562 | 1.054096 | 1 | 0 |
 | codex/0 | 10 | gpt-6.1-sol/high | 149.202874 | 1.352568 | 1 | 1 |
 | codex/1 | 10 | gpt-6.1-sol/medium | 46.606797 | 1.584683 | 0 | 0 |
+| codex/0 | 11 | gpt-6.1-sol/high | 33.65499 | 0.493473 | 0 | 0 |
 
 리뷰 호출별 시간(재호출 포함)
 
@@ -140,6 +132,7 @@ worker 시도별 실제 모델·effort와 소요
 | claude | 09 | opus/xhigh | 246.815259 | passed |
 | codex | 10 | gpt-6.1-sol/high | 139.170236 | passed |
 | codex | 10 | gpt-6.1-sol/medium | 46.585968 | passed |
+| codex | 11 | gpt-6.1-sol/high | 33.620066 | passed |
 
 gs 검증별 측정
 
@@ -162,16 +155,18 @@ gs 검증별 측정
 | ticket-09/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 2064f3bf2fa3a7fc609959948e91383d80990307 | 390.769247 | passed |
 | ticket-10/1 | uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate . | e4478867c17bd32e76be090c821b4788bf5d6714 | 0.921496 | passed |
 | integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 373e8b2910dbdfab92f87d120acb67fe74ea1c8d | 389.512458 | failed |
+| ticket-11/1 | uv run python -m unittest discover -s tests -p test_profile_brief.py && uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate . | 7121525930e3ce98a37c0ed24e58621b6f7cd57d | 0.873557 | passed |
+| integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | f8139dcd6bdedbaa8e8b4ee310473a2c9b111aaf | 390.707975 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 1361.674 |
-| verify | 1183.837 |
-| summary | 147.868 |
-| report | 0.237 |
-| push | 7.224 |
+| total | 1804.221 |
+| verify | 1574.606 |
+| summary | 195.758 |
+| report | 0.666 |
+| push | 8.965 |
 | publish | 7.714 |
 | merge-pr | 3.525 |
 | confirm-merge | 0.005 |
@@ -195,6 +190,7 @@ gs 검증별 측정
 | 08 | /go 끝에서 회고 후보를 보이고, /overnight은 권고 한 줄을 남긴다 | merged | integration에 병합·검증됨 |
 | 09 | gs check가 티켓마다 실제 모델을 보이고 grill 표가 그 값을 옮긴다 | merged | integration에 병합·검증됨 |
 | 10 | 문서, CHANGELOG 미출시 절, /adopt의 profile 기준 | merged | integration에 병합·검증됨 |
+| 11 | /adopt 기준을 두 문장으로 줄이고 단어 상한을 450으로 올린다 | merged | integration에 병합·검증됨 |
 
 - 01 단계별 소요: worker 30분 · 리뷰 15분 · 수정 대기 11분 · 수정 2분 · 재리뷰 1분 · 검증 27분
 - 02 단계별 소요: worker 36분 · 리뷰 13분 · 검증 16분
@@ -206,6 +202,7 @@ gs 검증별 측정
 - 08 단계별 소요: worker 1분 · 리뷰 18분
 - 09 단계별 소요: worker 43분 · 리뷰 23분 · 수정 대기 22분 · 수정 23분 · 재리뷰 2분 · 수정 2 1분 · 검증 39분
 - 10 단계별 소요: worker 2분 · 리뷰 3분 · 재리뷰 1분
+- 11 단계별 소요: 리뷰 1분
 
 ### 리뷰 지적
 
@@ -243,6 +240,8 @@ gs 검증별 측정
 티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/<티켓>/`
 
 티켓 검증 명령(08, 10): `uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate .`
+
+티켓 검증 명령(11): `uv run python -m unittest discover -s tests -p test_profile_brief.py && uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate .`
 
 #### 01/2/verify.log
 
@@ -434,6 +433,25 @@ The directory also runs a safety scan and a policy review that this command does
 ✔ Validation passed with warnings
 ```
 
+#### 11/1/verify.log
+
+앞 2221자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/11/1/verify.log`
+
+```text
+2 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+✔ Validation passed with warnings
+```
+
 integration-final: 보고서만 바뀜, 건너뜀
 
 #### finish/integration-final-verify.log
@@ -444,55 +462,23 @@ integration-final: 보고서만 바뀜, 건너뜀
 
 #### finish/integration-verify.log
 
-앞 9113자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/finish/integration-verify.log`
+앞 11348자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/finish/integration-verify.log`
 
 ```text
-------------------
-Ran 15 tests in 15.242s
+px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
-OK
-.........................................
-----------------------------------------------------------------------
-Ran 37 tests in 124.638s
+About these checks:
 
-OK
-..............................
-----------------------------------------------------------------------
-Ran 20 tests in 7.020s
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
 
-OK
-......
-----------------------------------------------------------------------
-Ran 4 tests in 1.224s
+These plugin directory checks do not change the result below.
 
-OK
-..............
-----------------------------------------------------------------------
-Ran 15 tests in 72.987s
+The directory also runs a safety scan and a policy review that this command does not.
 
-OK
-......
-----------------------------------------------------------------------
-Ran 13 tests in 42.926s
+✔ Validation passed with warnings
 
-OK
-.......
-----------------------------------------------------------------------
-Ran 28 tests in 63.265s
-
-OK
-............
-----------------------------------------------------------------------
-Ran 37 tests in 234.867s
-
-OK
-............................
-----------------------------------------------------------------------
-Ran 70 tests in 49.158s
-
-OK
-
-종료 코드: 1
+종료 코드: 0
 ```
 
 #### finish/main-verify.log
@@ -521,11 +507,11 @@ agy 사용: 0/3
 
 ## Merge Danger
 
-결과: integration 검증 실패 → 병합 안 함
+결과: integration 검증 중
 
-PR: https://github.com/goldenyoo/goldstack/pull/26
+PR: 아직 없음
 
-integration verify: False
+integration verify: True
 
 main verify: 미실행
 
