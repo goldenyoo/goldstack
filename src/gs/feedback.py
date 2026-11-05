@@ -725,13 +725,16 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path
     return sent
 
 
-def command(repo: Path, args: list[str], out, err) -> int:
-    """gs feedback [list|status|send|사람의 문장]. 전송 실패는 다른 gs 실행을 막지 않는다."""
+def command(repo: Path, args: list[str], out, err, *, body_file: Path | None = None) -> int:
+    """gs feedback [list|status|send|사람의 문장|--body-file 파일]. 파일도 같은 수동 전송 경로를 쓴다."""
     cfg, problems = config.load(repo)
     for problem in problems:
         print(problem, file=err)
     if cfg is None:
         return 1
+    if body_file is not None and args:
+        print("gs feedback: --body-file은 글·하위 명령과 함께 쓸 수 없습니다.", file=err)
+        return 2
     if args in (["list"], ["status"]):
         for path in sorted((repo / FEEDBACK_DIR).glob("*.md")):
             try:
@@ -748,16 +751,26 @@ def command(repo: Path, args: list[str], out, err) -> int:
     if os.environ.get("GS_ROLE") == "worker":
         print("gs feedback: worker는 수동 피드백을 저장·전송할 수 없습니다.", file=err)
         return 1
-    if not args:
-        print('사용: gs feedback "한 줄" | list | send', file=err)
+    if not args and body_file is None:
+        print('사용: gs feedback "한 줄" | --body-file <파일> | list | status | send', file=err)
         return 2
-    if len(args) == 1 and args != ["send"] and not any(char.isspace() for char in args[0]):
-        print('gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"', file=err)
+    message = " ".join(args)
+    if body_file is not None:
+        try:
+            message = body_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            print(f"gs feedback: 본문 파일을 읽지 못했습니다: {exc}", file=err)
+            return 1
+    if (body_file is not None or args != ["send"]) and len(message.split()) < 2:
+        if body_file is not None:
+            print("gs feedback: 본문 파일이 비었거나 한 단어입니다. 파일에 증상·근거·제안을 채워 --body-file로 다시 보내세요.", file=err)
+        else:
+            print('gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"', file=err)
         return 2
     only_path = None
-    if args != ["send"]:
+    if body_file is not None or args != ["send"]:
         try:
-            only_path = record_manual(repo, cfg, " ".join(args))
+            only_path = record_manual(repo, cfg, message)
         except (OSError, ValueError) as exc:
             print(f"gs feedback: 초안을 저장하지 못했습니다: {exc}", file=err)
             return 1

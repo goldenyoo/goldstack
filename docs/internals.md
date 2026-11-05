@@ -444,6 +444,8 @@ same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이
 
 ## 피드백 수집 (`feedback.py`, `cli.py`)
 
+수동 피드백은 문장 또는 `gs feedback --body-file <파일>`(UTF-8)로 받는다. 파일과 글·하위 명령은 함께 쓸 수 없다. 공백으로 나눈 글이 두 단어 미만이면 거부한다. 파일 본문도 `record_manual`을 거쳐 환경 정보 가리기·전송 조건·지문 중복 처리를 그대로 따른다. 사람이 확인한 자유 글 자체는 그대로 싣는다.
+
 gs 결함만 규칙으로 골라 초안(`record`)으로 넘긴다. 판단 모델은 없다. 대상 프로젝트의 실패(티켓 구현 실패, 패턴에 안 걸린 "커밋 없음", 시험 실패, 리뷰 지적, `transient.py`가 가리는 일시 오류)는 올리지 않는다. `mode = "off"`이거나 `GS_ROLE=worker`면 아무것도 하지 않는다.
 
 - **내부 예외**: `cli.main`이 처리되지 않은 `Exception`을 `collect_exception`으로 넘긴 뒤 그대로 다시 던진다. 단계는 명령 이름이다. `gs go`의 예외는 `cmd_go`가 요약 전에 먼저 수집한다. 끊긴 파이프, 네트워크 중단, 메시지가 일시·환경 오류인 외부 오류(`OSError`, `GitError` 등)는 만들지 않는다.
