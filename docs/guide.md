@@ -219,7 +219,7 @@ PR #8을 승인하고 한 번 더 치면 끝난다(종료 0):
 승인 뒤 `gs go`는 revert를 병합하고 마무리를 `main 검증 실패 → revert <sha>를 PR https://github.com/you/tally/pull/8로 main에 병합함`으로 적은 뒤 보고서 PR로 간다. 그러니 feature 하나에 사람 승인은 보통 2번(feature, 보고서), revert가 있으면 3번이다.
 
 **revert PR이 승인을 기다리는 동안 main이 바뀌면** — 사람이 그 사이 main을 고쳤을 수 있다. 다음 `gs go`는 revert PR이 이미 병합됐는지 먼저 보고, 병합됐으면 재검증 없이 `reverted`로 끝낸다. 아직이고 main이 검증 실패 때 그대로면 PR을 다시 읽고 기다린다. main이 움직였으면 옛 revert를 병합하지 않고 최신 main을 다시 검증한다(`main-recheck`):
-- **통과** — 되돌릴 필요가 없다. gs가 그 revert PR을 닫고 `gs/csv-export/revert` 원격 브랜치를 지운 뒤 `verified`로 끝낸다. `■ 최신 main 재검증 통과: revert PR #8을 닫았다`가 나오고 마무리와 보고서에 닫은 PR 번호가 남는다. PR을 닫거나 브랜치를 지우지 못하면 열린 PR이 남았다고 마무리에 적고 그 PR은 병합하지 않으며, 다음 `gs go`가 닫기를 다시 시도한다.
+- **통과** — 되돌릴 필요가 없다. gs가 그 revert PR을 닫고 `gs/csv-export/revert` 원격 브랜치를 지운 뒤 `verified`로 끝낸다. `■ 최신 main 재검증 통과: revert PR #8을 닫았다`가 나오고 마무리와 보고서에 닫은 PR 번호가 남는다. PR을 닫지 못하면 열린 PR이 남았다고 마무리에 적고 그 PR은 병합하지 않으며, 다음 `gs go`가 닫기를 다시 시도한다. PR은 닫았는데 원격 브랜치를 지우지 못하면 PR은 이미 닫힌 상태이고, 다음 `gs go`는 브랜치 삭제만 다시 시도한다.
 - **실패** — 최신 main 위에 revert를 다시 만들어 같은 `gs/csv-export/revert` 브랜치를 갱신한다. 옛 revert 커밋은 쓰지 않는다. 다시 만든 PR이 승인을 기다리면 지금처럼 `revert_pending`으로 멈춘다.
 
 사람이 revert PR을 병합하지 않고 닫았고 main이 그대로면 gs는 PR을 다시 연다(이 동작은 그대로다).
