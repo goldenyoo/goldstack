@@ -458,6 +458,12 @@ class RetroLogTest(unittest.TestCase):
         self.assertIn("그 파일의 줄 번호", body)
         self.assertNotIn("경로 목록", body)
 
+    def test_retro_skill_asks_agy_for_short_answer_without_links(self):
+        body = (Path(__file__).resolve().parents[1] / "skills/retro/SKILL.md").read_text(encoding="utf-8")
+        prompt = body.partition("프롬프트에는 ")[2].partition("\n")[0]
+        for text in ("`L123`처럼", "링크(`file://` 등)는 쓰지 않는다", "1만 자 안"):
+            self.assertIn(text, prompt)
+
     def test_water_level(self):
         self.assertEqual(retrolog._water_level([10, 20], 100), 20)
         self.assertEqual(retrolog._water_level([10, 100, 100], 110), 50)
