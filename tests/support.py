@@ -101,6 +101,28 @@ case "$GS_TICKET" in
 esac
 """
 
+
+def times_out_once_ready(ready: Path):
+    """`bash -c` 명령(verify)의 시간 제한을 실제 시간 대신 "명령이 준비됐다"로 정한다.
+
+    짧은 제한(1초)이면 부하에서 bash가 pid 파일을 쓰기도 전에 시간이 끝나 시험이 흔들린다. 명령이 할 일을 마치고 `ready` 파일을 만든다.
+    그 파일이 생기고도 명령이 안 끝났으면 시간 초과다. 시간 초과 뒤 정리(SIGTERM→SIGKILL, 자손 종료)는 실제 코드가 한다.
+    """
+    class ReadyPopen(subprocess.Popen):
+        def wait(self, timeout=None):
+            if timeout is None or self.args[:2] != ["bash", "-c"]:
+                return super().wait(timeout)
+            give_up = time.monotonic() + 120  # 명령이 끝내 준비되지 못해도 시험이 영영 서지 않게. 그때는 단정이 실패한다
+            while True:
+                try:
+                    return super().wait(0.05)
+                except subprocess.TimeoutExpired:
+                    if ready.exists() or time.monotonic() > give_up:
+                        raise
+
+    return mock.patch.object(subprocess, "Popen", ReadyPopen)
+
+
 # 멈춘 worker를 알아채는 유휴 제한(초). 멀쩡한 가짜 worker가 부하로 이만큼 조용해지면 시험이 틀리게 시간 초과로 본다. 짧게 두지 않는다
 IDLE_SECONDS = 5.0
 
@@ -474,7 +496,7 @@ class GoTest(unittest.TestCase):
     # --- verify 시간 제한(v1 01): GS_VERIFY_TIMEOUT=1초 ---
     def hang_verify(self, stage):
         """stage(ticket: 병합 전, integration: 마무리 integration, main: main 검증)에서만 멈추는 verify.
-        멈출 때 자식을 백그라운드로 띄우고 그 pid를 bin/bg_<n>에 적는다. 나머지는 `test ! -f BROKEN`."""
+        멈출 때 자식을 백그라운드로 띄우고 그 pid를 bin/bg_<n>에 적은 뒤 bin/hung을 만든다. 나머지는 `test ! -f BROKEN`."""
         (self.bin / "verify.sh").write_text(textwrap.dedent(f"""\
             here="{self.bin}"
             if git rev-parse -q --verify MERGE_HEAD >/dev/null; then now=ticket
@@ -489,7 +511,7 @@ class GoTest(unittest.TestCase):
             if [ $hang = yes ]; then
               n=$(ls "$here" | grep -c '^bg_')
               sleep 300 & echo $! > "$here/bg_$n"
-              echo "hanging in $now"; sleep 300
+              echo "hanging in $now"; touch "$here/hung"; sleep 300
             fi
             test ! -f BROKEN
             """))

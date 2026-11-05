@@ -11,7 +11,8 @@ from unittest import mock
 import support
 from gs import config, finish, setup, state, verify
 from support import sh
-from test_verify import times_out_once_ready, wait_dead
+from support import times_out_once_ready
+from test_verify import wait_dead
 
 
 class SetupCommandTest(unittest.TestCase):
