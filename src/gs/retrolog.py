@@ -97,6 +97,8 @@ def _ticket(repo: Path, rundir: Path, st: state.State, tid: str) -> list[str | S
         ticket_failed = ts.status == state.FAILED
         lines.append(f"상태 {ts.status} · 시도 {ts.attempts} · 실패 {ts.failures}"
                      + (f" · 이유: {_one_line(ts.reason)}" if ts.reason else ""))
+        if repaired := state.repair_summary(ts):
+            lines.append(_one_line(repaired))
         if ts.phases:
             lines.append("\n### 단계 시각 (state.json)")
             for p in ts.phases:
@@ -142,8 +144,8 @@ def _failed(directory: Path) -> bool:
 
 
 def _attempt_failed(adir: Path) -> bool:
-    """수정 worker(fix·fix2) 아래의 실패도 이 시도의 실패다. 수정 뒤 검증 실패는 fix/failure.log에 남는다."""
-    return _failed(adir) or any(d.name.startswith("fix") and _failed(d) for d in adir.iterdir() if d.is_dir())
+    """수정·수리 worker(fix·fix2·repair) 아래의 실패도 이 시도의 실패다. 수정·수리 뒤 검증 실패는 fix/failure.log, repair/failure.log에 남는다."""
+    return _failed(adir) or any(d.name.startswith(("fix", "repair")) and _failed(d) for d in adir.iterdir() if d.is_dir())
 
 
 def _mark(directory: Path, failed: bool, last: bool = True) -> str:
@@ -172,11 +174,17 @@ def _attempt(repo: Path, tid: str, adir: Path, failed: bool, last: bool, rounds:
             sub_failed = _failed(sub) or bool(why)
             parts.append(f"\n#### 수정 worker {sub.name} ({_mark(sub, sub_failed)})")
             parts.extend(_run(repo, f"{name} {sub.name}", sub, "수정 worker", sub_failed, tier, why))
+        elif sub.name.startswith("repair"):
+            sub_failed = _failed(sub)
+            parts.append(f"\n#### 수리 worker {sub.name} ({_mark(sub, sub_failed)})")
+            parts.extend(_run(repo, f"{name} {sub.name}", sub, "수리 worker", sub_failed, tier))
     return parts
 
 
 def _sub_key(d: Path) -> tuple[int, int, str]:
-    """리뷰 → 수정 → 재리뷰 순. fix는 1회차, fix2는 2회차."""
+    """리뷰 → 수정 → 재리뷰 순. fix는 1회차, fix2는 2회차. 수리와 그 재리뷰(rereview-repair-…)는 수정 뒤다."""
+    if d.name.startswith(("repair", "rereview-repair")):
+        return (3, 1 if d.name.startswith("repair") else 2, d.name)
     m = re.match(r"(review|rereview|fix)(\d*)", d.name)
     if not m:
         return (9, 9, d.name)
