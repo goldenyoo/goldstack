@@ -17,6 +17,7 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 수리 worker의 agy 상한은 수정 worker와 같다: 닿으면 띄우지 않고 티켓을 실패시키지 않고 다음 단계(다시 검증)로 간다.
 끝난 worker 처리는 단계로 나뉜다: 결과 확인(_finish, _check_worker) → 리뷰(_review_stage)와 수정 worker 판단(_next_fix) → catch-up·병합·검증(_merge_stage).
 리뷰 단계는 제너레이터다: 루프 스레드에서 돌다가 호출에서 멈추고, 호출이 끝나면 _review_tick이 결과를 넣어 잇는다.
+끊김 중에는 끝난 호출의 결과도 받지 않고(_review_step) 끊김이 끝난 뒤 받는다: 두 번째 리뷰 준비가 최신 head를 보게. 결과를 받지 않은 호출이 있는 동안 새 티켓은 미룬다(Reviews.fix_waiting).
 리뷰·재리뷰는 병합될 커밋의 트리를 읽고(_review_tree) 그 head를 기록에 남긴다(reviewed_head). 리뷰 뒤에 티켓 head가 그것과 다르면 한 번 더
 리뷰한다(_review_to_head). 리뷰가 끝난 뒤 끊김이나 수정 worker 자리를 기다렸으면 그 끝에 다시 대조한다(_moved_while_waiting). 다시 보는 것은 합쳐 한 번이다.
 2차 재리뷰가 그러고도 브랜치 끝을 못 보면 resolved 판정을 unchecked로 내린다.
@@ -766,8 +767,12 @@ class Reviews:
         return sum(rv.flow is not None for rv in self.tickets.values())
 
     def fix_waiting(self) -> bool:
-        """수정·수리 worker 자리를 기다리는 티켓이 있나. 있으면 새 티켓을 시작하지 않는다: 빈 자리는 수정·수리 worker가 먼저 얻는다."""
-        return any(rv.finished and (rv.todo or rv.repair) for rv in self.tickets.values())
+        """수정·수리 worker 자리를 기다리는 티켓이 있나. 있으면 새 티켓을 시작하지 않는다: 빈 자리는 수정·수리 worker가 먼저 얻는다.
+
+        호출이 끝났지만 루프가 아직 결과를 받지 않은 티켓도 센다. 병합이 _review_tick을 일찍 돌려보낸 때 그 결과에 고칠 지적이 있는지 모르니, 다음 _review_tick이 거둘 때까지 새 티켓을 미룬다.
+        """
+        return any(rv.finished and (rv.todo or rv.repair) or rv.future is not None and rv.future.done()
+                   for rv in self.tickets.values())
 
 
 class ReviewThreadError(Exception):
@@ -897,10 +902,15 @@ def _review_step(r: Run, rv: Reviewing, active: dict[str, Active], runner) -> bo
     """이 티켓의 리뷰 단계를 갈 수 있는 데까지 간다. 리뷰 단계를 떠났으면 True.
 
     끝난 호출의 결과를 받아 잇고, 자리가 있으면 리뷰를 시작하고, 낸 호출을 스레드 풀에 보낸다. 끊김 중에는 새 호출을 보내지 않는다.
+    끊김 중에는 끝난 호출의 결과도 받지 않는다: 잇다 보면 두 번째 리뷰 준비(_resume_flow)가 끊김 중에 돌아 단계가 network가 아닌 review로 보이고 그 사이 움직인 head를 놓친다. 끊김이 끝난 뒤 받아 그때의 head를 본다.
+    호출이 예외로 끝났으면 미루지 않는다(NetworkAbort가 끊김의 끝까지 늦지 않게).
     """
     reviews, a = r.reviews, rv.a
     if rv.future is not None:
         if not rv.future.done():
+            return False
+        if r.net.active and not _ended_in_error(rv.future):
+            _wait_phase(r, a.t.id, "network")
             return False
         done, rv.future = rv.future, None
         _resume_flow(r, rv, done)
@@ -914,6 +924,14 @@ def _review_step(r: Run, rv: Reviewing, active: dict[str, Active], runner) -> bo
         rv.ended, rv.rows = {}, metrics.reviewer_rows(r)
         rv.future, rv.call = reviews.executor.submit(_off_loop, rv.call, rv.ended), None
     return rv.finished and _leave_review(r, rv, active, runner)
+
+
+def _ended_in_error(future: Future) -> bool:
+    """끝난 호출이 예외로 끝났나: 던졌거나, 함께 돌린 호출(run_together)의 결과 목록에 중단 예외(NetworkAbort)가 있다."""
+    if future.exception() is not None:
+        return True
+    res = future.result()
+    return isinstance(res, list) and any(isinstance(x, transient.NetworkAbort) for x in res)
 
 
 def _resume_flow(r: Run, rv: Reviewing, done: Future | None = None) -> None:
