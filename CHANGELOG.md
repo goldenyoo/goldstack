@@ -2,6 +2,12 @@
 
 ## 미출시
 
+### goldstack-v13
+
+- `gs remote check <머신>`이 herdr 원격 머신의 준비(연결, `gs`·플러그인 버전, gh·claude·codex 인증, 디스크, 레포, `local.env` 유무, grill 커밋 수신)를 항목별로 검사한다. 레포 경로는 `.goldstack/local.env`의 `GS_REMOTE_REPO_<머신>`이다.
+- `gs remote go <머신> <feature>`가 같은 검사 뒤 원격 pane에 claude를 띄워 `/go`를 보내고 돌아온다. 이미 돌고 있거나 전송 결과를 모르면 세션을 새로 만들거나 닫지 않는다. `gs remote status <머신> <feature>`는 원격 `gs status`를 보인다.
+- `docs/guide.md`에 원격 준비 순서와 맥미니 실제 확인 절차를 적었다.
+
 ### goldstack-v12
 
 - 티켓 검증이 실패하면 새 시도 전에 수리 worker가 같은 브랜치·worktree에서 실패 로그를 보고 한 번 고친다. 커밋이 있으면 `tiers.rereview` 등급으로 재리뷰하고 없으면 바로 다시 검증한다. 또 실패하면 지금처럼 새 시도다. 보고서 티켓 결과에 `수리: …` 줄이 붙는다.
