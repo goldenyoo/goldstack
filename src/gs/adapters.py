@@ -98,16 +98,21 @@ class Claude(Adapter):
 
     def isolation(self, inp: WorkerInput) -> str:
         """격리 옵션. 플러그인 목록을 못 읽으면 플러그인 끄기만 빼고(나머지는 넣는다) outcome 메모로 알린다."""
+        return shlex.join(self.isolation_argv(inp.worktree))
+
+    def isolation_argv(self, worktree: Path) -> list[str]:
+        """worker·리뷰·판단 호출이 공유하는 격리 인자. 경고는 호출자가 보존하거나 표시한다."""
+        self.isolation_warning = ""
         try:
-            off = plugins_to_disable(claude_plugins(inp.worktree))
+            off = plugins_to_disable(claude_plugins(worktree))
         except AdapterError as e:
             self.isolation_warning = f"플러그인 격리 못 함: {e}"
             off = []
-        settings = ""
+        settings = []
         if off:
             value = json.dumps({"enabledPlugins": {p: False for p in off}}, separators=(",", ":"))
-            settings = f"--settings {q(value)} "
-        return settings + self.ISOLATION
+            settings = ["--settings", value]
+        return settings + shlex.split(self.ISOLATION)
 
     def command(self, inp: WorkerInput) -> str:
         return f"{self.BASE} {self.model_options()}{self.isolation(inp)} < {q(str(inp.brief))}"

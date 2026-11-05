@@ -50,6 +50,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -490,7 +491,8 @@ def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path,
                     else ["--effort", selection.effort])
     if reviewer == "claude":
         return ["claude", "-p", *options, "--output-format", "json",
-                "--permission-mode", "bypassPermissions", "--tools", "Read,Grep,Glob"], prompt, False
+                "--permission-mode", "bypassPermissions", "--tools", "Read,Grep,Glob",
+                *_claude_isolation(models, worktree)], prompt, False
     if reviewer == "codex":
         return ["codex", "exec", "--json", *options, "-s", "read-only", "--skip-git-repo-check", "-C", str(worktree),
                 "--output-last-message", str(out), "-"], prompt, True
@@ -616,10 +618,20 @@ def write_diff(repo: Path, base: str, branch: str, out: Path) -> tuple[str, bool
     return mb, not diff.strip()
 
 
-def judge_argv(cfg: config.Config, *, model: str | None = None) -> list[str]:
-    """판단 호출은 기본 models.judge, 실패 요약만 별도 모델이다. 파일 경로만 넘기므로 읽기 도구만 준다."""
+def _claude_isolation(models: config.ModelsConfig, worktree: Path) -> list[str]:
+    """worker의 격리 인자를 재사용한다. 목록 실패는 호출을 막지 않고 gs의 표준 오류에 남긴다."""
+    adapter = adapters.Claude(models)
+    argv = adapter.isolation_argv(worktree)
+    if adapter.isolation_warning:
+        print(f"claude 리뷰·판단: {adapter.isolation_warning}", file=sys.stderr)
+    return argv
+
+
+def judge_argv(cfg: config.Config, *, model: str | None = None, cwd: Path | None = None) -> list[str]:
+    """판단·요약은 읽기 도구와 worker 격리를 쓴다. 플러그인은 호출할 디렉터리에서 찾는다."""
     return [os.environ.get("GS_JUDGE", "claude"), "-p", "--model", cfg.models.judge if model is None else model, "--output-format", "json",
-            "--permission-mode", "bypassPermissions", "--tools", "Read"]
+            "--permission-mode", "bypassPermissions", "--tools", "Read",
+            *_claude_isolation(cfg.models, cwd if cwd is not None else Path.cwd())]
 
 
 def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket: Path, spec: Path, cfg: config.Config,
@@ -630,7 +642,7 @@ def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket:
                     encoding="utf-8")
     prompt = judge_prompt(path.resolve(), diff, ticket, spec, diff_label)
     (rdir / "judge-prompt.md").write_text(prompt, encoding="utf-8")
-    argv = judge_argv(cfg)
+    argv = judge_argv(cfg, cwd=cwd)
     try:
         text = call_waiting(lambda: _call(argv, prompt=prompt, cwd=cwd, env=_env(cwd), log=rdir / "judge.log",
                                           timeout=cfg.timeouts.judge_minutes * 60, family="claude",

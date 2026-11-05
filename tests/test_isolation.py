@@ -1,4 +1,4 @@
-"""claude worker 플러그인 격리(08): 명령 문자열에 격리 옵션이 들어가는가.
+"""claude worker·리뷰·판단 플러그인 격리: 명령 인자에 격리 옵션이 들어가는가.
 
 실제 claude는 부르지 않는다. `claude plugin list --json`은 가짜 실행 파일(GS_CLAUDE)로 바꿔 끼운다.
 격리 옵션이 실제로 goldstack hook을 남기고 다른 플러그인 skill을 빼는지는
@@ -11,10 +11,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import support
-from gs import adapters, config, state
+from gs import adapters, config, review, state
 from gs.adapters import AdapterError, WorkerInput
 
 MODELS = config.ModelsConfig("judge-test", "review-test", "agy-test", "")
@@ -121,6 +122,62 @@ class IsolationCommand(unittest.TestCase):
         self.assertNotIn("--settings", a.command(self.inp))
         self.assertIn("가 없다", a.outcome(1, self.inp)[1])
         self.assertEqual(a.outcome(1, self.inp)[0], 1)
+
+    def review_and_judge_argv(self):
+        argv, prompt, to_file = review.reviewer_argv(
+            "claude", self.wt, "review prompt", self.root / "review.txt", MODELS)
+        self.assertEqual((prompt, to_file), ("review prompt", False))
+        return [(argv, "Read,Grep,Glob"),
+                (review.judge_argv(SimpleNamespace(models=MODELS), cwd=self.wt), "Read")]
+
+    def assert_readonly_isolation(self, argv, tools):
+        self.assertEqual(argv[argv.index("--tools") + 1], tools)
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(json.loads(argv[argv.index("--mcp-config") + 1]), {"mcpServers": {}})
+        self.assertIn("--disable-slash-commands", argv)
+
+    def test_review_and_judge_share_worker_isolation_in_their_worktree(self):
+        os.environ.pop("GS_REVIEWER_CMD", None)
+        calls = self.listing(PLUGINS)
+        worker_argv = self.argv(adapters.Claude(MODELS).command(self.inp))
+        expected = json.loads(worker_argv[worker_argv.index("--settings") + 1])
+        for argv, tools in self.review_and_judge_argv():
+            self.assert_readonly_isolation(argv, tools)
+            self.assertEqual(json.loads(argv[argv.index("--settings") + 1]), expected)
+        lines = calls.read_text().splitlines()
+        self.assertEqual(len(lines), 3)
+        for line in lines:
+            cwd, args = line.split("|")
+            self.assertEqual(os.path.realpath(cwd), os.path.realpath(self.wt))
+            self.assertEqual(args, "plugin list --json")
+
+    def test_review_and_judge_listing_failure_warns_and_keeps_other_isolation(self):
+        os.environ.pop("GS_REVIEWER_CMD", None)
+        for body in ("exit 3", "echo nope", "echo '{}'", None):
+            with self.subTest(body=body):
+                if body is None:
+                    os.environ["GS_CLAUDE"] = str(self.root / "missing")
+                else:
+                    self.fake_claude(body)
+                with mock.patch("sys.stderr") as stderr:
+                    commands = self.review_and_judge_argv()
+                self.assertEqual("".join(c.args[0] for c in stderr.write.call_args_list)
+                                 .count("플러그인 격리 못 함:"), 2)
+                for argv, tools in commands:
+                    self.assert_readonly_isolation(argv, tools)
+                    self.assertNotIn("--settings", argv)
+
+    def test_review_and_judge_seams_are_preserved(self):
+        os.environ["GS_REVIEWER_CMD"] = "custom reviewer --flag"
+        os.environ["GS_JUDGE"] = str(self.root / "custom judge")
+        with mock.patch.object(adapters, "claude_plugins", return_value=[]) as listing:
+            self.assertEqual(review.reviewer_argv("claude", self.wt, "prompt", self.root / "out", MODELS),
+                             (["bash", "-c", "custom reviewer --flag"], "prompt", False))
+            listing.assert_not_called()
+            argv = review.judge_argv(SimpleNamespace(models=MODELS), model="summary-model", cwd=self.wt)
+        self.assertEqual(argv[0], os.environ["GS_JUDGE"])
+        self.assertEqual(argv[argv.index("--model") + 1], "summary-model")
+        self.assert_readonly_isolation(argv, "Read")
 
     def test_plugins_to_disable_ignores_junk(self):
         got = adapters.plugins_to_disable([{"id": "a@m"}, {"id": ""}, {"id": 3}, {}, {"id": "a@m"},
