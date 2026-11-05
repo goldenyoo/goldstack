@@ -2,6 +2,9 @@
 remote = "origin"
 base = "main"
 
+[worktree]
+setup = "uv sync --locked"
+
 [models]
 judge = "opus"
 claude_review = "opus"
