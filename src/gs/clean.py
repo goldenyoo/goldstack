@@ -58,6 +58,8 @@ def _remove(repo: Path, paths: list[Path], branches: list[str], remote: str,
             try:
                 git.push(repo, remote, record, "--delete", name)
                 removed.remote += 1
+            except git.PushSettingsChanged:
+                raise
             except (git.GitError, OSError) as e:
                 warn(e)
     except git.PushSettingsChanged:

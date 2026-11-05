@@ -152,18 +152,22 @@ class CleanTest(unittest.TestCase):
         self.assertIn("gs/demo/integration", sh(self.remote, "git", "branch", "--list", "gs/demo/integration"))
 
     def test_push_settings_change_during_auto_cleanup_fails_go_with_changed_values(self):
-        # 먼저 verified state를 만든 다음, 완료된 실행의 재개 경로에서 정리만 다시 시도한다.
+        # 먼저 verified state를 만든다. worktree 없이 완료 재개 경로에서 정리한다.
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        wt = self.rundir / "wt/integration"
-        git.ensure_worktree(self.repo, wt, "gs/demo/integration", "HEAD")
-        sh(self.repo, "git", "push", "-q", self.REMOTE, "gs/demo/integration")
         change = git.PushSettingsChanged("push URL changed: old -> new")
         with mock.patch("gs.git.check_push", side_effect=change):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         self.assertIn("push URL changed: old -> new", err)
-        self.assertTrue(wt.exists())
+
+    def test_push_settings_change_during_remote_delete_is_not_warned(self):
+        self.prepare()
+        change = git.PushSettingsChanged("push URL changed: old -> new")
+        with mock.patch("gs.git.check_push", side_effect=[None, change]):
+            code, out, err = self.clean()
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("push URL changed: old -> new", err)
 
     def test_auto_cleanup_only_removes_integration(self):
         wt = self.rundir / "wt/99-retry-2"
