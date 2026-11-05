@@ -26,7 +26,7 @@ v11 티켓 10장 중 8장(01–08)이 integration에 들어갔습니다. 09는 �
    - 06: `## Summary ##` 형태의 제목은 여전히 중복됩니다.
 6. **실제 실행에서 아직 확인되지 않은 측정:** 이 실행은 설치본 `081e56e`로 돈 것으로 보이며, 이번 보고서 표에는 `결과 대기(초)` 열이 없습니다. 코드와 시험은 병합됐지만 "v11 보고서에 `결과 대기(초)`가 있다"는 완료 조건은 채워지지 않았습니다. 새 남은 시간 계산도 재시도와 수정을 예측하지 않아, 긴 실행에서는 여전히 짧게 말할 수 있습니다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/25 병합 · main 검증 통과
 리뷰 지적: 수정됨 5 · 보고만 7
 
 ## Evidence
@@ -127,15 +127,22 @@ gs 검증별 측정
 | ticket-04/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 20e82c51d36a64bbcd5c66580bf2fd7e117c7bb2 | 666.077562 | passed |
 | ticket-07/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 27c7a9c795518964d4dcc03401da5095f5d0bb2c | 417.751365 | passed |
 | integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | e1b1946613bd6efa558e8c1d4f2c8c726f3fc8e7 | 396.164863 | passed |
+| main/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 44fd039d5c60da9ae1a97046486e2a4f2544b333 | 397.959919 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 489.0 |
-| verify | 396.226 |
+| total | 899.0 |
+| verify | 794.259 |
 | summary | 92.102 |
-| report | 0 |
+| report | 0.099 |
+| push | 2.175 |
+| publish | 3.688 |
+| merge-pr | 3.525 |
+| confirm-merge | 0.005 |
+| postmerge | 398.946 |
+| restore-reverts | 0.014 |
 
 ### 티켓별 결과
 
@@ -403,9 +410,38 @@ Ran 37 tests in 518.447s
 OK
 ```
 
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 11343자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/finish/integration-verify.log`
+
+```text
+px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
+#### finish/main-verify.log
+
+앞 11707자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/finish/main-verify.log`
 
 ```text
 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
@@ -429,13 +465,15 @@ agy 사용: 1/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/25
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `44fd039d5c60da9ae1a97046486e2a4f2544b333`
 
 ### 되돌리는 법
 
@@ -445,7 +483,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 44fd039d5c60da9ae1a97046486e2a4f2544b333
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v11/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
