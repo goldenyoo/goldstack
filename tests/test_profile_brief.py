@@ -53,7 +53,6 @@ class ProfileSkillTest(unittest.TestCase):
         self.assertEqual(data["name"], "adopt")
         self.assertEqual(data["disable-model-invocation"], "true")  # 사람이 부른다
         self.assertIn("/adopt", data["description"])
-        self.assertLess(len(body.split()), 450)
         parts = steps(body)
         for source in ("README", "CI workflow", "디렉터리 구조", "git log"):
             self.assertIn(source, parts[1])

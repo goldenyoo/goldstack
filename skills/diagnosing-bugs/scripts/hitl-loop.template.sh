@@ -10,7 +10,8 @@
 #   step "<안내>"            → 안내를 보이고 Enter를 기다린다
 #   capture VAR "<질문>"     → 질문을 보이고 답을 VAR에 읽는다
 #
-# 끝에 잡은 값을 KEY=VALUE로 찍어 agent가 읽게 한다.
+# 끝에 잡은 값을 KEY=VALUE로 찍는다. agent는 `ERRORED` 같은 관찰값을 판정값으로
+# 읽는다: 값이 증상을 뜻하면 red, 아니면 green이다.
 #
 # `capture`는 값을 터미널에 다시 찍고 agent가 그것을 읽는다.
 # 그러니 관찰만 capture하고, 로그인은 사람에게 `step`으로 맡긴다.
