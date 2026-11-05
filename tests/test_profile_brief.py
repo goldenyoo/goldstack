@@ -56,7 +56,10 @@ class ProfileSkillTest(unittest.TestCase):
         parts = steps(body)
         for source in ("README", "CI workflow", "디렉터리 구조", "git log"):
             self.assertIn(source, parts[1])
-        self.assertIn("`.goldstack/config.toml`이 없으면 `gs init`", parts[2])
+        self.assertIn("`[feedback]` 절이 있는지 보고 기억한다", parts[2])
+        self.assertLess(parts[2].index("`[feedback]`"), parts[2].index("`gs init`"))  # init 전에 본다
+        self.assertIn("`gs init` 전에 본 `[feedback]` 절", parts[3])
+        self.assertNotIn("lockfile", body)  # 그 권고는 gs doctor가 낸다
         self.assertIn("`gs doctor`", parts[3])
         self.assertIn("`gs doctor --write`", parts[3])
         for section in ("## 구조", "## 빌드·시험", "## 관례", "## 주의점", "## CI", "갱신: YYYY-MM-DD (/adopt)"):

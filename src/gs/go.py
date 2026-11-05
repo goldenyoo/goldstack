@@ -451,8 +451,8 @@ def _prepare_integration(r: Run) -> bool:
         finally:
             r.st.phase = ""
         if not res.ok:
+            say(f"■ integration 준비 실패. setup.log를 확인하라: {directory / 'setup.log'}")
             if r.no_merge:  # 마무리가 아니다. 보고서를 쓰지 않고 지난 마무리 기록은 다음 마무리가 읽게 둔다
-                say(f"■ integration 준비 실패. setup.log를 확인하라: {directory / 'setup.log'}")
                 return False
             # 이미 진행한 병합·base 검증·revert·보고서의 재개 상태를 준비 실패로 덮지 않는다.
             if r.st.finish.get("phase") not in (*finish.RESUME_PHASES, *finish.BASE_REPORT_PHASES):

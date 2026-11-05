@@ -11,13 +11,12 @@ goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profil
    - README와 docs, 기여 안내(`CONTRIBUTING` 등)
    - 빌드·시험 설정: 패키지 파일(`pyproject.toml`, `package.json`, `Cargo.toml`, `Makefile` 등), 시험 디렉터리, lint·format 설정
    - CI workflow(`.github/workflows/*.yml` 등): 어떤 job이 무엇을 돌리는지
-   - setup에 `npm install`·`yarn` 같은 lock 갱신형 명령이 있으면 lockfile을 바꾸지 않는 `npm ci`·`yarn --frozen-lockfile`·`uv sync --locked`를 권한다.
    - 디렉터리 구조: 주요 디렉터리와 역할, 생성 파일·큰 디렉터리(`node_modules`, `dist` 등)
    - 최근 커밋 메시지 모양(`git log --oneline -20`)과 브랜치 이름
-2. **설정이 없으면 만든다.** `.goldstack/config.toml`이 없으면 `gs init`(끝에 `gs doctor`가 한 번 돈다). 있으면 그대로 둔다.
+2. **설정이 없으면 만든다.** 먼저 `.goldstack/config.toml`에 `[feedback]` 절이 있는지 보고 기억한다(파일이 없으면 없음). 파일이 없으면 `gs init`(끝에 `gs doctor`가 한 번 돈다)을 돌린다. 있으면 그대로 둔다.
 3. **doctor를 보인다.** `gs doctor` 출력을 그대로 보이고(init에서 이미 봤으면 다시 돌리지 않는다) "제안대로 config에 쓸까(`gs doctor --write`)"를 묻는다. 원하면 돌리고 `<키>: <전> → <후> (<이유>)` 줄을 보인다.
 
-   **피드백 설정.** 2단계 전 `.goldstack/config.toml`에 `[feedback]` 절이 있었으면 다시 묻지 않는다. 없었으면 한 번 묻는다. `gs init`이 쓴 기본값(`draft`·`errors`)은 사람이 고른 것이 아니니 묻는다. 옛 config라 절이 없으면 `off`로 읽힌다.
+   **피드백 설정.** 2단계에서 `gs init` 전에 본 `[feedback]` 절이 있었으면 다시 묻지 않는다. 없었으면 한 번 묻는다. `gs init`이 쓴 기본값(`draft`·`errors`)은 사람이 고른 것이 아니니 묻는다. 옛 config라 절이 없으면 `off`로 읽힌다.
    - `mode`: `auto`(오류가 나면 gs가 자동으로 GitHub issue를 올린다) / `draft`(초안만 `.goldstack/feedback/`에 남기고 사람이 `gs feedback send`로 보낸다) / `off`(보내지 않는다).
    - `detail`: `errors`(정해진 항목에 실패한 명령의 오류 줄 최대 20줄을 더한다) / `minimal`(정해진 항목만, 오류 줄 없음).
    - 예를 보이고 고르게 한다: 개인 프로젝트는 `auto` + `errors`, 회사 레포는 `off` 또는 `minimal`. 오류 줄에 회사 코드가 섞일 수 있으니 회사 레포는 `off`를 먼저 권한다.

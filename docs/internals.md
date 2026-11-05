@@ -46,7 +46,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 .goldstack/local.env.example    커밋. 빈 값 + 채우는 법 안내
 .goldstack/work/<feature>/      spec.md, tickets/NN-slug.md, report.md (run/은 gitignore)
 .goldstack/out-of-scope/        grill이 뺀 개념
-.goldstack/ideas/               아이디어 함: <slug>.md 하나씩(아래 "아이디어 함"), README.md는 형식 설명
+.goldstack/ideas/               아이디어 함: <slug>.md 하나씩(아래 "아이디어 함"), README.md는 backlog 출력 설명(형식 원본은 `skills/idea/templates/idea.md`)
 ```
 `gs init`이 `.gitignore`에 넣는 줄: `.goldstack/local.env`, `.goldstack/work/*/run/`. 레포 루트는 지금 디렉터리에서 위로 `.git`을 찾는다(`--repo`로 지정 가능). 옛 위치(`.work/`, `.out-of-scope/`, `.ideas/`)는 읽지 않는다. `gs migrate`로 옮긴다.
 
@@ -405,7 +405,7 @@ mod의 hooks API는 early-access다. Claude Code 2.1.317에서 command hook과 `
 
 ## 아이디어 함
 
-`.goldstack/ideas/<slug>.md`가 아이디어 하나다. slug(소문자·숫자·`-`)가 파일 이름이자 id다. `README.md`는 형식 설명이라 아이디어가 아니다.
+`.goldstack/ideas/<slug>.md`가 아이디어 하나다. slug(소문자·숫자·`-`)가 파일 이름이자 id다. 형식 원본은 `skills/idea/templates/idea.md`다. `README.md`는 아이디어가 아니라 `gs backlog`가 건너뛴다.
 ```
 ---
 date: 2026-11-03          # YYYY-MM-DD, 필수
