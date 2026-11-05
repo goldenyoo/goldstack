@@ -1414,7 +1414,8 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
     if a.review_done:
         if a.repair == REPAIR_VERIFY:
             return _merge_stage(r, a)
-        todo = [] if a.repair or a.fix >= 2 else _todo(r, a.t, a.fix + 1)  # 수정은 티켓당 최대 2회다. 수리 뒤에는 고치지 않는다
+        # 수정은 티켓당 최대 2회다. 수리 뒤와 버린 수정 뒤에는 고치지 않는다
+        todo = [] if a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) else _todo(r, a.t, a.fix + 1)
         r.reviews.tickets[a.t.id] = Reviewing(a, finished=True, todo=todo, waited=True, repair=a.repair == REPAIR_SEAT)
         return
     step = _check_worker(r, a, code, others, error)
@@ -1512,13 +1513,13 @@ def _merge_stage(r: Run, a: Active) -> None:
     브랜치는 catch-up 앞뒤와 검증 뒤에 대조한다. 움직였으면 병합하지 않고 재리뷰로 돌아간다(_late_commit). 이미 한 번 더 봤으면 늦은 커밋을 뺀 SHA를 병합한다.
     그때는 브랜치에 catch-up하지 않는다: 합친 커밋이 늦은 커밋을 품는다. 병합 충돌은 integration 병합에서 본다.
     catch-up이 합친 커밋은 늦은 커밋이 아니다(_is_catch_up). 리뷰 대상이 그 커밋으로 옮겨 간다.
-    a.target이 없으면 옛 state의 표시로 이은 것이다. 대조할 것이 없으니 지금 head를 병합한다. 리뷰 없이 verify만으로 가는 티켓도 대상은 리뷰하려던 head다.
+    a.target이 없으면 옛 state의 표시로 이은 것이다. 리뷰 기록으로 대조할 SHA를 정한다(_old_target). 리뷰 없이 verify만으로 가는 티켓도 대상은 리뷰하려던 head다.
     검증 실패는 _verify_failed가 받는다: 이 시도의 첫 실패면 수리로 보낸다. 병합 충돌, 시간 초과, 검증하는 동안 integration이 바뀐 것은 바로 티켓 실패다.
     검증이 떨어지면서 integration도 바뀌었으면 브랜치의 결함인지 모르니 수리하지 않는다.
     """
     t = a.t
     head = git.sha(r.repo, a.branch)
-    a.target = a.target or head
+    a.target = a.target or _old_target(r, a, head)
     if head != a.target and _late_commit(r, a, head):
         return
 
@@ -1581,12 +1582,23 @@ def _merge_stage(r: Run, a: Active) -> None:
     _cleanup_merged(r, t.id)
 
 
+def _old_target(r: Run, a: Active, head: str) -> str:
+    """옛 state의 표시로 이어 리뷰 대상이 없다. 병합 전 대조에 쓸 SHA를 리뷰 기록으로 정한다.
+
+    head가 기록의 reviewed_head이거나 대조할 기록이 없으면(리뷰 실패, 더 옛 state) head가 대상이다. 수리의 기준(a.base)이어도 그렇다: 수리 커밋 없이 다시 검증하는 head는 catch-up을 합친 커밋이라 기록에 없다.
+    그 밖에는 리뷰 뒤에 움직였다. a.base를 돌려주어 재리뷰로 보낸다(_late_commit). 재리뷰가 대상을 새로 정한다. 다시 검증 차례로 이은 티켓(REPAIR_VERIFY)은 여기 말고 대조하는 곳이 없다(_finish).
+    옛 표시로는 부르지 못한 수리 재리뷰의 커밋과 지난 실행이 수리 커밋 위에 합친 catch-up도 움직인 것으로 보인다. 한 번 더 볼 뿐이다.
+    """
+    return a.base if _moved_head(r, a) not in ("", a.base) else head
+
+
 def _late_commit(r: Run, a: Active, head: str) -> bool:
     """병합 단계에서 브랜치가 리뷰 대상(a.target)을 떠나 head로 움직인 것을 봤다. 재리뷰로 돌려보냈으면 True다(병합하지 않는다).
 
     규칙은 리뷰 단계의 대조(_review_again)와 같다: 한 번만 더 본다. 이미 더 봤으면 False다: 경고와 기록을 남기고 호출한 쪽이 a.target을 병합한다. 리뷰를 깨끗해질 때까지 돌리지 않는다.
     늦은 커밋은 브랜치에 남는다. 끝이 integration에 없으니 _cleanup_merged가 브랜치를 지우지 않는다.
     돌려보낸 티켓은 리뷰부터 잇는 표시를 남기고 다른 리뷰처럼 자리와 끊김의 끝을 기다린다(_review_step). 수리를 거친 티켓의 표시는 REPAIR_VERIFY 그대로다: 재개하면 이 대조로 다시 온다.
+    수정을 버린 티켓도 늦은 커밋은 재리뷰한다. 재리뷰는 다음 수정을 띄우지 않고 버린 기록을 덮어쓰지 않는다(_fix_discarded).
     """
     if a.reviewed_again:
         msg = f"병합 전 대조: head {head[:8]}는 리뷰하지 못해 병합에 넣지 않는다. 리뷰 대상 {a.target[:8]}를 병합한다"
@@ -1897,6 +1909,11 @@ def _received(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
     return [(rec, found) for rec, found in pairs if found]
 
 
+def _fix_discarded(r: Run, t: Ticket, nth: int) -> bool:
+    """nth번째 수정을 버렸나(_end_fix). 지적의 기록으로 가리므로 재개해도 그대로다. 받은 지적이 없으면(nth가 0) 아니다."""
+    return any(f.get("fix_attempt") == review.DISCARDED for _, found in _received(r, t, nth) for f in found)
+
+
 def _to_rereview(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
     """(리뷰 기록, 그 기록 안의 nth번째 재리뷰가 판정할 지적). 받은 지적에 더해 2차면 앞서 resolved인 지적도 있다. 그 지적만 낸 리뷰어도 든다."""
     pairs = [(rec, review.rereview_targets(rec, nth)) for rec in state.reviews(r.st.ticket(t.id))]
@@ -1985,8 +2002,11 @@ def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> b
     (2차 수정 실패면 1차 수정 결과는 남는다. 그 위에 못 본 늦은 커밋이 있었으면 함께 버린다). 재리뷰는 하지 않는다. 어느 쪽이든 티켓은 병합·검증으로 간다.
     되돌리기 자체가 git 오류면 어느 트리를 병합할지 모르니 그 오류는 올린다(_loop가 티켓 실패로 처리해 다시 한다).
     돌고 있던 worker는 _check_worker가 이미 끝냈다.
+    이미 버린 수정이면 True다: 버린 뒤의 늦은 커밋을 재리뷰하러 가다 멈춘 표시로 이었다(_late_commit). 그 커밋을 수정의 결과로 적지 않는다.
     """
     t, wt, branch, nth = a.t, a.wt, a.branch, a.fix
+    if _fix_discarded(r, t, nth):
+        return True
     kept = git.run(r.repo, "merge-base", "--is-ancestor", a.base, branch, check=False).returncode == 0
     why = error or ("" if code == 0 else f"종료 코드 {code}") or ("" if kept else "이전 커밋을 지웠다") \
         or ("" if commits else "커밋 없음")
@@ -2210,6 +2230,7 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
     병합 전 대조로 다시 불려도 같은 지적을 본다(a.base..head이므로 수정 뒤에 생긴 커밋도 diff에 든다).
     2차면 수정 worker가 받은 지적에 더해 앞서 resolved인 지적도 최종 커밋에서 본다. 수정 커밋의 diff가 비면 받은 지적만 unresolved다:
     트리가 앞 재리뷰가 본 그대로이니 앞 판정은 그대로 맞다.
+    버린 수정 뒤의 늦은 커밋을 보는 재리뷰(_late_commit)는 판정만 적고 2차 수정을 띄우지 않는다: 실패한 수정 뒤에는 고치지 않는다.
     """
     t, nth = a.t, a.fix
     targets = _to_rereview(r, t, nth)
@@ -2233,7 +2254,7 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
             if not done or done[-1].get("head") != head:  # 먼저 끝난 다른 리뷰어의 결과는 그대로 둔다
                 review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_FAILED, f"뜻밖의 오류 {_err(e)}")
     r.save()
-    return _todo(r, t, nth + 1) if nth == 1 else []  # 수정은 티켓당 최대 2회다
+    return _todo(r, t, nth + 1) if nth == 1 and not _fix_discarded(r, t, nth) else []  # 수정은 티켓당 최대 2회다
 
 
 class TreeUnavailable(Exception):

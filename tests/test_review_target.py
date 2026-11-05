@@ -888,18 +888,50 @@ class MergeReviewedShaTest(Base):
         self.assertEqual(rec["findings"][0]["rereview_evidence"], "늦은 커밋까지 보고 확인")
         self.assertEqual(self.subject(merged_sha(self)), "late")
 
-    def test_commit_after_a_failed_fix_is_rereviewed(self):
+    def fix_fails_and_stays_unresolved(self):
+        """1차 수정이 실패한다. 재리뷰는 정상 판정을 낸다: 2차 수정을 띄울 만한 답이다."""
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         (self.bin / "fixfail_1").touch()
-        self.run_ok(at_call("_merge_stage", late_commit("late")))
-        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        self.answer("codex", 1, [(1, "unresolved", "수정을 버려 그대로다")])
+
+    def assert_fix_stays_discarded(self):
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])  # 실패한 수정 뒤에는 2차 수정이 없다
         self.assertEqual(self.lines("rereview.calls"), ["codex 1"])
+        rec = self.ts().review
+        found = rec["findings"][0]
+        self.assertEqual((found["fix_attempt"], found["fix_round"]), (review.DISCARDED, 1))
+        self.assertEqual(found["rereview"], review.UNRESOLVED)
+        self.assertNotIn("수정 커밋", rec["fix"])  # 늦은 커밋을 수정의 결과로 적지 않는다
+        self.assertEqual(self.subject(merged_sha(self)), "late")
+        self.assertNotIn("bad1", self.files())
+        self.assertEqual(self.merged(), ["01"])
+
+    def test_commit_after_a_failed_fix_is_rereviewed(self):
+        self.fix_fails_and_stays_unresolved()
+        self.run_ok(at_call("_merge_stage", late_commit("late")))
+        self.assert_fix_stays_discarded()
         diff = (self.bin / "rereview.diff.codex.1").read_text()
         self.assertIn("late", diff)
         self.assertNotIn("bad1", diff)  # 버린 수정은 없다
+
+    def test_stopped_before_rereviewing_after_a_failed_fix_stays_discarded(self):
+        self.fix_fails_and_stays_unresolved()
+        with at_call("_merge_stage", late_commit("late")), at_call("_rereview", stop), \
+                self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
         self.assertEqual(self.ts().review["findings"][0]["fix_attempt"], review.DISCARDED)
-        self.assertEqual(self.subject(merged_sha(self)), "late")
-        self.assertNotIn("bad1", self.files())
+        self.assertEqual(self.lines("rereview.calls"), [])
+        self.run_ok()
+        self.assert_fix_stays_discarded()
+
+    def test_stopped_after_rereviewing_after_a_failed_fix_sends_no_second_fix(self):
+        self.fix_fails_and_stays_unresolved()
+        with at_call("_merge_stage", late_commit("late")), at_call("_leave_review", None, stop), \
+                self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        self.assertTrue(self.ts().network_resume["reviewed"])
+        self.run_ok()
+        self.assert_fix_stays_discarded()
 
     def test_unseen_commit_under_a_fix_is_in_its_rereview(self):
         self.late("review", 1)
@@ -933,10 +965,10 @@ class MergeReviewedShaTest(Base):
             self.go("--only", "01")
         return self.ts().network_resume
 
-    def drop_target(self):
+    def drop_target(self, tid="01"):
         """이 기능 전의 gs가 남긴 state처럼 만든다."""
         raw = json.loads(state.path(self.rundir).read_text())
-        raw["tickets"]["01"]["network_resume"].pop("target")
+        raw["tickets"][tid]["network_resume"].pop("target")
         state.path(self.rundir).write_text(json.dumps(raw, ensure_ascii=False))
 
     def test_stopped_after_the_review_merges_the_same_sha(self):
@@ -985,6 +1017,7 @@ class MergeReviewedShaTest(Base):
 class RepairMergeShaTest(test_verify_repair.Base):
     """수리 worker의 커밋과 재리뷰 흐름은 그대로이고 그 끝의 병합도 리뷰 대상 SHA로 간다."""
     subject = Base.subject
+    drop_target = MergeReviewedShaTest.drop_target
 
     def run_ok(self, *args):
         code, out, err = self.go(*(args or ("--only", "01")))
@@ -1031,7 +1064,8 @@ class RepairMergeShaTest(test_verify_repair.Base):
         self.assertIn("late", (Path(ts.review["rereviews"][-1]["dir"]) / "repair.patch").read_text())
         self.assertEqual(self.subject(merged_sha(self)), "late")
 
-    def test_repair_without_a_commit_keeps_the_catch_up_as_its_target(self):
+    def catch_up_then_repair_without_a_commit(self):
+        """12가 catch-up을 한 뒤 첫 검증이 떨어지고 수리 worker는 커밋 없이 끝난다."""
         self.add_ticket("11")
         self.add_ticket("12")
         verify = self.bin / "verify.sh"
@@ -1045,6 +1079,9 @@ class RepairMergeShaTest(test_verify_repair.Base):
             fi
             {GOOD}
         '''))
+
+    def test_repair_without_a_commit_keeps_the_catch_up_as_its_target(self):
+        self.catch_up_then_repair_without_a_commit()
         out = self.run_ok("--only", "11,12")
         ts = self.ts("12")
         self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
@@ -1083,13 +1120,34 @@ class RepairMergeShaTest(test_verify_repair.Base):
         self.worker(BREAKS, REPAIRS)
         mark = self.stopped_at_the_second_verify()
         self.assertEqual(self.subject(mark["target"]), "repair 01")
-        raw = json.loads(state.path(self.rundir).read_text())
-        raw["tickets"]["01"]["network_resume"].pop("target")
-        state.path(self.rundir).write_text(json.dumps(raw, ensure_ascii=False))
+        self.drop_target()
         self.run_ok()
         self.assertEqual(self.reviewers(), ["codex", "codex"])
         self.assertEqual(self.subject(merged_sha(self)), "repair 01")
         self.assertEqual(state.repair_summary(self.ts()), "수리: 시도 1 커밋 1개 → 다시 검증 통과")
+
+    def test_commit_while_stopped_with_an_old_mark_goes_back_to_the_rereview(self):
+        self.worker(BREAKS, REPAIRS)
+        self.stopped_at_the_second_verify()
+        self.drop_target()
+        late_commit("late", self.rundir / "wt/01")(None, None)
+        out = self.run_ok()
+        ts = self.ts()
+        self.assertIn("병합 전 대조", out)
+        self.assertEqual(self.reviewers(), ["codex", "codex", "codex"])
+        self.assertIn("late", (Path(ts.review["rereviews"][-1]["dir"]) / "repair.patch").read_text())
+        self.assertEqual(self.subject(merged_sha(self)), "late")
+        self.assertEqual(merged_sha(self), ts.review["reviewed_head"])
+
+    def test_old_mark_keeps_the_catch_up_of_a_repair_without_a_commit(self):
+        self.catch_up_then_repair_without_a_commit()
+        with at_call("_verify", None, None, stop), self.assertRaises(KeyboardInterrupt):  # 11, 12의 첫 검증, 12의 다시 검증
+            self.go("--only", "11,12")
+        self.drop_target("12")
+        out = self.run_ok("--only", "11,12")
+        self.assertEqual(self.reviewers(), ["codex", "codex"])  # 기록에 없는 head지만 수리의 기준이다: 늦은 커밋이 아니다
+        self.assertNotIn("병합 전 대조", out)
+        self.assertEqual(merged_sha(self, "12"), self.ts("12").repairs[0]["base"])
 
     def test_failed_repair_merges_the_verified_sha(self):
         self.worker(GOOD, f"{USELESS}; exit 3")
