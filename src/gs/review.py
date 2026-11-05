@@ -181,13 +181,13 @@ def parse_findings(text: str) -> list[Finding]:
 
 
 def parse_checked(text: str) -> list[str] | None:
-    """선택 checked는 문자열 목록이다. 없으면 옛 응답 그대로 받고, 틀린 모양은 형식 오류다."""
+    """선택 checked는 문자열 목록이다. 없거나 모양이 틀리면 무시하고 지적·판정은 그대로 받는다."""
     data = extract_json(text)
     if "checked" not in data:
         return None
     checked = data["checked"]
     if not isinstance(checked, list) or any(not isinstance(item, str) for item in checked):
-        raise ReviewError("`checked`가 문자열 목록이 아니다")
+        return None
     return checked
 
 
@@ -297,8 +297,8 @@ def _close(p: subprocess.Popen) -> None:
             pass
 
 
-def _communicate(p: subprocess.Popen, prompt: str | None, timeout: float, cancel: threading.Event | None) -> str:
-    """p가 끝나기를 기다려 stdout을 돌려준다. timeout을 넘기면 TimeoutExpired, cancel이 서면 Cancelled.
+def _communicate(p: subprocess.Popen, prompt: str | None, timeout: float, cancel: threading.Event | None) -> None:
+    """stdout을 파일에 쓰는 p가 끝나기를 기다린다. timeout을 넘기면 TimeoutExpired, cancel이 서면 Cancelled.
 
     communicate는 시간 초과 뒤 다시 불러도 출력을 잃지 않는다. 입력은 첫 부름에만 준다.
     """
@@ -306,7 +306,8 @@ def _communicate(p: subprocess.Popen, prompt: str | None, timeout: float, cancel
     while True:
         left = max(0.0, deadline - time.monotonic())
         try:
-            return p.communicate(prompt, timeout=left if cancel is None else min(left, CANCEL_TICK))[0]
+            p.communicate(prompt, timeout=left if cancel is None else min(left, CANCEL_TICK))
+            return
         except subprocess.TimeoutExpired:
             prompt = None
             if cancel is not None and cancel.is_set():
@@ -334,24 +335,19 @@ def _call(argv: list[str], *, prompt: str | None, cwd: Path, env: dict[str, str]
     try:
         with log.open("w", encoding="utf-8") as err, raw.open("xb") as output:
             p = subprocess.Popen(argv, stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
-                                 cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=err, text=True,
+                                 cwd=cwd, env=env, stdout=output, stderr=err, text=True,
                                  start_new_session=True)
-            stdout: str | bytes = ""
             try:
-                stdout = _communicate(p, prompt, timeout, cancel)
-            except subprocess.TimeoutExpired as e:
-                stdout = e.output or b""
+                _communicate(p, prompt, timeout, cancel)
+            except subprocess.TimeoutExpired:
                 raise ReviewTimeout(f"`{argv[0]}`가 {timeout}초 안에 끝나지 않았다(로그 {log})") from None
-            except Cancelled as e:
-                # _communicate는 TimeoutExpired를 받았을 때 취소를 본다. 그때까지의 부분 출력도 보존한다.
-                stdout = getattr(e.__context__, "output", None) or b""
-                raise
             finally:  # 정상 종료여도 띄워 둔 자손이 다음 호출·수정 worker와 함께 worktree를 건드리지 못하게. 코디네이터가 죽어도 남기지 않는다
                 verify.stop(p)
                 _close(p)
-                output.write(stdout.encode("utf-8") if isinstance(stdout, str) else stdout)
     except OSError as e:
         raise ReviewError(f"`{argv[0]}`를 실행하지 못했다: {e}") from e
+    # 원본은 바이트 그대로 두고, 파싱용 문자열만 디코드·줄바꿈 변환한다.
+    stdout = raw.read_text(encoding="utf-8", errors="replace")
     result = _claude_result(stdout) if family == "claude" else None
     is_error = bool(result and result.get("is_error") is True)
     if p.returncode or is_error:

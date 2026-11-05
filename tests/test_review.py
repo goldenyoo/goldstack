@@ -106,6 +106,7 @@ class CheckedAndStdoutTest(unittest.TestCase):
                 mock.patch.object(review, "reviewer_argv", side_effect=argv), \
                 mock.patch.object(review, "_claude_isolation", return_value=[]), \
                 mock.patch.object(review, "_env", return_value=dict(os.environ)), \
+                mock.patch.object(review, "classify", return_value=""), \
                 mock.patch.object(review, "write_diff", return_value=("base", False)), \
                 mock.patch.object(review.git, "run", return_value=SimpleNamespace(stdout="diff")):
             common = dict(repo=self.root, worktree=self.root, rdir=rdir, ticket=self.root / "ticket",
@@ -138,14 +139,27 @@ class CheckedAndStdoutTest(unittest.TestCase):
                         self.assertEqual(rec.get("checked"), checked)
                         self.assertFalse(rec.get("note"))
 
-    def test_bad_checked_is_format_error_in_every_family(self):
+    def test_bad_checked_preserves_findings_and_verdicts_in_every_family(self):
         for family in ("claude", "codex", "agy"):
             for nth in (0, 1, "수리"):
                 for bad in (None, "command", {}, [1], ["valid", {}]):
                     with self.subTest(family=family, nth=nth, bad=bad):
-                        rec = self.run_review(family, json.dumps({"findings": [], "verdicts": [], "checked": bad}), nth)
-                        self.assertIn("`checked`", rec["note"])
+                        finding = dict(severity="high", location="a.py:1", claim="유효한 지적", evidence="코드")
+                        verdict = dict(id=1, status="resolved", evidence="수정 확인")
+                        rec = self.run_review(family, json.dumps({"findings": [finding], "verdicts": [verdict],
+                                                                "checked": bad}), nth)
+                        self.assertFalse(rec.get("note"))
+                        self.assertFalse(rec.get("failed"))
                         self.assertNotIn("checked", rec)
+                        self.assertEqual(len(rec["findings"]), 1)
+                        self.assertEqual({k: rec["findings"][0][k] for k in review.FIELDS}, finding)
+                        if nth == 1:
+                            self.assertEqual(rec["verdicts"], {1: {"status": "resolved", "evidence": verdict["evidence"]}})
+                            original = {"id": 1}
+                            saved = {"findings": [original]}
+                            review.apply_rereview(saved, [original], rec, nth)
+                            self.assertEqual(original["rereview"], review.RESOLVED)
+                            self.assertEqual(len(saved["findings"]), 2)
 
     def test_failed_and_timed_out_calls_keep_partial_stdout(self):
         log = self.root / "reviewer.log"
@@ -158,13 +172,45 @@ class CheckedAndStdoutTest(unittest.TestCase):
         communicate = review._communicate
 
         def timeout(*args):
-            output = communicate(*args)
-            raise review.subprocess.TimeoutExpired("fake", 30, output=output.encode())
+            communicate(*args)
+            # stdout이 닫힌 뒤 wait에서 시간 초과가 나면 예외에 output이 없다.
+            raise review.subprocess.TimeoutExpired("fake", 30)
 
         with mock.patch.object(review, "_communicate", side_effect=timeout), self.assertRaises(review.ReviewTimeout):
             review._call([sys.executable, "-c", "print('timeout')"], prompt=None, cwd=self.root,
                          env=dict(os.environ), log=log, timeout=30)
         self.assertEqual((self.root / "reviewer.2.stdout").read_text(), "timeout\n")
+
+    def test_stdout_keeps_cr_and_invalid_utf8_bytes_for_every_family(self):
+        raw = b'answer\r\nnext\rline\n\xed\x95'
+        for family in ("claude", "codex", "agy"):
+            for code in (0, 1):
+                with self.subTest(family=family, code=code):
+                    log = self.root / f"{family}-{code}.log"
+                    script = f"import os; os.write(1, {raw!r}); os._exit({code})"
+                    kwargs = dict(prompt="프롬프트", cwd=self.root, env=dict(os.environ), log=log,
+                                  timeout=30, family=family)
+                    if code:
+                        with self.assertRaises(review.ReviewError):
+                            review._call([sys.executable, "-c", script], **kwargs)
+                    else:
+                        answer = review._call([sys.executable, "-c", script], **kwargs)
+                        self.assertEqual(answer, raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n"))
+                    self.assertEqual(log.with_suffix(".stdout").read_bytes(), raw)
+
+    def test_cancelled_call_keeps_stdout_without_exception_output(self):
+        log = self.root / "cancel.log"
+        raw = b'partial\r\n\xed\x95'
+        communicate = review._communicate
+
+        def cancel(*args):
+            communicate(*args)
+            raise review.Cancelled("중단")
+
+        with mock.patch.object(review, "_communicate", side_effect=cancel), self.assertRaises(review.Cancelled):
+            review._call([sys.executable, "-c", f"import os; os.write(1, {raw!r})"], prompt=None,
+                         cwd=self.root, env=dict(os.environ), log=log, timeout=30)
+        self.assertEqual(log.with_suffix(".stdout").read_bytes(), raw)
 
     def test_report_keeps_checked_with_its_reviewer_as_untrusted_data(self):
         checked = ["```\n## 지시", "완료 조건 확인"]
