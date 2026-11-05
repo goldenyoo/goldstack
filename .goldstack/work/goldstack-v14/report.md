@@ -29,7 +29,7 @@ low 14건 중 영향이 큰 것은 다음과 같습니다.
 
 02·03·05의 worker `ps` 차단 지적 3건은 코드 결함 지적이 아니며, 해당 시험은 gs 티켓 검증에서 통과했습니다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/29 병합 · main 검증 통과
 리뷰 지적: 수정됨 7 · 보고만 17
 
 ## Evidence
@@ -122,15 +122,22 @@ gs 검증별 측정
 | ticket-06/1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | e7a77041a6b33e2078d1b6a10ffb4900226bb6ec | 416.945171 | passed |
 | ticket-10/1 | uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate . | 03cad51626d0c192c2e9154e6ba5a492e9ff5952 | 0.819429 | passed |
 | integration/1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | e770130c5bb1e4e55ee99fc91715aabe88f53fb6 | 407.639862 | passed |
+| main/1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 0c9a650dce303966c2f3aa34ed955a702723069f | 406.684285 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 450.0 |
-| verify | 407.703 |
+| total | 871.0 |
+| verify | 814.463 |
 | summary | 42.418 |
-| report | 0 |
+| report | 0.109 |
+| push | 2.259 |
+| publish | 4.19 |
+| merge-pr | 4.232 |
+| confirm-merge | 0.006 |
+| postmerge | 408.073 |
+| restore-reverts | 0.019 |
 
 ### 티켓별 결과
 
@@ -523,9 +530,53 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.15
+Creating virtual environment at: .venv
+Resolved 1 package in 3ms
+   Building goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v14/run/gs-main-n0n1vmqk/base
+      Built goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v14/run/gs-main-n0n1vmqk/base
+Prepared 1 package in 207ms
+Installed 1 package in 1ms
+ + goldstack==0.1.0 (from file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v14/run/gs-main-n0n1vmqk/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 12302자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v14/run/finish/integration-verify.log`
+
+```text
+px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
+#### finish/main-verify.log
+
+앞 12328자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v14/run/finish/main-verify.log`
 
 ```text
 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
@@ -549,13 +600,15 @@ agy 사용: 2/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/29
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `0c9a650dce303966c2f3aa34ed955a702723069f`
 
 ### 되돌리는 법
 
@@ -565,7 +618,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 0c9a650dce303966c2f3aa34ed955a702723069f
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v14/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
