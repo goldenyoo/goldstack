@@ -23,7 +23,7 @@
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
-| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 새 gs에서 재발하면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
+| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 초안에 기록된 발생 버전이 새로우면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
 | `notify.py` | 텔레그램 전송, `gs notify` 명령 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
