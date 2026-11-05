@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v8 07 리뷰(claude) 보고만 3건, 2026-11-05 코드 대조"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v15"
 ---
 티켓 `closes`의 issue가 되돌린 수정에서 닫힌 채 남거나, 직접 반영한 티켓에서 안 닫힌다.
 

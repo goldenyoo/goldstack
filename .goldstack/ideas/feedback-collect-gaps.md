@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v8 06 리뷰(codex) 보고만 2건, 2026-11-05 코드 대조"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v14"
 ---
 gs 결함 자동 수집이 마무리 초반 오류와 수정 worker 실패를 놓친다.
 

@@ -7,7 +7,7 @@ feature: "goldstack-v11"
 ---
 구현이 끝나면 `/retro`를 자동으로 돌리는 것이 좋은지 검토한다.
 
-**왜**: 지금은 사람이 기억해서 `/retro <feature>`를 쳐야 한다. 안 치면 그 실행의 결함이 `report.md`와 gitignore된 `run/` 로그에만 남고, `run/`은 `gs clean`이나 다른 머신에서 볼 수 없다. 밤샘 실행이나 다른 레포에서는 더 쉽게 빠진다.
+**왜**: 지금은 사람이 기억해서 `/retro <feature>`를 쳐야 한다. 안 치면 그 실행의 결함이 `report.md`와 gitignore된 `run/` 로그에만 남고, `run/`은 다른 머신에서 볼 수 없다. 밤샘 실행이나 다른 레포에서는 더 쉽게 빠진다.
 
 **지금 (2026-11-05 확인)**:
 - `skills/retro`는 `disable-model-invocation: true`라 사람이 부른다. `skills/go`의 결과 단계에는 `/retro` 호출이 없다. `docs/guide.md`는 끝나면 돌아볼 수 있다고 안내만 한다.

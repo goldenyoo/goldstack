@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "low"
 source: "goldstack-v9 06 agy 리뷰(Claude가 재현)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v15"
 ---
 앞 티켓이 병합되면 `_review_tick`이 바로 돌아가, 끝나 있던 다른 티켓의 리뷰 결과를 거두기 전에 새 티켓이 빈 worker 자리를 먼저 얻는다.
 

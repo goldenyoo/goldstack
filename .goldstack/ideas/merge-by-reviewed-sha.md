@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v8 13 리뷰(codex) 보고만, 2026-11-05 코드 대조"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v15"
 ---
 head 대조 뒤 실제 병합까지 티켓 브랜치가 움직이면 재리뷰 없이 새 커밋이 병합된다.
 

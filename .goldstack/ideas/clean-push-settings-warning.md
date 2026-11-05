@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "low"
 source: "goldstack-v8 12 리뷰(codex) 보고만, 2026-11-05 코드 대조"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v15"
 ---
 자동 integration 정리에서 push 설정 변경을 감지해도 경고만 내고 `gs go`가 성공으로 끝난다.
 

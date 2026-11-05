@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v11 실행 중 대화"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v15"
 ---
 열린 issue가 미분류, 아이디어 연결, 고침, 안 고침 중 하나의 상태를 갖게 해서 issue함에 쌓이지 않게 한다.
 

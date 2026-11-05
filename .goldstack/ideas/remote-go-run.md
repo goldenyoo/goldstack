@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v11 실행 중 부하 측정과 맥미니 점검(2026-11-05 대화)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v13"
 ---
 맥북이 바쁠 때 `/go <feature>`를 맥미니 같은 저장된 herdr 머신에서 끝까지 돌릴 수 있게 한다.
 

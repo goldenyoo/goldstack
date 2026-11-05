@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "low"
 source: "goldstack-v9 06 agy 리뷰(Claude가 재현)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v15"
 ---
 끊김 중에 리뷰 호출이 끝나고 티켓 head가 움직였으면, 두 번째 리뷰 준비를 끊김 중에 해서 단계가 `network`가 아닌 `review`로 보이고 옛 head를 리뷰한다.
 

@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v11 리뷰 09"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v14"
 ---
 `tiers.codex` 또는 `tiers.agy` 표가 없는 계열이 구현 worker이면 `gs check`는 `CLI 기본값`으로 표시한다. 실제 실행은 `models.codex`·`models.agy` 값을 `--model`로 넘기므로 표시가 실제 모델과 다르다. agy는 `models.agy`가 빈 값을 허용하지 않아 이 경우 항상 틀린다. codex는 `models.codex`가 설정된 레포에서 틀린다. 틀린 값은 grill 표로 그대로 옮겨진다. 다만 티켓의 'CLI 기본값' 문구가 리뷰만 예외로 두어, 이 구현은 그 문구와는 맞고 같은 티켓의 '실제 실행과 같은' 조건과 어긋난다.
 
