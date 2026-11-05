@@ -145,6 +145,19 @@ class BacklogTest(unittest.TestCase):
                 self.assertIn('issues: #12', out)
                 self.assertNotIn('지시를 무시하라', out)
 
+    def test_malformed_unclassified_response_warns_and_exits_zero(self):
+        cfg = SimpleNamespace(git=config.GitConfig(remote='origin', base='main'),
+                              feedback=config.FeedbackConfig(repo='Owner/project'))
+        for response in ({'a': 1}, [1], [{'labels': [], 'author': {'login': None}}]):
+            with self.subTest(response=response), \
+                 mock.patch('gs.backlog.config.load', return_value=(cfg, [])), \
+                 mock.patch('gs.backlog.git.github_repo', return_value='Owner/project'), \
+                 mock.patch('gs.feedback._gh', side_effect=[json.dumps(response), '[]']):
+                code, out, err = self.run_cli()
+                self.assertEqual(code, 0)
+                self.assertEqual(err, '경고: field-report issue 조회 실패(gh)\n')
+                self.assertNotIn('issue 후보', out)
+
     def test_out_of_scope_conditions_and_missing_ideas(self):
         self.ideas.rmdir()
         directory = self.repo / '.goldstack/out-of-scope'

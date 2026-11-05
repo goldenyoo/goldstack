@@ -127,7 +127,7 @@ def _field_reports(repo: Path, out, err, linked: set[int]) -> None:
             title = " ".join(issue["title"].splitlines())
             mark = "  미분류" if is_unclassified else ""
             rows.append(f"#{number}  {title}  횟수 {max(counts, default=1)}{mark}")
-    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, AttributeError):
         print("경고: field-report issue 조회 실패(gh)", file=err)
         return
     print(f"issue 후보 (field-report·미분류, 열림 {len(rows)})", file=out)
