@@ -78,6 +78,10 @@ LOCAL_ENV_EXAMPLE = """# 이 파일을 .goldstack/local.env로 복사한 뒤 값
 # .goldstack/local.env는 비밀 파일이므로 커밋하지 않는다.
 TG_TOKEN=
 TG_CHAT_ID=
+
+# 원격 실행: herdr에 저장된 머신 이름을 키 접미사로 쓰고 원격 레포의 절대 경로를 적는다.
+# GS_REMOTE_REPO_<머신>=/absolute/path/to/repo
+# 따옴표 없이 적는다. 원격 local.env는 사람이 직접 준비하며 gs는 유무만 검사한다.
 """
 
 
