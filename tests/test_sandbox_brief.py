@@ -47,6 +47,14 @@ class SandboxBriefTest(unittest.TestCase):
                 self.assertIn("필요한 단계를 worker가 돌리지 못한 것만으로는 지적하지 않는다", prompts[name])
                 self.assertIn("그 밖의 실패를 sandbox 탓으로 돌린 것은 지적한다", prompts[name])
 
+    def test_codex_note_points_to_profile_sandbox_command_without_naming_tools(self):
+        note = adapters.Codex.NOTE
+        self.assertIn("레포 profile의 빌드·시험 절에 sandbox용 시험 명령이 있으면", note)
+        self.assertIn("그 명령으로 좁은 시험을 돌린다", note)
+        for tool in ("uv", ".venv"):  # 환경을 가정하지 않는다: 명령은 레포 profile이 정한다
+            with self.subTest(tool=tool):
+                self.assertNotIn(tool, note)
+
     def _worker_brief(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

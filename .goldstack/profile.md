@@ -16,6 +16,7 @@
 - 시험은 **unittest**다(pytest 아님). 린터·포맷터 설정 없음.
 - 전체 병렬: `ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p`. worker와 함께 돌면 5–10분 걸린다(goldstack-v10 보고서). 순차 실행은 훨씬 느리니 쓰지 않는다.
 - 한 파일: `uv run python -m unittest discover -s tests -p test_x.py`.
+- sandbox(codex worker)에서 쓸 한 파일 시험: `.venv/bin/python -m unittest discover -s tests -p test_x.py`. `.venv`는 worktree setup(`uv sync --locked`)이 sandbox 전에 만든다. `uv run`은 `~/.cache/uv` 쓰기 차단으로 sandbox에서 실패한다.
 - 그 밖의 검증: `claude plugin validate .`, `uv build -q -o "$(mktemp -d)"`(레포 안에 `dist/`를 만들면 verify가 "worktree 바뀜"으로 실패한다).
 - `verify_ticket`은 쓰지 않는다. 코드 티켓은 전체 검증을 쓴다.
 
