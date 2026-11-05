@@ -28,7 +28,8 @@ max_workers: 3
 판단 모델 `opus`, 실패 요약 `haiku`. 예상은 v8–v11 등급별 중앙값(small 9, medium 38, large 69분)을 올림했다.
 
 ## 6. 환경 사실 (2026-11-05 확인)
-- `herdr --machine <머신> <명령>`이 herdr 명령을 원격에서 돌린다. `workspace create --cwd --label --env`, `pane send-text`, `pane read`, `machine status`가 있다. 임의의 셸 명령을 바로 돌리는 herdr 명령은 보지 못했다.
+- `herdr --machine <머신> <명령>`이 herdr 명령을 원격에서 돌린다. `workspace create --cwd --label --env`, `pane run <PANE_ID> <COMMAND>...`, `pane send-text`, `pane wait-output --match|--regex --timeout`, `pane read`, `machine status`가 있다. `--machine`을 붙인 `pane run`을 실제로 돌려 보지는 않았다.
+- `herdr machine status`는 저장된 머신 하나라도 실패하면 종료 1이다(2026-11-06 확인: `mac_mini` reachable, `Yseungjae_154` error). 머신 연결은 종료 코드가 아니라 그 머신의 줄로 판단한다.
 - `src/gs/herdr.py`는 `HERDR_BIN_PATH`로 바꿀 수 있다.
 - `mac_mini`는 reachable이다. 그 머신에는 `gs`, 플러그인, 레포 클론이 없고 gh 미로그인, 디스크 여유 21GB다(`.goldstack/ideas/remote-go-run.md`, 2026-11-05 점검).
 - `.goldstack/local.env.example`에 `TG_TOKEN`, `TG_CHAT_ID`가 있다. 이 머신에 `.goldstack/local.env`는 없다.
