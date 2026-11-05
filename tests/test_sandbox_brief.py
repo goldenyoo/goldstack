@@ -38,8 +38,13 @@ class SandboxBriefTest(unittest.TestCase):
             with self.subTest(message=name):
                 for term in ("네트워크", "localhost", "홈 디렉터리 쓰기"):
                     self.assertIn(term, text)
+        for name in ("Codex NOTE", "worker brief"):
+            with self.subTest(message=name):
+                self.assertIn("단계와 이유를 마지막 메시지에", prompts[name])
+                self.assertIn("커밋", prompts[name])
         for name in ("review", "rereview"):
             with self.subTest(message=name):
+                self.assertIn("필요한 단계를 worker가 돌리지 못한 것만으로는 지적하지 않는다", prompts[name])
                 self.assertIn("그 밖의 실패를 sandbox 탓으로 돌린 것은 지적한다", prompts[name])
 
     def _worker_brief(self):

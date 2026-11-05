@@ -175,7 +175,8 @@ class Codex(Adapter):
     """
     name = "codex"
     NOTE = ("아래 <stdin>의 brief대로 일한다. sandbox 때문에 검증 명령 일부가 못 도는 것(네트워크, localhost, "
-            "홈 디렉터리 쓰기)은 실패로 보지 말고, 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친 뒤 커밋한다. "
+            "홈 디렉터리 쓰기)은 실패로 보지 말고, 돌릴 수 없던 단계와 이유를 마지막 메시지에 적은 뒤 커밋한다. "
+            "그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다. "
             "gs가 sandbox 밖 병합 트리에서 검증을 다시 돌린다.")
 
     def writable_dirs(self, worktree: Path) -> list[Path]:
