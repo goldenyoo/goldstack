@@ -1,29 +1,6 @@
 # CHANGELOG
 
-## 미출시
-
-### goldstack-v9
-
-- 목표: worker가 끝나고도 다른 티켓의 리뷰 때문에 기다리는 시간을 줄이고, 고치지 않은 리뷰 지적이 보고서에 묻히지 않게 하고, "수정됨" 판정을 믿을 수 있게 한다.
-- 리뷰·판단·재리뷰가 루프 밖 스레드에서 돈다. 리뷰 중에도 다른 worker 종료가 처리되고 새 티켓이 시작된다. 병합·검증은 여전히 한 번에 하나다. 리뷰 중인 티켓은 `max_workers` 자리를 차지하지 않는다(worker 최대 `max_workers` + 리뷰 중인 티켓 최대 `max_workers`). 루프를 떠나면 돌던 리뷰어를 끝내고 다음 `gs go`가 끝나지 않은 리뷰를 다시 한다.
-- 2차 수정이 있었던 티켓은 2차 재리뷰가 앞서 수정됨이던 지적도 최종 커밋에서 다시 본다. 되돌려졌으면 `미해결`, 못 보면 `확인 못 함`이라 보고서의 "수정됨"으로 세지 않는다.
-- 상태가 "보고만"인 high·medium 리뷰 지적은 `.goldstack/ideas/<feature>-<티켓>-<번호>.md`로 보고서 커밋에 함께 올라가 `gs backlog`에 나온다. low는 보고서에만 남고, 있는 파일은 덮어쓰지 않는다.
-- `gs retro-log <feature>`가 `/retro`용 로그를 약 8만 토큰 이하 파일 하나(`run/retro-log.md`)로 모은다. `/retro`는 큰 로그를 agy에 맡길 때 이 파일 하나만 준다.
-- worker·리뷰 지시문에 sandbox 네트워크 안내를 더했다. 네트워크가 필요한 단계만 못 돌린 worker는 그 사실을 적고 커밋하고, gs가 sandbox 밖 병합 트리에서 다시 검증한다. 리뷰어는 그것만으로 지적하지 않는다.
-- `uv tool install --reinstall .`로 설치한 로컬 설치면 `gs go`·`gs doctor`가 `경고: 설치 commit 모름(로컬 설치): 뒤처짐을 비교할 수 없다`를 낸다. 문서의 재설치 절차는 설치 commit이 남는 `gs self-update`로 바꿨다.
-
-**레포에서 할 일** — 새 config 키는 없다. `gs`를 다시 설치한다. v8 gs에서 v9 gs로 넘어가는 이번 한 번만 `git pull` 뒤 `uv tool install --reinstall .`를 쓴다. 이후에는 `gs self-update --from <원격 주소>`를 한 번 쳐서 설치 commit을 남기면 경고가 사라지고, 그 뒤에는 `gs self-update`만 친다.
-
-- 보고만 high·medium 지적이 `.goldstack/ideas/`에 파일로 생기므로 보고서 커밋에 그 파일이 함께 들어간다. 필요 없는 파일은 지우지 말고 `status: "dropped"`로 둔다.
-
-### goldstack-v9 뒤 수정
-
-- 재리뷰 스레드의 뜻밖의 오류가 `unchecked`로 바뀌어 병합되던 것을 티켓 실패로 고쳤다.
-- 리뷰가 끝난 뒤 수정 worker 자리나 끊김을 기다리다 gs가 멈추면 다음 `gs go`가 끝난 리뷰를 다시 부르고 지적을 중복하던 것을 고쳤다.
-- 코드 인용의 `\'` 하나로 리뷰어 답 전체를 "리뷰 없음"으로 버리던 것을 고쳤다.
-- 초 경계에 따라 실패하던 `test_network_wait` 시험의 기대를 고쳤다.
-
-## 0.1.0 — 미출시
+## 0.1.0 — 2026-11-05
 
 ### goldstack-v0
 
@@ -110,3 +87,24 @@
 - `.gitignore`에 `.goldstack/feedback/`, `.goldstack/overnight/` 줄이 없는 옛 레포는 `gs init`을 다시 쳐서 줄을 더한다(있는 파일은 그대로 둔다). 피드백 디렉터리는 스스로도 git에서 가리지만 줄을 넣어 둔다.
 - worker가 `git config`·`git remote`를 쓰는 티켓은 이제 막힌다. 한 명령에만 필요하면 `git -c 키=값 <명령>`을 쓴다. `worktree.setup`이 `core.hooksPath`를 바꾸는 도구(husky 등)면 push 전 대조가 멈추게 하니 `docs/guide.md`의 "push 설정이 바뀌어 멈췄을 때"를 본다.
 - `gs go`를 감싼 스크립트는 종료 코드 3을 계속 "다시 돌리면 이어 간다"로 다룬다. 대기 상한이 실제로 지켜져 `중단(네트워크)`가 더 자주 날 수 있다.
+
+### goldstack-v9
+
+- 목표: worker가 끝나고도 다른 티켓의 리뷰 때문에 기다리는 시간을 줄이고, 고치지 않은 리뷰 지적이 보고서에 묻히지 않게 하고, "수정됨" 판정을 믿을 수 있게 한다.
+- 리뷰·판단·재리뷰가 루프 밖 스레드에서 돈다. 리뷰 중에도 다른 worker 종료가 처리되고 새 티켓이 시작된다. 병합·검증은 여전히 한 번에 하나다. 리뷰 중인 티켓은 `max_workers` 자리를 차지하지 않는다(worker 최대 `max_workers` + 리뷰 중인 티켓 최대 `max_workers`). 루프를 떠나면 돌던 리뷰어를 끝내고 다음 `gs go`가 끝나지 않은 리뷰를 다시 한다.
+- 2차 수정이 있었던 티켓은 2차 재리뷰가 앞서 수정됨이던 지적도 최종 커밋에서 다시 본다. 되돌려졌으면 `미해결`, 못 보면 `확인 못 함`이라 보고서의 "수정됨"으로 세지 않는다.
+- 상태가 "보고만"인 high·medium 리뷰 지적은 `.goldstack/ideas/<feature>-<티켓>-<번호>.md`로 보고서 커밋에 함께 올라가 `gs backlog`에 나온다. low는 보고서에만 남고, 있는 파일은 덮어쓰지 않는다.
+- `gs retro-log <feature>`가 `/retro`용 로그를 약 8만 토큰 이하 파일 하나(`run/retro-log.md`)로 모은다. `/retro`는 큰 로그를 agy에 맡길 때 이 파일 하나만 준다.
+- worker·리뷰 지시문에 sandbox 네트워크 안내를 더했다. 네트워크가 필요한 단계만 못 돌린 worker는 그 사실을 적고 커밋하고, gs가 sandbox 밖 병합 트리에서 다시 검증한다. 리뷰어는 그것만으로 지적하지 않는다.
+- `uv tool install --reinstall .`로 설치한 로컬 설치면 `gs go`·`gs doctor`가 `경고: 설치 commit 모름(로컬 설치): 뒤처짐을 비교할 수 없다`를 낸다. 문서의 재설치 절차는 설치 commit이 남는 `gs self-update`로 바꿨다.
+
+**레포에서 할 일** — 새 config 키는 없다. `gs`를 다시 설치한다. v8 gs에서 v9 gs로 넘어가는 이번 한 번만 `git pull` 뒤 `uv tool install --reinstall .`를 쓴다. 이후에는 `gs self-update --from <원격 주소>`를 한 번 쳐서 설치 commit을 남기면 경고가 사라지고, 그 뒤에는 `gs self-update`만 친다.
+
+- 보고만 high·medium 지적이 `.goldstack/ideas/`에 파일로 생기므로 보고서 커밋에 그 파일이 함께 들어간다. 필요 없는 파일은 지우지 말고 `status: "dropped"`로 둔다.
+
+### goldstack-v9 뒤 수정
+
+- 재리뷰 스레드의 뜻밖의 오류가 `unchecked`로 바뀌어 병합되던 것을 티켓 실패로 고쳤다.
+- 리뷰가 끝난 뒤 수정 worker 자리나 끊김을 기다리다 gs가 멈추면 다음 `gs go`가 끝난 리뷰를 다시 부르고 지적을 중복하던 것을 고쳤다.
+- 코드 인용의 `\'` 하나로 리뷰어 답 전체를 "리뷰 없음"으로 버리던 것을 고쳤다.
+- 초 경계에 따라 실패하던 `test_network_wait` 시험의 기대를 고쳤다.
