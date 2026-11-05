@@ -187,7 +187,7 @@ class MetricsTest(unittest.TestCase):
         self.st.ticket('01').network_wait_seconds = 60
         r = SimpleNamespace(st=self.st, order=['01'])
         text = report.measurements(r)
-        for expected in ['gs 0.1.0', 'install-sha', 'worker-model/high', 'review-model/xhigh', '50 | 3 | 2',
+        for expected in ['gs 0.1.0', 'install-sha', 'worker-model/high', 'review-model/xhigh', '50 | 기록 없음 | 3 | 2',
                          'summary | 5', 'verify-sha', 'check \\| tee log', '일시 오류 3회 · 대기 123.0초',
                          '01: 일시 오류 2회 · 대기 60.0초']:
             self.assertIn(expected, text)

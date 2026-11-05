@@ -5,6 +5,8 @@ direct_url.json에 있을 때만 읽는다(작업 대상 레포의 HEAD를 gs �
 
 처리 대기(workers의 processing_wait_seconds): worker가 끝난 뒤 go._loop가 그 결과를 받기까지(worker_exited_at → processing_started_at).
 v9부터 리뷰는 루프 밖이라 다른 티켓의 리뷰 시간은 여기 들지 않는다. 병합·검증과 실패 요약처럼 루프 안에서 도는 일을 기다린 시간이다.
+결과 대기(reviewers의 result_wait_seconds): 리뷰·판단 호출이 스레드에서 돌아온 때부터 go._loop가 그 결과를 받기까지(go._resume_flow).
+검증이 루프를 막으면 그동안 끝난 리뷰의 결과는 받아지지 않는다. 그 대기다. 한 호출로 나간 리뷰어(둘이면 함께)는 같은 값이고, 기록이 없는 옛 state는 보고서에 `기록 없음`이다.
 받은 뒤 리뷰 자리를 기다린 시간은 여기 들지 않고 단계 `review_wait`로, 수정 worker 자리는 `fix_wait`로 남는다(state.phases).
 """
 from __future__ import annotations
@@ -122,6 +124,30 @@ def review_result(rec, start) -> None:
 @best_effort
 def copy_review_counts(target, source):
     target.update({k: source[k] for k in ("seconds", "findings_count", "fix_count") if k in source})
+
+
+@best_effort
+def reviewer_rows(r) -> int:
+    """리뷰 호출을 보내는 시점의 reviewers 길이. 그 호출이 낸 줄은 이 뒤에 붙는다(result_wait)."""
+    return len(r.st.metrics.get("reviewers", []))
+
+
+@best_effort
+def result_wait(r, rv) -> None:
+    """루프가 끝난 리뷰 호출의 결과를 받는다. 호출이 돌아온 때부터 지금까지를 이 호출이 낸 reviewers 줄에 적는다.
+
+    호출이 넘긴 변경을 먼저 반영한 뒤(go._drain) 불러야 줄이 있다. 돌아온 시각이 없으면 적지 않는다.
+    """
+    at = rv.ended.get("at")
+    if at is None:
+        return
+    wait = elapsed(at)
+    tid = rv.a.t.id
+    rows = r.st.metrics.get("reviewers", [])
+    for row in rows[rv.rows or 0:]:
+        if row.get("ticket") == tid and "result_wait_seconds" not in row:
+            row["result_wait_seconds"] = wait
+    r.save()
 
 
 def on_state(wait, change) -> None:

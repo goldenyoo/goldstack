@@ -692,6 +692,8 @@ class Reviewing:
     todo: list[dict] = field(default_factory=list)  # 끝났을 때: 다음 수정 worker가 고칠 지적
     waited: bool = False  # 끝난 뒤 떠나지 못하고 기다렸다. 떠날 때 head를 다시 대조한다
     moved: str = ""  # 기다리는 사이 움직인 head. 리뷰를 다시 시작할 때 쓴다
+    ended: dict = field(default_factory=dict)  # 호출이 스레드에서 돌아온 시각(metrics.clock). 루프가 결과를 받을 때 결과 대기를 잰다(metrics.result_wait)
+    rows: int = 0  # 호출을 보낼 때 state.metrics["reviewers"]의 길이. 이 호출이 낸 줄은 그 뒤에 붙는다
 
 
 class Reviews:
@@ -853,7 +855,8 @@ def _review_step(r: Run, rv: Reviewing, active: dict[str, Active], runner) -> bo
         rv.flow = _review_stage(r, a, rv.moved)
         _resume_flow(r, rv)
     if rv.call is not None and not r.net.active:
-        rv.future, rv.call = reviews.executor.submit(_off_loop, rv.call), None
+        rv.ended, rv.rows = {}, metrics.reviewer_rows(r)
+        rv.future, rv.call = reviews.executor.submit(_off_loop, rv.call, rv.ended), None
     return rv.finished and _leave_review(r, rv, active, runner)
 
 
@@ -863,6 +866,8 @@ def _resume_flow(r: Run, rv: Reviewing, done: Future | None = None) -> None:
     먼저 호출이 넘긴 대기·측정을 적는다: 결과보다 먼저 일어난 일이고, 나가기를 기다리는 agy 재시도도 여기서 세여 다음 상한 판단에 든다.
     """
     _drain(r)
+    if done is not None:
+        metrics.result_wait(r, rv)  # 결과를 받는 시각이다. 검증이 루프를 막았다면 그만큼 늦다
     try:
         if done is None:
             rv.call = next(rv.flow)
@@ -878,14 +883,17 @@ def _resume_flow(r: Run, rv: Reviewing, done: Future | None = None) -> None:
             r.save()
 
 
-def _off_loop(call: Callable[[], list]) -> list:
-    """리뷰 스레드에서 호출 하나를 돌린다. 리뷰 단계가 다루는 오류 말고는 ReviewThreadError로 넘긴다."""
+def _off_loop(call: Callable[[], list], ended: dict | None = None) -> list:
+    """리뷰 스레드에서 호출 하나를 돌린다. 리뷰 단계가 다루는 오류 말고는 ReviewThreadError로 넘긴다. 돌아온 시각은 ended에 남긴다."""
     try:
         return call()
     except (review.Refused, git.GitError, OSError, transient.NetworkAbort, review.Cancelled):
         raise
     except BaseException as e:  # noqa: BLE001 — 스레드의 어떤 오류도 루프를 죽이지 않고 그 티켓의 실패로 간다
         raise ReviewThreadError(_err(e)) from e
+    finally:
+        if ended is not None:
+            ended["at"] = metrics.clock()
 
 
 def _leave_review(r: Run, rv: Reviewing, active: dict[str, Active], runner) -> bool:
