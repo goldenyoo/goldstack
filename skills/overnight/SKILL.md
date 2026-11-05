@@ -51,7 +51,7 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 
 밤사이 막힐 것을 사람이 있을 때 없앤다. 차례대로 하고 결과를 보인다. 실패는 사람과 고쳐 다시 본다.
 
-- **원격 앞섬**: 현재 브랜치가 `<base>`인지 본다. `git fetch <remote> <base>` 뒤 뒤처지기만 했으면 `git pull --ff-only`, 갈라졌으면 사람에게 보인다.
+- **원격 앞섬**: 현재 브랜치가 `<base>`인지 본다. `git fetch <remote> <base>` 뒤 뒤처지기만 했으면 `git pull --ff-only <remote> <base>`, 갈라졌으면 사람에게 보인다.
 - **텔레그램**: 답이 지금 값과 다르면 `.goldstack/config.toml`의 `telegram`을 고쳐 그 파일만 커밋한다. 켰으면 `gs notify --check`가 통과해야 한다.
 - **`gs check` 전부**: 오류 0. 경고는 첫 feature가 0이다. 뒤 feature는 앞 feature가 gs를 고쳐야 사라지는 경고(`알 수 없는 키`)만 남기고 6단계에서 다시 본다.
 - **미커밋 grill**: feature마다(뒤 feature 것도) `/go` 2단계로 커밋하고 push한다. 다른 미커밋 변경은 다른 세션 것일 수 있어 건드리지 않고 사람에게 보인다.
