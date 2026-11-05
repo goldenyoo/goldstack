@@ -2074,9 +2074,11 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
     with log.open("w", encoding="utf-8") as f:
         f.write(f"$ {command}\ncwd: {r.iwt}\n")
         res = verify.run(replace(spec, verify=command), r.iwt, f)
-        changed = not res.timed_out and (_merge_state(r) != before or not setup.is_clean(r.iwt, staged_ok=True))
+        after = _merge_state(r)
+        changed = not res.timed_out and (after != before or not setup.is_clean(r.iwt, staged_ok=True))
         if changed:
             f.write("\n검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
+            _log_changes(r, f, before, after)
         elif res.ok:
             verify.flaky(res, f"ticket-{t.id}", f)
     if res.timed_out:
@@ -2084,6 +2086,25 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
     metrics.validation(r, f"ticket-{t.id}", command, before[0], res, changed,
                        tree_sha=before[3], merge_head=before[2])
     return res, log, changed
+
+
+def _log_changes(r: Run, f, before: tuple[str, ...], after: tuple[str, ...]) -> None:
+    """검증이 트리를 바꿨다고 판정한 근거를 로그에 남긴다. 읽지 못해도 판정과 재시도 흐름은 그대로다."""
+    names = ("HEAD", "브랜치", "MERGE_HEAD", "index 트리")
+    try:
+        if after != before:
+            f.write("병합 상태가 달라졌다(전 -> 후):\n")
+            for name, was, now in zip(names, before, after):
+                if was != now:
+                    f.write(f"  {name}: {was or '(없음)'} -> {now or '(없음)'}\n")
+        cp = git.run(r.iwt, "status", "--porcelain", "--untracked-files=all", check=False)
+        if cp.returncode:
+            f.write(f"바뀐 파일 목록을 읽지 못했다: git status --porcelain 종료 코드 {cp.returncode}: "
+                    f"{(cp.stderr or cp.stdout).strip()}\n")
+        else:
+            f.write("git status --porcelain:\n" + (cp.stdout or "(출력 없음)\n"))
+    except (OSError, git.GitError) as e:
+        f.write(f"바뀐 파일 목록을 읽지 못했다: {e}\n")
 
 
 LABEL = {"merged": "병합", "already": "이미 병합", "failed": "실패", "skipped": "건너뜀", "pending": "대기",
