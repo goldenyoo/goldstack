@@ -241,13 +241,92 @@ class FeedbackSendTest(unittest.TestCase):
         self.tomorrow()
         self.assertEqual(self.send(), 1)
 
-    def run_cli(self, *args, mode='draft'):
+    def run_cli(self, *args, mode='draft', extra_config=''):
         (self.repo / ".goldstack").mkdir(exist_ok=True)
-        (self.repo / config.CONFIG_PATH).write_text(test_config.CONFIG + '\n[feedback]\nmode = "' + mode + '"\nrepo = "owner/inbox"\n')
+        (self.repo / config.CONFIG_PATH).write_text(test_config.CONFIG + '\n[feedback]\nmode = "' + mode + '"\nrepo = "owner/inbox"\n' + extra_config)
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(['--repo', str(self.repo), 'feedback', *args])
         return code, out.getvalue(), err.getvalue()
+
+    def test_status_lists_existing_drafts_without_changing_or_sending(self):
+        path = self.record()
+        (path.parent / 'broken.md').write_text('broken')
+        for mode in ('auto', 'draft', 'off'):
+            with self.subTest(mode=mode):
+                before = {p.name: p.read_bytes() for p in path.parent.iterdir()}
+                listed = self.run_cli('list', mode=mode)
+                self.assertEqual(listed[0], 0)
+                self.assertIn('pending', listed[1])
+                self.assertIn('broken.md invalid', listed[1])
+                self.assertEqual(self.run_cli('status', mode=mode), listed)
+                self.assertEqual({p.name: p.read_bytes() for p in path.parent.iterdir()}, before)
+        self.assertEqual(self.calls(), [])
+
+    def test_status_without_drafts_does_not_create_feedback_directory(self):
+        self.assertEqual(self.run_cli('status'), self.run_cli('list'))
+        self.assertEqual(self.run_cli('status'), (0, '', ''))
+        self.assertFalse((self.repo / feedback.FEEDBACK_DIR).exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_status_prints_config_warnings_once_like_list(self):
+        path = self.record()
+        before = path.read_bytes()
+        extra = '\n[unexpected]\nkey = "value"\n'
+        listed = self.run_cli('list', extra_config=extra)
+        self.assertEqual(listed[0], 0)
+        self.assertEqual(len(listed[2].splitlines()), 1)
+        self.assertIn('unexpected', listed[2])
+        self.assertEqual(self.run_cli('status', extra_config=extra), listed)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.calls(), [])
+
+    def test_unknown_single_word_never_creates_or_sends_drafts(self):
+        # 따옴표 유무와 무관하게 셸은 한 단어를 같은 argv 한 항목으로 넘긴다.
+        for mode in ('auto', 'draft'):
+            for word in ('오타', 'statsu', 'sendd'):
+                with self.subTest(mode=mode, word=word):
+                    code, out, err = self.run_cli(word, mode=mode)
+                    self.assertEqual(code, 2)
+                    self.assertEqual(out, '')
+                    self.assertIn('subcommand가 아니다. 보내려면 gs feedback "문장"', err)
+                    self.assertFalse((self.repo / feedback.FEEDBACK_DIR).exists())
+        path = self.record()
+        before = {p.name: p.read_bytes() for p in path.parent.iterdir()}
+        self.assertEqual(self.run_cli('오타', mode='auto')[0], 2)
+        self.assertEqual({p.name: p.read_bytes() for p in path.parent.iterdir()}, before)
+        self.assertEqual(self.calls(), [])
+
+    def test_manual_cli_sends_quoted_and_separate_words(self):
+        for args in (('한 줄 이상의 문장',), ('두', '단어'), ('탭\t문장',), ('여러\n줄',)):
+            with self.subTest(args=args):
+                self.assertEqual(self.run_cli(*args), (0, 'gs feedback: 1건 전송\n', ''))
+                create = self.calls('issue', 'create')[-1]
+                self.assertIn(' '.join(args), create[create.index('--body') + 1])
+        self.assertEqual(len(self.calls('issue', 'create')), 4)
+
+    def test_manual_cli_failure_guidance_matches_mode_and_preserves_draft(self):
+        for mode in ('auto', 'draft'):
+            for failure in ('list', 'create', 'missing'):
+                with self.subTest(mode=mode, failure=failure):
+                    message = f'{mode} {failure} 전송 실패'
+                    with mock.patch.dict(os.environ, {
+                        'FAKE_FAIL': failure,
+                        'GS_GH': '/no/such/gh' if failure == 'missing' else str(self.fake),
+                    }):
+                        code, out, err = self.run_cli(message, mode=mode)
+                    self.assertEqual((code, out), (0, 'gs feedback: 0건 전송\n'))
+                    self.assertEqual(len(err.splitlines()), 1)
+                    self.assertNotIn('secret auth failure', err)
+                    if mode == 'draft':
+                        self.assertIn('gs feedback send', err)
+                        self.assertNotIn('다음 실행', err)
+                    else:
+                        self.assertIn('다음 실행 때 다시 보냅니다', err)
+                    drafts = [feedback.read_draft(p, self.cfg)
+                              for p in (self.repo / feedback.FEEDBACK_DIR).glob('*.md')]
+                    draft, = [d for d in drafts if message in d.body]
+                    self.assertNotIn('sent_count', draft.meta)
 
     def test_manual_cli_sends_verbatim_text_and_environment_in_draft_mode(self):
         message = '진행 요약에 기다린 시간도 보여 주세요 $(touch nope)'
