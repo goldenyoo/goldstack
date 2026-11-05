@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "high"
 source: "goldstack-v10 리뷰 03"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v11"
 ---
 이전 verified 실행에 새 티켓을 추가한 뒤, integration 병합 직후 중단되면 --only 재실행이 완료 상태를 무효화하지 않는다. 이후 gs clean이 미병합 변경을 삭제해도 옵션 없는 gs go는 '이미 끝남'으로 종료하여 새 티켓을 base에 반영하지 않는다.
 

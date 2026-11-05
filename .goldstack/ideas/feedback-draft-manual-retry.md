@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v8 05 리뷰(claude) 보고만, 2026-11-05 코드 대조"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v11"
 ---
 `draft` 모드에서 못 나간 `gs feedback "한 줄"`을 다음 실행이 다시 보내지 않는데, 안내는 다시 보낸다고 한다.
 
