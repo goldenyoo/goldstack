@@ -6,6 +6,7 @@
 - `GS_ROLE != worker`면 입력을 읽기 전에 `allow`만 낸다(일반 agy 세션에 영향 없음).
 - `toolCall.args`만 본다. `lastUserInput`(프롬프트 전체)을 보면 brief의 금지 문구 때문에 정상 명령까지 막힌다.
 - worktree의 `.agents/`(gs hook 설정)를 바꾸거나 읽는 일은 막는다. agent가 차단 장치를 끄거나 커밋하지 않게.
+- 검색 도구의 `SearchPath`·`DirectoryPath`는 조사 문서에서 가져왔다. 실제 agy 검색 이벤트를 받지 않아 이 입력 모양은 미확인이다.
 """
 from __future__ import annotations
 
@@ -37,6 +38,17 @@ def translate(payload: Mapping) -> tuple[dict, str] | None:
     cwd = str(args.get("Cwd") or workspace)
     if name == "run_command":
         return {"tool_name": "Bash", "cwd": cwd, "tool_input": {"command": str(args.get("CommandLine") or "")}}, workspace
+    search_tools = {"grep_search": ("Grep", "SearchPath"),
+                    "find_by_name": ("Glob", "DirectoryPath"),
+                    "list_dir": ("Glob", "DirectoryPath")}
+    if name in search_tools:
+        tool, key = search_tools[name]
+        path = args.get(key)
+        if not isinstance(path, str) or not path:
+            path = next((args[k] for k in PATH_KEYS
+                         if isinstance(args.get(k), str) and args[k]), None)
+        tool_input = {"path": path} if isinstance(path, str) and path else {}
+        return {"tool_name": tool, "cwd": cwd, "tool_input": tool_input}, workspace
     path = next((str(args[k]) for k in PATH_KEYS if isinstance(args.get(k), str) and args[k]), "")
     if not path:
         return None
@@ -65,7 +77,8 @@ def _guard_agents(inner: dict, env: Mapping[str, str]) -> str | None:
             return "`.agents/`는 gs가 건 차단 장치(hook 설정)다. worker는 건드리지 않는다"
         return None
     root = os.path.realpath(env.get("GS_WORKTREE") or inner["cwd"] or os.getcwd())
-    real = os.path.realpath(os.path.join(inner["cwd"] or root, os.path.expanduser(inp["file_path"])))
+    path = inp.get("file_path") or inp.get("path") or "."
+    real = os.path.realpath(os.path.join(inner["cwd"] or root, os.path.expanduser(path)))
     agents = os.path.join(root, ".agents")
     if real == agents or real.startswith(agents + "/"):
         return "`.agents/`는 gs가 건 차단 장치(hook 설정)다. worker는 건드리지 않는다"

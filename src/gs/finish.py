@@ -26,6 +26,7 @@ feature PR로 base에 간다. base에 없으면(revert가 지움, 파일을 쓰�
 
 finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행은 같은 PR을 다시 병합하지 않고
 base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
+병합 뒤 무엇을 할지는 `revert_decision.next_step`이 정하고 `_postmerge`는 사실을 읽어 그 답을 실행한다.
 integration 전체 검증 실패로 not_merged가 되면 실패한 검증 단계를 남겨 보고서가 로그·후보 티켓을 붙인다.
 """
 from __future__ import annotations
@@ -36,10 +37,11 @@ import re
 import subprocess
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
 
-from . import clean, doctor, feedback, findings, git, metrics, report, review, setup, state, verify
+from . import clean, doctor, feedback, findings, git, metrics, report, review, revert_decision, setup, state, verify
 from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
@@ -626,12 +628,34 @@ def _revert_pr(r, sha: str) -> bool:
     return False
 
 
+def _prepare_base(r, wt: Path) -> str | None:
+    """임시 base worktree를 준비하고 검증할 끝 커밋을 돌려준다. setup이 실패하면 None(끝 커밋을 읽지 않는다)."""
+    if r.cfg.worktree.setup.strip():
+        r.st.phase = "setup"
+        r.save()
+        try:
+            print(f"■ {r.base} 준비 중", flush=True)
+            prepared = setup.run(r.cfg, wt, r.rundir / "finish" / "setup.log").ok
+        finally:
+            r.st.phase = "finish"
+            r.save()
+        if not prepared:
+            return None
+        setup.remember(wt)
+    return git.sha(wt, "HEAD")
+
+
 @metrics.stage("postmerge")
 def _postmerge(r) -> bool:
+    """사실을 읽어 `revert_decision.next_step`에 묻고 답한 단계를 실행한다. 판단 규칙은 그 함수에 있다."""
     f = r.st.finish
-    if f["phase"] == "verified":
+    sha = f.get("revert_sha")
+    facts = revert_decision.Facts(phase=f["phase"], direct_push=r.cfg.git.direct_push, has_revert=bool(sha),
+                                  revert_head_matches=f.get("revert_head") == sha)
+    step = revert_decision.next_step(facts)
+    if step == revert_decision.ALREADY_VERIFIED:
         return True
-    if f["phase"] == "reverted":
+    if step == revert_decision.ALREADY_REVERTED:
         return False
     git.run(r.repo, "fetch", "-q", r.remote, r.base)
     merge = f["merge_sha"]
@@ -639,22 +663,22 @@ def _postmerge(r) -> bool:
         raise git.GitError(f"병합 커밋 {merge}가 {r.base_ref}에 없다")
     _check_merge(r)
     tip = git.sha(r.repo, r.base_ref)
-    sha = f.get("revert_sha")
-    if sha and f.get("revert_head") == sha:
-        # 지난 실행이 올린 revert 브랜치·PR(승인 대기, 생성 응답 오류, 병합 직후 중단)을 다시 읽는다. squash면 sha는 base에 들지 않는다.
+    theirs = _revert_of(r.repo, merge, f"{merge}..{r.base_ref}")
+    facts = replace(facts, revert_in_base=bool(sha) and _ancestor(r.repo, sha, r.base_ref), external_revert=bool(theirs))
+    step = revert_decision.next_step(facts)
+    if step == revert_decision.READ_REVERT_PARENT:
+        facts = replace(facts, revert_parent_is_tip=git.sha(r.repo, f"{sha}^") == tip)
+        step = revert_decision.next_step(facts)
+    if step in (revert_decision.REREAD_REVERT_PR, revert_decision.OPEN_REVERT_PR):
         return _revert_pr(r, sha)
-    if sha and _ancestor(r.repo, sha, r.base_ref):
+    if step == revert_decision.RECORD_PUSHED_REVERT:
         _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
         return False
-    theirs = _revert_of(r.repo, merge, f"{merge}..{r.base_ref}")
-    if theirs:  # gs가 아닌 누군가 이미 되돌렸다. 같은 병합을 두 번 revert하지 않는다
+    if step == revert_decision.RECORD_EXTERNAL_REVERT:
         _save(r, phase="reverted", revert_sha=theirs,
               outcome=f"{r.base}에서 이미 병합 커밋을 되돌렸다(revert {theirs}, gs가 아닌 다른 곳). gs는 revert를 push하지 않음")
         return False
-    # revert push 직전에 중단됐고 base가 그대로면 같은 커밋을 일반 push한다(두 번 revert하지 않는다).
-    if sha and git.sha(r.repo, f"{sha}^") == tip:
-        if not r.cfg.git.direct_push:
-            return _revert_pr(r, sha)
+    if step == revert_decision.PUSH_REVERT:
         git.push(r.repo, r.remote, r.st.push_record, f"{sha}:refs/heads/{r.base}")
         _save(r, phase="reverted", outcome=f"{r.base} 검증 실패 → revert {sha}를 {r.base}에 push함")
         return False
@@ -662,29 +686,17 @@ def _postmerge(r) -> bool:
         wt = Path(tmp) / "base"
         git.run(r.repo, "worktree", "add", "--detach", str(wt), tip)
         try:
-            if r.cfg.worktree.setup.strip():
-                r.st.phase = "setup"
-                r.save()
-                try:
-                    print(f"■ {r.base} 준비 중", flush=True)
-                    prepared = setup.run(r.cfg, wt, r.rundir / "finish" / "setup.log").ok
-                finally:
-                    r.st.phase = "finish"
-                    r.save()
-                if not prepared:
-                    _save(r, phase="base_unverified", main_ok=None, outcome="base 미검증(준비 실패)")
-                    return False
-                setup.remember(wt)
-            main_head = git.sha(wt, "HEAD")
-            if f["phase"] != "main_failed":
-                ok = _verify(r, wt, "main")
-            elif f.get("main_head") != main_head:
-                # 실패 뒤 base가 움직였다(그사이 push로 revert push가 거부됐을 수 있다). 최신 base를 다시 검증한다.
-                ok = _verify(r, wt, "main-recheck")
-            else:
-                ok = False
+            main_head = _prepare_base(r, wt)
+            facts = replace(facts, base_ready=main_head is not None, base_moved=f.get("main_head") != main_head)
+            step = revert_decision.next_step(facts)
+            if step == revert_decision.RECORD_UNVERIFIED:
+                _save(r, phase="base_unverified", main_ok=None, outcome="base 미검증(준비 실패)")
+                return False
+            label = {revert_decision.VERIFY_MAIN: "main", revert_decision.RECHECK_MAIN: "main-recheck"}.get(step)
+            ok = bool(label) and _verify(r, wt, label)
             _save(r, main_ok=ok, main_head=main_head)
-            if ok:
+            step = revert_decision.next_step(replace(facts, main_ok=ok))
+            if step == revert_decision.RECORD_VERIFIED:
                 stale = f.pop("revert_sha", None)
                 _save(r, phase="verified", outcome=f"integration·{r.base} 검증 통과, PR 병합 완료" if not stale else
                       f"{r.base} 검증 실패 뒤 {r.base}가 바뀌었고 최신 {r.base} 검증 통과 → revert하지 않음(쓰지 않은 revert {stale})")
@@ -699,7 +711,7 @@ def _postmerge(r) -> bool:
             git.run(wt, "revert", "--no-edit", *(["-m", "1"] if len(parents) > 1 else []), merge)
             sha = git.sha(wt, "HEAD")
             _save(r, revert_sha=sha)  # push 실패·중단 때 재사용할 커밋
-            if not r.cfg.git.direct_push:
+            if step == revert_decision.MAKE_REVERT_PR:
                 return _revert_pr(r, sha)
             # 절대로 force하지 않는다. 거부되면(base가 움직임) 다음 실행이 최신 base 위에서 다시 만든다.
             git.push(wt, r.remote, r.st.push_record, f"HEAD:refs/heads/{r.base}")
