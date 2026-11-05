@@ -14,7 +14,7 @@ SKILLS = REPO / "skills"
 TEMPLATES = SKILLS / "grill" / "templates"
 # skill 본문(frontmatter 뺀 `split()`) 단어 상한. 상한은 여기 한 곳에만 둔다. skill 글을 고치는 티켓은 이 값과 지금 단어 수를 완료 조건에 적는다
 WORD_LIMITS = {
-    "grill": 450, "go": 480, "adopt": 450, "overnight": 1700, "idea": 400,  # overnight은 사전 점검부터 이어받기까지 한 문서라 넓다
+    "grill": 450, "go": 480, "adopt": 450, "overnight": 1550, "idea": 400,  # overnight은 사전 점검부터 이어받기까지 한 문서라 넓다
     "retro": 1150, "writing-for-agents": 1430, "diagnosing-bugs": 1200,  # 이 셋은 지금 단어 수의 약 10% 위. 낮추는 일은 goldstack-v12 12
 }
 
