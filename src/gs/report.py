@@ -4,6 +4,9 @@
 스크립트가 보존한다. 모델 호출 실패도 보고서에 남기며 검증 결과를 대신하지 않는다.
 마무리 전체 검증 실패에는 실패 줄·로그 경로와 파일이 겹치는 후보 티켓(추정)을 붙인다.
 수리한 티켓은 티켓별 결과의 이유 칸에 그 사실과 결과가 있다(state.repair_summary).
+"gs 검증별 측정" 표는 검증의 재시도 하나가 한 줄이다. 열 뜻: 티켓 시도 = 그때의 티켓 worker 시도, 재시도 = 한 검증 안의 재시도,
+integration head = 검증한 integration 끝(티켓 검증이어도 티켓 코드가 아니고 여러 검증이 같을 수 있다), 티켓 head = 병합하려던 티켓 커밋.
+판단 입력 `report-input.md`에는 실패한 검증의 시험 줄이 들어간다(failing_tests). 로그가 없으면 없다고 적는다.
 """
 from __future__ import annotations
 
@@ -185,9 +188,9 @@ def measurements(r) -> str:
     # 중단된 호출도 버리지 않는다. 아래 호출 시간에는 판단 모델·네트워크 대기가 들어가지 않는다.
     table("리뷰 호출별 시간(재호출 포함)", ["리뷰어", "티켓", "모델/effort", "소요(초)", "결과"], [
         (x['reviewer'], x['ticket'], model(x), x.get('seconds'), x['result']) for x in data.get('review_calls', [])])
-    table("gs 검증별 측정", ["라벨/시도", "명령", "SHA", "소요(초)", "결과"], [
-        (f"{x['label']}/{x['attempt']}", x['command'], x['sha'], x['seconds'], x['result'])
-        for x in data.get('validations', [])])
+    table("gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티켓 worker 시도, 재시도는 한 검증 안의 번호)",
+          ["순번", "라벨", "티켓 시도", "재시도", "명령", "integration head", "티켓 head", "소요(초)", "결과"],
+          [(n, *validation_row(x)) for n, x in enumerate(data.get('validations', []), 1)])
     totals = Counter()
     for rec in data.get("finish_stages", []):
         seconds = rec.get("seconds")
@@ -198,6 +201,15 @@ def measurements(r) -> str:
         lines.append("")
         lines.append("중단된 마무리 단계는 마지막 상태 저장까지의 시간만 포함한다(실제 소요의 하한).")
     return "\n".join(lines) + "\n\n"
+
+
+def validation_row(x: dict) -> tuple:
+    """`metrics.validation` 한 줄을 표의 칸으로. 옛 state는 sha·attempt·merge_head 이름으로 남아 있다."""
+    ticket_attempt = x.get("ticket_attempt")
+    return (x["label"], "-" if ticket_attempt is None else ticket_attempt,
+            x.get("retry", x.get("attempt", "?")), x["command"],
+            x.get("integration_head", x.get("sha")) or "-", x.get("ticket_head", x.get("merge_head")) or "-",
+            x["seconds"], x["result"])
 
 
 def ticket_commands(r) -> str:
@@ -244,7 +256,7 @@ def summarize(r, on_wait=None) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     argv = review.judge_argv(r.cfg, cwd=r.iwt, on_wait=on_wait)
     facts = directory / "report-input.md"
-    facts.write_text(evidence(r) + "\n## 마무리 상태\n\n" + block(json.dumps(r.st.finish, ensure_ascii=False)),
+    facts.write_text(evidence(r) + (failing_tests(r) or "") + "\n## 마무리 상태\n\n" + block(json.dumps(r.st.finish, ensure_ascii=False)),
                      encoding="utf-8")
     diff = directory / "diff-stat.txt"
     diff.write_text(git.out(r.iwt, "diff", "--stat", f"{r.base_ref}...HEAD") + "\n", encoding="utf-8")
@@ -315,6 +327,76 @@ def _failure_candidates(r, lines: list[str]) -> list[str]:
     return candidates
 
 
+def _failure_lines(log: Path, command: str) -> list[str]:
+    """로그에서 실패 줄을 최대 10줄(원본 그대로). 읽지 못하면 OSError."""
+    lines = []
+    with log.open(encoding="utf-8", errors="replace") as stream:
+        # verify가 쓴 명령은 여러 줄이어도 실제 검증 출력에서 뺀다.
+        head = f"$ {command}\n"
+        if stream.read(len(head)) != head:
+            stream.seek(0)
+        for line in stream:
+            if any(word in line for word in ("FAIL", "ERROR", "failed", "not ok")):
+                lines.append(line.rstrip("\n"))
+                if len(lines) == 10:
+                    break
+    return lines
+
+
+def _excerpts(lines: list[str]) -> list[str]:
+    return [line if len(line) <= FAILURE_LINE_LIMIT else line[:FAILURE_LINE_LIMIT] + " …(줄 일부 생략)"
+            for line in lines]
+
+
+@metrics.best_effort
+def failing_tests(r) -> str | None:
+    """판단 입력용: 통과하지 못한 검증의 로그에서 실패한 시험 줄. 검증 표만으로는 원인을 모른다.
+    티켓 로그는 시도 디렉터리마다 마지막 검증만 남는다. 로그가 없으면 없다고 적는다. 읽기 오류는 보고서를 막지 않는다(None)."""
+    recorded = r.st.metrics.get("validations", [])
+    failed = [x for x in recorded if x.get("result") != "passed"]
+    command = r.feat.spec.verify
+    out = []
+    if not recorded:  # 측정 이력이 없는 옛 state: 어떤 검증이 실패했는지 모르니 남은 티켓 로그에서 실패 줄을 찾는다
+        for tid in r.order:
+            for log in sorted((r.rundir / tid).glob("**/verify.log"), key=lambda p: p.stat().st_mtime):
+                try:
+                    lines = _failure_lines(log, command)
+                except OSError as e:
+                    out.append(f"- 티켓 {tid}: `{log.relative_to(r.rundir)}`\n  로그를 읽지 못함: {e}\n")
+                    continue
+                if lines:
+                    out.append(f"- 티켓 {tid}: `{log.relative_to(r.rundir)}` (측정 이력 없음)\n"
+                               + block("\n".join(_excerpts(lines))))
+    for tid in r.order if recorded else ():
+        mine = [x for x in failed if x["label"] == f"ticket-{tid}" or x["label"].startswith(f"ticket-{tid}-")]
+        if not mine:
+            continue
+        logs = sorted((r.rundir / tid).glob("**/verify.log"), key=lambda p: p.stat().st_mtime)
+        if not logs:
+            out.append(f"- 티켓 {tid}: 실패한 검증 {len(mine)}회, verify.log 없음")
+        for log in logs:
+            out.append(f"- 티켓 {tid}: `{log.relative_to(r.rundir)}`\n" + _failure_block(log, command))
+    for x in failed:
+        if x["label"].startswith("ticket-"):
+            continue
+        log = r.rundir / "finish" / f"{x['label']}-verify.log"
+        entry = f"- 마무리 `{x['label']}`({x['result']}): "
+        item = entry + f"`{log.relative_to(r.rundir)}`\n" + _failure_block(log, command) if log.is_file() \
+            else entry + "verify.log 없음"
+        if item not in out:
+            out.append(item)
+    return ("## 실패한 검증의 시험 줄\n\n" + "\n".join(out) + "\n\n") if out else \
+        "## 실패한 검증의 시험 줄\n\n" + ("측정 이력 없음, 실패 줄이 있는 티켓 로그 없음" if not recorded else "통과하지 못한 검증 없음") + "\n\n"
+
+
+def _failure_block(log: Path, command: str) -> str:
+    try:
+        lines = _failure_lines(log, command)
+    except OSError as e:
+        return f"  로그를 읽지 못함: {e}\n"
+    return block("\n".join(_excerpts(lines))) if lines else "  해당 실패 줄 없음\n"
+
+
 def verification_failure(r) -> str:
     """실패 증거는 원본 로그에서 최대 10줄. 후보 추정 오류는 보고서 쓰기를 막지 않는다."""
     label = r.st.finish.get("failed_verify")
@@ -324,19 +406,8 @@ def verification_failure(r) -> str:
     text = f"### 검증 실패\n\n검증: `{label}` · 로그: `{log.resolve()}`\n\n"
     lines = []
     try:
-        with log.open(encoding="utf-8", errors="replace") as stream:
-            # finish._verify가 쓴 명령은 여러 줄이어도 실제 검증 출력에서 뺀다.
-            command = f"$ {r.feat.spec.verify}\n"
-            if stream.read(len(command)) != command:
-                stream.seek(0)
-            for line in stream:
-                if any(word in line for word in ("FAIL", "ERROR", "failed", "not ok")):
-                    lines.append(line.rstrip("\n"))
-                    if len(lines) == 10:
-                        break
-        excerpts = [line if len(line) <= FAILURE_LINE_LIMIT
-                    else line[:FAILURE_LINE_LIMIT] + " …(줄 일부 생략)" for line in lines]
-        text += block("\n".join(excerpts)) if lines else "해당 실패 줄 없음. 전체 로그를 확인하라.\n"
+        lines = _failure_lines(log, r.feat.spec.verify)
+        text += block("\n".join(_excerpts(lines))) if lines else "해당 실패 줄 없음. 전체 로그를 확인하라.\n"
     except OSError as e:
         text += f"로그를 읽지 못함: {e}\n"
     try:

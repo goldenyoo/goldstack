@@ -2330,7 +2330,9 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
     if res.timed_out:
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
     label = f"ticket-{t.id}" + ("-repair" if state.open_repair(r.st.ticket(t.id)) else "")
-    metrics.validation(r, label, command, before[0], res, changed, tree_sha=before[3], merge_head=before[2])
+    ts = r.st.ticket(t.id)
+    metrics.validation(r, label, command, before[0], res, changed, tree_sha=before[3], ticket_head=before[2],
+                       ticket_attempt=ts.phases[-1]["attempt"] if ts.phases else ts.attempts)
     return res, log, changed
 
 
