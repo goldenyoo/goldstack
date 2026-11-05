@@ -125,14 +125,22 @@ def require_other_family(model: str, reviewer: str) -> None:
 
 # ---------------------------------------------------------------- 형식
 
+def _repair_escapes(text: str) -> str:
+    r"""`\'`의 역슬래시를 뗀다. 모델이 셸 코드를 인용하다 낸다. 다른 이스케이프는 그대로 둔다: 키가 바뀌어 판정이 뒤집히면 안 된다(`statu\s`)."""
+    return re.sub(r"\\(.)", lambda m: "'" if m.group(1) == "'" else m.group(0), text, flags=re.S)
+
+
 def extract_json(text: str) -> dict:
-    """답에서 JSON 객체 하나를 꺼낸다: 전체 → 마지막 ```json 블록부터 → 첫 `{`부터 마지막 `}`까지."""
+    """답에서 JSON 객체 하나를 꺼낸다: 전체 → 마지막 ```json 블록부터 → 첫 `{`부터 마지막 `}`까지.
+
+    그대로 읽히는 후보가 없을 때만 `\\'`를 고쳐 다시 읽는다(_repair_escapes). 인용 하나 때문에 답 전체를 "리뷰 없음"으로 버리지 않는다.
+    """
     text = text.strip()
     candidates = [text, *reversed(re.findall(r"```(?:json)?[ \t]*\n(.*?)```", text, re.S))]
     i, j = text.find("{"), text.rfind("}")
     if 0 <= i < j:
         candidates.append(text[i:j + 1])
-    for c in candidates:
+    for c in [*candidates, *map(_repair_escapes, candidates)]:
         try:
             value = json.loads(c)
         except (ValueError, RecursionError):  # 너무 깊이 중첩된 답도 형식 오류다

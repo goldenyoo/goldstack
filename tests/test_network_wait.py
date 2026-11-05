@@ -99,7 +99,8 @@ class NetworkTest(support.GoTest):
         self.assertIn("지난 시도가 네트워크로 끊겼다. `git status`와 `git diff`로 남은 변경을 보고 이어라",
                       (self.bin / "brief_2").read_text())
         self.assertIn("일시 오류(", out)
-        self.assertIn("네트워크 대기(1회, 1분 뒤)", out)
+        # 분 값은 보지 않는다: 시각이 초 단위라 0.05초 대기가 초 경계를 넘으면 "20분 뒤"가 된다
+        self.assertRegex(out, r"네트워크 대기\(1회, \d+분 뒤\)")
         self.assertIn("■ 네트워크 회복", out)
         self.assertEqual(ts.transient_errors, 1)
         self.assertGreater(ts.network_wait_seconds, 0)
