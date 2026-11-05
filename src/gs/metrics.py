@@ -10,6 +10,8 @@ v9부터 리뷰는 루프 밖이라 다른 티켓의 리뷰 시간은 여기 들
 받은 뒤 리뷰 자리를 기다린 시간은 여기 들지 않고 단계 `review_wait`로, 수정 worker 자리는 `fix_wait`로, 수리 worker 자리는 `repair_wait`로 남는다(state.phases).
 수리(go._start_repair): worker는 workers에 phase `repair`로 남고(끊겨 이으면 디렉터리가 `repair-net<n>`이어도 같다), 수리 재리뷰는 reviewers의 round가
 review.REPAIR_ROUND다. 수리 뒤 다시 한 검증은 validations의 label이 `ticket-<NN>-repair`다(go._verify).
+validations 한 줄은 검증 하나의 재시도 하나다. `integration_head`(검증한 integration 끝)와 `ticket_head`(병합하려던 티켓 커밋)는 다르고,
+같은 티켓의 검증이 여러 번이어도 integration_head가 같을 수 있다. `ticket_attempt`는 티켓 worker 시도 번호, `retry`는 한 검증 안의 재시도 번호다.
 """
 from __future__ import annotations
 
@@ -106,11 +108,22 @@ def sample(samples, start, result) -> None:
 
 
 @best_effort
-def validation(r, label, command, sha, result, changed=False, *, tree_sha="", merge_head="") -> None:
+def validation(r, label, command, integration_head, result, changed=False, *, tree_sha="", ticket_head="",
+               ticket_attempt=None) -> None:
+    """검증 한 번(재시도 포함)을 `validations`에 한 줄씩 남긴다.
+
+    - `integration_head`: 검증한 worktree의 HEAD. 티켓 검증이면 미완 병합을 만들기 전 integration 끝이라
+      같은 티켓의 다른 검증과 같을 수 있다. 티켓 코드가 아니다.
+    - `ticket_head`: 티켓 검증에서 병합하려던 티켓 커밋(MERGE_HEAD). 마무리 검증은 비어 있다.
+    - `ticket_attempt`: 그때의 티켓 worker 시도 번호(마무리 검증은 None). 검증 재시도 번호가 아니다.
+    - `retry`: 이 검증 안의 재시도 번호(1부터, `verify.run` 표본 순서). 티켓 시도와 무관하다.
+    옛 state는 `sha`(= integration_head), `attempt`(= retry), `merge_head`(= ticket_head)로 읽는다(report.validation_row).
+    """
     for nth, item in enumerate(result.samples, 1):
         r.st.metrics.setdefault("validations", []).append({
-            **item, "label": label, "command": command, "sha": sha, "tree_sha": tree_sha,
-            "merge_head": merge_head, "attempt": nth, "recorded_at": state.now(),
+            **item, "label": label, "command": command, "integration_head": integration_head,
+            "ticket_head": ticket_head, "ticket_attempt": ticket_attempt, "tree_sha": tree_sha,
+            "retry": nth, "recorded_at": state.now(),
             "tree_changed": changed, "accepted": item["ok"] and not changed,
             "result": "timeout" if item["timed_out"] else "failed" if not item["ok"] else
                       "tree_changed" if changed else "passed"})

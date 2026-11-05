@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import shutil
 import tempfile
@@ -23,6 +24,17 @@ verify: "true"
 
 def ticket(tid, blocked_by="[]", model="claude", reviewer="codex", extra=""):
     return f'---\nid: "{tid}"\ntitle: t{tid}\nblocked_by: {blocked_by}\nmodel: {model}\nreviewer: {reviewer}\n{extra}---\n## 목표\n'
+
+
+def past_ticket(tier, minutes, status="merged"):
+    """tier가 None이면 옛 형식(phases에 tier 없음)."""
+    phase = {"attempt": 1, "phase": "worker", "model": "claude",
+             "started_at": "2026-11-01T10:00:00+09:00", "ended_at": ""}
+    if tier:
+        phase["tier"] = tier
+    return {"status": status, "started_at": "2026-11-01T10:00:00+09:00",
+            "ended_at": f"2026-11-01T{10 + minutes // 60:02d}:{minutes % 60:02d}:00+09:00",
+            "phases": [phase]}
 
 
 class CheckTest(unittest.TestCase):
@@ -344,6 +356,44 @@ class CheckTest(unittest.TestCase):
             with self.subTest(url=url):
                 git.run(self.repo, "remote", "set-url", "upstream", url)
                 self.assertEqual(self.run_check()[::2], (0, ""))
+
+    def past_run(self, feature, tickets):
+        rundir = self.repo / ".goldstack/work" / feature / "run"
+        rundir.mkdir(parents=True)
+        (rundir / "state.json").write_text(json.dumps(
+            {"feature": feature, "tickets": {f"{i:02d}": t for i, t in enumerate(tickets, 1)}}))
+
+    def measured(self):
+        self.write("01-a.md", ticket("01"))
+        code, out, err = self.run_check()
+        self.assertEqual((code, err), (0, ""))
+        return [line for line in out.splitlines() if line.startswith("실측")]
+
+    def test_no_history(self):
+        self.assertEqual(self.measured(), ["실측 기록 없음"])
+
+    def test_old_tickets_without_tier_are_not_samples(self):
+        self.past_run("old", [past_ticket(None, 30), past_ticket(None, 40)])
+        self.assertEqual(self.measured(), ["실측 기록 없음"])
+
+    def test_single_sample(self):
+        self.past_run("v1", [past_ticket("small", 9)])
+        self.assertEqual(self.measured(), ["실측(지난 실행): small 9분(1)"])
+
+    def test_median_per_tier_in_order_skipping_failed_and_current_feature(self):
+        self.past_run("v1", [past_ticket("large", 70), past_ticket("small", 8), past_ticket("small", 12),
+                             past_ticket("small", 99, status="failed"), past_ticket(None, 500)])
+        self.past_run("v2", [past_ticket("large", 60), past_ticket("small", 10), past_ticket("medium", 38)])
+        self.past_run("demo", [past_ticket("small", 400)])
+        self.assertEqual(self.measured(),
+                         ["실측(지난 실행): small 10분(3) · medium 38분(1) · large 65분(2)"])
+
+    def test_broken_state_is_skipped(self):
+        self.past_run("v1", [past_ticket("medium", 20)])
+        broken = self.repo / ".goldstack/work/bad/run"
+        broken.mkdir(parents=True)
+        (broken / "state.json").write_text("{not json")
+        self.assertEqual(self.measured(), ["실측(지난 실행): medium 20분(1)"])
 
 
 class RealRepoTest(unittest.TestCase):
