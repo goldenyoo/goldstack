@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack-v11 — spec
 
-상태: grill 완료(라운드 2개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 3개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 ## 1. 목표
 실제로 사람과 worker를 잘못 이끈 결함을 고친다: 실수로 나가는 공개 issue, 원인을 남기지 않는 검증 실패, 지워질 수 있는 미병합 티켓, 부하에 약한 시험, 머신마다 다른 리뷰 도구. 사람이 보는 숫자도 믿을 수 있게 한다: 진행 바의 남은 시간, 리뷰 결과 대기, 티켓 표의 실제 모델. 구현이 끝나면 `/go`가 회고 후보를 바로 보인다.
@@ -34,6 +34,7 @@ max_workers: 3
 | 2-3 | 마무리 값 | 같은 레포의 지난 실행 중앙값. 기록이 없으면 `약 20분 남음 + 마무리`, 마무리 중에는 `마무리 중` |
 | 2-4 | 티켓 분해 | §5의 10장. 범위 밖 `eta-range-display` 추가, `async-verify` 다시 볼 조건 수정 |
 | 2-5 | 첫 리뷰 등급 | `tiers.review = "large"` 그대로 |
+| 3-1 | `/adopt` 단어 상한 | 상한을 400에서 450으로 올리고 기준을 두 문장으로 줄인다. 티켓 11 |
 
 ## 5. 티켓 그래프
 구현과 리뷰의 모델은 `.goldstack/config.toml` 기준이다. 경로 앞 `src/gs/`, `tests/`는 생략했다.
@@ -51,7 +52,9 @@ max_workers: 3
 | 09 | `gs check`에 실제 모델 표시, grill 표 | – | 1 | small(있는 값 풀기) | 25분 | codex gpt-6-luna/medium | claude opus/xhigh | `check.py`, `cli.py`, `skills/grill/SKILL.md`, `skills/grill/templates/spec.md`, `test_check.py` | 전체 |
 | 10 | 문서, CHANGELOG, `/adopt` 기준 | 01–09 앞 결과 필요 | 5 | small(문서) | 20분 | claude sonnet/medium | codex gpt-6.1-sol/high | `skills/adopt/SKILL.md`, `docs/guide.md`, `docs/internals.md`, `CHANGELOG.md` | `test_skills` + `claude plugin validate .` |
 
-일렬 경로 02→03→06→07→10 예상 195분 · 평균 동시 1.7
+| 11 | `/adopt` 기준 줄이기, 단어 상한 450 | 10 앞 결과 필요 | 6 | small(글 두 문장과 숫자 하나) | 15분 | claude sonnet/medium | codex gpt-6.1-sol/high | `skills/adopt/SKILL.md`, `test_profile_brief.py` | `test_profile_brief` + `test_skills` + `claude plugin validate .` |
+
+일렬 경로 02→03→06→07→10→11 예상 210분 · 평균 동시 1.7
 
 두 번째 리뷰어는 상태 전이 티켓 02에만 붙인다. 01, 05, 09를 codex로 구현해 v10의 sandbox 안내와 `uv` 재시도를 이번 보고서에서 본다.
 
@@ -82,6 +85,7 @@ max_workers: 3
   - 한계: 마무리 값 15분은 같은 표본의 중앙값이라 낙관적이다. 재시도와 수정은 예측하지 않아 v5·v9처럼 긴 실행은 여전히 짧게 말한다.
   - 마지막 티켓 뒤 마무리 시간: goldstack 약 12–25분, goldhud-v1 약 2분. 레포마다 다르다.
 - `check.py`는 `touches`가 겹치고 순서가 없는 티켓 쌍에 경고를 낸다.
+- 재실행(2026-11-05 17:53)의 integration 검증이 `test_profile_brief.test_adopt_skill`로 실패해 PR #26이 `not_merged`다. `/adopt` 본문은 main 398단어, integration 522단어이고 상한은 400이다. 티켓 10의 좁은 verify에 이 시험이 없었다.
 - 미커밋: `docs/research/agy.md`는 다른 세션의 수정이다. 건드리지 않고 grill 커밋에 넣지 않는다.
 - `.goldstack/profile.md`는 이번 grill에서 고쳤다(1-9). 위의 낡은 값은 고치기 전의 기록이다.
 
@@ -110,3 +114,7 @@ max_workers: 3
 3. 마무리 값이 없을 때: A `+ 마무리`, 마무리 중에는 `마무리 중` / B 0으로 침 — 추천 A(`약 0분 남음`이 가장 눈에 띄는 오류) → 확정 A
 4. 티켓 분해와 범위 밖(`eta-range-display`, `async-verify` 조건 수정): 추천 표대로 → 확정
 5. 첫 리뷰 등급: A 그대로 / B `tiers.review = "medium"` / C 티켓을 따름 — 추천 A(바꿀 비교 자료가 없다) → 확정 A
+
+### 라운드 3 — `/adopt` 단어 상한 (추천대로)
+재실행의 integration 검증 실패 뒤 사람에게 물었다. 사람이 되물은 것: `/adopt` 쪽 맥락을 더 달라고 했다 → 왜 기준을 넣었는지, 왜 끝에서야 드러났는지 설명했다.
+1. `/adopt` 글: A 상한 400을 지키며 기존 지시도 덜어 냄 / B 기준을 두 문장으로 줄이고 상한 450 / C 기준을 뺌 — 추천 B(기준이 남고 기존 지시를 지우지 않는다) → 확정 B
