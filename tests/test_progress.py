@@ -32,8 +32,8 @@ class ProgressTest(unittest.TestCase):
         p = state.calculate_progress(st, order, 3, at=clock(1440))
         self.assertEqual(p, {
             "done": 3, "total": 8, "running": [{"id": "04", "phase": "review", "model": "codex"}],
-            "elapsed_s": 1440, "eta_s": 2400,
-            "line": "▓▓▓░░░░░ goldstack-v2 3/8 · 04 리뷰 중(codex) · 24분 · 약 40분 남음"})
+            "elapsed_s": 1440, "eta_s": 2880,
+            "line": "▓▓▓░░░░░ goldstack-v2 3/8 · 04 리뷰 중(codex) · 24분 · 약 48분 남음 + 마무리"})
 
     def test_no_completed_ticket_and_empty_scope(self):
         st = state.State(feature="f", started_at=clock(0))
@@ -55,7 +55,7 @@ class ProgressTest(unittest.TestCase):
         st.ticket("skipped").status = state.SKIPPED
         p = state.calculate_progress(st, ["old", "01", "02", "skipped", "pending"], 3,
                                      prior={"old"}, at=clock(400))
-        self.assertEqual((p["done"], p["total"], p["eta_s"]), (4, 5, 120))
+        self.assertEqual((p["done"], p["total"], p["eta_s"]), (4, 5, 300))
         self.assertEqual(state.minutes(30), 1)
         self.assertEqual(state.minutes(29), 0)
         self.assertEqual(state.minutes(90), 2)
@@ -153,6 +153,144 @@ class ProgressTest(unittest.TestCase):
             self.assertEqual(out.getvalue().splitlines()[-1], st.progress["line"])
             ts.phases = [p for p in ts.phases if p["phase"] != "fix"]
             self.assertNotIn("수정 2분", report.evidence(r))
+
+
+def merged(st, tid, start, end):
+    ts = st.ticket(tid)
+    ts.status, ts.started_at, ts.ended_at = state.MERGED, clock(start), clock(end)
+    return ts
+
+
+def running(st, tid, start, phase="worker"):
+    ts = st.ticket(tid)
+    ts.status = state.RUNNING
+    state.begin_phase(ts, phase, "codex", attempt=1, at=clock(start))
+    return ts
+
+
+class ScheduleTest(unittest.TestCase):
+    """남은 시간 = 의존과 max_workers로 흉내 낸 일정 + 마무리."""
+
+    def eta(self, st, order, workers, at, **kw):
+        p = state.calculate_progress(st, order, workers, at=clock(at), **kw)
+        return p["eta_s"], p["line"].split(" · ")[-1]
+
+    def test_serial_chain_is_not_divided_by_workers(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        st.ticket("02"), st.ticket("03")
+        deps = {"01": [], "02": ["01"], "03": ["02"]}
+        # 첫 티켓이 10분 걸렸고 둘이 남았다: 20분. max_workers = 3이어도 같다
+        self.assertEqual(self.eta(st, ["01", "02", "03"], 3, 600, deps=deps, finish_median_s=0),
+                         (1200, "약 20분 남음"))
+        self.assertEqual(self.eta(st, ["01", "02", "03"], 3, 600, finish_median_s=0), (600, "약 10분 남음"))
+
+    def test_parallel_tickets_share_workers(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        for tid in ("02", "03", "04", "05"):
+            st.ticket(tid)
+        deps = {"02": ["01"], "03": ["01"], "04": ["01"], "05": ["02", "03"]}
+        # 02·03·04가 한꺼번에 돌고 05는 02·03 뒤: 20분. 자리가 둘이어도 02·03, 04·05로 20분, 하나면 40분
+        order = ["01", "02", "03", "04", "05"]
+        self.assertEqual(self.eta(st, order, 3, 600, deps=deps, finish_median_s=0), (1200, "약 20분 남음"))
+        self.assertEqual(self.eta(st, order, 2, 600, deps=deps, finish_median_s=0), (1200, "약 20분 남음"))
+        self.assertEqual(self.eta(st, order, 1, 600, deps=deps, finish_median_s=0), (2400, "약 40분 남음"))
+
+    def test_running_ticket_counts_remaining_time_only(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        running(st, "02", 600)
+        st.ticket("03")
+        deps = {"02": ["01"], "03": ["02"]}
+        # 02는 4분 썼다: 남은 6분 + 03의 10분
+        self.assertEqual(self.eta(st, ["01", "02", "03"], 2, 840, deps=deps, finish_median_s=0), (960, "약 16분 남음"))
+        # 02가 네트워크 대기 중이어도 자리를 쓰고 쓴 시간을 뺀다
+        state.begin_phase(st.ticket("02"), "network", "codex", at=clock(700))
+        self.assertEqual(self.eta(st, ["01", "02", "03"], 2, 840, deps=deps, finish_median_s=0), (960, "약 16분 남음"))
+
+    def test_running_ticket_over_average_counts_one_minute(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        running(st, "02", 600)
+        self.assertEqual(self.eta(st, ["01", "02"], 1, 600 + 1500, finish_median_s=0), (60, "약 1분 남음"))
+
+    def test_retry_time_of_running_ticket_counts_from_first_attempt(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        ts = running(st, "02", 600)
+        state.begin_phase(ts, "worker", "codex", attempt=2, at=clock(900))
+        # 첫 시도부터 5분을 썼다: 남은 5분
+        self.assertEqual(self.eta(st, ["01", "02"], 1, 900, finish_median_s=0), (300, "약 5분 남음"))
+
+    def test_finish_estimate_is_added_or_flagged(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        st.ticket("02")
+        self.assertEqual(self.eta(st, ["01", "02"], 1, 600, finish_median_s=900), (1500, "약 25분 남음"))
+        self.assertEqual(self.eta(st, ["01", "02"], 1, 600), (600, "약 10분 남음 + 마무리"))
+
+    def test_no_sample_keeps_calculating_message(self):
+        st = state.State(feature="f", started_at=clock(0))
+        st.ticket("01")
+        self.assertEqual(self.eta(st, ["01"], 1, 0, finish_median_s=900), (None, "남은 시간 계산 중"))
+
+    def test_ticket_blocked_by_failure_is_not_counted(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        st.ticket("02").status = state.FAILED
+        for tid in ("03", "04"):
+            st.ticket(tid)
+        deps = {"03": ["02"], "04": ["03"]}
+        self.assertEqual(self.eta(st, ["01", "02", "03", "04"], 2, 600, deps=deps, finish_median_s=0), (0, "약 0분 남음"))
+
+    def test_dependency_outside_scope_counts_as_done(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        st.ticket("02")
+        self.assertEqual(self.eta(st, ["01", "02"], 1, 600, deps={"02": ["outside"]}, finish_median_s=0),
+                         (600, "약 10분 남음"))
+
+    def test_finishing_shows_remaining_finish_time(self):
+        st = state.State(feature="f", started_at=clock(0), phase="finish")
+        merged(st, "01", 0, 600)
+        # 마무리 15분 중 5분을 썼다
+        eta, text = self.eta(st, ["01"], 1, 900, finish_median_s=900)
+        self.assertEqual((eta, text), (600, "약 10분 남음"))
+        # 값이 없거나 넘겼거나 1분도 안 남았으면 마무리 중이다
+        for at, finish in ((900, None), (600 + 900, 900), (600 + 1000, 900), (600 + 871, 900)):
+            with self.subTest(at=at, finish=finish):  # 마지막은 29초 남아 0분으로 반올림되는 경우
+                self.assertEqual(self.eta(st, ["01"], 1, at, finish_median_s=finish), (None, "마무리 중"))
+        p = state.calculate_progress(st, ["01"], 1, at=clock(900), finish_median_s=900)
+        self.assertIn("마무리 중(claude)", p["line"])
+
+    def test_waiting_for_ci_uses_the_same_rule(self):
+        st = state.State(feature="f", started_at=clock(0), phase="finish", finish={"phase": "checks_pending"})
+        merged(st, "01", 0, 600)
+        for at, finish, expected in ((1200, 1800, (1200, "약 20분 남음")), (1200, None, (None, "마무리 중")),
+                                     (2400, 1800, (None, "마무리 중"))):
+            with self.subTest(at=at, finish=finish):
+                p = state.calculate_progress(st, ["01"], 1, at=clock(at), finish_median_s=finish)
+                self.assertEqual((p["eta_s"], p["line"].split(" · ")[-1]), expected)
+                self.assertIn("CI 대기 중", p["line"])
+                self.assertNotIn("약 0분 남음", p["line"])
+
+    def test_finishing_ignores_previous_run_tickets_for_finish_start(self):
+        st = state.State(feature="f", started_at=clock(1000), phase="finish")
+        merged(st, "01", 0, 600)  # 지난 실행에서 병합: 마무리는 이번 실행 시작부터 센다
+        p = state.calculate_progress(st, ["01"], 1, prior={"01"}, at=clock(1300), finish_median_s=900)
+        self.assertEqual(p["eta_s"], 600)
+
+    def test_historical_basis_is_marked_after_the_finish_marker(self):
+        st = state.State(feature="f", started_at=clock(0))
+        st.ticket("01")
+        p = state.calculate_progress(st, ["01"], 1, at=clock(0), history_median_s=600)
+        self.assertTrue(p["line"].endswith("약 10분 남음 + 마무리(이전 실행 기준)"))
+        p = state.calculate_progress(st, ["01"], 1, at=clock(0), history_median_s=600, finish_median_s=300)
+        self.assertTrue(p["line"].endswith("약 15분 남음(이전 실행 기준)"))
+        st.phase = "finish"
+        p = state.calculate_progress(st, ["01"], 1, at=clock(0), history_median_s=600, finish_median_s=300)
+        self.assertEqual(p["line"].split(" · ")[-1], "약 5분 남음")
 
 
 if __name__ == "__main__":
