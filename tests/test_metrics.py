@@ -377,7 +377,7 @@ class MetricsExecutionTest(support.GoTest):
             self.assertIsInstance(x['seconds'], float)
         text = self.final_report()
         self.assertEqual(sum(line.startswith('| 01 |') for line in text.splitlines()), 1)
-        for s in ['worker 시도별', '리뷰어별 소요와 채택', '마무리 단계별 시간', 'gs 0.1.0', '일시 오류', 'integration head', '티켓 head']:
+        for s in ['worker 시도별', '리뷰어별 소요와 채택', '마무리 단계별 시간', 'gs ' + metrics.metadata.version('goldstack'), '일시 오류', 'integration head', '티켓 head']:
             self.assertIn(s, text)
 
     def test_measurement_clock_and_metadata_errors_still_merge(self):

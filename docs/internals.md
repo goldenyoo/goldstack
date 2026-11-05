@@ -154,7 +154,7 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 
 **읽는 트리**(`go._review_tree`) — 첫 리뷰와 재리뷰가 같은 규칙을 쓴다. 티켓 worktree가 대상 head 그대로이고 깨끗하면(setup 산출물 제외) 그곳이다. 미커밋 변경이 있거나 다른 곳으로 옮겨 갔으면 임시 worktree `run/gs-review-*/wt`(재리뷰는 `run/gs-rereview-*/wt`)다. 판단 모델도 같은 트리에서 돈다. 병합되지 않을 코드를 근거로 지적을 기각하거나 `resolved`로 확인하지 않게 한다. 티켓 worktree의 변경은 지우지 않는다. 트리를 못 만들면 아무도 부르지 않는다(agy 호출로 세지 않는다): 첫 리뷰는 리뷰 실패(`note`)로 적고 verify만으로 병합하고, 재리뷰는 `unchecked`(`재리뷰 실패`)다. 치우기 실패는 경고뿐이다.
 
-**병합 전 대조**(`go._review_to_head`, `go._moved_head`) — 리뷰·재리뷰가 끝날 때마다 티켓 head를 리뷰 기록의 `reviewed_head`와 비교한다. 살아 남은 자손이 리뷰 중에 커밋한 경우 같은, 아무 리뷰어도 보지 않은 head가 병합되지 않게 한다.
+**병합 전 대조**(`go._review_to_head`, `go._moved_head`) — 리뷰·재리뷰가 끝날 때마다 티켓 head를 리뷰 기록의 `reviewed_head`와 비교한다. 살아 남은 자손이 리뷰 중에 커밋한 경우 같은, 아무 리뷰어도 보지 않은 head가 병합되지 않게 한다. 병합은 브랜치 이름이 아니라 리뷰 단계가 마지막으로 대상으로 삼은 SHA(`Active.target`)로 한다(`go._merge_stage`가 `git merge --no-ff --no-commit <SHA>`). 병합 직전이나 검증 중에 브랜치가 움직였으면(`_late_commit`) 병합하지 않고 재리뷰로 돌아가고, 이미 한 번 더 봤으면 늦은 커밋을 뺀 SHA를 병합한다. catch-up으로 합친 커밋은 리뷰 대상 위인지 `_is_catch_up`이 가려낸다. `target`은 재개 표시(`network_resume`)에 남고, 비어 있으면 옛 state라 대조할 것이 없다.
 - `reviewed_head`: 이 리뷰어를 부른 마지막 리뷰·재리뷰의 대상 head. 호출이 실패해도 옮긴다(실패는 `note`·`failed`가 말한다). 수정 커밋 diff가 비어 부르지 않은 재리뷰도 그 head로 옮긴다. 부르지 못했으면(거부, 한도, 트리 실패) 옮기지 않는다. 옛 state의 기록에는 없고, 값이 하나도 없으면 대조하지 않는다.
 - 리뷰가 둘이면 어느 한쪽이 본 head면 같다(재리뷰는 지적을 낸 리뷰어만 부른다).
 - 다르면 한 번 다시 부른다. 수정 전이면 `_review`(티켓 diff 전체, 새 기록이 앞 기록을 대신한다. 답을 못 받았으면 앞 지적을 남기고 `note`에 덧붙인다), 수정 뒤면 그 회차의 `_rereview`(수정 worker가 받은 지적, `a.base..head`)다. 고칠 지적이 나오면 평소처럼 수정 worker로 가고 수정 횟수 상한은 그대로다.
@@ -415,6 +415,7 @@ date: 2026-11-03          # YYYY-MM-DD, 필수
 severity: high            # high | medium | low, 필수
 source: goldstack-v2 리뷰 02   # 자유 문장, 필수
 status: open              # open | taken | dropped, 필수
+issues: []                # 연결한 양의 issue 번호 목록(선택, 예: [12])
 feature: ""               # status가 taken이면 필수(예: goldstack-v3)
 ---
 <첫 줄: 한 줄 요약. 이어서 근거·생각. dropped면 끝에 `버린 이유: …` 한 줄>
@@ -441,7 +442,9 @@ same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이
 - `README.md`는 건너뛴다. 형식이 틀린 파일(slug, 빠진 필수 키, 허용 밖 값, 날짜, taken인데 빈 feature 등)은 `경고: <파일>: <이유>`로 보이고 목록에서 뺀다. `.goldstack/ideas/`가 없으면 빈 목록. `gs check`는 아이디어를 보지 않는다(아이디어가 실행을 막을 이유가 없다).
 - 범위 밖 줄: `.goldstack/out-of-scope/*.md`마다 `<slug>  <**다시 볼 조건**: 뒤 문장>`. 조건 줄이 없거나 비면 `(조건 없음)`.
 
-`backlog.py`는 설정된 원격의 GitHub 저장소가 `feedback.repo`와 같을 때만 열린 `field-report` issue를 조회한다. 번호·제목·횟수(본문과 횟수 댓글의 최댓값)를 보이며 gh 실패는 한 줄 경고로 끝낸다. 기존 아이디어·범위 밖 출력과 종료 코드는 그대로다.
+`issues` 키는 양의 번호 목록이다(없으면 빈 목록, 목록이 아니거나 0·음수·숫자 아닌 값이 있으면 경고). 번호는 아이디어 줄 끝에 `issues: #12`로 보이고, 같은 번호의 issue는 아래 후보에서 다시 보이지 않는다.
+
+`backlog.py`는 설정된 원격의 GitHub 저장소가 `feedback.repo`와 같을 때만 열린 `field-report` issue와 그 저장소 소유자가 올린 라벨 없는 열린 issue(`미분류` 표시)를 조회한다. 번호·제목·횟수(본문과 횟수 댓글의 최댓값)를 보이며 gh 실패는 한 줄 경고로 끝낸다. 기존 아이디어·범위 밖 출력과 종료 코드는 그대로다.
 
 ## 피드백 수집 (`feedback.py`, `cli.py`)
 
