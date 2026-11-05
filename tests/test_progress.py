@@ -215,6 +215,13 @@ class ScheduleTest(unittest.TestCase):
         running(st, "02", 600)
         self.assertEqual(self.eta(st, ["01", "02"], 1, 600 + 1500, finish_median_s=0), (60, "약 1분 남음"))
 
+    def test_running_ticket_just_under_average_counts_remainder(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "01", 0, 600)
+        running(st, "02", 600)
+        # 평균 10분 중 590초를 썼다: 남은 10초는 1분으로 올리지 않는다(분 반올림은 그대로)
+        self.assertEqual(self.eta(st, ["01", "02"], 1, 1190, finish_median_s=300), (300, "약 5분 남음"))
+
     def test_retry_time_of_running_ticket_counts_from_first_attempt(self):
         st = state.State(feature="f", started_at=clock(0))
         merged(st, "01", 0, 600)

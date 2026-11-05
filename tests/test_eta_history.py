@@ -65,6 +65,20 @@ class EtaHistoryTest(HistoryCase):
         self.save(st)
         self.assertIsNone(state.load_eta_history(self.repo, "current"))
 
+    def test_broken_ticket_times_are_left_out(self):
+        self.save(finished("good", tail=600))
+        backwards = finished("backwards", tail=600, ticket_start=800)
+        backwards.ticket("01").ended_at = clock(600)  # 종료가 시작보다 빠르다
+        self.save(backwards)
+        invalid = finished("invalid", tail=600)
+        invalid.ticket("01").ended_at = "invalid"
+        self.save(invalid)
+        last_bad = finished("last-bad", tail=600)
+        merged = completed(last_bad, "02", 300, start=0)
+        merged.ended_at = "invalid"
+        self.save(last_bad)
+        self.assertEqual(state.load_finish_history(self.repo, "current"), 600)
+
     def test_unreadable_history_is_skipped(self):
         good = state.State(feature="good")
         completed(good, "01", 600)

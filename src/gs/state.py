@@ -241,7 +241,10 @@ def _finish_sample(st: State) -> float | None:
         starts = [parse_time(p["started_at"]) for p in ts.phases] + [parse_time(ts.started_at)]
         if any(start and start < run_start for start in starts):
             return None  # 재개가 섞인 실행
-        if end := parse_time(ts.ended_at):
+        if ts.ended_at:
+            end = parse_time(ts.ended_at)
+            if not end or any(start and start > end for start in starts):
+                return None  # 깨진 종료 시각(읽을 수 없거나 시작보다 빠름)
             ends.append(end)
     if not ends or run_end < max(ends):
         return None
@@ -333,7 +336,7 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
             avg = average or 0
             scope = set(order)  # 범위 밖 의존은 끝난 것이다(go._skip_blocked)
             schedule = simulate_schedule(
-                {tid: avg for tid in waiting}, {tid: max(MIN_RUNNING_S, avg - s) for tid, s in spent.items()},
+                {tid: avg for tid in waiting}, {tid: avg - s if s < avg else MIN_RUNNING_S for tid, s in spent.items()},
                 {tid: [d for d in (deps or {}).get(tid, ()) if d in scope] for tid in order},
                 {tid for tid in order if st.tickets[tid].status == MERGED}, max_workers)
             pending_finish = finish_median_s is None and not st.finished_at
