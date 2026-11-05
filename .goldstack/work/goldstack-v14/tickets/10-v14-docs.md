@@ -1,7 +1,7 @@
 ---
 id: "10"
 title: "문서, CHANGELOG"
-blocked_by: ["01", "02", "03", "04", "05", "06", "07", "08", "09"]
+blocked_by: ["01", "02", "03", "04", "05", "06", "08", "09"]
 touches: ["docs/guide.md", "docs/internals.md", "CHANGELOG.md"]
 tier: small
 model: claude

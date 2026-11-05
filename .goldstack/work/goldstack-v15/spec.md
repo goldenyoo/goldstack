@@ -5,14 +5,14 @@ max_workers: 3
 ---
 # goldstack-v15 — spec
 
-상태: grill 완료(라운드 3개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 4개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 결정과 grill 기록은 [goldstack-v12 spec](../goldstack-v12/spec.md)의 §3·§7에 있다. 이 feature의 결정 번호: 1-1, 1-2, 1-3, 1-7, 1-8, 2-20–2-23.
 
 ## 1. 목표
 issue가 실제 반영과 맞게 열리고 닫히게 하고, 리뷰한 코드만 병합되게 한 뒤 `0.2.0`으로 올린다.
 
-**완료 조건**: §5의 티켓이 병합되고 main 보고서 마무리 줄이 `verified`다. 세 버전 파일이 `0.2.0`이고 태그가 없다.
+**완료 조건**: §5의 티켓이 병합되고 main 보고서 마무리 줄이 `verified`다. 세 버전 파일이 `0.2.0`이고 새 태그가 없다(기존 `v0.1.0`은 그대로).
 
 ## 5. 티켓 그래프
 경로 앞 `src/gs/`, `tests/`도 그대로 적었다. 계열: 병합·revert·재개는 claude opus와 두 번째 리뷰어, 작은 코드는 codex다.
@@ -25,7 +25,7 @@ issue가 실제 반영과 맞게 열리고 닫히게 하고, 리뷰한 코드만
 | 04 | 리뷰한 SHA로 병합 | – | 1 | large(병합 경로) | 70분 | claude opus/xhigh | codex gpt-6.1-sol/high + agy gemini-4-argon-high | `src/gs/go.py`, `src/gs/review.py`, `tests/test_review_target.py` | 전체 |
 | 05 | 빈 자리 순서와 끊김 중 리뷰 준비 | 04 같은 파일 | 2 | medium(재개 흐름, 작은 수정) | 40분 | claude sonnet/high | codex gpt-6.1-sol/high + agy gemini-4-argon-high | `src/gs/go.py`, `src/gs/review.py`, `tests/test_async_review.py` | 전체 |
 | 06 | push 설정 변경을 정리 경고로 넘기지 않기 | – | 1 | small(예외 분기 하나) | 15분 | codex gpt-6-luna/medium | claude opus/xhigh | `src/gs/clean.py`, `tests/test_clean.py` | 전체 |
-| 07 | 문서, CHANGELOG, `0.2.0` | 01–06 앞 결과 필요 | 3 | small(문서와 버전) | 15분 | claude sonnet/medium | codex gpt-6.1-sol/high | `docs/guide.md`, `docs/internals.md`, `CHANGELOG.md`, `pyproject.toml`, `uv.lock`, `.claude-plugin/plugin.json` | 전체 |
+| 07 | 문서, CHANGELOG, `0.2.0` | 01, 02, 03, 04, 05, 06 앞 결과 필요 | 3 | small(문서와 버전) | 15분 | claude sonnet/medium | codex gpt-6.1-sol/high | `docs/guide.md`, `docs/internals.md`, `CHANGELOG.md`, `pyproject.toml`, `uv.lock`, `.claude-plugin/plugin.json`, `tests/test_version.py` | 전체 |
 
 일렬 경로 02→03→07 예상 125분 · 평균 동시 2.3
 

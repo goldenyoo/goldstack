@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack-v12 — spec
 
-상태: grill 완료(라운드 3개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 4개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 요청 원문: "아이디어 리스트업 해줘. overnight로 돌릴거라 규모가 커도 좋아." 한 번의 grill로 goldstack-v12–v15를 정했다. 질문과 답은 이 spec에 있다.
 
@@ -41,13 +41,15 @@ max_workers: 3
 | 2-14 | 원격 검증 범위 | 가짜 herdr 시험까지. 맥미니 실제 실행은 보고서에 사람 확인으로 남긴다 |
 | 2-15 | 리뷰 `checked` | 선택 항목. 리뷰어 표준 출력은 항상 파일로 남긴다 |
 | 2-16 | 시간 예상 | `gs check`가 같은 레포 지난 `state.json`의 등급별 중앙값을 보이고, 기록이 없으면 `기록 없음` |
-| 2-17 | 중복 지적 | 같은 티켓의 같은 파일·줄 근처면 같은 지적이다 |
+| 2-17 | 중복 지적 | 3-1이 뒤집었다. 티켓을 만들지 않는다 |
 | 2-18 | 문서 티켓 건너뜀 | 보고서에 `문서 미반영`을 뚜렷이 적는다 |
 | 2-19 | `/retro` issue | 증상·근거·제안을 채워 확인받고 `gs feedback`이 본문 파일을 받는다 |
 | 2-20 | 밤의 공개 issue 쓰기 | 병합으로 고친 issue만 고정 문구로 닫는다. not planned 닫기는 사람 명령일 때만 |
 | 2-21 | 닫힌 issue 재발 | 고친 버전보다 새 gs에서 재발하면 다시 연다. 옛 gs면 업데이트만 안내한다 |
 | 2-22 | 라벨 없는 issue | 저장소 소유자가 쓴 것만 미분류 후보로 보인다 |
 | 2-23 | 리뷰한 SHA로 병합 | 고친다. 브랜치가 움직였으면 재리뷰한다. 두 번째 리뷰어를 붙인다 |
+| 3-1 | 중복 지적(다시) | `findings-dup-after-edit`를 이번에 고치지 않고 아이디어로 연다. 수리로 재시도가 줄면 중복이 주는지 보고 정한다 |
+| 3-2 | v14의 issue 닫기 | 지금 경로(PR `Closes #`)로 닫는다. `v14`가 `reverted`이면 사람이 #21–#24를 다시 연다 |
 
 ## 5. 티켓 그래프
 경로 앞 `src/gs/`, `tests/`도 그대로 적었다. 구현이 전부 claude인 이유: codex 시험 환경은 티켓 04가 병합되고 재설치한 뒤에야 쓰인다.
@@ -62,12 +64,12 @@ max_workers: 3
 | 06 | go·idea·adopt의 잘못 이끄는 문장 고치기 | 05 같은 파일 | 2 | medium(세 skill과 문구 시험) | 40분 | claude sonnet/high | codex gpt-6.1-sol/high | `skills/go/SKILL.md`, `skills/idea/**`, `skills/adopt/SKILL.md`, `tests/test_skills.py`, `tests/test_profile_brief.py` | 좁게(티켓 `verify`) |
 | 07 | retro 쓰기 범위·분량 정리, agy 답 크기 | 06 같은 파일 | 3 | medium(글 200단어 삭제와 프롬프트) | 40분 | claude sonnet/high | codex gpt-6.1-sol/high | `skills/retro/SKILL.md`, `skills/go/SKILL.md`, `tests/test_skills.py`, `tests/test_retro_log.py` | 좁게(티켓 `verify`) |
 | 08 | `gs notify <파일>` 명령 | – | 1 | small(있는 함수에 입구만) | 15분 | claude sonnet/medium | codex gpt-6.1-sol/high | `src/gs/cli.py`, `src/gs/notify.py`, `tests/test_notify.py` | 전체 |
-| 09 | overnight 빈틈·분량 정리, 사전 점검 구멍 | 05 같은 파일, 08 앞 결과 필요 | 2 | medium(밤에 쓰는 글, 문구 시험 33줄) | 40분 | claude sonnet/high | codex gpt-6.1-sol/high | `skills/overnight/SKILL.md`, `tests/test_overnight_skill.py` | 좁게(티켓 `verify`) |
+| 09 | overnight 빈틈·분량 정리, 사전 점검 구멍 | 05 같은 파일, 07 앞 결과 필요, 08 앞 결과 필요 | 4 | medium(밤에 쓰는 글, 문구 시험 33줄) | 40분 | claude sonnet/high | codex gpt-6.1-sol/high | `skills/overnight/SKILL.md`, `tests/test_overnight_skill.py` | 좁게(티켓 `verify`) |
 | 10 | writing-for-agents 재설명 합치기 | – | 1 | medium(약 400단어 판단 삭제) | 40분 | claude sonnet/high | codex gpt-6.1-sol/high | `skills/writing-for-agents/**` | 좁게(티켓 `verify`) |
 | 11 | diagnosing-bugs 독려·중복 줄이기 | – | 1 | small(글 약 150단어) | 15분 | claude sonnet/medium | codex gpt-6.1-sol/high | `skills/diagnosing-bugs/**` | 좁게(티켓 `verify`) |
-| 12 | 상한 낮추기, 문서, CHANGELOG | 01–11 앞 결과 필요 | 4 | small(숫자와 문서) | 15분 | claude sonnet/medium | codex gpt-6.1-sol/high | `tests/test_skills.py`, `docs/guide.md`, `docs/internals.md`, `CHANGELOG.md` | 좁게(티켓 `verify`) |
+| 12 | 상한 낮추기, 문서, CHANGELOG | 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11 앞 결과 필요 | 5 | small(숫자와 문서) | 15분 | claude sonnet/medium | codex gpt-6.1-sol/high | `tests/test_skills.py`, `docs/guide.md`, `docs/internals.md`, `CHANGELOG.md` | 좁게(티켓 `verify`) |
 
-일렬 경로 05→06→07→12 예상 135분 · 평균 동시 3.0
+일렬 경로 05→06→07→09→12 예상 175분 · 평균 동시 2.3
 
 판단 모델 `opus`, 실패 요약 `haiku`. 예상은 v8–v11 등급별 중앙값(small 9, medium 38, large 69분)을 올림했다.
 
@@ -114,3 +116,9 @@ max_workers: 3
 
 ### 라운드 3 — 티켓 분해 (추천대로)
 네 feature 32장의 표와 범위 밖 목록을 보이고 확정했다. 사람이 허용 규칙을 복사해 넣을 명령을 달라고 해 `.claude/settings.local.json`에 규칙 23개가 들어갔다(`.omc/add-rules.py`, 전체 33개).
+
+### 라운드 4 — codex 더블 체크 (모두 추천대로)
+사람이 확정 내용을 codex에게도 확인해 달라고 했다. codex(gpt-6.1-sol/high, 읽기 전용, Claude의 판단을 보지 않음)가 "고친 뒤 시작"으로 판정하고 7건을 냈다. Claude가 모두 재현했다.
+- 결정을 안 바꾸고 고침: v14 09 verify(`gs config`가 점 둘 키를 못 읽어 TOML 직접 읽기로), v15 07에 `tests/test_version.py`, v15 07 "태그 없음"(기존 `v0.1.0` 보존), v12 09 `blocked_by`에 07, v14 08의 문서 티켓 조건.
+1. 같은 지적 판별: 라운드 2의 "실제 사례는 둘 다 `check.py:24`"는 Claude의 사실 오류였다. 실제는 206행과 24행이고 문장 유사도 0.29로 다른 지적(0.10–0.18)과 잘 갈리지 않는다. A 티켓 빼고 아이디어 열기 / B 판단 모델 / C 줄 근처 그대로 — 추천 A(피해가 중복 파일 하나) → 확정 A. 그래서 전체 31장이다.
+2. v14 issue 닫기가 v15의 보호를 못 받는다: A 그대로 두고 기록 / B v14·v15 순서 바꿈 / C `closes` 뺌 — 추천 A(발생 조건이 좁고 아침에 고칠 수 있다) → 확정 A.

@@ -1,7 +1,7 @@
 ---
 id: "09"
 title: "overnight 빈틈·분량 정리, 사전 점검 구멍"
-blocked_by: ["05", "08"]
+blocked_by: ["05", "07", "08"]
 touches: ["skills/overnight/SKILL.md", "tests/test_overnight_skill.py"]
 tier: medium
 model: claude

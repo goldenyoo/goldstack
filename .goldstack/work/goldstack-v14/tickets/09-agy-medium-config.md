@@ -6,7 +6,7 @@ touches: [".goldstack/config.toml"]
 tier: small
 model: claude
 reviewer: codex
-verify: "test \"$(uv run gs config models.agy)\" = \"gemini-4-argon-medium\" && test \"$(uv run gs config tiers.agy.large)\" = \"gemini-4-argon-high\""
+verify: "uv run python -c \"import tomllib; c = tomllib.load(open('.goldstack/config.toml', 'rb')); a = c['tiers']['agy']; assert c['models']['agy'] == a['small'] == a['medium'] == 'gemini-4-argon-medium' and a['large'] == 'gemini-4-argon-high' and c['tiers']['review'] == 'large'\""
 ---
 ## 목표
 agy 공용 한도를 아끼도록 `/retro` 요약과 쓰이지 않는 `small`을 Argon Medium으로 옮긴다. 첫 리뷰는 High다.
