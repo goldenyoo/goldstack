@@ -349,6 +349,7 @@ class ReviewAbortTest(support.GoTest):
         self.assertEqual((ts.status, ts.attempts, ts.worktree), ("merged", 1, str(self.rundir / "wt/01")))
 
     def test_two_reviewers_abort_goes_up_from_run_together(self):
+        support.fake_clis(self, "agy")
         (self.repo / ".goldstack/work/demo/tickets/01-t.md").write_text(
             worker_ticket("01", second="agy"))
         sh(self.repo, "git", "commit", "-qam", "second reviewer")

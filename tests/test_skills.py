@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from gs import cli, config, feature, frontmatter, git
+from support import fake_clis
 
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
@@ -55,6 +56,7 @@ class SkillTest(unittest.TestCase):
             self.assertTrue((TEMPLATES / name).is_file(), name)
 
     def test_filled_templates_pass_check(self):
+        fake_clis(self, "gh", "claude", "codex")
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             git.run(repo, "init", "-q")

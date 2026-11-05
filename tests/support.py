@@ -16,6 +16,19 @@ from unittest import mock
 from gs import adapters, cli, config, state, worker
 
 
+def fake_clis(test, *names):
+    """가짜 CLI를 PATH 앞에 올린다. `gs check`는 CLI가 PATH에 있는지만 보므로, 진짜 CLI가 있는 머신과 없는 머신(CI)에서 같게 돈다."""
+    root = tempfile.TemporaryDirectory()
+    test.addCleanup(root.cleanup)
+    for name in names:
+        path = Path(root.name) / name
+        path.write_text("#!/bin/sh\nexit 0\n")
+        path.chmod(0o755)
+    patch = mock.patch.dict(os.environ, {"PATH": root.name + os.pathsep + os.environ["PATH"]})
+    patch.start()
+    test.addCleanup(patch.stop)
+
+
 def isolate_git_env(test):
     patch = mock.patch.dict(os.environ)
     patch.start()
