@@ -923,9 +923,9 @@ claude    # 여기서 /go 나 /overnight
 맥북이 바쁠 때 herdr에 저장된 다른 머신(예: `mac_mini`)에서 `/go`를 끝까지 돌린다. 원격 pane에 claude를 띄워 `/go <feature>`를 보내고 바로 돌아온다. 이후 실행은 원격의 레포에서 일어난다. 필요한 `herdr`는 로컬에 있어야 하고 머신은 `herdr machine status`에 `reachable`로 보여야 한다.
 
 ### 준비 순서 (원격 머신에서, 한 번)
-1. `gs` 설치: README의 설치를 따른다(`uv`, `git`, `gh`, `claude` 필요). 로컬과 같은 버전이어야 한다.
+1. `gs` 설치: README의 설치를 따른다(`uv`, `git`, `gh`, `claude`, `codex` 필요). 로컬과 같은 버전이어야 한다.
 2. 플러그인: `gs self-update`가 goldstack 플러그인도 갱신한다. 로컬 플러그인 버전과 같아야 한다.
-3. 로그인: `gh auth login`, `claude auth login`, 티켓이 codex면 `codex login`. 한 번 `claude`를 띄워 폴더 신뢰 확인도 끝내 둔다.
+3. 로그인: `gh auth login`, `claude auth login`, `codex login`(티켓 모델과 무관하게 `gs remote check`가 gh·claude·codex 인증을 모두 요구한다). 한 번 `claude`를 띄워 폴더 신뢰 확인도 끝내 둔다.
 4. 클론: 대상 레포를 원격에 `git clone`한다. 원격 git이 `git.remote`를 읽을 수 있어야 한다.
 5. 로컬 `.goldstack/local.env`에 원격 레포의 절대 경로를 적는다. 머신 이름이 키 접미사다:
    ```
@@ -967,8 +967,8 @@ $ gs remote status mac_mini csv-export
 코드 시험은 가짜 herdr로 돈다. 실제 머신은 아래 순서로 사람이 한 번 확인한다. 2026-11-05 점검에서 `mac_mini`는 연결되지만 `gs`, 플러그인, 레포 클론이 없고 gh가 로그인되지 않았다:
 1. `herdr machine status`에서 `mac_mini`가 `reachable`인지 본다.
 2. 위 준비 순서를 맥미니에서 끝내고 로컬 `.goldstack/local.env`에 `GS_REMOTE_REPO_mac_mini`를 적는다.
-3. `gs remote check mac_mini`가 `빠짐` 없이 끝나는지 본다.
-4. 작은 feature(티켓 하나) 하나를 grill·커밋·push하고 `gs remote go mac_mini <feature>`를 친다.
+3. 작은 feature(티켓 하나) 하나를 grill·커밋·push한다. check도 grill 커밋이 원격에 닿았는지 보므로 이 단계가 먼저다.
+4. `gs remote check mac_mini`가 `빠짐` 없이 끝나는지 본다. 그다음 `gs remote go mac_mini <feature>`를 친다.
 5. 맥북을 닫거나 다른 일을 하면서 `gs remote status mac_mini <feature>`로 진행을 보고, `herdr --machine mac_mini pane read` 화면에 claude가 `/go`를 받았는지 확인한다.
 6. 끝나면 PR이 만들어졌는지, 원격에서 로컬 레포로 `git pull`하면 보고서가 오는지 본다.
 7. 실패한 단계와 화면 출력을 보고서나 아이디어 파일에 적는다. `--machine`이 붙은 `pane run`은 가짜 herdr로만 시험했고 실제로 돌려 본 적이 없다.
