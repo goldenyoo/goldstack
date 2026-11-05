@@ -51,7 +51,7 @@ disable-model-invocation: true
 
    **feature 실행**: 사람이 고른 후보는 아이디어 함 `.goldstack/ideas/`에 `/idea` 형식으로 쓴다.
 
-   **goldstack 범주 후보**(위 "goldstack 자체")는 사람이 고를 때 "issue로 올리기"도 고를 수 있다. 고르면 한 줄 요약을 보이고 확인받은 뒤 `gs feedback "<사람이 확인한 한 줄>"`을 돌린다. 그 한 줄에 레포 이름·파일 이름을 넣지 않는다(gs·skill·형식의 문제만 적는다). 전송 여부는 `[feedback] mode`가 정한다. `gs feedback`이 없거나 실패하면 그 사실을 말하고 아이디어 함에 적을지 묻는다.
+   **goldstack 범주 후보**(위 "goldstack 자체")는 사람이 고를 때 "issue로 올리기"도 고를 수 있다. 고르면 **증상·근거·제안**을 채운 초안 전체를 보이고 확인받는다. 근거는 확인한 동작·오류·반복 여부를 익명으로 적는다. 초안에 레포 이름·파일 이름을 넣지 않는다(gs·skill·형식의 문제만 적는다). 확인한 본문을 UTF-8 임시 파일에 저장하고 `gs feedback --body-file "<본문 파일>"`로 보낸다. 전송 여부는 `[feedback] mode`가 정한다. `gs feedback`이 없거나 실패하면 알리고 아이디어 함에 적을지 묻는다.
 
    **세션**: 사람이 고른 것만 고친다. 아이디어 함에는 사람이 원하는 후보만 `.goldstack/ideas/`에 `/idea` 형식으로 쓴다.
 
