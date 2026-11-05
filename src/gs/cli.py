@@ -36,6 +36,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("feature", help=".goldstack/work/<feature>")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id. 이 부분 집합 기준으로 순서·frontier를 계산한다")
 
+    p = sub.add_parser("remote", help="herdr 원격 머신의 실행 준비를 검사한다")
+    remote_sub = p.add_subparsers(dest="remote_cmd", required=True)
+    remote_check = remote_sub.add_parser("check", help="원격 실행에 필요한 항목을 검사한다")
+    remote_check.add_argument("machine", help="herdr에 저장된 머신 이름")
+
     p = sub.add_parser("go", help="티켓 실행·보고·PR 병합·main 재검증(실패하면 revert)")
     p.add_argument("feature", nargs="+", help=".goldstack/work/<feature>. 여러 개면 verified 뒤 차례로 실행")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다. integration까지만 하고 병합하지 않는다(병합은 옵션 없는 gs go)")
@@ -89,6 +94,9 @@ def _run(args: argparse.Namespace) -> int:
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
         return 2
+    if args.cmd == "remote":
+        from .remote import check as remote_check
+        return remote_check(repo, args.machine, sys.stdout, sys.stderr)
     if args.cmd == "feedback":
         from .feedback import command
         return command(repo, args.feedback_args, sys.stdout, sys.stderr)
