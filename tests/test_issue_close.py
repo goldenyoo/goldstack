@@ -135,6 +135,18 @@ class IssueTest(support.GoTest):
         sh(self.repo, "git", "commit", "-qam", "squash")
         sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
 
+    def also_closes(self, tid, number):
+        path = self.repo / f".goldstack/work/demo/tickets/{tid}-t.md"
+        path.write_text(path.read_text().replace("---\n##", f"closes: [{number}]\n---\n##"))
+        sh(self.repo, "git", "commit", "-qam", f"{tid}의 issue")
+        sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
+
+    def land_own_merge(self, tid):
+        """표시가 병합 커밋 자신에 있어 `_feature_merge`가 아니다. 되돌려도 `_restore_reverts`가 되살리지 않는다."""
+        return self.someone(f"git checkout -q -b own-{tid}", f"echo x > own_{tid}", f"git add own_{tid}",
+                            f"git commit -qm own-{tid}", "git checkout -q main",
+                            f"git merge -q --no-ff own-{tid} -m 반영 -m 'gs-ticket: demo/{tid}'")
+
     def revert_after_report(self, merge):
         """위에 gs의 최종 보고서 커밋이 있어 report.md가 충돌한다. 보고서의 되돌리는 법대로 지금 보고서를 남긴다."""
         return self.someone(f"! git revert --no-edit -m 1 {merge}",
@@ -280,6 +292,54 @@ class RevertTest(IssueTest):
         self.assertEqual(self.logged("close", 12), [])
         self.assertEqual(self.logged("reopen", 12), [])  # 열려 있으면 그대로다
 
+    def test_next_pr_does_not_close_issue_of_reverted_ticket(self):
+        """티켓 병합 하나만 되돌리면 표시가 이력에 남고 되살리지 않는다. 다음 PR의 키워드가 다시 닫으면 기록 때문에 못 연다."""
+        self.assertEqual(self.go("--only", "01")[0], 0)
+        self.assertEqual(self.issue(12)["state"], "CLOSED")
+        reverted = self.revert(sh(self.repo, "git", "rev-parse", f"{self.REMOTE}/{self.BASE}^{{/gs-ticket: demo/01}}"), "-m", "1")
+        code, out, err = self.go("--only", "04")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.finish()["phase"], "verified")
+        self.assertNotIn("Closes #12", (self.bin / "pr-body.md").read_text())
+        self.assertEqual(self.issue(12)["state"], "OPEN")
+        self.assertEqual(len(self.logged("reopen", 12)), 1)
+        self.assertEqual(self.finish()["issues"]["12"], {"action": "reopen", "commit": reverted, "ok": True})
+        self.assertIn(f"#12 다시 엶: `{reverted}`", self.final_report())
+
+    def test_next_pr_does_not_close_issue_shared_with_reverted_ticket(self):
+        self.also_closes("04", 12)
+        self.land_pr("01", "02")
+        self.revert(self.inner("01"), "-m", "1")
+        code, out, err = self.go("--only", "04")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("Closes #12", (self.bin / "pr-body.md").read_text())
+        self.assertEqual(self.issue(12), {"state": "OPEN", "comments": []})
+        self.assertEqual(self.logged("close", 12), [])
+
+    def test_revert_of_own_merge_stays_out_of_next_pr(self):
+        self.also_closes("04", 99)
+        self.revert(self.land_own_merge("01"), "-m", "1")
+        code, out, err = self.go("--only", "01,04")  # 표시가 남아 01은 merged로 돌아온다
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.calls(), ["04"])
+        body = (self.bin / "pr-body.md").read_text()
+        self.assertNotIn("Closes #12", body)
+        self.assertIn("Closes #99", body)  # 그 PR이 들인 티켓은 그대로 닫는다
+        self.assertEqual(self.issue(12), {"state": "OPEN", "comments": []})
+        self.assertEqual(self.issue(99)["state"], "CLOSED")
+
+    def test_squash_message_leaves_out_issue_of_reverted_ticket(self):
+        self.use_squash()
+        self.also_closes("04", 12)
+        self.revert(self.land_own_merge("01"), "-m", "1")
+        code, out, err = self.go("--only", "04")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.finish()["phase"], "verified")
+        message = sh(self.remote, "git", "log", "-1", "--format=%B", self.finish()["merge_sha"])
+        self.assertIn("gs-ticket: demo/04", message)
+        self.assertNotIn("Closes #12", message)
+        self.assertEqual(self.issue(12), {"state": "OPEN", "comments": []})
+
     def test_already_closed_issue_of_reverted_landing_is_reopened(self):
         merge, _ = self.land_pr("01")
         reverted = self.revert(merge, "-m", "1")
@@ -325,6 +385,7 @@ class RevertTest(IssueTest):
         self.assertEqual(f["phase"], "verified", f)
         self.assertIn("integ_01", self.remote_files())
         self.assertEqual(len(self.logged("reopen", 12)), 1)  # 되돌린 동안은 열어 두었다
+        self.assertIn("Closes #12", (self.bin / "pr-body.md").read_text())  # 이 PR이 되살리는 티켓의 키워드는 남는다
         self.assertEqual(self.issue(12)["state"], "CLOSED")
         self.assertEqual(self.comments(12), [f"demo에서 고침 ({f['merge_sha']})"])
 

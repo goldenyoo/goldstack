@@ -6,8 +6,8 @@ base 브랜치와 원격은 `.goldstack/config.toml`의 `git.base`·`git.remote`
 병합 방식은 `git.merge_method`(merge·squash)다. 병합을 요청할 때 finish에 남기고(`merge_method`) 그 PR의
 확인·revert·재개는 남긴 방식을 따른다. merge는 병합 커밋이 검증한 integration(`merge_head`)을 조상으로 갖는지,
 squash는 squash 커밋(부모 하나)의 tree가 `merge_head`의 tree와 같은지로 확인한다. revert는 둘 다 그 커밋 하나다.
-이 PR이 base에 들이는 merged 티켓의 closes 번호를 PR 본문과 squash 메시지에 종료 키워드로 남긴다. 그 뒤 `sync_issues`가 issue를 base의 지금
-상태에 맞춘다: 반영된 티켓의 issue는 고정 문구 댓글을 달고 닫고(앞 PR이 있어도), 되돌린 티켓의 issue는 다시 연다.
+이 PR이 base에 들이는 merged 티켓의 closes 번호를 PR 본문과 squash 메시지에 종료 키워드로 남긴다(이 PR 뒤에도 되돌린 채인 티켓의 번호는 뺀다).
+그 뒤 `sync_issues`가 issue를 base의 지금 상태에 맞춘다: 반영된 티켓의 issue는 고정 문구 댓글을 달고 닫고(앞 PR이 있어도), 되돌린 티켓의 issue는 다시 연다.
 squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에서도 병합된 티켓·이 feature의 병합을 알아본다.
 
 보호된 base(`git.direct_push = false`)에는 아무것도 직접 push하지 않는다. revert는 `gs/<f>/revert`, 병합 뒤 최종
@@ -438,19 +438,37 @@ def _closing_numbers(r, tids=None) -> list[int]:
                    for number in ticket.closes})
 
 
-def _closing_lines(r, tids=None) -> str:
-    return "\n".join(f"Closes #{number}" for number in _closing_numbers(r, tids))
+def _restoring(r, head: str) -> list[dict]:
+    """head에 들었고 base에는 아직 없는 되살림(`_restore_reverts`의 기록)."""
+    return [x for x in r.st.finish.get("reintroduced", [])
+            if _ancestor(r.repo, x["commit"], head) and not _revert_of(r.repo, x["revert"], r.base_ref)]
+
+
+def _restored_tickets(r, restoring: list[dict]) -> set[str]:
+    return {tid for x in restoring for tid in _trailers(r, f"{x['merge']}^..{x['merge']}")}
+
+
+def _closing_lines(r, tids, head: str) -> str:
+    """tids 중 head의 병합이 닫아도 되는 issue의 종료 키워드. PR 본문과 squash 메시지가 같이 쓴다.
+
+    앞서 base에 들어가 지금도 있는 티켓은 뺀다. 넣으면 그 뒤 다시 열린 issue를 이 PR의 병합이 또 닫는다.
+    이 PR 뒤에도 base에서 되돌린 채인 티켓의 issue도 뺀다. 같은 issue를 닫는 다른 티켓이 있어도 그렇다(`_issue_plan`과 같다).
+    개별 티켓의 revert는 `_restore_reverts`가 되살리지 않아 그 표시만 이력에 남는다. 되살리는 티켓을 여기서 놓쳐도 병합 뒤 `sync_issues`가 닫는다."""
+    if not _closing_numbers(r, tids):
+        return ""
+    base = _base_tickets(r)
+    merge = r.st.finish.get("merge_sha")  # 이 PR이 이미 병합됐으면 그 티켓은 키워드를 그대로 둔다
+    landed = {tid for tid, (kept, commit) in base.items() if kept and commit != merge}
+    back = _restored_tickets(r, _restoring(r, head))
+    reverted = {number for tid, (kept, _) in base.items() if not kept and tid not in back and tid in r.feat.tickets
+                for number in r.feat.tickets[tid].closes}
+    return "\n".join(f"Closes #{number}" for number in _closing_numbers(r, set(tids) - landed) if number not in reverted)
 
 
 def _pr_body(r, path: Path) -> Path:
-    """이 PR이 base에 들이는 티켓의 종료 키워드를 보고서 길이 제한 밖에 보존한다.
-
-    앞서 base에 들어가 지금도 있는 티켓은 뺀다(squash 메시지도 같다). 넣으면 그 뒤 다시 열린 issue를 이 PR의 병합이 또 닫는다."""
-    tickets = _trailers(r, git.sha(r.iwt, "HEAD"))
-    if _closing_numbers(r, tickets):
-        merge = r.st.finish.get("merge_sha")  # 이 PR이 이미 병합됐으면 그 티켓은 키워드를 그대로 둔다
-        tickets -= {tid for tid, (kept, commit) in _base_tickets(r).items() if kept and commit != merge}
-    closing = _closing_lines(r, tickets)
+    """이 PR이 base에 들이는 티켓의 종료 키워드(`_closing_lines`)를 보고서 길이 제한 밖에 보존한다."""
+    head = git.sha(r.iwt, "HEAD")
+    closing = _closing_lines(r, _trailers(r, head), head)
     if not closing:
         return path
     suffix = "\n\n" + closing
@@ -615,19 +633,15 @@ def _squash_message(r) -> tuple[str, str]:
     f = r.st.finish
     number = re.search(r"/(\d+)/?$", f["url"])
     title = f"{r.name}: gs go" + (f" (#{number.group(1)})" if number else "")
-    new = _trailers(r, f["merge_head"]) - _trailers(r, r.base_ref)
-    restored = []
-    for entry in f.get("reintroduced", []):
-        if (_ancestor(r.repo, entry["commit"], f["merge_head"])
-                and not _revert_of(r.repo, entry["revert"], r.base_ref)):
-            new.update(_trailers(r, f"{entry['merge']}^..{entry['merge']}"))
-            restored.append(f"This reverts commit {entry['revert']}.")
+    restoring = _restoring(r, f["merge_head"])
+    new = (_trailers(r, f["merge_head"]) - _trailers(r, r.base_ref)) | _restored_tickets(r, restoring)
+    restored = [f"This reverts commit {x['revert']}." for x in restoring]
     rank = {tid: i for i, tid in enumerate(r.feat.tickets)}
     tids = sorted(new, key=lambda tid: (rank.get(tid, len(rank)), tid))
     listing = [f"{tid} {r.feat.tickets[tid].title}" if tid in r.feat.tickets else tid for tid in tids]
     trailers = [f"gs-ticket: {r.name}/{tid}" for tid in tids]
     sections = ["\n".join(listing), "\n".join(trailers)]
-    if closing := _closing_lines(r, tids):
+    if closing := _closing_lines(r, tids, f["merge_head"]):
         sections.append(closing)
     if restored:
         sections.append("\n".join(dict.fromkeys(restored)))
