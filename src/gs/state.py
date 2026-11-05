@@ -65,13 +65,13 @@ class TicketState:
     # 마지막 시도의 리뷰 기록(06, review.run): reviewer, dir, merge_base, note, fix, findings, reviewed_head.
     # reviewed_head는 이 리뷰어를 부른 마지막 리뷰·재리뷰의 대상 head다(go가 적는다). 호출이 실패해도 남고 실패는 note·failed가 말한다.
     # 부르지 못한 리뷰(거부, 한도, 트리 실패)는 옮기지 않는다. 옛 state의 기록에는 없다.
-    # 재리뷰가 있었으면 rereviews(회차마다 round, dir, base, head, note, failed)도 있다.
+    # 재리뷰가 있었으면 rereviews(회차마다 round, dir, base, head, note, failed)도 있다. 수리 재리뷰의 round는 review.REPAIR_ROUND다.
     # 지적마다 severity·location·claim·evidence·action(fix|report)·why, 그리고 수정·재리뷰 결과(review.Finding):
     #   fix_attempt("" | attempted | discarded), fix_round(이 지적을 받은 마지막 수정 worker 회차, 0이면 받은 적 없음),
     #   fix_reason(수정 못 한 이유: 한도, 띄우지 못함, 수정 worker 실패…),
     #   rereview("" | resolved | unresolved | unchecked), rereview_reason(unchecked의 이유: 시간 초과 | 한도 | 재리뷰 실패),
     #   rereview_evidence(판정 근거·실패 내용), rereview_round(그 결과를 낸 재리뷰 회차),
-    #   found_round(0 첫 리뷰, 1·2 그 회차 재리뷰가 새로 낸 지적. 2회차는 늘 report),
+    #   found_round(0 첫 리뷰, 1·2 그 회차 재리뷰가 새로 낸 지적. 2회차는 늘 report. review.REPAIR_ROUND는 수리 재리뷰의 지적으로 늘 report),
     #   idea_number(보고만 high·medium 지적의 아이디어 파일 번호, findings.py. 옛 state와 정하기 전에는 없다).
     # 지적 하나의 결말은 이 순서로 읽는다: action이 report면 보고만 → rereview가 있으면 그 값(2차 수정을 못 했거나 버렸어도
     # 1차 재리뷰의 unresolved는 그대로 미해결이다) → fix_reason이 있으면 수정 못 함.
@@ -87,7 +87,12 @@ class TicketState:
     # 끊긴 worker를 잇는 표시: branch, worktree, base, fix(수정 worker 회차, 0이면 구현), rundir,
     # done(worker는 끝났고 리뷰부터 하면 된다). 있으면 _start가 새 worktree 대신 여기서 잇는다. 비었으면 없음.
     # 리뷰 단계 동안에도 done으로 있다: 끝나지 않은 리뷰는 gs가 어떻게 끝나든 다음 gs go가 다시 한다(go._finish).
+    # 수리 중이면 repair(go.REPAIR_*: 어디까지 했나)도 있다. 수리는 검증 실패부터 다시 검증까지 이 표시로 잇는다. 옛 state에는 없다.
     network_resume: dict = field(default_factory=dict)
+    # 수리(go._start_repair)마다 한 줄. 재시도·재실행 뒤에도 보존한다. 옛 state에는 없다.
+    # attempt(시도 번호), verify_log(수리 worker가 받은 실패 로그), reason(첫 검증 실패 이유), base(수리 전 head),
+    # worker(수리 worker의 결과. 비면 아직 안 끝났다), result("" 진행 중 | REPAIR_PASSED | REPAIR_FAILED), detail(실패 이유).
+    repairs: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -133,8 +138,36 @@ def agy_reached(st: State, limit: int) -> bool:
 
 
 PHASE_LABELS = {"worker": "worker", "review_wait": "리뷰 대기", "review": "리뷰", "fix_wait": "수정 대기", "fix": "수정",
-                "rereview": "재리뷰", "fix2": "수정 2", "verify": "검증", "finish": "마무리", "checks": "CI 대기",
-                "setup": "준비", "network": "네트워크 대기"}
+                "rereview": "재리뷰", "fix2": "수정 2", "repair_wait": "수리 대기", "repair": "수리", "verify": "검증",
+                "finish": "마무리", "checks": "CI 대기", "setup": "준비", "network": "네트워크 대기"}
+
+REPAIR_PASSED, REPAIR_FAILED = "passed", "failed"  # TicketState.repairs의 result
+
+
+def open_repair(ts: TicketState) -> dict | None:
+    """결과가 아직 없는 수리 기록. 없으면 None."""
+    return ts.repairs[-1] if ts.repairs and not ts.repairs[-1].get("result") else None
+
+
+def close_repair(ts: TicketState, result: str, detail: str = "") -> None:
+    """지금 수리의 결과를 적는다. 수리 중이 아니면 하는 일이 없다. 저장은 부르는 쪽이 한다."""
+    if rec := open_repair(ts):
+        rec.update(result=result, detail=detail)
+
+
+def repair_summary(ts: TicketState) -> str:
+    """수리한 사실과 결과 한 줄(보고서, `gs status`). 수리한 적이 없으면 빈 문자열."""
+    parts = []
+    for rec in ts.repairs:
+        done = rec.get("worker", "")
+        if rec.get("result") == REPAIR_PASSED:
+            outcome = "다시 검증 통과"
+        elif rec.get("result") == REPAIR_FAILED:
+            outcome = f"실패: {rec.get('detail', '')}"
+        else:
+            outcome = "다시 검증 중" if done else "수리 중"
+        parts.append(f"시도 {rec.get('attempt', '?')} " + (f"{done} → " if done else "") + outcome)
+    return "수리: " + " · ".join(parts) if parts else ""
 
 
 def end_phase(ts: TicketState, at: str | None = None) -> None:

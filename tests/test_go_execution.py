@@ -294,7 +294,8 @@ class GoExecutionTest(support.GoTest):
         self.assertIn("[05] 실패: 검증 실패", out)
         self.assertIn("[06] 실패: 커밋 없음", out)
         self.assertIn("■ PR: https://example.test/pr/1", out)
-        self.assertEqual(sorted(self.calls()), ["01", "02", "02", "04", "05", "05", "06", "06"])  # 순서는 리뷰가 끝나는 때에 달렸다
+        # 순서는 리뷰가 끝나는 때에 달렸다. 05는 검증 실패라 시도마다 수리 worker도 돈다
+        self.assertEqual(sorted(self.calls()), ["01", "02", "02", "04", "05", "05", "05", "05", "06", "06"])
 
         log = self.integration("log", "--format=%B", "gs/demo/integration")
         merged = sorted(line.split("/")[-1] for line in log.splitlines() if line.startswith("gs-ticket:"))
