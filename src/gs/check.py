@@ -11,6 +11,23 @@ from pathlib import Path, PurePosixPath
 
 from . import feature as featmod
 from . import config, git, graph, version
+from .review import reviewer_selection
+
+
+def ticket_model_line(ticket: featmod.Ticket, cfg: config.Config) -> str:
+    """실행과 같은 선택 함수로 첫 구현·리뷰 호출만 표시한다."""
+    def label(family: str, selection: config.ModelEffort | None) -> str:
+        model = selection.model if selection and selection.model else "CLI 기본값"
+        effort = f"/{selection.effort}" if selection and selection.effort else ""
+        return f"{family} {model}{effort}"
+
+    tier, selection = cfg.tiers.worker(ticket.model, ticket.tier)
+    reviewers = [ticket.reviewer]
+    if ticket.second_reviewer:
+        reviewers.append(ticket.second_reviewer)
+    reviews = " + ".join(label(family, reviewer_selection(family, cfg)[1])
+                         for family in reviewers)
+    return f"{ticket.id} {tier or ticket.tier or 'medium'} {label(ticket.model, selection)} · 리뷰 {reviews}"
 
 
 def _glob_tokens(pattern: str) -> list[str]:
@@ -200,4 +217,6 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
     feat.problems.extend(environment_problems(repo, cfg, feat, g))
     lines.append("순서: " + " ".join(graph.topo_order(g)))
     lines.append("지금 시작 가능: " + " ".join(graph.frontier(g)))
+    if not feat.errors:
+        lines.extend(ticket_model_line(feat.tickets[tid], cfg) for tid in sorted(g))
     return feat, lines
