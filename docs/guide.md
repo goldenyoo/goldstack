@@ -175,7 +175,7 @@ git switch main && git fetch origin && git reset --keep origin/main
 ```
 ❌ csv-export · 사람 승인 필요: https://github.com/you/tally/pull/7. main 검증은 미실행 · 티켓 3/3 · 보고서 .goldstack/work/csv-export/report.md
 ```
-CI 대기 중에는 진행 바가 `▓▓▓▓▓▓▓▓ csv-export 3/3 · CI 대기 중 · 31분 · 약 0분 남음`이다. 검사가 실패하거나 시간을 넘기면 병합하지 않고 `■ 마무리: CI 실패: build, test` 또는 `■ 마무리: CI 대기 시간 초과`로 끝난다. 고치는 커밋을 PR 브랜치에 넣거나 CI를 다시 돌린 뒤 `gs go`하면 검사를 다시 읽어 이어 간다(head가 바뀌었으면 그 head를 먼저 `verify`한다).
+CI 대기 중에는 진행 바가 `▓▓▓▓▓▓▓▓ csv-export 3/3 · CI 대기 중 · 31분 · 마무리 중`이다(마무리 시간을 아는 레포에서 아직 남았으면 `약 4분 남음`처럼 시간을 보인다. 어림이 끝났으면 `마무리 중`). 검사가 실패하거나 시간을 넘기면 병합하지 않고 `■ 마무리: CI 실패: build, test` 또는 `■ 마무리: CI 대기 시간 초과`로 끝난다. 고치는 커밋을 PR 브랜치에 넣거나 CI를 다시 돌린 뒤 `gs go`하면 검사를 다시 읽어 이어 간다(head가 바뀌었으면 그 head를 먼저 `verify`한다).
 
 **CI가 아직 안 떴을 때** — PR을 막 열면 검사가 등록되기 전일 수 있다. 보호 규칙에서 필수 검사 이름을 읽었으면(`build`, `test`) 그 이름이 나타나 끝날 때까지 기다린다(`timeouts.checks_minutes`까지, 아직 없는 이름은 `…`로 보인다). 읽지 못했으면(보호 규칙을 읽는 API에 권한이 없거나 규칙이 없으면) 검사가 하나도 안 보이는 동안 `timeouts.checks_grace_seconds`(기본 60초)까지 기다리고, 그 안에 하나라도 보이면 끝날 때까지 기다린다. 끝까지 없으면 병합을 시도한다:
 ```
@@ -398,14 +398,20 @@ $ gs check csv-export
 csv-export: 티켓 3장, 오류 0, 경고 0
 순서: 01 02 03
 지금 시작 가능: 01
+01 small codex gpt-6-luna/medium · 리뷰 claude opus/xhigh
+02 medium claude sonnet/high · 리뷰 codex gpt-6.1-sol/high
+03 large claude opus/xhigh · 리뷰 codex gpt-6.1-sol/high + agy gemini-4-argon-high
 ```
+오류가 없으면 `gs check`는 끝에 티켓마다 한 줄을 더해, `gs go`가 그 티켓의 **첫 시도**에 쓸 등급과 구현 모델/effort, 리뷰어(두 번째 리뷰어가 있으면 `+`로 이어 붙인다)를 보인다. 실행이 쓰는 선택 함수와 같은 값이고, 재시도·수정·재리뷰와 승급은 미리 알 수 없어 넣지 않는다. 그 계열의 `[tiers]` 표가 없으면 모델은 `CLI 기본값`이다. `/grill`은 spec의 티켓 표에 이 값을 그대로 옮긴다.
+
 파일 형식은 [skills/grill/templates/](../skills/grill/templates/). 중간에 세션이 끊겨도 `/grill csv-export`를 다시 부르면 spec의 기록에서 이어 간다.
 
 **`/go csv-export`**
 1. `gs check` — 오류가 있으면 보이고 "`/grill csv-export`로 고친다"며 끝낸다.
 2. 현재 브랜치가 base인지 보고, grill 결과(`.goldstack/work/csv-export`, `.goldstack/out-of-scope`, `.goldstack/ideas`, `.goldstack/profile.md`)가 아직 커밋 안 됐으면 그 경로만 커밋하고, base가 원격보다 앞서기만 하면 `git push origin main`(force 아님). 뒤처졌거나 갈라졌으면 말하고 끝낸다. worker는 `origin/main` 위에서 일하므로 spec·티켓이 거기 있어야 한다. 보호된 main이면 이 push가 막히니 [먼저 PR로 올린다](#예시-보호된-main--필수-승인).
 3. `gs go csv-export`를 백그라운드로 돌리고 끝날 때까지 기다린다. 사람에게 묻지 않는다.
-4. 결과: `report.md`의 세 줄 요약과 PR 링크(README "5분 따라 하기" 3). 끝나면 `/retro csv-export`로 실행을 돌아볼 수 있다([아이디어 흐름](#아이디어-흐름)).
+4. 결과: `report.md`의 세 줄 요약과 PR 링크(README "5분 따라 하기" 3).
+5. 회고: 끝난 feature마다 subagent가 `/retro`와 같은 방식으로 실행을 읽어 고칠 후보만 번호 붙여 돌려준다. 세션이 후보를 보이고, 사람이 고른 것만 아이디어 파일로 쓴다. 고르지 않으면 아무것도 쓰지 않는다. subagent가 실패하면 다시 부르지 않고 `/retro csv-export`로 따로 돌리라고만 말한다([아이디어 흐름](#아이디어-흐름)). 1~4단계는 사람에게 묻지 않고, 묻는 건 끝난 뒤인 이 단계뿐이다. `/overnight`은 사람이 없어 이 단계를 돌리지 않고 아침 보고에 `회고: /retro csv-export` 한 줄만 적는다.
 
 일부 티켓만 먼저 돌려 볼 때는 터미널에서 `gs check csv-export --only 01,02`로 범위를 보고 `gs go csv-export --only 01,02`. 범위 밖 의존은 끝났다고 본다. **`--only`는 병합하지 않고 멈춘다.** 티켓을 돌려 integration에 병합·검증까지만 하고, 범위가 모든 티켓이어도 PR을 만들지 않고 base를 바꾸지 않으며 최종 보고서도 쓰지 않는다. 끝에 `■ --only 범위만 돌았다: 병합하지 않음 → 이어서 gs go csv-export`가 나온다(범위 안 티켓이 모두 병합됐으면 종료 0, 아니면 1). base 병합은 옵션 없는 `gs go csv-export`가 한다. 이미 병합된 티켓은 다시 돌지 않고 남은 티켓만 돌린 뒤 PR을 병합하며, 보고서 표에 `--only`로 돌린 티켓도 나온다. 반쪽 기능이 main에 들어가지 않는다.
 
@@ -600,12 +606,13 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 - `1/3`: 끝난 티켓(병합·실패·건너뜀)/전체. 막대 8칸이 그 비율이다.
 - `02 리뷰 중(codex)`: 돌고 있는 티켓마다 단계(준비, worker, 리뷰, 수정, 재리뷰, 수정 2, 검증, 마무리)와 그 단계의 모델(`03 재리뷰 중(codex+agy)`). feature 전체 마무리(보고서·PR·main 검증) 중이면 `마무리 중(claude)`, CI를 기다리면 `CI 대기 중`, integration이나 base worktree를 준비하면 `준비 중`.
 - `네트워크 대기(2회, 3분 뒤)`: 끊겨서 기다리는 중이고, 두 번째 대기이며 3분 뒤 다시 부른다. `네트워크 회복 확인(2회)`는 다시 띄운 worker가 일시 오류 없이 도는지 보는 중이다. 둘 다 그동안 새 worker·리뷰를 시작하지 않는다([네트워크가 끊겼을 때](#네트워크가-끊겼을-때)).
-- `12분`: 이번 실행의 경과. `약 18분 남음`: 이번 실행에서 끝난 티켓의 평균 소요 × 남은 티켓 ÷ `max_workers`.
+- `12분`: 이번 실행의 경과. `약 18분 남음`: 남은 티켓을 의존과 `max_workers`대로 자리에 넣어 본 일정의 길이에 마무리 시간을 더한 값이다. 티켓 하나의 예상 소요는 이번 실행에서 끝난 티켓의 평균이고(등급별 평균은 쓰지 않는다), 돌고 있는 티켓은 예상에서 이미 쓴 시간을 뺀다(예상을 넘겼으면 1분으로 센다). 직렬로 이어진 티켓은 자리가 남아도 나뉘지 않는다. 마무리 시간은 이 레포의 다른 feature 실행에서 끝까지 마친 것(`verified`·`reverted`)의 마지막 티켓 종료부터 실행 종료까지 중앙값이다. 재시도와 수정은 예측하지 않으니 어려운 실행은 실제보다 짧게 말할 수 있다.
+- 마무리 시간 기록이 없으면 티켓 일정만 센 값에 `+ 마무리`를 붙인다(`약 18분 남음 + 마무리`). 티켓이 모두 끝나 마무리(보고서·PR·main 검증·CI 대기) 중이면 기록이 있고 어림이 남았을 때만 `약 4분 남음`, 아니면 `마무리 중`이다. `약 0분 남음`은 나오지 않는다.
 - 이번 실행에서 끝난 티켓이 아직 없으면 이 레포의 **다른 feature** 실행 기록(`.goldstack/work/*/run/state.json`)에서 병합된 티켓의 소요 중앙값으로 처음부터 예측하고, 그 사실을 꼬리표로 단다:
   ```
   ░░░░░░░░ csv-import 0/4 · 01 worker 중(codex) · 02 worker 중(claude) · 3분 · 약 26분 남음(이전 실행 기준)
   ```
-  `(이전 실행 기준)` = "이번 feature의 티켓은 아직 하나도 안 끝났고, 지난 feature들의 티켓 크기로 어림했다"는 뜻이다. 티켓 크기가 feature마다 다르니 거친 값으로 본다. 이번 실행에서 티켓 하나가 끝나면(병합·실패) 꼬리표가 빠지고 이번 실행 평균으로 바뀐다. `run/`은 gitignore라 기록은 실행한 머신에만 있다. 다른 feature 기록도 없으면(이 레포의 첫 feature, 새 머신) `남은 시간 계산 중`.
+  `(이전 실행 기준)` = "이번 feature의 티켓은 아직 하나도 안 끝났고, 지난 feature들의 티켓 크기로 어림했다"는 뜻이다(일정과 마무리 계산은 같다). 티켓 크기가 feature마다 다르니 거친 값으로 본다. 이번 실행에서 티켓 하나가 끝나면(병합·실패) 꼬리표가 빠지고 이번 실행 평균으로 바뀐다. `run/`은 gitignore라 기록은 실행한 머신에만 있다. 다른 feature 기록도 없으면(이 레포의 첫 feature, 새 머신) `남은 시간 계산 중`.
 - `gs go`는 worker를 기다리는 동안 상태가 그대로여도 60초마다 state.json을 다시 써서(heartbeat) worker가 오래 돌아도 바가 남는다. 실행이 끝나거나 state.json이 10분 넘게 안 바뀌면 사라진다. 리뷰·재리뷰는 루프 밖 스레드에서 돌아 그동안에도 heartbeat가 계속된다. 검증·병합·마무리는 `gs go`가 직접 기다리느라 heartbeat가 멈추므로, 10분 넘는 검증(기본 20분) 중에는 정상 실행이어도 바가 사라졌다가 그 단계가 끝나면 돌아온다. 죽었는지는 `gs status <feature>`의 `실행 중(pid …)`/`중단됨`으로 본다. 안 보이면 [README](../README.md#설치) 5.
 
 **`gs status`** — 읽기 전용. 파일을 만들거나 잠그지 않으니 실행 중에 언제든 친다.
@@ -638,7 +645,7 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | 마무리 상태 줄(Summary 바로 아래) | gs가 state에서 쓴 한 줄. 예 `마무리: verified · PR https://github.com/you/tally/pull/7 병합 · main 검증 통과`, `마무리: reverted · main 검증 실패 → revert 1a2b3c4d`, `마무리: not_merged · integration 검증 실패` |
 | 지적 개수 줄(마무리 상태 줄 아래) | `리뷰 지적: 수정됨 1 · 미해결 1 · …`. 상태마다 뜻과 볼 것은 [리뷰와 재리뷰](#리뷰와-재리뷰) |
 | Evidence → 남은 위험(있을 때만, 맨 앞) | `- 01: 플러그인 격리 못 함: …`. claude worker의 플러그인 끄기가 빠진 채 돌았다는 뜻이다(worker를 막지는 않는다). `claude plugin list`가 되는지 본다 |
-| Evidence → 실행 측정 | gs 버전·설치 commit, 일시 오류 수·대기 시간(전체, 티켓별), 표: worker 시도별 실제 모델·effort·소요·처리 대기, 리뷰어별 소요·지적·채택(fix, 해결 수와 다르다), 리뷰 호출별 시간(재호출 포함), gs 검증별 명령·SHA·소요·결과, 마무리 단계별 시간. 어디서 시간을 썼는지 볼 때 읽는다. 뜻은 [internals](internals.md#상태) |
+| Evidence → 실행 측정 | gs 버전·설치 commit, 일시 오류 수·대기 시간(전체, 티켓별), 표: worker 시도별 실제 모델·effort·소요·처리 대기, 리뷰어별 소요·결과 대기·지적·채택(fix, 해결 수와 다르다), 리뷰 호출별 시간(재호출 포함), gs 검증별 명령·SHA·소요·결과, 마무리 단계별 시간. `결과 대기(초)`는 리뷰 호출이 돌아온 뒤 `gs go`가 그 결과를 받기까지다. 검증이 `gs go`를 붙잡는 동안 끝난 리뷰가 기다린 시간이고, 기록이 없는 옛 실행은 `기록 없음`이다. 어디서 시간을 썼는지 볼 때 읽는다. 뜻은 [internals](internals.md#상태) |
 | Evidence → 검증 실패(마무리 전체 검증이 실패했을 때만) | 실패한 단계(`integration`, `integration-final`), 로그 경로, 실패 줄 최대 10줄, `후보 티켓(추정)`. 추정이라 틀릴 수 있다. 로그로 확인하고 `/grill`로 고칠 티켓을 더한다 |
 | Evidence → 티켓별 결과 | 티켓마다 결과(`merged`, `failed`, `skipped`)와 이유. 단계별 소요(`worker 9분 · 리뷰 4분 · 수정 2분 · 재리뷰 1분 · 검증 3분`, 0분인 단계는 빼고 모두 1분 미만이면 `모두 1분 미만`). 미커밋 변경 때문에 남긴 worktree(`--only` 범위 밖 티켓 것도). `경고: setup이 추적 파일을 바꿨다 → 되돌림: …`, 플러그인 격리 경고 |
 | Evidence → 리뷰 지적 | 다른 계열 reviewer의 지적 전부와 지적마다의 상태·근거·판단·재리뷰 근거. 고쳐졌다고 확인된 지적도 `수정됨(재리뷰 확인)`으로 남는다. `second_reviewer`가 있으면 리뷰마다 `04 리뷰(codex)`, `04 리뷰(agy)`로 나뉜다. 리뷰 자체가 실패했거나 `건너뜀(한도)`이면 그 메모, 수정·재리뷰 경과 메모 |
@@ -870,7 +877,11 @@ detail = "errors" # errors | minimal
 - `auto` + `errors`: 개인 프로젝트용. 자동으로 오류 줄까지 보낸다. `minimal`이면 오류 줄 없이 항목만 보낸다.
 `/adopt`가 새 레포에서 한 번 묻고 이 값을 적는다. 받는 쪽은 `gs backlog`와 `/grill` 1단계가 열린 `field-report` issue를 후보로 보인다. 티켓 키 `closes: [12]`면 그 PR이 병합될 때 issue가 닫힌다.
 
-명령: `gs feedback "한 줄"`(초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태), `gs feedback send`(쌓인 것 전송). skill은 `/feedback <한 줄 | list | send>`.
+명령: `gs feedback "문장"`(초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태. `status`도 같다), `gs feedback send`(쌓인 것 전송). skill은 `/feedback <문장 | list | send>`.
+
+**한 단어는 보내지 않는다** — `list`·`send`·`status`는 정상 하위 명령이라 예외다. `gs feedback statsu`처럼 그 밖의 공백 없는 한 단어는 하위 명령을 잘못 친 것으로 보고 `gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"`을 내고 종료 코드 2로 끝난다. 초안도 만들지 않는다. 옛 판은 `status`를 글로 보고 `draft` 모드에서도 공개 issue를 올렸다. 일부러 한 단어를 보내려면 따옴표 안에 공백을 넣어 문장으로 쓴다.
+
+**`draft` 모드의 재전송** — 보내다 실패하면 초안은 남고 `gs feedback: 전송하지 못한 초안은 남겨 두고 gs feedback send로 보내세요.`가 나온다. `draft`는 사람이 보낼 때를 고르는 모드라 다음 `gs` 실행이 자동으로 다시 보내지 않는다. `auto`는 `다음 실행 때 다시 보냅니다.`로 알린다.
 
 ## `/overnight`: 자는 동안 이어 돌리기
 

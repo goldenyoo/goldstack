@@ -28,18 +28,18 @@ max_workers: 3
 <!-- 파일·명령·출력 형식처럼 티켓 여러 장이 같이 따를 것. 없으면 절을 지운다 -->
 
 ## 5. 티켓 그래프
-<!-- 마지막 라운드에서 확정. 값은 티켓 frontmatter와 맞춘다
+<!-- 마지막 라운드에서 확정. 티켓 frontmatter 초안을 쓰고 `gs check <feature>`를 통과시킨 뒤 값을 옮긴다. 사람이 표를 고치면 초안도 고쳐 재검사한다
 blocked_by: 같은 파일을 건드릴 쌍은 줄 세운다. 이유는 "같은 파일" 또는 "앞 결과 필요"
 tier: small|medium|large와 이유 한 줄
 예상: 티켓 하나에 걸릴 시간
-구현·리뷰 계열: 서로 다른 계열. 두 번째 리뷰어가 있으면 `claude + agy`처럼 적는다
+구현·리뷰 계열: `gs check`의 계열 모델/effort를 옮긴다. effort가 없으면 모델만, 표가 없으면 CLI 기본값(리뷰는 models 값)을 쓴다. 두 번째 리뷰어는 +로 잇는다
 touches: 레포 루트 기준 경로, glob 허용
 verify: 문서·설정 티켓은 좁은 명령, 코드 티켓은 `전체`
 일렬 경로: 예상 합이 가장 긴 blocked_by 사슬. 평균 동시: 전체 예상 합 ÷ 일렬 경로 예상 -->
 | id | 제목 | blocked_by(이유) | wave | tier(이유) | 예상 | 구현 | 리뷰 계열 | touches | verify |
 |---|---|---|---|---|---|---|---|---|---|
-| 01 | <제목> | – | 1 | small(<이유. 예: 문서>) | 20분 | claude | codex | `<경로>` | `<좁은 명령>` |
-| 02 | <제목> | 01 앞 결과 필요 | 2 | large(<이유. 예: 재개 흐름>) | 60분 | codex | claude + agy | `<경로>` | 전체 |
+| 01 | <제목> | – | 1 | small(<이유. 예: 문서>) | 20분 | claude sonnet/medium | codex gpt-6.1-sol/high | `<경로>` | `<좁은 명령>` |
+| 02 | <제목> | 01 앞 결과 필요 | 2 | large(<이유. 예: 재개 흐름>) | 60분 | codex gpt-6.1-sol/high | claude opus/xhigh + agy gemini-4-argon-high | `<경로>` | 전체 |
 
 일렬 경로 <01→02> 예상 <80>분 · 평균 동시 <1.0>
 

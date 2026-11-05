@@ -74,6 +74,68 @@ class CheckTest(unittest.TestCase):
         self.assertIn("순서: 01 02", out)
         self.assertIn("지금 시작 가능: 01", out)
 
+    def model_lines(self, out):
+        return [line for line in out.splitlines() if " · 리뷰 " in line]
+
+    def test_actual_models_with_tiers(self):
+        self.write("01-a.md", ticket("01", extra="tier: large\n"))
+        self.write("02-b.md", ticket("02", model="codex", reviewer="claude", extra="tier: small\n"))
+        path = self.repo / config.CONFIG_PATH
+        path.write_text(path.read_text().replace('review = "large"', 'review = "medium"'))
+        code, out, err = self.run_check()
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.model_lines(out), [
+            "01 large claude opus/xhigh · 리뷰 codex gpt-6.1-sol/medium",
+            "02 small codex gpt-6-luna/medium · 리뷰 claude sonnet/high",
+        ])
+        self.assertLess(out.index("지금 시작 가능:"), out.index("01 large"))
+
+    def test_actual_models_without_tiers(self):
+        self.write("01-a.md", ticket("01", extra="tier: large\nsecond_reviewer: agy\n"))
+        self.write("02-b.md", ticket("02", model="codex", reviewer="claude"))
+        path = self.repo / config.CONFIG_PATH
+        text = path.read_text()
+        path.write_text(text[:text.index("[tiers]")] + text[text.index("[agy]"):])
+        code, out, err = self.run_check()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.model_lines(out), [
+            "01 large claude CLI 기본값 · 리뷰 codex CLI 기본값 + agy gemini-4-argon-high",
+            "02 medium codex CLI 기본값 · 리뷰 claude opus",
+        ])
+
+    def test_actual_models_second_reviewer_and_no_effort(self):
+        self.write("01-a.md", ticket("01", extra="tier: large\nsecond_reviewer: agy\n"))
+        code, out, err = self.run_check()
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.model_lines(out), [
+            "01 large claude opus/xhigh · 리뷰 codex gpt-6.1-sol/high + agy gemini-4-argon-high",
+        ])
+
+    def test_actual_models_only_selected_tickets(self):
+        self.write("01-a.md", ticket("01", extra="tier: large\n"))
+        self.write("02-b.md", ticket("02", '["01"]', extra="tier: small\n"))
+        code, out, err = self.run_check("--only", "02")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.model_lines(out), [
+            "02 small claude sonnet/medium · 리뷰 codex gpt-6.1-sol/high",
+        ])
+
+    def test_actual_models_hidden_on_errors(self):
+        self.write("01-a.md", ticket("01", extra="tier: large\n"))
+        path = self.repo / config.CONFIG_PATH
+        for change in ('large = "opus/xhigh"', 'review = "large"'):
+            with self.subTest(change=change):
+                original = path.read_text()
+                path.write_text(original.replace(change, change.split(" = ")[0] + ' = "invalid/bad"'))
+                code, out, err = self.run_check()
+                self.assertEqual(code, 1, out + err)
+                self.assertEqual(self.model_lines(out), [])
+                path.write_text(original)
+        (self.bin / "codex").unlink()
+        code, out, err = self.run_check()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.model_lines(out), [])
+
     def test_telegram_without_secrets_warns(self):
         self.write("01-a.md", ticket("01"))
         path = self.repo / config.CONFIG_PATH

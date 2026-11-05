@@ -24,6 +24,8 @@ goldstack을 이 레포에 들인다. 결과는 레포 요약 `.goldstack/profil
    - 답을 `.goldstack/config.toml`의 `[feedback]`에 `mode = "..."`, `detail = "..."`로 쓴다. 다른 키(`repo`, `max_per_day`)는 건드리지 않는다.
 4. **profile을 쓴다.** `.goldstack/profile.md`를 아래 절로 쓴다. 시험 명령은 가능하면 한 번 돌려 걸린 시간을 잰다(못 돌리면 이유를 적는다). 시험이 없으면 "검증 없음"을 경고하고 spec에 `verify: "true"`처럼 명시하라고 적는다. 비밀 값(`.env` 내용 등)은 적지 않고 위치만 적는다.
 
+   명령으로 찾을 수 있는 값(줄 수, 시험 수, 파일 목록)은 적지 않고, 함정과 코드에서 읽히지 않는 관례를 적는다. profile이 있으면 이 기준으로 낡은 값을 지운다.
+
    ```
    # <레포> profile
    갱신: YYYY-MM-DD (/adopt)
