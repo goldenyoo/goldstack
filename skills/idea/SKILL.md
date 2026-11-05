@@ -10,9 +10,9 @@ disable-model-invocation: true
 
 1. **비슷한 것을 찾는다.** `gs backlog`로 열린 아이디어를 보고, 주제가 닿는 것은 `.goldstack/ideas/<slug>.md`를 열어 본문까지 읽는다. 비슷함 = 같은 문제를 말하거나 같은 곳을 고친다. 열린 아이디어를 모두 견줘 봤으면 끝.
 2. **있으면 묻는다.** 비슷한 파일의 slug와 첫 줄을 보이고 "이 파일에 근거로 덧붙일까, 새 파일로 쓸까"를 묻는다. 덧붙이기면 그 파일 본문 끝에 `- <오늘 YYYY-MM-DD> <근거 한 줄> (출처: <어디서>)`를 더하고 frontmatter는 그대로 둔다. 새 파일이면 3단계로 간다.
-3. **없으면 쓴다.** `.goldstack/ideas/<slug>.md`를 `templates/idea.md` 형식으로 쓴다. 값은 문맥에서 정하고 따옴표로 감싼다.
+3. **없으면 쓴다.** `.goldstack/ideas/<slug>.md`를 `templates/idea.md` 형식으로 쓴다. 값은 문맥에서 정하고 문자열은 따옴표로 감싼다.
    - slug: 내용을 줄인 영어 소문자·숫자·`-`(예: `pr-repo-flag`). 같은 이름 파일이 있으면 다른 이름.
-   - `date`: 오늘. `status`: `open`. `feature`: `""`.
+   - `date`: 오늘. `status`: `open`. `feature`: `""`. `issues`: 연결한 issue 번호 목록, 없으면 `[]`.
    - `severity`: `high`(결과·기록이 틀리거나 안전 구멍) | `medium`(반복되는 손일·불편) | `low`(다듬기).
    - `source`: 생각이 나온 곳(예: `goldstack-v3 실행 중 대화`, `/retro goldstack-v3`, `goldstack-v2 리뷰 02`).
    - 본문: 첫 줄은 한 줄 요약, 이어서 근거·생각.

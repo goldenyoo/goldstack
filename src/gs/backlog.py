@@ -1,4 +1,4 @@
-"""아이디어, 범위 밖의 다시 볼 조건과 수신한 field-report를 읽기 전용으로 보여 준다."""
+"""아이디어, 범위 밖의 다시 볼 조건과 수신한 issue 후보를 읽기 전용으로 보여 준다."""
 from __future__ import annotations
 
 import json
@@ -23,6 +23,7 @@ class Idea:
     source: str
     status: str
     summary: str
+    issues: tuple[int, ...] = ()
 
 
 def read_idea(path: Path) -> Idea:
@@ -49,8 +50,13 @@ def read_idea(path: Path) -> Idea:
         raise ValueError("feature: 문자열이어야 한다")
     if data["status"] == "taken" and not feature.strip():
         raise ValueError("feature: status가 taken이면 필수다")
+    issues = data.get("issues", [])
+    if (not isinstance(issues, list)
+            or any(not re.fullmatch(r"[0-9]+", value) or int(value) < 1 for value in issues)):
+        raise ValueError("issues: 양의 issue 번호 목록이어야 한다(예: [12])")
     summary = next((line.strip() for line in body.splitlines() if line.strip()), "")
-    return Idea(path.stem, data["date"], data["severity"], data["source"], data["status"], summary)
+    return Idea(path.stem, data["date"], data["severity"], data["source"], data["status"], summary,
+                tuple(dict.fromkeys(map(int, issues))))
 
 
 def backlog(repo: Path, show_all: bool, out, err) -> int:
@@ -70,7 +76,8 @@ def backlog(repo: Path, show_all: bool, out, err) -> int:
         if not show_all and idea.status != "open":
             continue
         status = f"{idea.status:<7}  " if show_all else ""
-        print(f"{idea.severity:<6}  {idea.date}  {status}{idea.slug}  {idea.summary}   ({idea.source})", file=out)
+        linked = "  issues: " + ", ".join(f"#{n}" for n in idea.issues) if idea.issues else ""
+        print(f"{idea.severity:<6}  {idea.date}  {status}{idea.slug}  {idea.summary}   ({idea.source}){linked}", file=out)
     print("범위 밖 (다시 볼 조건)", file=out)
     for path in sorted((repo / ".goldstack/out-of-scope").glob("*.md")):
         try:
@@ -81,12 +88,12 @@ def backlog(repo: Path, show_all: bool, out, err) -> int:
         match = re.search(r"\*\*다시 볼 조건\*\*:[ \t]*([^\r\n]*)", body)
         condition = match.group(1).strip() if match else ""
         print(f"{path.stem}  {condition or '(조건 없음)'}", file=out)
-    _field_reports(repo, out, err)
+    _field_reports(repo, out, err, {n for idea in ideas for n in idea.issues})
     return 0
 
 
-def _field_reports(repo: Path, out, err) -> None:
-    """받는 저장소에서만 열린 보고서를 읽는다. 본문·댓글은 자료로만 파싱한다."""
+def _field_reports(repo: Path, out, err, linked: set[int]) -> None:
+    """받는 저장소에서만 열린 보고서와 소유자의 무라벨 issue를 읽는다. 본문·댓글은 자료로만 파싱한다."""
     cfg, _ = config.load(repo)
     if cfg is None:
         return
@@ -97,18 +104,32 @@ def _field_reports(repo: Path, out, err) -> None:
     if target.casefold() != cfg.feedback.repo.casefold():
         return
     try:
+        owner = target.split("/", 1)[0]
+        unclassified = json.loads(feedback._gh(repo, target, "issue", "list", "--state", "open",
+                                              "--author", owner, "--limit", "1000",
+                                              "--json", "number,title,body,comments,labels,author"))
         issues = json.loads(feedback._gh(repo, target, "issue", "list", "--state", "open",
                                         "--label", "field-report", "--limit", "1000",
                                         "--json", "number,title,body,comments"))
         rows = []
-        for issue in issues:
+        seen = set(linked)
+        candidates = [(issue, False) for issue in issues]
+        candidates.extend((issue, True) for issue in unclassified
+                          if issue.get("labels") == []
+                          and (issue.get("author") or {}).get("login", "").casefold() == owner.casefold())
+        for issue, is_unclassified in candidates:
+            number = int(issue["number"])
+            if number in seen:
+                continue
+            seen.add(number)
             counts = [int(n) for body in [issue["body"], *(c["body"] for c in issue.get("comments", []))]
                       for n in re.findall(r"^- 횟수: ([0-9]+)$", body, re.MULTILINE)]
             title = " ".join(issue["title"].splitlines())
-            rows.append(f"#{int(issue['number'])}  {title}  횟수 {max(counts, default=1)}")
+            mark = "  미분류" if is_unclassified else ""
+            rows.append(f"#{number}  {title}  횟수 {max(counts, default=1)}{mark}")
     except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
         print("경고: field-report issue 조회 실패(gh)", file=err)
         return
-    print(f"field-report (열림 {len(rows)})", file=out)
+    print(f"issue 후보 (field-report·미분류, 열림 {len(rows)})", file=out)
     for row in rows:
         print(row, file=out)
