@@ -278,6 +278,15 @@ class CommandTest(FakeServerMixin, unittest.TestCase):
         self.assertEqual(fake.texts()[0], notify.truncate(self.file.read_text(encoding="utf-8")))
         self.assertNotIn(TOKEN, out + err)
 
+    def test_cli_check_option_is_accepted(self):
+        from gs import cli
+        fake = self.serve()
+        self.env(f"TG_TOKEN={TOKEN}\nTG_CHAT_ID=42\n")
+        with mock.patch("sys.stdout", self.io.StringIO()), mock.patch("sys.stderr", self.io.StringIO()):
+            code = cli.main(["--repo", str(self.repo), "notify", "--check"])
+        self.assertEqual(code, 0)
+        self.assertEqual([r for r in fake.requests if r[0].endswith("sendMessage")], [])
+
     def test_missing_values(self):
         fake = self.serve()
         self.env("TG_CHAT_ID=42\n")

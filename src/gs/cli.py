@@ -57,7 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("feedback_args", nargs="*", help="한 줄 또는 list | send")
 
     p = sub.add_parser("notify", help="파일 내용을 텔레그램으로 보낸다(--check는 토큰만 확인). notify.telegram이 꺼져 있어도 보낸다")
-    p.add_argument("notify_args", nargs="*", help="<파일> 또는 --check")
+    p.add_argument("notify_args", nargs="*", help="<파일>")
+    p.add_argument("--check", action="store_true", help="메시지를 보내지 않고 토큰만 확인한다")
 
     p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
     p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
@@ -93,7 +94,9 @@ def _run(args: argparse.Namespace) -> int:
         return command(repo, args.feedback_args, sys.stdout, sys.stderr)
     if args.cmd == "notify":
         from .notify import command
-        return command(repo, args.notify_args, sys.stdout, sys.stderr)
+        return command(repo, ["--check"] if args.check and not args.notify_args else
+                       (args.notify_args + ["--check"] if args.check else args.notify_args),
+                       sys.stdout, sys.stderr)
     if args.cmd == "init":
         config.init(repo, sys.stdout)
         return 0
