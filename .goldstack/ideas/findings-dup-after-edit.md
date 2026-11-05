@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v9 07 리뷰(codex) 보고만, goldstack-v10 grill에서 뺌"
-status: "taken"
-feature: "goldstack-v14"
+status: "open"
+feature: ""
 ---
 사람이 첫 줄이나 위치를 고친 아이디어 파일은 티켓 재시도 때 같은 지적이 새 `open` 파일로 또 생길 수 있다.
 
@@ -12,3 +12,5 @@ feature: "goldstack-v14"
 **다시 볼 때**: 자동 이관은 v9 뒤 설치본에서 처음 실제로 돈다. goldstack-v10 실행과 goldhud-v1에서 중복이 실제로 나오는지 먼저 본다. 고치려면 재시도를 넘어 지적 동일성을 유지하는 설계가 필요하다.
 
 - 2026-11-05 첫 관측: goldstack-v11 09의 재시도에서 같은 `CLI 기본값` 지적이 문장만 달라 `goldstack-v11-09-1`과 `goldstack-v11-09-3` 두 파일이 됐다. 사람이 고치지 않아도 재시도마다 리뷰어 문장이 달라 생긴다. 이 지적은 네 시도 모두 나왔다. 티켓의 "`CLI 기본값`으로 적는다"와 "실제 실행과 같은 함수"가 충돌해 매번 보고만으로 분류된 것이다. `goldstack-v11-09-1`은 `dropped`로 합쳤다. (출처: /retro goldstack-v11)
+
+- 2026-11-05 "같은 파일·줄 근처" 규칙은 이 사례를 못 잡는다. `goldstack-v11-09-1`은 `check.py:206`, `-09-3`은 `check.py:24`다(재시도가 다시 구현해 줄이 멀어졌다). 문장 유사도는 0.29로, 다른 지적과의 0.10–0.18과 잘 갈리지 않는다. goldstack-v12의 수리로 재시도가 줄면 중복이 주는지 먼저 본다. 고친다면 판단 모델이 후보다. (출처: goldstack-v12 grill 3-1)
