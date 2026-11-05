@@ -1269,7 +1269,8 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         state.begin_phase(ts, phase, t.model, attempt=attempt)
         _set(r, t.id, status=state.RUNNING, attempts=ts.attempts + (0 if nth or repair else 1), branch=branch, pane="",
              worktree=str(wt), log=str(job.log), started_at=state.now(), ended_at="", reason="")
-        worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True)
+        worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True,
+                           narrow=bool(nth or repair))
         if nth or repair:
             with job.brief.open("a", encoding="utf-8") as f:
                 f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth))
@@ -1837,7 +1838,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
     proc = None
     try:
         job.rundir.mkdir(parents=True)
-        worker.write_brief(job, r.feat.spec, r.name, a.branch)
+        worker.write_brief(job, r.feat.spec, r.name, a.branch, narrow=True)
         with job.brief.open("a", encoding="utf-8") as f:
             f.write(review.fix_brief(todo, nth))
         adapter = _worker_adapter(r, t)
@@ -1968,7 +1969,7 @@ def _start_repair(r: Run, a: Active, runner) -> Active:
     try:
         # 있어도 된다: 표시를 바꾸기 전에 죽은 지난 실행의 흔적이다. 그 worker는 _begin이 끝냈다
         job.rundir.mkdir(parents=True, exist_ok=True)
-        worker.write_brief(job, r.feat.spec, r.name, a.branch)
+        worker.write_brief(job, r.feat.spec, r.name, a.branch, narrow=True)
         with job.brief.open("a", encoding="utf-8") as f:
             f.write(review.repair_brief(ts.repairs[-1]["verify_log"]))
         adapter = _worker_adapter(r, t)

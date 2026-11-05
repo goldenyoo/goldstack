@@ -60,8 +60,17 @@ class Job:
 
 
 def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "",
-                resumed: bool = False) -> None:
+                resumed: bool = False, narrow: bool = False) -> None:
+    """worker brief를 쓴다. `narrow`는 수정·수리 worker용이다: 전체 검증은 gs가 병합 트리에서 하므로 좁은 시험만 시킨다.
+    첫 구현 worker(`narrow=False`)의 brief는 전체 검증을 한 번 돌리라고 한다."""
     t = job.ticket
+    verify = spec.verify_for(t)
+    verify_rule = (
+        f"- 검증 명령 `{verify}`: 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌린다. 너는 돌리지 않는다. "
+        "고친 곳에 닿는 좁은 시험만 돌린다."
+        if narrow else
+        f"- 검증 명령 `{verify}`: 개발 중에는 관련 시험만 돌리고, 커밋 전에 이 명령을 한 번 돌린다. "
+        "통과시켜야 한다. gs가 커밋된 내용만으로 병합 트리에서 다시 돌려 확인한다.")
     spec_rel = f"{work_rel(feature)}/spec.md"
     ticket_rel = f"{work_rel(feature)}/tickets/{t.path.name}"
     # worktree는 base(integration) 위에 새로 만든 것이라, 여기 있으면 base에 커밋된 profile이다
@@ -75,7 +84,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 - 이 worktree 안의 파일만 바꾼다.
 - 끝나면 변경을 이 브랜치에 커밋한다(여러 커밋 가능). 커밋이 없으면 실패로 처리된다.
 - push, PR 생성, 병합은 하지 않는다. gs가 한다.
-- 검증 명령 `{spec.verify_for(t)}`: 개발 중에는 관련 시험만 돌리고, 커밋 전에 이 명령을 한 번 돌린다. 통과시켜야 한다. gs가 커밋된 내용만으로 병합 트리에서 다시 돌려 확인한다.
+{verify_rule}
 - sandbox에서 네트워크, localhost, 홈 디렉터리 쓰기가 필요한 검증 단계만 돌릴 수 없다면 실패로 보지 않는다. 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다. 돌릴 수 없던 단계와 이유를 마지막 메시지에 적고 변경을 커밋한다. gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.
 - 완료 조건이 이 티켓의 명세다. 범위 밖은 건드리지 않는다.
