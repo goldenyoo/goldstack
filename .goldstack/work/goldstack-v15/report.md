@@ -23,7 +23,7 @@
   - 원격 삭제 경로의 새 시험은 `clean.integration`을 직접 검증하지 않는다.
 - **worker 보고(03·06, low):** 시험 미통과를 `ps` 차단 탓으로 돌린 보고의 근거가 부족하다는 지적이 남았다. 코드 결함 지적은 아니다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/30 병합 · main 검증 통과
 리뷰 지적: 수정됨 8 · 보고만 15 · 확인 못 함 1
 
 ## Evidence
@@ -112,15 +112,22 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 6 | ticket-03 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | b0ae648c3c3b819fc117fdda7f92f7d3d4ea0b0c | 0c4ef4db287d902307ba45e0abdc02260cc81eb3 | 421.527441 | passed |
 | 7 | ticket-07 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 6e6a8c60942d37c6d6c5980bdcf64e23957a5d76 | 694e10dee44b0956de054e09736b8c68d339383b | 422.300301 | passed |
 | 8 | integration | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 4d2e2fd1fabc26c2e925e29dabdee59a94ea6abd | - | 422.762826 | passed |
+| 9 | main | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 83b4e35abcc2f85f3af7d7f5281c9ecc54f6d4fd | - | 424.959059 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 472.0 |
-| verify | 422.828 |
+| total | 912.0 |
+| verify | 847.865 |
 | summary | 49.685 |
-| report | 0 |
+| report | 0.171 |
+| push | 2.16 |
+| publish | 5.086 |
+| merge-pr | 4.143 |
+| confirm-merge | 0.005 |
+| postmerge | 426.268 |
+| restore-reverts | 0.021 |
 
 ### 티켓별 결과
 
@@ -417,22 +424,38 @@ unittest.TextTestRunner().run(T())'` → 결과: `base_tickets: {'02': (True, ..
 
 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v15/run/integration/1/setup.log`
 
+#### finish/setup.log
+
+전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v15/run/finish/setup.log`
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v15/run/finish/integration-final-verify.log`
+
 #### finish/integration-verify.log
 
 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v15/run/finish/integration-verify.log`
+
+#### finish/main-verify.log
+
+전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v15/run/finish/main-verify.log`
 
 
 agy 사용: 3/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/30
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `83b4e35abcc2f85f3af7d7f5281c9ecc54f6d4fd`
 
 ### 되돌리는 법
 
@@ -442,7 +465,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 83b4e35abcc2f85f3af7d7f5281c9ecc54f6d4fd
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v15/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
