@@ -343,7 +343,7 @@ fi
     def test_integration_verify_timeout_does_not_merge(self):
         self.hang_verify("integration")
         initial = sh(self.remote, "git", "rev-parse", "main")
-        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}):
+        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}), support.times_out_once_ready(self.bin / "hung"):  # 멈춘 verify만 시간 초과
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         f = state.load(self.rundir, "demo").finish
@@ -361,7 +361,7 @@ fi
     def test_main_verify_timeout_reverts_merge(self):
         self.hang_verify("main")
         initial = sh(self.remote, "git", "rev-parse", "main")
-        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}):
+        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}), support.times_out_once_ready(self.bin / "hung"):  # 멈춘 verify만 시간 초과
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         f = state.load(self.rundir, "demo").finish

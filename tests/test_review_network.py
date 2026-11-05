@@ -1,6 +1,9 @@
 """리뷰·판단 호출(v7 07): 끊기면 기다렸다 다시 부르고, 넘기면 중단하고, 끝날 때 프로세스 그룹을 남기지 않는다."""
+import contextlib
+import itertools
 import json
 import os
+import subprocess
 import stat
 import tempfile
 import textwrap
@@ -73,6 +76,31 @@ class Base(unittest.TestCase):
         path = self.bin / f"n_{name}"
         return int(path.read_text()) if path.exists() else 0
 
+    @contextlib.contextmanager
+    def times_out_once_ready(self):
+        """호출 제한 시간을 실제 시간 대신 "가짜 CLI가 준비됐다"로 정한다.
+
+        짧은 제한(1초)이면 부하에서 bash가 뜨기도 전에 시간이 끝나, 스크립트가 남기는 회차·pid 파일이 비고 시험이 흔들린다.
+        가짜 CLI는 할 일(회차·pid 기록)을 마치고 `ready_<회차>` 파일을 만든다. 그 파일이 생기고도 프로세스가 안 끝나면 그 호출은 시간 초과다.
+        stdin을 읽는 CLI가 있으니 입력은 첫 부름에 준다. 제한 시간 처리(프로세스 그룹 정리·재시도)는 실제 코드가 그대로 한다.
+        """
+        real = review._communicate
+        nth = itertools.count(1)
+
+        def communicate(p, prompt, timeout, cancel):
+            marker = self.bin / f"ready_{next(nth)}"
+            give_up = time.monotonic() + 120  # 가짜 CLI가 끝내 준비되지 못해도 시험이 영영 서지 않게. 그때는 아래 단정이 실패한다
+            while True:
+                try:
+                    return real(p, prompt, 0.05, cancel)
+                except subprocess.TimeoutExpired:
+                    prompt = None
+                    if marker.exists() or time.monotonic() > give_up:
+                        raise
+
+        with mock.patch.object(review, "_communicate", communicate):
+            yield
+
     def run_review(self, reviewer="claude", cfg=None, on_wait=None):
         with mock.patch.object(review, "write_diff", return_value=("base", False)), \
                 mock.patch.object(review, "_env", return_value=dict(os.environ)):
@@ -97,7 +125,7 @@ class CallTest(Base):
                             timeout=timeout, family=family)
 
     def wait_dead(self, pid):
-        for _ in range(100):
+        for _ in range(1000):
             if not alive(pid):
                 return
             time.sleep(0.02)
@@ -111,8 +139,8 @@ class CallTest(Base):
         self.assertEqual(prompt, "hello")
 
     def test_timeout_leaves_no_child(self):
-        with self.assertRaises(review.ReviewTimeout) as caught:
-            self.call('sleep 300 & echo $! > "$here/child"; echo $$ > "$here/leader"; wait', timeout=1)
+        with self.times_out_once_ready(), self.assertRaises(review.ReviewTimeout) as caught:
+            self.call('sleep 300 & echo $! > "$here/child"; echo $$ > "$here/leader"; touch "$here/ready_$n"; wait')
         self.assertIn("초 안에 끝나지 않았다", str(caught.exception))
         self.wait_dead(int((self.bin / "child").read_text()))
         self.assertFalse(alive(int((self.bin / "leader").read_text())))
@@ -121,19 +149,21 @@ class CallTest(Base):
         body = '''\
             trap '' TERM
             bash -c 'trap "" TERM; echo $$ > "$HERE/child"; while :; do sleep 0.05; done' &
+            for i in $(seq 3000); do [ -s "$here/child" ] && break; sleep 0.02; done
             echo $$ > "$here/leader"
+            touch "$here/ready_$n"
             while :; do sleep 0.05; done
         '''
-        with mock.patch.object(verify, "GRACE", 0.3), self.assertRaises(review.ReviewTimeout):
-            self.call(body, timeout=1)
+        with mock.patch.object(verify, "GRACE", 0.3), self.times_out_once_ready(), self.assertRaises(review.ReviewTimeout):
+            self.call(body)
         self.assertFalse(alive(int((self.bin / "leader").read_text())))
         self.wait_dead(int((self.bin / "child").read_text()))
 
     def test_child_holding_stdout_after_leader_exit_cannot_hang_past_timeout(self):
         start = time.monotonic()
-        with self.assertRaises(review.ReviewTimeout):
-            self.call('sleep 300 & echo $! > "$here/child"; exit 0', timeout=1)
-        self.assertLess(time.monotonic() - start, 10)
+        with self.times_out_once_ready(), self.assertRaises(review.ReviewTimeout):
+            self.call('sleep 300 & echo $! > "$here/child"; touch "$here/ready_$n"; exit 0')
+        self.assertLess(time.monotonic() - start, 100)  # 자손이 쥔 300초를 기다리지 않는다
         self.wait_dead(int((self.bin / "child").read_text()))
 
     def test_normal_end_leaves_no_background_child(self):
@@ -142,12 +172,14 @@ class CallTest(Base):
         self.wait_dead(int((self.bin / "child").read_text()))
 
     def test_interrupt_stops_the_group(self):
-        path = self.script("cli", 'sleep 300 & echo $! > "$here/child"; wait')
+        path = self.script("cli", 'sleep 300 & echo $! > "$here/child"; touch "$here/ready_$n"; wait')
         real = review.subprocess.Popen.communicate
 
         def interrupted(p, *a, **kw):
-            with self.assertRaises(review.subprocess.TimeoutExpired):
-                real(p, *a, **{**kw, "timeout": 1})
+            with self.assertRaises(review.subprocess.TimeoutExpired):  # 안 끝난 프로세스를 기다리다 끊긴다
+                real(p, *a, **{**kw, "timeout": 0.05})
+            while not (self.bin / "ready_1").exists():  # 가짜 CLI가 child를 남긴 뒤에 끊는다
+                time.sleep(0.01)
             raise KeyboardInterrupt
 
         with mock.patch.object(review.subprocess.Popen, "communicate", interrupted), self.assertRaises(KeyboardInterrupt):
@@ -309,13 +341,8 @@ class WaitingTest(Base):
         self.assertIn("timeouts.network_wait_minutes", str(caught.exception))
 
     def test_timeouts_retry_and_abort_too(self):
-        call = review._call
-
-        def short(argv, **kw):
-            return call(argv, **{**kw, "timeout": 1})
-
-        self.script("claude", 'sleep 300 & echo $! > "$here/child$n"; wait')
-        with mock.patch.object(review, "_call", side_effect=short), self.assertRaises(transient.NetworkAbort) as caught:
+        self.script("claude", 'sleep 300 & echo $! > "$here/child$n"; touch "$here/ready_$n"; wait')
+        with self.times_out_once_ready(), self.assertRaises(transient.NetworkAbort) as caught:
             self.run_review(cfg=make_cfg(limit=1))
         self.assertIn("초 안에 끝나지 않았다", str(caught.exception))
         self.assertEqual(self.calls("claude"), 2)
@@ -323,11 +350,6 @@ class WaitingTest(Base):
             self.assertFalse(alive(int((self.bin / f"child{n}").read_text())))
 
     def test_retry_starts_after_previous_call_ended(self):
-        call = review._call
-
-        def short(argv, **kw):
-            return call(argv, **{**kw, "timeout": 1})
-
         # 앞 회차의 프로세스가 살아 있으면 표시를 남긴다. 3회 부른다(대기 2번)
         self.script("claude", '''\
             for p in "$here"/pid_*; do
@@ -335,9 +357,10 @@ class WaitingTest(Base):
             done
             echo $$ > "$here/pid_$n"
             sleep 300 & echo $! > "$here/pid_child_$n"
+            touch "$here/ready_$n"
             wait
         ''')
-        with mock.patch.object(review, "_call", side_effect=short), self.assertRaises(transient.NetworkAbort):
+        with self.times_out_once_ready(), self.assertRaises(transient.NetworkAbort):
             self.run_review(cfg=make_cfg(limit=3))
         self.assertEqual(self.calls("claude"), 3)
         self.assertFalse((self.bin / "overlap").exists())
@@ -465,10 +488,11 @@ class SummaryTest(Base):
         self.assertEqual(self.calls("judge"), 2)
 
     def test_failure_summary_timeout_stops_children(self):
-        self.judge('cat >/dev/null; sleep 300 & echo $! > "$here/child"; wait')
+        self.judge('cat >/dev/null; sleep 300 & echo $! > "$here/child"; touch "$here/ready_$n"; wait')
         log = self.dir / "failure.log"
         log.write_text("x")
-        failure.summarize(self.dir, log, make_cfg(limit=1, summary_seconds=1))
+        with self.times_out_once_ready():
+            failure.summarize(self.dir, log, make_cfg(limit=1, summary_seconds=1))
         self.assertEqual(self.calls("judge"), 2)
         self.assertFalse(alive(int((self.bin / "child").read_text())))
 
@@ -514,7 +538,9 @@ class CallWaitTest(unittest.TestCase):
         self.assertNotIn("네트워크 대기", seen[-1])
 
     def test_saves_during_long_wait_so_progress_stays_fresh(self):
-        with mock.patch.object(review, "WAIT_TICK", 0.02):
+        now = [0.0]  # 가짜 시계: 자면 그만큼 흐른다. 실제 시간이 아니라 틱 수로 센다
+        clock = SimpleNamespace(monotonic=lambda: now[0], sleep=lambda seconds: now.__setitem__(0, now[0] + seconds))
+        with mock.patch.object(review, "WAIT_TICK", 0.02), mock.patch.object(review, "time", clock):
             self.waiter()("끊김", 1, 0.1)
         self.assertGreater(len(self.saves), 3)
 
@@ -525,25 +551,53 @@ class CallWaitTest(unittest.TestCase):
         self.assertTrue(self.lines[0].startswith("끊김."))
 
     def test_two_threads_stays_while_other_waits(self):
-        w = self.waiter()
-        threads = [threading.Thread(target=w, args=("끊김", 1, s)) for s in (0.05, 1.0)]
-        for t in threads:
-            t.start()
-        time.sleep(0.4)  # 짧은 쪽이 끝났고 긴 쪽은 기다린다
-        self.assertTrue(self.st.network["wait"])
-        for t in threads:
-            t.join()
-        self.assertEqual(self.st.network["wait"], {})
+        cancel = threading.Event()
+        w = review.CallWait(self.st, lambda: self.saves.append(dict(self.st.network.get("wait") or {})), "01",
+                            self.lines.append, cancel=cancel)
+
+        def long_wait():
+            with contextlib.suppress(review.Cancelled):
+                w("끊김", 1, 600)
+
+        short, long_ = threading.Thread(target=w, args=("끊김", 1, 0.05)), threading.Thread(target=long_wait)
+        long_.start()
+        self.wait_until(lambda: self.st.network["errors"] == 1)  # 긴 쪽이 기다리기 시작했다
+        short.start()
+        short.join()  # 짧은 쪽이 끝났고 긴 쪽은 기다린다
         self.assertEqual(self.st.network["errors"], 2)
+        self.assertTrue(self.st.network["wait"])
+        cancel.set()
+        long_.join()
+        self.assertEqual(self.st.network["wait"], {})
 
     def test_two_threads_count_wall_clock_once(self):
-        w = self.waiter()
-        threads = [threading.Thread(target=w, args=("끊김", 1, 0.5)) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        self.assertLess(self.st.network["waited_seconds"], 0.95)  # 합(1.0)이 아니라 벽시계다
+        cancel = threading.Event()
+        w = review.CallWait(self.st, lambda: self.saves.append(dict(self.st.network.get("wait") or {})), "01",
+                            self.lines.append, cancel=cancel)
+
+        def long_wait():
+            with contextlib.suppress(review.Cancelled):
+                w("끊김", 1, 600)
+
+        started = time.monotonic()
+        long_ = threading.Thread(target=long_wait)
+        long_.start()
+        self.wait_until(lambda: self.st.network["errors"] == 1)
+        short = threading.Thread(target=w, args=("끊김", 1, 0.5))  # 긴 쪽이 기다리는 동안 0.5초를 기다린다
+        short.start()
+        short.join()
+        cancel.set()
+        long_.join()
+        took = time.monotonic() - started
+        # 각자 센 합이면 (긴 쪽 시간) + 0.5초 이상이다. 벽시계로 한 번만 세면 시험 전체가 걸린 시간을 넘지 않는다.
+        self.assertLessEqual(self.st.network["waited_seconds"], round(took, 1) + 0.1)
+        self.assertGreater(self.st.network["waited_seconds"], 0)
+
+    def wait_until(self, cond):
+        deadline = time.monotonic() + 60
+        while not cond():
+            self.assertLess(time.monotonic(), deadline, "기다리던 상태가 오지 않았다")
+            time.sleep(0.005)
 
     def test_restores_worker_outage_label(self):
         outage = {"count": 3, "due_at": "2099-01-01T00:00:00+09:00"}
