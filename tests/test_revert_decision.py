@@ -31,6 +31,26 @@ def ready(**rest):
     return facts(**{**BASE_READ, "base_ready": True, **rest})
 
 
+def pushed(**rest):
+    """보호된 base: 지난 실행이 revert_sha로 revert 브랜치를 올렸다. PR은 아직 안 읽었다."""
+    return revert(**{"direct_push": False, "revert_head_matches": True, "revert_pushed": True, **rest})
+
+
+def waiting(**rest):
+    """그 PR이 아직 병합되지 않았다."""
+    return pushed(**{"revert_pr_merged": False, **rest})
+
+
+def dropped(**rest):
+    """재검증이 실패해 옛 revert를 버렸고 새 revert를 만들기 전이다. 옛 PR은 남아 있다."""
+    return facts(**{**BASE_READ, "direct_push": False, "revert_pushed": True, "revert_pr_merged": False, **rest})
+
+
+def unpushed(**rest):
+    """새 revert를 만들었고 브랜치에 올리기 전이다. 옛 PR은 남아 있다."""
+    return revert(**{"direct_push": False, "revert_pushed": True, "revert_pr_merged": False, **rest})
+
+
 # (왜 이 답인가, 사실, 다음 단계). 위에서 아래로 next_step의 줄 순서다.
 TABLE = [
     ("끝난 마무리", facts(phase="verified"), rd.ALREADY_VERIFIED),
@@ -39,14 +59,60 @@ TABLE = [
     ("끝난 마무리는 다른 사실을 보지 않는다", revert(phase="reverted", main_ok=True), rd.ALREADY_REVERTED),
 
     *[("base를 아직 안 읽음", facts(phase=phase), rd.READ_BASE) for phase in OPEN_PHASES],
-    ("revert가 있어도 base부터", facts(has_revert=True, revert_head_matches=True), rd.READ_BASE),
+    ("닫기 재개도 base부터", facts(phase="revert_closing", revert_pushed=True), rd.READ_BASE),
+    ("revert가 있어도 base부터", facts(has_revert=True, revert_head_matches=True, revert_pushed=True), rd.READ_BASE),
     ("외부 revert를 아직 안 읽음", facts(revert_in_base=False), rd.READ_BASE),
 
-    ("지난 실행이 올린 PR", revert(phase="revert_pending", revert_head_matches=True), rd.REREAD_REVERT_PR),
-    ("올리고 응답 전 중단", revert(phase="main_failed", revert_head_matches=True), rd.REREAD_REVERT_PR),
-    ("설정이 직접 push로 바뀌어도 PR을 먼저 읽는다", revert(revert_head_matches=True, direct_push=True), rd.REREAD_REVERT_PR),
-    ("PR이 base 확인보다 먼저", revert(revert_head_matches=True, revert_in_base=True), rd.REREAD_REVERT_PR),
-    ("PR이 외부 revert보다 먼저", revert(revert_head_matches=True, external_revert=True), rd.REREAD_REVERT_PR),
+    ("올린 PR은 base 이동보다 먼저 읽는다", pushed(phase="revert_pending"), rd.READ_REVERT_PR),
+    ("올리고 응답 전 중단", pushed(phase="main_failed"), rd.READ_REVERT_PR),
+    ("base가 그대로여도 PR부터", pushed(base_moved=False), rd.READ_REVERT_PR),
+    ("닫기 재개도 PR부터", pushed(phase="revert_closing"), rd.READ_REVERT_PR),
+    ("옛 revert를 버린 뒤에도 옛 PR이 남았다", facts(**BASE_READ, revert_pushed=True), rd.READ_REVERT_PR),
+    ("새 revert를 올리기 전에도 옛 PR이 남았다", revert(revert_pushed=True), rd.READ_REVERT_PR),
+
+    ("병합된 PR은 base 이동보다 먼저", pushed(revert_pr_merged=True), rd.REREAD_REVERT_PR),
+    ("설정이 직접 push로 바뀌어도 PR을 먼저 읽는다", pushed(revert_pr_merged=True, direct_push=True), rd.REREAD_REVERT_PR),
+    ("병합된 PR이 base 확인보다 먼저", pushed(revert_pr_merged=True, revert_in_base=True), rd.REREAD_REVERT_PR),
+    ("병합된 PR이 외부 revert보다 먼저", pushed(revert_pr_merged=True, external_revert=True), rd.REREAD_REVERT_PR),
+    ("닫기 전에 사람이 병합했다", pushed(phase="revert_closing", revert_pr_merged=True), rd.REREAD_REVERT_PR),
+    ("옛 revert를 버린 뒤 옛 PR이 병합됐다", dropped(revert_pr_merged=True), rd.REREAD_REVERT_PR),
+    ("새 revert를 올리기 전에 옛 PR이 병합됐다", unpushed(revert_pr_merged=True), rd.REREAD_REVERT_PR),
+    ("재검증 실패 뒤 다시 읽으니 병합됐다: 새 revert를 올리지 않는다",
+     waiting(base_ready=True, main_ok=False, revert_pr_merged=True), rd.REREAD_REVERT_PR),
+    ("지난 실패를 믿어 재검증 없이 왔지만 다시 읽으니 병합됐다",
+     dropped(phase="main_failed", base_ready=True, base_moved=False, revert_pr_merged=True), rd.REREAD_REVERT_PR),
+
+    ("base 그대로: 승인 대기", waiting(phase="revert_pending", base_moved=False), rd.REREAD_REVERT_PR),
+    ("base 그대로: 올리고 응답 전 중단", waiting(phase="main_failed", base_moved=False), rd.REREAD_REVERT_PR),
+    ("base 그대로: 준비 실패 뒤", waiting(phase="base_unverified", base_moved=False), rd.REREAD_REVERT_PR),
+
+    ("재검증 통과 뒤 닫기를 잇는다", waiting(phase="revert_closing"), rd.CLOSE_REVERT_PR),
+    ("닫기를 이을 때 base 이동을 보지 않는다", waiting(phase="revert_closing", base_moved=False), rd.CLOSE_REVERT_PR),
+    ("닫기를 이을 때 외부 revert를 보지 않는다", waiting(phase="revert_closing", external_revert=True), rd.CLOSE_REVERT_PR),
+    ("닫기를 이을 때 다시 검증하지 않는다", waiting(phase="revert_closing", base_ready=True), rd.CLOSE_REVERT_PR),
+
+    ("기다리는 동안 내 revert가 base에 들었다", waiting(revert_in_base=True), rd.RECORD_PUSHED_REVERT),
+    ("기다리는 동안 누군가 되돌렸다", waiting(external_revert=True), rd.RECORD_EXTERNAL_REVERT),
+    ("base가 움직임: 부모를 읽지 않고 재검증 준비", waiting(phase="revert_pending"), rd.PREPARE_BASE),
+    ("base가 움직임: setup 실패", waiting(phase="revert_pending", base_ready=False), rd.RECORD_UNVERIFIED),
+    *[("base가 움직임: 재검증", waiting(phase=phase, base_ready=True), rd.RECHECK_MAIN)
+      for phase in ("revert_pending", "main_failed", "base_unverified")],
+    ("재검증 통과: PR을 닫는다", waiting(phase="revert_pending", base_ready=True, main_ok=True), rd.CLOSE_REVERT_PR),
+    ("재검증 실패: revert를 다시 만든다", waiting(phase="revert_pending", base_ready=True, main_ok=False), rd.MAKE_REVERT_PR),
+    ("설정이 직접 push로 바뀌어도 PR 브랜치를 갱신한다",
+     waiting(base_ready=True, main_ok=False, direct_push=True), rd.MAKE_REVERT_PR),
+
+    ("옛 revert를 버린 뒤 base 그대로: 지난 실패를 믿는다", dropped(phase="main_failed", base_ready=True, base_moved=False),
+     rd.MAKE_REVERT_PR),
+    ("옛 revert를 버린 뒤 base가 움직임", dropped(phase="main_failed", base_ready=True), rd.RECHECK_MAIN),
+    ("옛 revert를 버린 뒤 재검증 통과", dropped(phase="main_failed", base_ready=True, main_ok=True), rd.CLOSE_REVERT_PR),
+
+    ("새 revert를 올리기 전: 부모가 답을 가른다", unpushed(phase="main_failed"), rd.READ_REVERT_PARENT),
+    ("새 revert를 올리기 전, base 그대로", unpushed(revert_parent_is_tip=True), rd.OPEN_REVERT_PR),
+    ("설정이 직접 push로 바뀌어도 그 PR로 올린다", unpushed(revert_parent_is_tip=True, direct_push=True), rd.OPEN_REVERT_PR),
+    ("새 revert를 올리기 전 base가 움직임", unpushed(phase="main_failed", revert_parent_is_tip=False), rd.PREPARE_BASE),
+    ("새 revert를 올리기 전 재검증 통과", unpushed(phase="main_failed", revert_parent_is_tip=False, base_ready=True,
+                                          main_ok=True), rd.CLOSE_REVERT_PR),
 
     ("push한 revert가 base에 있다", revert(revert_in_base=True), rd.RECORD_PUSHED_REVERT),
     ("base의 내 revert가 외부 revert보다 먼저", revert(revert_in_base=True, external_revert=True), rd.RECORD_PUSHED_REVERT),
@@ -91,6 +157,37 @@ def all_steps() -> set[str]:
     return {value for name, value in vars(rd).items() if name.isupper() and isinstance(value, str)}
 
 
+def without_pr_branch(f: Facts) -> str:
+    """브랜치를 올린 적 없는 경로(직접 push 포함)의 답. PR 줄이 들어오기 전 `next_step` 그대로다. 바꾸지 않는다."""
+    if f.phase == "verified":
+        return rd.ALREADY_VERIFIED
+    if f.phase == "reverted":
+        return rd.ALREADY_REVERTED
+    if f.revert_in_base is None or f.external_revert is None:
+        return rd.READ_BASE
+    if f.has_revert and f.revert_in_base:
+        return rd.RECORD_PUSHED_REVERT
+    if f.external_revert:
+        return rd.RECORD_EXTERNAL_REVERT
+    if f.has_revert:
+        if f.revert_parent_is_tip is None:
+            return rd.READ_REVERT_PARENT
+        if f.revert_parent_is_tip:
+            return rd.PUSH_REVERT if f.direct_push else rd.OPEN_REVERT_PR
+    if f.base_ready is None:
+        return rd.PREPARE_BASE
+    if not f.base_ready:
+        return rd.RECORD_UNVERIFIED
+    if f.main_ok is None:
+        if f.phase != "main_failed":
+            return rd.VERIFY_MAIN
+        if f.base_moved:
+            return rd.RECHECK_MAIN
+    if f.main_ok:
+        return rd.RECORD_VERIFIED
+    return rd.MAKE_REVERT_PUSH if f.direct_push else rd.MAKE_REVERT_PR
+
+
 class NextStepTest(unittest.TestCase):
     def test_table(self):
         for why, given, step in TABLE:
@@ -102,25 +199,52 @@ class NextStepTest(unittest.TestCase):
 
     def test_invariants_over_every_combination(self):
         unread = (None, False, True)
-        for phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok in itertools.product(
-                (*OPEN_PHASES, "verified", "reverted"), (False, True), (False, True), (False, True),
-                unread, unread, unread, unread, (False, True), unread):
-            given = Facts(phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok)
+        for phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok, branch, pr_merged in itertools.product(
+                (*OPEN_PHASES, "revert_closing", "verified", "reverted"), (False, True), (False, True), (False, True),
+                unread, unread, unread, unread, (False, True), unread, (False, True), unread):
+            given = Facts(phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok, branch, pr_merged)
             step = next_step(given)
             self.assertIn(step, all_steps(), given)
-            if phase in ("verified", "reverted"):
+            finished = phase in ("verified", "reverted")
+            if finished:
                 self.assertIn(step, (rd.ALREADY_VERIFIED, rd.ALREADY_REVERTED), given)
             if not has:  # 없는 커밋을 읽거나 올리지 않는다
-                self.assertNotIn(step, (rd.READ_REVERT_PARENT, rd.REREAD_REVERT_PR, rd.RECORD_PUSHED_REVERT,
-                                        rd.PUSH_REVERT, rd.OPEN_REVERT_PR), given)
-            if direct:
+                self.assertNotIn(step, (rd.READ_REVERT_PARENT, rd.RECORD_PUSHED_REVERT, rd.PUSH_REVERT, rd.OPEN_REVERT_PR),
+                                 given)
+            if not has and not branch:  # 올린 적 없는 브랜치의 PR을 읽지 않는다
+                self.assertNotEqual(step, rd.REREAD_REVERT_PR, given)
+            if not branch:
+                self.assertNotEqual(step, rd.READ_REVERT_PR, given)
+            if direct and not branch:
                 self.assertNotIn(step, (rd.OPEN_REVERT_PR, rd.MAKE_REVERT_PR), given)
-            else:  # 보호된 base에는 직접 push하지 않는다
+            if not direct or branch:  # 보호된 base에는 직접 push하지 않는다. 올린 PR을 두고 직접 push하지도 않는다
                 self.assertNotIn(step, (rd.PUSH_REVERT, rd.MAKE_REVERT_PUSH), given)
             if ok is not None:  # 이미 돈 검증을 다시 돌리지 않는다
                 self.assertNotIn(step, (rd.VERIFY_MAIN, rd.RECHECK_MAIN), given)
             if step in (rd.MAKE_REVERT_PUSH, rd.MAKE_REVERT_PR):  # 실패가 확인됐을 때만 되돌린다
-                self.assertTrue(ok is False or (ok is None and phase == "main_failed" and not moved), given)
+                self.assertTrue(ok is False or (ok is None and (phase == "main_failed" or branch) and not moved), given)
+            if step == rd.RECHECK_MAIN:
+                self.assertTrue(moved, given)
+            if step == rd.CLOSE_REVERT_PR:  # 재검증을 통과했을 때만 닫는다
+                self.assertTrue(phase == "revert_closing" or (branch and ok is True), given)
+            if not finished and in_base is not None and external is not None and branch:
+                if pr_merged is None:  # PR 상태를 base 이동보다 먼저 본다
+                    self.assertEqual(step, rd.READ_REVERT_PR, given)
+                if pr_merged:  # 병합됐으면 재검증도 새 revert도 없다
+                    self.assertEqual(step, rd.REREAD_REVERT_PR, given)
+                if pr_merged is False and (moved or phase == "revert_closing"):  # 재검증 전에 옛 revert를 병합하지 않는다
+                    self.assertNotEqual(step, rd.REREAD_REVERT_PR, given)
+            if phase == "revert_closing":  # 재검증을 통과한 뒤에는 닫거나, 사람이 병합한 PR로 끝낸다
+                self.assertIn(step, (rd.READ_BASE, rd.READ_REVERT_PR, rd.REREAD_REVERT_PR, rd.CLOSE_REVERT_PR), given)
+
+    def test_path_without_pr_branch_is_unchanged(self):
+        # has·matches가 함께 참이면 revert_head가 있다는 뜻이라 브랜치 없는 경로에 없다.
+        unread = (None, False, True)
+        for phase, direct, has, in_base, external, parent, base_ready, moved, ok in itertools.product(
+                (*OPEN_PHASES, "verified", "reverted"), (False, True), (False, True),
+                unread, unread, unread, unread, (False, True), unread):
+            given = Facts(phase, direct, has, not has, in_base, external, parent, base_ready, moved, ok)
+            self.assertEqual(next_step(given), without_pr_branch(given), given)
 
     def test_module_calls_nothing_outside(self):
         tree = ast.parse(inspect.getsource(rd))
@@ -184,16 +308,18 @@ class PostmergeTest(unittest.TestCase):
         self.rundir = Path(tmp.name)
 
     def postmerge(self, *, gitfake=None, direct_push=True, setup_cmd="", setup_ok=True, setup_head=None, verify_ok=False,
-                  **stored):
+                  pr=None, **stored):
         self.fake = gitfake or FakeGit()
         finished = {"merge_sha": MERGE, **stored}
+        self.saved = []
 
         def run_setup(cfg, wt, log):
             self.fake.head = setup_head or self.fake.head
             return SimpleNamespace(ok=setup_ok)
 
         self.run_ = SimpleNamespace(
-            repo=self.rundir, remote="origin", base="main", base_ref="origin/main", rundir=self.rundir, save=lambda: None,
+            repo=self.rundir, remote="origin", base="main", base_ref="origin/main", rundir=self.rundir,
+            save=lambda: self.saved.append(dict(finished)),
             st=SimpleNamespace(finish=finished, phase="finish", metrics={}, push_record={}),
             cfg=SimpleNamespace(git=SimpleNamespace(direct_push=direct_push),
                                 worktree=SimpleNamespace(setup=setup_cmd)))
@@ -203,6 +329,9 @@ class PostmergeTest(unittest.TestCase):
               mock.patch("gs.finish._check_merge"),
               mock.patch("gs.finish._verify", return_value=verify_ok) as self.verify,
               mock.patch("gs.finish._revert_pr", return_value=False) as self.revert_pr,
+              mock.patch("gs.finish._read_revert_pr", return_value=pr or {},
+                         side_effect=pr if isinstance(pr, list) else None) as self.read_pr,
+              mock.patch("gs.finish._close_revert_pr", return_value=True) as self.close_pr,
               mock.patch("gs.finish.setup.run", run_setup),
               mock.patch("gs.finish.setup.remember"),
               contextlib.redirect_stdout(io.StringIO())):
@@ -237,13 +366,136 @@ class PostmergeTest(unittest.TestCase):
         self.remove.assert_called_once()
 
     def test_reread_pr_does_not_read_parent_or_verify(self):
-        # 부모를 읽으면 오류가 나는 커밋이다. 지금처럼 그 전에 PR을 다시 읽는다.
-        self.assertFalse(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT,
-                                        direct_push=False))
+        # 부모를 읽으면 오류가 나는 커밋이다. base가 그대로면 그 전에 PR을 다시 읽는다.
+        self.assertFalse(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT, main_head=TIP,
+                                        direct_push=False, pr={"state": "OPEN", "headRefOid": REVERT}))
+        self.read_pr.assert_called_once_with(self.run_, REVERT)
         self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.close_pr.assert_not_called()
         self.assertFalse(self.fake.read_parent())
         self.assert_no_worktree()
         self.assertEqual(self.fake.count("fetch"), 1)
+
+    def test_merged_pr_wins_over_moved_base(self):
+        self.assertFalse(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
+                                        direct_push=False, pr={"state": "MERGED", "headRefOid": REVERT}))
+        self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.close_pr.assert_not_called()
+        self.assert_no_worktree()
+
+    def test_merged_pr_after_push_before_revert_head_was_saved(self):
+        # 새 revert를 올리고 revert_head를 남기기 전에 끊겼고 사람이 그 PR을 병합했다.
+        self.assertFalse(self.postmerge(phase="main_failed", revert_sha=NEW_REVERT, revert_head=REVERT, main_head=TIP,
+                                        direct_push=False, pr={"state": "MERGED", "headRefOid": NEW_REVERT}))
+        self.revert_pr.assert_called_once_with(self.run_, NEW_REVERT)
+        self.assertEqual((self.stored["revert_sha"], self.stored["revert_head"]), (NEW_REVERT, NEW_REVERT))
+        self.assert_no_worktree()
+
+    def test_old_pr_merged_before_new_revert_was_pushed(self):
+        self.assertFalse(self.postmerge(phase="main_failed", revert_sha=NEW_REVERT, revert_head=REVERT, main_head=TIP,
+                                        direct_push=False, pr={"state": "MERGED", "headRefOid": REVERT}))
+        self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.assertEqual((self.stored["revert_sha"], self.stored["revert_head"]), (REVERT, REVERT))
+        self.assert_no_worktree()
+
+    def test_old_pr_merged_after_old_revert_was_dropped(self):
+        self.assertFalse(self.postmerge(phase="main_failed", revert_head=REVERT, main_head=TIP, direct_push=False,
+                                        pr={"state": "MERGED", "headRefOid": REVERT}))
+        self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.assertEqual(self.stored["revert_sha"], REVERT)
+        self.assert_no_worktree()
+
+    def test_moved_base_passing_recheck_saves_result_and_phase_together_then_closes(self):
+        self.assertTrue(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
+                                       direct_push=False, verify_ok=True, pr={"state": "OPEN", "headRefOid": REVERT}))
+        self.assertEqual(self.verified_labels(), ["main-recheck"])
+        self.close_pr.assert_called_once_with(self.run_)
+        self.revert_pr.assert_not_called()
+        self.assertEqual(self.fake.count("revert"), 0)
+        # main_head를 새 끝으로 남긴 저장은 곧 phase revert_closing이다. 끊겨도 다음 실행이 옛 revert를 병합하지 않는다.
+        saved = [s for s in self.saved if s.get("main_head") == TIP]
+        self.assertEqual((saved[0]["phase"], saved[0]["main_ok"]), ("revert_closing", True))
+
+    def test_moved_base_failing_recheck_drops_revert_with_result_then_makes_new_one(self):
+        self.assertFalse(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
+                                        direct_push=False, pr={"state": "OPEN", "headRefOid": REVERT}))
+        self.assertEqual(self.verified_labels(), ["main-recheck"])
+        self.revert_pr.assert_called_once_with(self.run_, NEW_REVERT)
+        self.close_pr.assert_not_called()
+        self.assertEqual(self.fake.count("revert"), 1)
+        self.push.assert_not_called()
+        # main_head를 새 끝으로 남기는 저장에 옛 revert_sha가 함께 있으면 다음 실행이 옛 revert를 병합한다.
+        saved = [s for s in self.saved if s.get("main_head") == TIP]
+        self.assertEqual(saved[0]["phase"], "main_failed")
+        self.assertFalse(saved[0]["main_ok"])
+        self.assertNotEqual(saved[0].get("revert_sha"), REVERT)
+        self.assertEqual(saved[-1]["revert_sha"], NEW_REVERT)
+        self.assertEqual(self.read_pr.call_count, 2)  # 처음 판단과, 브랜치를 덮어쓰기 직전
+
+    def test_old_pr_merged_during_failing_recheck_is_the_revert(self):
+        # 처음 읽을 때는 열려 있었다. 새 revert를 올리기 직전에 다시 읽으니 병합됐다.
+        self.assertFalse(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
+                                        direct_push=False, pr=[{"state": "OPEN", "headRefOid": REVERT},
+                                                               {"state": "MERGED", "headRefOid": REVERT}]))
+        self.assertEqual(self.verified_labels(), ["main-recheck"])
+        self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.assertEqual((self.stored["revert_sha"], self.stored["revert_head"]), (REVERT, REVERT))
+        self.assertFalse(self.stored["main_ok"])
+        self.push.assert_not_called()
+
+    def test_old_pr_merged_while_base_was_prepared_is_the_revert(self):
+        # 같은 base의 실패를 믿어 재검증하지 않았다. setup이 도는 동안에도 병합될 수 있다.
+        self.assertFalse(self.postmerge(phase="main_failed", revert_head=REVERT, main_head=TIP, direct_push=False,
+                                        pr=[{"state": "OPEN", "headRefOid": REVERT},
+                                            {"state": "MERGED", "headRefOid": REVERT}]))
+        self.assertEqual(self.verified_labels(), [])
+        self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.assertEqual((self.stored["revert_sha"], self.stored["revert_head"]), (REVERT, REVERT))
+
+    def test_closing_phase_closes_without_verifying(self):
+        self.assertTrue(self.postmerge(phase="revert_closing", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
+                                       main_ok=True, direct_push=False, pr={"state": "OPEN", "headRefOid": REVERT}))
+        self.close_pr.assert_called_once_with(self.run_)
+        self.assert_no_worktree()
+        self.revert_pr.assert_not_called()
+
+    def test_closing_phase_with_merged_pr_is_the_revert(self):
+        self.assertFalse(self.postmerge(phase="revert_closing", revert_sha=REVERT, revert_head=REVERT, main_head=TIP,
+                                        main_ok=True, direct_push=False, pr={"state": "MERGED", "headRefOid": REVERT}))
+        self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.close_pr.assert_not_called()
+        self.assert_no_worktree()
+
+    def test_waiting_pr_setup_failure_keeps_old_main_head_and_next_run_rechecks(self):
+        waiting = dict(revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP, direct_push=False,
+                       pr={"state": "OPEN", "headRefOid": REVERT})
+        self.assertFalse(self.postmerge(phase="revert_pending", setup_cmd="make", setup_ok=False, **waiting))
+        self.assertEqual((self.stored["phase"], self.stored["main_head"]), ("base_unverified", OLD_TIP))
+        self.close_pr.assert_not_called()
+        self.revert_pr.assert_not_called()
+        self.assertTrue(self.postmerge(phase="base_unverified", verify_ok=True, **waiting))
+        self.assertEqual(self.verified_labels(), ["main-recheck"])
+        self.close_pr.assert_called_once_with(self.run_)
+
+    def test_setup_moving_head_back_does_not_hide_a_moved_base(self):
+        # 받아 온 끝이 움직였는데 setup이 HEAD를 지난 main_head로 옮겼다. 위 "그대로" 줄로 돌아가 옛 revert를 병합하지 않는다.
+        self.assertFalse(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
+                                        direct_push=False, setup_cmd="make", setup_head=OLD_TIP,
+                                        pr={"state": "OPEN", "headRefOid": REVERT}))
+        self.assertEqual(self.verified_labels(), ["main-recheck"])
+        self.revert_pr.assert_called_once_with(self.run_, NEW_REVERT)
+
+    def test_external_revert_while_waiting_is_recorded_and_says_pr_is_left(self):
+        self.assertFalse(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
+                                        revert_pr="https://example.test/pr/2", direct_push=False,
+                                        gitfake=FakeGit(theirs=THEIRS), pr={"state": "OPEN", "headRefOid": REVERT}))
+        self.assertEqual((self.stored["phase"], self.stored["revert_sha"]), ("reverted", THEIRS))
+        self.assertIn("https://example.test/pr/2", self.stored["outcome"])
+        self.assertNotIn("revert_pr", self.stored)  # 보고서가 남의 revert를 이 PR의 커밋으로 적지 않는다
+        self.assertNotIn("revert_head", self.stored)
+        self.revert_pr.assert_not_called()
+        self.close_pr.assert_not_called()
+        self.assert_no_worktree()
 
     def test_revert_in_base_is_recorded_without_parent(self):
         self.assertFalse(self.postmerge(phase="main_failed", revert_sha=REVERT, gitfake=FakeGit(in_base=[REVERT])))
@@ -311,6 +563,7 @@ class PostmergeTest(unittest.TestCase):
         self.revert_pr.assert_called_once_with(self.run_, NEW_REVERT)
         self.push.assert_not_called()
         self.assertEqual((self.stored["phase"], self.stored["revert_sha"]), ("main_failed", NEW_REVERT))
+        self.read_pr.assert_not_called()  # 올린 적 없는 브랜치의 PR을 읽지 않는다
 
     def test_failed_base_that_did_not_move_is_not_verified_again(self):
         self.assertFalse(self.postmerge(phase="main_failed", main_head=TIP))
