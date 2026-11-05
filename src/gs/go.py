@@ -319,7 +319,8 @@ def _begin(r: Run) -> None:
     # below resets FAILED/SKIPPED tickets to PENDING before finish renders again.
     merged = {tid for tid, ts in st.tickets.items() if ts.status == state.MERGED}
     prior_docs = set(st.finish.get("docs_missing", []))
-    for tid, ticket in r.feat.tickets.items():
+    tickets = getattr(getattr(r, "feat", None), "tickets", {})
+    for tid, ticket in tickets.items():
         ts = st.tickets.get(tid)
         touches = getattr(ticket, "touches", [])
         if (ts is not None and ts.status in (state.FAILED, state.SKIPPED) and merged - {tid}
