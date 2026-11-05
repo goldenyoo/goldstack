@@ -646,19 +646,24 @@ class ProtectedBaseTest(unittest.TestCase):
         self.assertNotIn("file_01", self.remote_files())
         self.assertEqual(len(self.reverts_in_base()), 1)
 
-    def test_human_merges_during_recheck(self):
-        self.pending_revert()
-        self.fix_base()
+    def go_merging_during_recheck(self, *merge):
+        """재검증이 끝나는 순간 사람이 revert PR을 병합한다. merge를 주면 그 일을 대신 한다."""
         real = gs_finish._verify
 
         def verify(r, wt, label):
             ok = real(r, wt, label)
             if label == "main-recheck":
-                self.human_merge(2)
+                for step in merge or (lambda: self.human_merge(2),):
+                    step()
             return ok
 
         with mock.patch("gs.finish._verify", side_effect=verify):
-            code, out, err = self.go()
+            return self.go()
+
+    def test_human_merges_during_recheck(self):
+        self.pending_revert()
+        self.fix_base()
+        code, out, err = self.go_merging_during_recheck()
         self.assertEqual(code, 1, out + err)
         f = self.finish()
         self.assertEqual(f["phase"], "reverted", f)
@@ -667,9 +672,54 @@ class ProtectedBaseTest(unittest.TestCase):
         self.assertNotIn("file_01", self.remote_files())
         self.assertEqual(len(self.reverts_in_base()), 1)
 
+    def assert_old_pr_is_the_revert(self, old, result):
+        """재검증이 실패했어도 사람이 병합한 옛 PR로 끝난다. 브랜치를 덮어쓰지 않고 두 번째 revert PR도 없다."""
+        code, out, err = result
+        self.assertEqual(code, 1, out + err)
+        f = self.finish()
+        self.assertEqual((f["phase"], f["revert_sha"], f["revert_head"], f["revert_pr"]),
+                         ("reverted", old, old, URL.format(2)), f)
+        self.assertFalse(f["main_ok"])
+        self.assertIn(f"revert {old}를 PR {URL.format(2)}로", f["outcome"])
+        self.assertEqual(self.revert_branch(), old)
+        self.assertEqual([p["head"] for p in self.prs()], ["gs/demo/integration", "gs/demo/revert", "gs/demo/report"])
+        self.assertEqual(self.closes(), [])
+        self.assertEqual(len(self.reverts_in_base()), 1)
+        self.assertNotIn("file_01", self.remote_files())
+        self.assertIn("human.txt", self.remote_files())
+        self.assert_no_base_push()
+
+    def test_human_merges_during_failing_recheck(self):
+        old = self.pending_revert()["revert_sha"]
+        self.move_base()
+        self.assert_old_pr_is_the_revert(old, self.go_merging_during_recheck())
+
+    def test_human_merges_during_failing_recheck_and_lifts_protection(self):
+        # 보호가 풀려 있으면 두 번째 revert PR을 gs가 곧바로 병합해 같은 병합이 두 번 되돌려진다.
+        old = self.pending_revert()["revert_sha"]
+        self.move_base()
+        self.assert_old_pr_is_the_revert(old, self.go_merging_during_recheck(self.protect, lambda: self.human_merge(2)))
+
+    def test_human_merges_while_new_revert_is_made(self):
+        # 재검증은 끝났고 새 revert를 만드는 중이다. 브랜치를 덮어쓰기 직전에 읽어야 이 병합도 본다.
+        old = self.pending_revert()["revert_sha"]
+        self.move_base()
+        real = git.run
+
+        def run(cwd, *args, **kw):
+            done = real(cwd, *args, **kw)
+            if args[0] == "revert" and self.prs()[1]["state"] == "OPEN":  # 뒤의 _restore_reverts도 revert를 부른다
+                self.human_merge(2)
+            return done
+
+        with mock.patch("gs.git.run", side_effect=run):
+            result = self.go()
+        self.assert_old_pr_is_the_revert(old, result)
+
     def test_someone_else_reverted_while_waiting_is_not_reverted_twice(self):
         merge = self.pending_revert()["merge_sha"]
-        theirs = self.on_base(f"git revert --no-edit -m 1 {merge}")
+        # 신원이 같으면 gs의 revert와 같은 초에 만들 때 같은 커밋이 되어 "남의 revert"가 아니게 된다.
+        theirs = self.on_base(f"GIT_AUTHOR_NAME=human git revert --no-edit -m 1 {merge}")
         code, out, err = self.go()
         self.assertEqual(code, 1, out + err)
         f = self.finish()
@@ -796,6 +846,39 @@ class ProtectedBaseTest(unittest.TestCase):
         self.assertNotEqual(new, old)
         self.assertEqual(self.revert_branch(), old)
         self.assert_rebuilt_on(tip, same=new)
+
+    def rereading_before_push(self, r, head):
+        return r.st.finish["phase"] == "main_failed"
+
+    def test_dies_before_old_pr_is_read_again(self):
+        old, tip = self.dying_while_rebuilding("gs.finish._read_revert_pr", self.rereading_before_push, after=False)
+        self.assertEqual(self.revert_branch(), old)
+        self.assert_rebuilt_on(tip, same=self.finish()["revert_sha"])
+
+    def test_dies_before_old_pr_is_read_again_and_human_merges_it(self):
+        old, _ = self.dying_while_rebuilding("gs.finish._read_revert_pr", self.rereading_before_push, after=False)
+        self.human_merge(2)
+        self.assert_old_pr_is_the_revert(old, self.go())
+
+    def test_cannot_read_old_pr_again_keeps_branch_then_resumes(self):
+        old = self.pending_revert()["revert_sha"]
+        tip = self.move_base()
+        real = gs_finish._read_revert_pr
+
+        def read(r, head):
+            if self.rereading_before_push(r, head):
+                raise git.GitError("HTTP 502 Bad Gateway")
+            return real(r, head)
+
+        with mock.patch("gs.finish._read_revert_pr", side_effect=read):
+            code, out, err = self.go()
+        self.assertEqual(code, 1, out + err)
+        f = self.finish()
+        self.assertEqual(f["phase"], "main_failed", f)
+        self.assertIn("HTTP 502", f["error"])
+        self.assertEqual(self.revert_branch(), old)  # 옛 PR의 상태를 모르면 브랜치를 덮어쓰지 않는다
+        self.assertEqual(len(self.prs()), 2)
+        self.assert_rebuilt_on(tip, same=f["revert_sha"])
 
     def force_push_to_revert(self, cwd, remote, record, *a, flags=(), **k):
         return "--force" in flags and any("gs/demo/revert" in x for x in a)

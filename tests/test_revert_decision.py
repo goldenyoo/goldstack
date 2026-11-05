@@ -77,6 +77,10 @@ TABLE = [
     ("닫기 전에 사람이 병합했다", pushed(phase="revert_closing", revert_pr_merged=True), rd.REREAD_REVERT_PR),
     ("옛 revert를 버린 뒤 옛 PR이 병합됐다", dropped(revert_pr_merged=True), rd.REREAD_REVERT_PR),
     ("새 revert를 올리기 전에 옛 PR이 병합됐다", unpushed(revert_pr_merged=True), rd.REREAD_REVERT_PR),
+    ("재검증 실패 뒤 다시 읽으니 병합됐다: 새 revert를 올리지 않는다",
+     waiting(base_ready=True, main_ok=False, revert_pr_merged=True), rd.REREAD_REVERT_PR),
+    ("지난 실패를 믿어 재검증 없이 왔지만 다시 읽으니 병합됐다",
+     dropped(phase="main_failed", base_ready=True, base_moved=False, revert_pr_merged=True), rd.REREAD_REVERT_PR),
 
     ("base 그대로: 승인 대기", waiting(phase="revert_pending", base_moved=False), rd.REREAD_REVERT_PR),
     ("base 그대로: 올리고 응답 전 중단", waiting(phase="main_failed", base_moved=False), rd.REREAD_REVERT_PR),
@@ -325,7 +329,8 @@ class PostmergeTest(unittest.TestCase):
               mock.patch("gs.finish._check_merge"),
               mock.patch("gs.finish._verify", return_value=verify_ok) as self.verify,
               mock.patch("gs.finish._revert_pr", return_value=False) as self.revert_pr,
-              mock.patch("gs.finish._read_revert_pr", return_value=pr or {}) as self.read_pr,
+              mock.patch("gs.finish._read_revert_pr", return_value=pr or {},
+                         side_effect=pr if isinstance(pr, list) else None) as self.read_pr,
               mock.patch("gs.finish._close_revert_pr", return_value=True) as self.close_pr,
               mock.patch("gs.finish.setup.run", run_setup),
               mock.patch("gs.finish.setup.remember"),
@@ -425,6 +430,27 @@ class PostmergeTest(unittest.TestCase):
         self.assertFalse(saved[0]["main_ok"])
         self.assertNotEqual(saved[0].get("revert_sha"), REVERT)
         self.assertEqual(saved[-1]["revert_sha"], NEW_REVERT)
+        self.assertEqual(self.read_pr.call_count, 2)  # 처음 판단과, 브랜치를 덮어쓰기 직전
+
+    def test_old_pr_merged_during_failing_recheck_is_the_revert(self):
+        # 처음 읽을 때는 열려 있었다. 새 revert를 올리기 직전에 다시 읽으니 병합됐다.
+        self.assertFalse(self.postmerge(phase="revert_pending", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
+                                        direct_push=False, pr=[{"state": "OPEN", "headRefOid": REVERT},
+                                                               {"state": "MERGED", "headRefOid": REVERT}]))
+        self.assertEqual(self.verified_labels(), ["main-recheck"])
+        self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.assertEqual((self.stored["revert_sha"], self.stored["revert_head"]), (REVERT, REVERT))
+        self.assertFalse(self.stored["main_ok"])
+        self.push.assert_not_called()
+
+    def test_old_pr_merged_while_base_was_prepared_is_the_revert(self):
+        # 같은 base의 실패를 믿어 재검증하지 않았다. setup이 도는 동안에도 병합될 수 있다.
+        self.assertFalse(self.postmerge(phase="main_failed", revert_head=REVERT, main_head=TIP, direct_push=False,
+                                        pr=[{"state": "OPEN", "headRefOid": REVERT},
+                                            {"state": "MERGED", "headRefOid": REVERT}]))
+        self.assertEqual(self.verified_labels(), [])
+        self.revert_pr.assert_called_once_with(self.run_, REVERT)
+        self.assertEqual((self.stored["revert_sha"], self.stored["revert_head"]), (REVERT, REVERT))
 
     def test_closing_phase_closes_without_verifying(self):
         self.assertTrue(self.postmerge(phase="revert_closing", revert_sha=REVERT, revert_head=REVERT, main_head=OLD_TIP,
@@ -537,6 +563,7 @@ class PostmergeTest(unittest.TestCase):
         self.revert_pr.assert_called_once_with(self.run_, NEW_REVERT)
         self.push.assert_not_called()
         self.assertEqual((self.stored["phase"], self.stored["revert_sha"]), ("main_failed", NEW_REVERT))
+        self.read_pr.assert_not_called()  # 올린 적 없는 브랜치의 PR을 읽지 않는다
 
     def test_failed_base_that_did_not_move_is_not_verified_again(self):
         self.assertFalse(self.postmerge(phase="main_failed", main_head=TIP))

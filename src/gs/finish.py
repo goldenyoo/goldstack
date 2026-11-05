@@ -793,6 +793,12 @@ def _postmerge(r) -> bool:
             sha = git.sha(wt, "HEAD")
             _save(r, revert_sha=sha)  # push 실패·중단 때 재사용할 커밋
             if step == revert_decision.MAKE_REVERT_PR:
+                if pushed:
+                    # 맨 앞에서 읽은 뒤 setup·재검증이 도는 동안 사람이 옛 PR을 병합했을 수 있다. 브랜치를 덮어쓰면 그 병합을 놓치고 두 번째 revert PR을 연다.
+                    view = _read_revert_pr(r, pushed)
+                    step = revert_decision.next_step(replace(facts, main_ok=ok, revert_pr_merged=view.get("state") == "MERGED"))
+                if step == revert_decision.REREAD_REVERT_PR:
+                    return _reread_revert_pr(r, view)
                 return _revert_pr(r, sha)
             # 절대로 force하지 않는다. 거부되면(base가 움직임) 다음 실행이 최신 base 위에서 다시 만든다.
             git.push(wt, r.remote, r.st.push_record, f"HEAD:refs/heads/{r.base}")

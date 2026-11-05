@@ -9,6 +9,7 @@ git·gh·파일·시각을 부르지 않는다. 사실을 읽고 단계를 실�
 revert 브랜치를 올린 적이 있으면(보호된 base) PR 상태를 base 이동보다 먼저 본다. PR 병합이 곧 base 이동이기 때문이다. 병합되지 않았고
 base가 그대로면 그 PR을 기다리고, base가 움직였으면 옛 revert를 병합하지 않고 재검증한다. 통과하면 PR을 닫고(phase `revert_closing`이
 "재검증 통과, 닫기가 남음"이다), 실패하면 최신 base 위에 revert를 다시 만들어 같은 브랜치를 갱신한다. 직접 push 경로는 브랜치를 올리지 않아 이 줄들을 지나지 않는다.
+재검증이 도는 동안 PR이 병합될 수 있어 `_postmerge`는 그 브랜치를 덮어쓰기 직전에 PR을 다시 읽어 묻는다. 병합됐으면 검증 결과와 상관없이 그 PR로 끝난다.
 """
 from __future__ import annotations
 
