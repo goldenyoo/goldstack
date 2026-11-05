@@ -13,3 +13,5 @@ feature: ""
 - `src/gs`에 issue를 다시 여는 코드가 없다. PR 병합으로 닫힌 issue는 base 검증 실패로 revert해도 닫힌 채고, `gs backlog`는 열린 issue만 본다.
 
 **다시 볼 때**: 2026-11-05 기준 `field-report` issue는 0건이고 `closes`를 쓴 실제 실행 기록은 확인하지 않았다. `url` 조건을 빼면 gs가 되돌린 PR의 issue를 닫을 수 있어 세 건을 함께 봐야 한다.
+
+- 2026-11-05 다시 열기와 재발 확인이 이어져 있어 `issue-lifecycle`과 함께 정한다 (출처: goldstack-v11 실행 중 대화)
