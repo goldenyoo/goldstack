@@ -241,5 +241,92 @@ class GoNotifyTest(FakeServerMixin, unittest.TestCase):
         self.assertIn("경고: 텔레그램 알림 실패: IsADirectoryError", err)
 
 
+@mock.patch.object(notify, "RETRY_DELAY", 0)
+class CommandTest(FakeServerMixin, unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("GS_ROLE", None)
+        import io
+        import tempfile
+        from pathlib import Path
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.repo = Path(tmp.name)
+        (self.repo / ".goldstack").mkdir()
+        self.file = self.repo / "msg.txt"
+        self.file.write_text("안녕 " + "가" * 4000, encoding="utf-8")
+        self.io = io
+
+    def env(self, text):
+        (self.repo / ".goldstack/local.env").write_text(text, encoding="utf-8")
+
+    def run_cmd(self, *args):
+        out, err = self.io.StringIO(), self.io.StringIO()
+        code = notify.command(self.repo, list(args), out, err)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_sends_file_truncated_without_printing_secrets(self):
+        fake = self.serve()
+        self.env(f"TG_TOKEN={TOKEN}\nTG_CHAT_ID=42\n")  # notify.telegram은 기본 꺼짐
+        code, out, err = self.run_cmd(str(self.file))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(fake.requests[0][0], f"/bot{TOKEN}/sendMessage")
+        self.assertEqual(fake.requests[0][1]["chat_id"], "42")
+        self.assertEqual(fake.texts()[0], notify.truncate(self.file.read_text(encoding="utf-8")))
+        self.assertNotIn(TOKEN, out + err)
+
+    def test_cli_check_option_is_accepted(self):
+        from gs import cli
+        fake = self.serve()
+        self.env(f"TG_TOKEN={TOKEN}\nTG_CHAT_ID=42\n")
+        with mock.patch("sys.stdout", self.io.StringIO()), mock.patch("sys.stderr", self.io.StringIO()):
+            code = cli.main(["--repo", str(self.repo), "notify", "--check"])
+        self.assertEqual(code, 0)
+        self.assertEqual([r for r in fake.requests if r[0].endswith("sendMessage")], [])
+
+    def test_missing_values(self):
+        fake = self.serve()
+        self.env("TG_CHAT_ID=42\n")
+        code, out, err = self.run_cmd(str(self.file))
+        self.assertEqual(code, 1)
+        self.assertIn("TG_TOKEN", err)
+        self.assertEqual(fake.requests, [])
+        code, out, err = self.run_cmd("--check")
+        self.assertEqual(code, 1)
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertEqual(fake.requests, [])
+
+    def test_api_error_masks_token(self):
+        self.serve([404], echo_path=True)
+        self.env(f"TG_TOKEN={TOKEN}\nTG_CHAT_ID=42\n")
+        code, out, err = self.run_cmd(str(self.file))
+        self.assertEqual(code, 1)
+        self.assertIn("HTTP 404", err)
+        self.assertNotIn(TOKEN, out + err)
+        fake = self.serve([401], echo_path=True)
+        code, out, err = self.run_cmd("--check")
+        self.assertEqual(code, 1)
+        self.assertEqual(len(err.strip().splitlines()), 1)
+        self.assertNotIn(TOKEN, out + err)
+
+    def test_check_sends_no_message(self):
+        fake = self.serve()
+        self.env(f"TG_TOKEN={TOKEN}\n")  # 채팅 ID 없이도 토큰은 확인한다
+        code, out, err = self.run_cmd("--check")
+        self.assertEqual(code, 0, err)
+        self.assertEqual([path for path, _ in fake.requests], [f"/bot{TOKEN}/getMe"])
+        self.assertNotIn(TOKEN, out + err)
+
+    def test_unreadable_file(self):
+        self.serve()
+        self.env(f"TG_TOKEN={TOKEN}\nTG_CHAT_ID=42\n")
+        code, out, err = self.run_cmd(str(self.repo / "nope.txt"))
+        self.assertEqual(code, 1)
+        self.assertNotIn(TOKEN, err)
+
+
 if __name__ == "__main__":
     unittest.main()

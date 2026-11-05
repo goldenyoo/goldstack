@@ -23,7 +23,7 @@
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
 | `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글, `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
-| `notify.py` | 텔레그램 전송 |
+| `notify.py` | 텔레그램 전송, `gs notify` 명령 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
 | `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건 |
@@ -46,7 +46,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 .goldstack/local.env.example    커밋. 빈 값 + 채우는 법 안내
 .goldstack/work/<feature>/      spec.md, tickets/NN-slug.md, report.md (run/은 gitignore)
 .goldstack/out-of-scope/        grill이 뺀 개념
-.goldstack/ideas/               아이디어 함: <slug>.md 하나씩(아래 "아이디어 함"), README.md는 형식 설명
+.goldstack/ideas/               아이디어 함: <slug>.md 하나씩(아래 "아이디어 함"), README.md는 backlog 출력 설명(형식 원본은 `skills/idea/templates/idea.md`)
 ```
 `gs init`이 `.gitignore`에 넣는 줄: `.goldstack/local.env`, `.goldstack/work/*/run/`. 레포 루트는 지금 디렉터리에서 위로 `.git`을 찾는다(`--repo`로 지정 가능). 옛 위치(`.work/`, `.out-of-scope/`, `.ideas/`)는 읽지 않는다. `gs migrate`로 옮긴다.
 
@@ -405,7 +405,7 @@ mod의 hooks API는 early-access다. Claude Code 2.1.317에서 command hook과 `
 
 ## 아이디어 함
 
-`.goldstack/ideas/<slug>.md`가 아이디어 하나다. slug(소문자·숫자·`-`)가 파일 이름이자 id다. `README.md`는 형식 설명이라 아이디어가 아니다.
+`.goldstack/ideas/<slug>.md`가 아이디어 하나다. slug(소문자·숫자·`-`)가 파일 이름이자 id다. 형식 원본은 `skills/idea/templates/idea.md`다. `README.md`는 아이디어가 아니라 `gs backlog`가 건너뛴다.
 ```
 ---
 date: 2026-11-03          # YYYY-MM-DD, 필수
@@ -460,6 +460,7 @@ PR <url>
 ```
 종료 코드가 0이 아니면 한 줄: `❌ <feature> · <마무리 결과> · 티켓 <병합>/<전체> (<id> 실패: <이유 첫 줄>, …) · 보고서 .goldstack/work/<feature>/report.md`.
 - 전송(`notify.py`): 표준 라이브러리 urllib로 `<api>/bot<TG_TOKEN>/sendMessage`(JSON, 링크 미리보기 끔). api는 `GS_TELEGRAM_API`, 없으면 `https://api.telegram.org`. 3900자를 넘으면 `… (잘림)`으로 자른다.
+- `gs notify <파일>`: 파일 내용을 같은 전송으로 보낸다(3900자 잘림). `notify.telegram`이 꺼져 있어도 보낸다(사람이 친 명령). `gs notify --check`는 `getMe`로 토큰만 확인한다. 성공 종료 0, 값 없음·실패는 이유 한 줄과 종료 1. 오류에서 토큰을 가린다.
 - 3번까지 시도한다(1초, 2초 쉬고). 연결 실패·5xx·429·응답 해석 실패는 재시도, 그 밖의 4xx(토큰·채팅 ID 오류)는 바로 멈춘다.
 - 예외를 밖으로 내지 않는다. 토큰·채팅 ID가 없거나, `local.env`를 못 읽거나, 전송이 실패하면 stderr에 `경고: 텔레그램 …` 한 줄만 쓰고 종료 코드·보고서는 그대로다. 오류 문자열에서도 토큰을 `***`로 가린다.
 
