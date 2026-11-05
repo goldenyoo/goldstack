@@ -6,7 +6,6 @@ from gs import config, go, selfupdate
 from test_skills import SKILLS, skill_frontmatter
 
 SRC = Path(go.__file__).resolve().parent
-WORD_LIMIT = 1700  # 뻗침 방지(표의 `|`도 센다). /go 400, /grill 450보다 넓은 것은 사전 점검부터 이어받기까지 한 문서에 있어서다
 
 
 def read():
@@ -51,9 +50,6 @@ class OvernightSkillTest(unittest.TestCase):
         self.assertIn("/overnight <feature> … | resume", self.data["description"])
         self.assertEqual(self.data["argument-hint"], "<feature> … | resume")
         self.assertLessEqual(set(self.data), {"name", "description", "argument-hint", "disable-model-invocation"})
-
-    def test_short(self):
-        self.assertLess(len(self.body.split()), WORD_LIMIT)
 
     def test_branches_on_resume(self):
         head = self.body.partition("\n## ")[0]

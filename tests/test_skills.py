@@ -12,7 +12,11 @@ from support import fake_clis
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
 TEMPLATES = SKILLS / "grill" / "templates"
-WORD_LIMITS = {"grill": 450, "go": 480}  # grill은 티켓 분해 기준 여섯 줄(v7 04)만큼 더 받는다
+# skill 본문(frontmatter 뺀 `split()`) 단어 상한. 상한은 여기 한 곳에만 둔다. skill 글을 고치는 티켓은 이 값과 지금 단어 수를 완료 조건에 적는다
+WORD_LIMITS = {
+    "grill": 450, "go": 480, "adopt": 450, "overnight": 1700, "idea": 400,  # overnight은 사전 점검부터 이어받기까지 한 문서라 넓다
+    "retro": 1150, "writing-for-agents": 1430, "diagnosing-bugs": 1200,  # 이 셋은 지금 단어 수의 약 10% 위. 낮추는 일은 goldstack-v12 12
+}
 
 
 def skill_frontmatter(text):
@@ -33,14 +37,18 @@ def fill(text, **values):
 
 
 class SkillTest(unittest.TestCase):
-    def test_user_invoked_and_short(self):
+    def test_word_limits(self):
         for name, limit in WORD_LIMITS.items():
-            text = (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
-            data, body = skill_frontmatter(text)
+            with self.subTest(name):
+                _, body = skill_frontmatter((SKILLS / name / "SKILL.md").read_text(encoding="utf-8"))
+                self.assertLess(len(body.split()), limit, f"{name}: skill 글이 길다(상한 {limit})")
+
+    def test_user_invoked(self):
+        for name in ("grill", "go"):
+            data, _ = skill_frontmatter((SKILLS / name / "SKILL.md").read_text(encoding="utf-8"))
             self.assertEqual(data["name"], name)
             self.assertEqual(data["disable-model-invocation"], "true")  # 사용자 호출 skill
             self.assertIn(f"/{name} <feature>", data["description"])
-            self.assertLess(len(body.split()), limit, f"{name}: skill 글이 길다")
 
     def test_grill_reads_back_short_answers(self):
         body = (SKILLS / "grill" / "SKILL.md").read_text(encoding="utf-8")
@@ -103,16 +111,16 @@ def steps(body):
 class GrillBreakdownTest(unittest.TestCase):
     """티켓 분해 라운드의 기준과 그것을 담는 템플릿(goldstack-v7 04)."""
 
-    def test_step_requires_criteria(self):
+    def test_step_points_to_table_rules(self):
         step = steps((SKILLS / "grill" / "SKILL.md").read_text(encoding="utf-8"))[5]
-        for text in ("가중 일렬 경로", "평균 동시 실행 수", "`일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1`",
-                     "등급(`tier`)과 이유 한 줄", "문서 small", "재개 흐름 large",
-                     '`blocked_by`마다 이유를 "같은 파일"과 "앞 결과 필요"로 구분',
-                     "강하게 엮인 작은 직렬 티켓은 한 장으로 묶는다",
-                     "두 번째 리뷰어", "`second_reviewer`", "상태 전이·재개·revert 티켓에만",
-                     "티켓 `verify`는 문서·설정 티켓에만 좁게", "코드 티켓은 전체 검증",
-                     "templates/spec.md"):
+        for text in ("templates/spec.md", "§5", "gs check <f>", "새 worker 한 문맥", "검증 가능한 문장"):
             self.assertIn(text, step)
+
+    def test_grill_argument_may_be_request(self):
+        body = (SKILLS / "grill" / "SKILL.md").read_text(encoding="utf-8")
+        head = body.partition("\n1. ")[0]
+        for text in ("`<f>`는 `$ARGUMENTS`다", "공백이 있으면", "요청으로 읽고", "라운드 1에서 feature 이름을 제안"):
+            self.assertIn(text, head)
 
     def test_spec_template_table(self):
         spec = (TEMPLATES / "spec.md").read_text(encoding="utf-8")
@@ -122,9 +130,30 @@ class GrillBreakdownTest(unittest.TestCase):
         self.assertEqual(rows[0], ["id", "제목", "blocked_by(이유)", "wave", "tier(이유)", "예상",
                                    "구현", "리뷰 계열", "touches", "verify"])
         self.assertEqual({len(row) for row in rows}, {len(rows[0])})
-        for text in ("같은 파일", "앞 결과 필요", "두 번째 리뷰어"):
-            self.assertIn(text, section)
         self.assertRegex(section, r"(?m)^일렬 경로 \S+ 예상 \S+분 · 평균 동시 \S+$")
+
+    def test_spec_template_holds_table_rules(self):
+        """표 작성 규칙은 §5 주석 한 곳에 있고 skill은 그것을 가리킨다."""
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        for text in ("일렬 경로", "평균 동시", "`일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1`",
+                     "tier: small|medium|large와 이유 한 줄", "문서 small", "재개 흐름 large",
+                     '"같은 파일" 또는 "앞 결과 필요"', "한 장으로 묶는다",
+                     "두 번째 리뷰어(`second_reviewer`)", "verify: 문서·설정 티켓은 좁은 명령, 코드 티켓은 `전체`"):
+            self.assertIn(text, comment)
+
+    def test_second_reviewer_criteria_match_guide(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
+        for text in ("상태 전이·재개·revert", "파일·브랜치 삭제", "차단 hook", "비밀", "데이터 마이그레이션"):
+            self.assertIn(text, comment)
+        for text in ("파일·브랜치를 지우는 코드", "병합·revert", "차단 hook", "비밀 처리", "데이터 마이그레이션"):
+            self.assertIn(text, guide)
+
+    def test_spec_template_skill_ticket_rule(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        for text in ("skill 글(`skills/*/SKILL.md`)을 고치는 티켓", "`WORD_LIMITS`의 상한과 지금 단어 수",
+                     "좁은 verify에 `test_skills.py`를 넣는다"):
+            self.assertIn(text, comment)
 
     def test_ticket_template_keys(self):
         ticket = fill((TEMPLATES / "ticket.md").read_text(encoding="utf-8"), NN="01")
@@ -150,7 +179,6 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertEqual(data["name"], "idea")
         self.assertEqual(data["disable-model-invocation"], "true")
         self.assertIn("/idea <한 줄>", data["description"])
-        self.assertLess(len(body.split()), 400)
         self.assertIn(".goldstack/ideas/README.md", body)  # 형식은 README 한 곳에
         self.assertTrue((REPO / ".goldstack/ideas/README.md").is_file())
         parts = steps(body)
@@ -168,13 +196,13 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertIn("라운드 1의 첫 질문", parts[3])
         self.assertIn("이번 feature에 넣을 후보", parts[3])
         self.assertIn('status: "taken"', parts[6])
-        self.assertIn('feature: "$ARGUMENTS"', parts[6])
+        self.assertIn('feature: "<f>"', parts[6])
 
     def test_ideas_committed_by_grill_and_go(self):
-        for name, step in (("grill", 6), ("go", 2)):
+        for name, step, feature_name in (("grill", 6, "<f>"), ("go", 2, "$ARGUMENTS")):
             with self.subTest(name):
                 text = steps(self.read(name))[step]
-                self.assertRegex(text, r"git add -- \.goldstack/work/\$ARGUMENTS \.goldstack/out-of-scope \.goldstack/ideas \.goldstack/profile\.md &&")
+                self.assertRegex(text, rf"git add -- \.goldstack/work/{re.escape(feature_name)} \.goldstack/out-of-scope \.goldstack/ideas \.goldstack/profile\.md &&")
 
     def test_retro_reads_feature_run(self):
         data, body = skill_frontmatter(self.read("retro"))
