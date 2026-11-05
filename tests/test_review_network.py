@@ -159,10 +159,9 @@ class CallTest(Base):
         self.assertFalse(alive(int((self.bin / "leader").read_text())))
         self.wait_dead(int((self.bin / "child").read_text()))
 
-    def test_child_holding_stdout_after_leader_exit_cannot_hang_past_timeout(self):
+    def test_child_holding_stdout_file_after_leader_exit_is_stopped(self):
         start = time.monotonic()
-        with self.times_out_once_ready(), self.assertRaises(review.ReviewTimeout):
-            self.call('sleep 300 & echo $! > "$here/child"; touch "$here/ready_$n"; exit 0')
+        self.assertEqual(self.call('sleep 300 & echo $! > "$here/child"; exit 0'), "")
         self.assertLess(time.monotonic() - start, 100)  # 자손이 쥔 300초를 기다리지 않는다
         self.wait_dead(int((self.bin / "child").read_text()))
 
