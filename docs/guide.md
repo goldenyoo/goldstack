@@ -375,6 +375,7 @@ TG_CHAT_ID=987654321
 주석은 줄 맨 앞 `#`만 인정한다. 값 뒤에 붙인 `# ...`는 값의 일부가 된다.
 채팅 ID를 모르면 봇에게 아무 메시지나 보낸 뒤 `https://api.telegram.org/bot<TG_TOKEN>/getUpdates`의 `chat.id`를 본다. 그리고 config에서 `telegram = true`.
 gs는 이 파일만 읽는다(환경 변수는 보지 않는다). worker는 이 파일을 읽을 수 없다(차단 hook).
+`gs notify <파일>`은 그 파일 내용을 같은 텔레그램으로 보낸다(3900자에서 자른다). `notify.telegram`이 꺼져 있어도 사람이 친 명령이라 보낸다. `gs notify --check`는 토큰만 확인한다(`getMe`). 성공이면 종료 0, 값이 없거나 실패하면 이유 한 줄과 종료 1이다. `/overnight`이 아침 보고를 보낼 때 쓴다.
 
 **환경 확인** — `gs check <feature>`는 spec·티켓과 함께 환경도 본다. feature가 아직 없어도 `gs check x`를 돌리면("feature 디렉터리가 없다" 오류는 무시) `git`·`gh`·원격·텔레그램 문제가 먼저 보인다. 나오는 줄:
 - ``필요한 CLI `codex`가 PATH에 없다``(오류): `git`, `gh`, `claude`(판단 모델: 실패 요약·리뷰 분류·보고서)와 범위 안 티켓의 `model`·`reviewer`가 쓰는 CLI가 있어야 한다.
@@ -385,7 +386,7 @@ gs는 이 파일만 읽는다(환경 변수는 보지 않는다). worker는 이 
 
 base 브랜치에서 Claude Code를 연다. 순서는 `/grill` → `/go`이고, 둘 다 사용자가 부르는 skill이다.
 
-**`/grill csv-export`**
+**`/grill csv-export`** — 인자가 공백 없는 한 단어면 feature 이름이다. 공백이 있으면(`/grill CSV로 내보내기 추가`) 이름이 아니라 요청으로 읽고, 라운드 1에서 feature 이름을 제안한다. 확정 전에는 `.goldstack/work/<이름>/` 경로를 만들지 않는다.
 1. Claude가 `.goldstack/profile.md`(있으면 가장 먼저, 없고 처음 쓰는 레포면 `/adopt`를 권한다), 레포·문서·도구 버전과 `gs backlog`(열린 아이디어, 범위 밖의 다시 볼 조건)를 직접 읽고 돌려 본 것을 spec "환경 사실"에 날짜와 함께 적는다. 찾을 수 있는 것은 묻지 않는다.
 2. 사람이 정할 결정을 라운드마다 한 메시지에 번호 붙여 묻는다. 질문마다 선택지와 그 선택지의 구체 예시(실제로 보일 명령·파일·출력), 추천과 이유가 붙고, 끝에 `yes = 추천 전부 수락. 바꿀 것만 번호로`. 열린 아이디어가 있으면 라운드 1의 첫 질문은 "이번 feature에 넣을 후보"다(아래 [아이디어 흐름](#아이디어-흐름)).
 3. 답하는 법: `yes`(추천 전부), `2. B`(2번만 B), `3. 왜 B가 아니야?`(되묻기: 답을 듣고 같은 라운드를 다시 확정한다). 짧은 답이면 Claude가 "이렇게 읽었다"를 답마다 한 줄로 보이니, 어긋나면 그때 고친다.
@@ -597,6 +598,15 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 
 `수정됨`이 아닌 넷을 다 합친 수가 `■ 보고서: … · 남은 리뷰 지적 N`과 텔레그램의 `남은 지적 N`이다(`보고만`도 센다). 이 기능이 생기기 전에 돈 실행의 state를 읽으면 `확인 못 함(재리뷰 없음)`, `수정 못 함(수정 버림)`, `수정 못 함(수정 기록 없음)`으로 보일 수 있다.
 
+### 검증 실패 수리
+
+티켓 검증이 실패하면(검증 시간 초과는 제외, 수리 없이 바로 아래 재시도로 간다) 시도 하나에 한 번, 새 worktree로 처음부터 다시 하기 전에 **수리 worker**가 같은 브랜치·worktree에서 돈다. 구현 모델이 그대로이고, brief에 실패한 `verify.log` 경로만 더해 그 실패의 원인만 고치게 한다. 출력은 `[03] 검증 실패… → 새 시도 대신 같은 브랜치에서 수리한다`, `[03] 수리 worker 시작`이다.
+- 커밋을 남기면 구현과 다른 계열 리뷰어가 `tiers.rereview` 등급으로 수리 커밋의 diff만 본다. 지적은 보고서에만 남고 고치지 않는다. 그 뒤 gs가 다시 병합·검증한다.
+- 커밋이 없으면(불안정한 시험이라 고칠 것이 없다고 본 경우), worker가 실패했으면, 띄우지 못했으면 재리뷰 없이 바로 다시 검증한다.
+- 다시 검증이 통과하면 병합한다. 또 실패하면 그 시도가 실패로 끝나고, 이 시도는 지금처럼 다음 등급의 새 worktree에서 처음부터 다시 한다(수리는 새 시도에서 한 번 더 돈다).
+- 수리 worker와 [수정 worker](#리뷰와-재리뷰)의 brief는 전체 검증 대신 고친 곳에 닿는 좁은 시험만 시킨다. 전체 검증은 gs가 병합 트리에서 하기 때문이다. 첫 구현 worker는 그대로 전체 검증을 한 번 돌린다.
+- 보고서 티켓별 결과의 이유 칸에 `수리: 시도 1 커밋 1개 → 다시 검증 통과` 같은 줄이 붙는다. gs가 죽거나 끊겨도 다음 `gs go`가 수리를 같은 worktree에서 잇는다.
+
 ## 실행 중 보기
 
 **진행 바** — 같은 레포에서 연 Claude Code 세션이면 어느 세션이든(레포 하위 디렉터리에서 연 세션도) 프롬프트 위에 한 줄이 뜬다(1초마다 갱신).
@@ -668,7 +678,7 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `agy 차단 장치가 없다: …` | agy가 gs hook을 걸지 못해 worker로 띄우지 않았다 | 그 티켓의 `model`을 바꾸거나 agy를 고친다 |
 | `agy 한도: 이번 실행의 agy 호출이 상한 3/3에 닿아 worker를 띄우지 않았다(config agy.max_calls_per_run)` | 이번 실행의 agy 호출이 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿았다. 재시도하지 않는다 | 상한을 올리거나 그 티켓의 `model`을 바꿔 다시 `gs go` |
 
-실패한 티켓은 같은 계열에서 등급을 한 단계 올려(표가 없으면 같은 모델로) 한 번 자동 재시도한 뒤에도 실패한 것이다(`준비 실패`와 `agy 한도`는 재시도하지 않는다). 재시도한 모델은 보고서 "실행 측정"에 있다. 시도마다 증거가 `.goldstack/work/csv-export/run/<티켓>/<시도>/`에 남는다: `brief.md`, `setup.log`, `worker.log`, `verify.log`, `merge.log`, `failure.log`, `failure-summary.md`(`models.failure_summary`의 요약), `review/`(diff·reviewer 답), `fix/`·`fix2/`(수정 worker, 끊겨서 다시 띄웠으면 `fix-net1/` 등), `rereview1-<계열>/`·`rereview2-<계열>/`(재리뷰). 실패한 worktree(`run/wt/03`, `run/wt/03-retry-1`)도 지우지 않고 남긴다. 다 봤으면 [`gs clean`](#끝난-feature-치우기gs-clean)으로 지운다.
+실패한 티켓은 같은 계열에서 등급을 한 단계 올려(표가 없으면 같은 모델로) 한 번 자동 재시도한 뒤에도 실패한 것이다(`준비 실패`와 `agy 한도`는 재시도하지 않는다). 실패 원인이 티켓 검증이면 새 시도 전에 [수리 worker](#검증-실패-수리)가 한 번 먼저 돈다. 재시도한 모델은 보고서 "실행 측정"에 있다. 시도마다 증거가 `.goldstack/work/csv-export/run/<티켓>/<시도>/`에 남는다: `brief.md`, `setup.log`, `worker.log`, `verify.log`, `merge.log`, `failure.log`, `failure-summary.md`(`models.failure_summary`의 요약), `review/`(diff·reviewer 답), `fix/`·`fix2/`(수정 worker, 끊겨서 다시 띄웠으면 `fix-net1/` 등), `rereview1-<계열>/`·`rereview2-<계열>/`(재리뷰). 실패한 worktree(`run/wt/03`, `run/wt/03-retry-1`)도 지우지 않고 남긴다. 다 봤으면 [`gs clean`](#끝난-feature-치우기gs-clean)으로 지운다.
 
 **마무리 결과**(보고서 Merge Danger, `■ 마무리:` 줄)
 
@@ -823,7 +833,7 @@ $ gs clean csv-export
 ```
 .goldstack/ideas/status-review-count.md · 2026-11-03 · low · goldstack-v3 실행 중 대화 · open
 ```
-severity는 `high`(결과·기록이 틀리거나 안전 구멍), `medium`(반복되는 손일·불편), `low`(다듬기). 커밋은 하지 않는다.
+severity는 `high`(결과·기록이 틀리거나 안전 구멍), `medium`(반복되는 손일·불편), `low`(다듬기). 커밋은 하지 않는다. 파일 형식의 원본은 plugin의 `skills/idea/templates/idea.md`이고, `/idea`가 그 파일을 직접 읽는다(대상 레포의 README를 가리키지 않는다).
 
 **`gs backlog [--all]`** — 다음 feature를 고르기 전에. 읽기 전용이고 늘 종료 0이다.
 ```console
@@ -936,6 +946,8 @@ $ gs migrate
 ## skill 사용 장면
 
 `/grill`, `/go`, `/adopt`, `/idea` 밖의 다섯 skill은 [mattpocock/skills](https://github.com/mattpocock/skills)를 옮긴 것이다. 각 `SKILL.md` 끝에 원본 링크가 있다. `/idea`·`gs backlog`와 `/retro <feature>`는 [아이디어 흐름](#아이디어-흐름).
+
+skill 본문(frontmatter 뺀 `split()`)에는 단어 상한이 있다. 상한은 `tests/test_skills.py`의 `WORD_LIMITS` 한 곳에 모여 있고, `grill`·`go`·`adopt`·`overnight`·`idea`·`retro`·`writing-for-agents`·`diagnosing-bugs` 각각 실제 단어 수의 약 10% 위(10단위 올림)다. skill 글을 고치는 티켓은 이 값과 지금 단어 수를 완료 조건에 적고, 늘렸으면 상한을 같은 티켓에서 올린다.
 
 ### `/wait-what` — 설명을 못 따라갔을 때(사용자 호출)
 grill 라운드 3번 질문이 "frontier 재계산 시 blocked_by 전이 폐포를…"처럼 읽혀 뜻을 모르겠다.
