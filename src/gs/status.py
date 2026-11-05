@@ -58,8 +58,9 @@ def _show(rundir: Path, name: str, out) -> None:
         label = LABEL.get(ts.status, ts.status)
         if ts.status == state.RUNNING and not pid:
             label += "(중단)"
+        reason = " · ".join(filter(None, (ts.reason, state.repair_summary(ts))))
         rows.append((tid, label, str(ts.attempts), _elapsed(ts, pid is not None, st, now),
-                     _last_output(ts.log, now), ts.reason))
+                     _last_output(ts.log, now), reason))
     widths = [max(_width(r[i]) for r in rows) for i in range(len(rows[0]) - 1)]
     for r in rows:
         cells = [_pad(c, w) for c, w in zip(r, widths)] + [r[-1]]

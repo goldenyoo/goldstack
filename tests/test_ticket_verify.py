@@ -164,6 +164,19 @@ class TicketVerifyRunTest(support.GoTest):
         self.assertEqual(self.merged(), ["01"])
 
     # --- 검증이 트리를 바꾸면 실패 ---
+    def assert_left_files_are_repaired(self, change):
+        """첫 검증만 파일을 남긴다. 병합 상태는 그대로라 브랜치의 결함일 수 있어 수리로 간다. 다시 검증은 깨끗한 integration에서 통과한다."""
+        once = self.bin / "changed"
+        self.configure("true", verify_ticket=f"if [ ! -f {once} ]; then touch {once}; {change}; fi")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0), out)
+        self.assertIn(CHANGED, (self.rundir / "01/1/verify.log").read_text())
+        self.assertNotIn(CHANGED, (self.rundir / "01/1/repair/verify.log").read_text())
+        self.assertEqual(self.merged(), ["01"])
+        return ts.repairs[0]["reason"]
+
     def assert_change_fails_once(self, change):
         """첫 검증만 트리를 바꾼다. 그 시도는 실패하고, 재시도는 제 브랜치의 깨끗한 integration에서 통과한다."""
         once = self.bin / "changed"
@@ -178,11 +191,11 @@ class TicketVerifyRunTest(support.GoTest):
         return (self.rundir / "01/1/failure.log").read_text()
 
     def test_untracked_file_fails(self):
-        self.assertIn(CHANGED, self.assert_change_fails_once("touch stray"))
+        self.assertIn(CHANGED, self.assert_left_files_are_repaired("touch stray"))
         self.assertNotIn("stray", self.integration("ls-tree", "-r", "--name-only", "gs/demo/integration").split())
 
     def test_modified_tracked_file_fails(self):
-        self.assertIn(CHANGED, self.assert_change_fails_once("echo more >> file_01"))
+        self.assertIn(CHANGED, self.assert_left_files_are_repaired("echo more >> file_01"))
 
     def test_staged_file_fails(self):
         self.assert_change_fails_once("touch staged; git add staged")
@@ -263,7 +276,7 @@ class TicketVerifyRunTest(support.GoTest):
                          "티켓 검증 명령: `fast`\n\n티켓 검증 명령(a): `own`\n\n")
         self.assertEqual(commands(None, a=None), "")
 
-    def test_brief_tells_when_to_run_for_worker_and_fix_worker(self):
+    def test_brief_names_ticket_command_for_worker_and_fix_worker(self):
         own = self.record("own")
         self.configure("true", tickets={"01": own})
         with self.review_with([{"severity": "high", "location": "file_01", "claim": "FIX: 틀렸다", "evidence": "e"}]):
@@ -271,8 +284,9 @@ class TicketVerifyRunTest(support.GoTest):
         self.assertEqual(code, 0, out + err)
         fix = (self.rundir / "01/1/fix/brief.md").read_text()
         self.assertIn("## 리뷰 지적(고칠 것)", fix)
+        self.assertIn(f"검증 명령 `{own}`: {SUFFIX}", self.brief("01"))
+        self.assertIn(f"검증 명령 `{own}`: 전체 검증은 gs가", fix)  # 수정 worker는 좁은 시험만(tests/test_fix_brief.py)
         for brief in (self.brief("01"), fix):
-            self.assertIn(f"검증 명령 `{own}`: {SUFFIX}", brief)
             self.assertNotIn("검증 명령 `true`", brief)
 
     # --- 마무리는 늘 spec verify ---

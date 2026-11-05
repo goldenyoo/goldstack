@@ -22,7 +22,8 @@ from gs import git, go, review, state, transient, worker
 
 STAGES = ("_check_worker", "_review_stage", "_merge_stage")
 STEPS = ("_net_hold", "_net_park", "_end_fix", "_review", "_rereview", "_call_reviewers", "_call_rereviewers",
-         "_moved_head", "_mark_resume", "_next_fix", "_start_fix", "_catch_up", "_verify", "_cleanup_merged", "_fail")
+         "_moved_head", "_mark_resume", "_next_fix", "_start_fix", "_catch_up", "_verify", "_cleanup_merged", "_fail",
+         "_start_repair", "_end_repair", "_repair_review", "_call_repair_reviewers")
 
 CHECK = ["_check_worker", "_net_park", "/_check_worker"]
 FIX_CHECK = ["_check_worker", "_net_park", "_end_fix", "/_check_worker"]
@@ -32,6 +33,8 @@ REREVIEW = MARK + ["_review_stage", "_rereview", "_call_rereviewers", "_moved_he
 TO_FIX = ["_next_fix", "_start_fix"]
 NO_FIX = ["_next_fix"]
 MERGE = ["_merge_stage", "_catch_up", "_verify", "_cleanup_merged", "/_merge_stage"]
+VERIFY_FAILED = ["_merge_stage", "_catch_up", "_verify", "_mark_resume", "/_merge_stage"]  # 수리 자리를 기다리는 표시를 남긴다
+TO_REPAIR = ["_start_repair", "_mark_resume"]  # 수정 worker와 달리 띄운 worker에도 표시를 남긴다: gs가 죽어도 잇는다
 PARKED = ["_check_worker", "_net_park", "_mark_resume", "/_check_worker"]  # 끊김 중에 끝났다. 회복하면 처음부터 다시 온다
 HELD = ["_check_worker", "_net_hold", "_mark_resume", "/_check_worker", "_mark_resume"]  # 마지막 표시는 다시 띄운 worker(_resume)다
 PROBE_ENDED = PARKED  # 다시 띄운 worker가 끝난 것이 회복의 근거다. 그때는 아직 끊김 중이라 자기도 한 번 미뤄진다
@@ -203,12 +206,27 @@ class StageOrderTest(test_review_target.Base):
         self.assertEqual(sorted((order(events, "11"), order(events, "12")), key=len), [win, lose + win])  # 진 쪽은 재시도한다
         self.assertEqual(self.merged(), ["11", "12"])
 
-    def test_verify_failure_fails_the_ticket_inside_the_merge_stage(self):
+    def test_verify_failure_is_repaired_and_fails_the_ticket_on_the_second_verify(self):
         (self.repo / ".goldstack/work/demo/spec.md").write_text("---\nfeature: demo\nverify: 'false'\nmax_workers: 1\n---\n")
         self.commit("verify false")
         steps, code, log = self.run_go()
         self.assertEqual(code, 1, log)
-        self.assertEqual(steps, (CHECK + REVIEW + NO_FIX + ["_merge_stage", "_catch_up", "_verify", "_fail", "/_merge_stage"]) * 2)
+        no_commit = ["_check_worker", "_end_repair", "_mark_resume", "/_check_worker"]  # 수리 worker가 고칠 것이 없다
+        fail = ["_merge_stage", "_catch_up", "_verify", "_fail", "/_merge_stage"]
+        self.assertEqual(steps, (CHECK + REVIEW + NO_FIX + VERIFY_FAILED + TO_REPAIR + no_commit + fail) * 2)
+
+    def test_repair_commit_comes_back_through_the_stages(self):
+        (self.bin / "worker.sh").write_text(textwrap.dedent('''\
+            if grep -q '^## 검증 실패(고칠 것)' "$GS_BRIEF"; then git rm -q BROKEN; git commit -qm repaired; exit 0; fi
+            touch BROKEN; echo x > file_01; git add -A; git commit -qm t01
+        '''))
+        steps, code, log = self.run_go()
+        self.assertEqual(code, 0, log)
+        check = ["_check_worker", "_net_park", "_end_repair", "/_check_worker"]
+        rereview = MARK + ["_review_stage", "_repair_review", "_call_repair_reviewers", "_moved_head", "/_review_stage"]
+        # 다시 검증에 들어가기 전에도 표시를 남긴다: 거기서 죽어도 수리를 잃지 않는다
+        self.assertEqual(steps, CHECK + REVIEW + NO_FIX + VERIFY_FAILED + TO_REPAIR + check + rereview + NO_FIX + MARK + MERGE)
+        self.assertEqual(self.phases(), ["worker", "review", "verify", "repair", "rereview", "verify", "finish"])
 
     def test_calls_receive_values_and_a_snapshot_of_findings(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
@@ -323,7 +341,7 @@ class CallBoundaryTest(unittest.TestCase):
     TREE = Path("/nowhere/tree")
 
     def test_calls_take_only_jobs_and_tree(self):
-        for call in (go._call_reviewers, go._call_rereviewers):
+        for call in (go._call_reviewers, go._call_rereviewers, go._call_repair_reviewers):
             self.assertEqual(list(inspect.signature(call).parameters), ["jobs", "tree"])
 
     def test_one_reviewer_runs_on_the_tree_and_returns_its_record(self):

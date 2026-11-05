@@ -210,7 +210,7 @@ verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest dis
 |---|---|
 | [docs/guide.md](docs/guide.md) | 상황별 사용 예시: 기존 레포에 들이기(`/adopt`, `gs doctor`, squash만 허용·보호된 main·느린 시험·전체 시험 나누기 예시, config·spec 키 표, 한계), 새 feature, 티켓 키(`tier`, `verify`, `touches`, `second_reviewer`)와 agy 한도, 리뷰와 재리뷰(지적 상태 5가지, 리뷰 중 자리, 2차 재리뷰의 재확인, 보고만 지적의 아이디어 파일, sandbox 네트워크), 실행 중 보기, 실패했을 때(네트워크 끊김 포함), 여러 feature 이어 돌리기, `gs clean`, 아이디어 흐름(`gs retro-log` 포함), 버전 맞추기(`gs self-update`, `requires`), 피드백(보내는 것·안 보내는 것·끄는 법), `/overnight`, 리눅스 서버, `gs migrate`, skill 사용 장면 |
 | [docs/internals.md](docs/internals.md) | 엔진 명세: 파일 배치, config, `gs doctor`, 상태와 측정 필드, 병렬, 실패 처리, 리뷰(재리뷰와 state 필드, 두 리뷰 합치기, 리뷰 스레드와 자리, agy 횟수), 네트워크 끊김(대기, `중단(네트워크)`, 리뷰·판단 호출), 마무리(순서와 재개 뒤 멈춤, squash 확인·revert·되살림, CI 대기, 보호된 base, 준비 실패, integration-final 건너뛰기)와 자동 정리, `gs clean`, 진행 계산(ETA 표본), 알림, 아이디어 함(보고만 지적 파일, `gs retro-log`), 피드백 수집, 버전·self-update, Actions 시험, 모델 어댑터(조사로 정한 worker 명령), plugin·hook·mod, 시험 seam |
-| [.goldstack/ideas/README.md](.goldstack/ideas/README.md) | 아이디어 파일 형식 |
+| [skills/idea/templates/idea.md](skills/idea/templates/idea.md) | 아이디어 파일 형식 |
 | [skills/grill/templates/](skills/grill/templates/) | spec·티켓·범위 밖 파일 형식 |
 | [docs/ORIGINS.md](docs/ORIGINS.md) | 시작 배경과 요구사항, 지난 실패 목록 |
 | [docs/research/](docs/research/) | 참고한 kit 분석(pstack, mattpocock/skills, 비교표), agy·어댑터 조사, worker 플러그인 격리·codex hook 실험 기록 |

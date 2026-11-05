@@ -43,14 +43,18 @@ def _send(token: str, chat_id: str, text: str) -> tuple[bool, str]:
         return False, "worker는 알림을 보내지 않는다"
     if not token or not chat_id:
         return False, "TG_TOKEN 또는 TG_CHAT_ID가 비었다"
+    return _post(token, "sendMessage",
+                 {"chat_id": chat_id, "text": truncate(text), "disable_web_page_preview": True})
+
+
+def _post(token: str, method: str, payload: dict) -> tuple[bool, str]:
     api = (os.environ.get("GS_TELEGRAM_API") or DEFAULT_API).rstrip("/")
-    body = json.dumps({"chat_id": chat_id, "text": truncate(text), "disable_web_page_preview": True},
-                      ensure_ascii=False).encode("utf-8")
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     error = ""
     for attempt in range(ATTEMPTS):
         if attempt:
             time.sleep(RETRY_DELAY * 2 ** (attempt - 1))
-        req = urllib.request.Request(f"{api}/bot{token}/sendMessage", data=body, method="POST",
+        req = urllib.request.Request(f"{api}/bot{token}/{method}", data=body, method="POST",
                                      headers={"Content-Type": "application/json; charset=utf-8"})
         try:
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
@@ -69,6 +73,57 @@ def _send(token: str, chat_id: str, text: str) -> tuple[bool, str]:
         except Exception as e:  # noqa: BLE001 — 연결 실패·시간 초과·응답 해석 실패 모두 재시도
             error = f"{type(e).__name__}: {e}"
     return False, mask(error, token)
+
+
+def check(token: str) -> tuple[bool, str]:
+    """메시지를 보내지 않고 getMe로 토큰만 확인한다. 예외를 내지 않는다."""
+    try:
+        if os.environ.get("GS_ROLE") == "worker":
+            return False, "worker는 알림을 보내지 않는다"
+        if not token:
+            return False, "TG_TOKEN이 비었다"
+        return _post(token, "getMe", {})
+    except Exception as e:  # noqa: BLE001
+        return False, mask(f"{type(e).__name__}: {e}", token)
+
+
+def command(repo, args: list[str], out, err) -> int:
+    """`gs notify <파일>` / `gs notify --check`. 사람이 친 명령이니 notify.telegram이 꺼져 있어도 보낸다."""
+    from . import config
+    token = ""
+    try:
+        env = config.read_local_env(repo)
+        token = env.get("TG_TOKEN", "")
+        chat_id = env.get("TG_CHAT_ID", "")
+        if args == ["--check"]:
+            ok, error = check(token)
+            if ok:
+                print("토큰 확인됨", file=out)
+                return 0
+            print(f"오류: 토큰을 확인하지 못했다: {mask(error, token)}", file=err)
+            return 1
+        if len(args) != 1 or args[0].startswith("--"):
+            print("사용법: gs notify <파일> | gs notify --check", file=err)
+            return 2
+        missing = [k for k, v in (("TG_TOKEN", token), ("TG_CHAT_ID", chat_id)) if not v]
+        if missing:
+            print(f"오류: .goldstack/local.env에 {', '.join(missing)} 값이 없다", file=err)
+            return 1
+        try:
+            with open(args[0], encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError as e:
+            print(f"오류: 파일을 읽지 못했다: {e}", file=err)
+            return 1
+        ok, error = send(token, chat_id, text)
+        if ok:
+            print("보냈다", file=out)
+            return 0
+        print(f"오류: 전송 실패: {mask(error, token)}", file=err)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        print(f"오류: {mask(f'{type(e).__name__}: {e}', token)}", file=err)
+        return 1
 
 
 def _json(raw: bytes) -> dict:

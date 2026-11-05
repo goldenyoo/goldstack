@@ -1,8 +1,10 @@
 """임시 레포 환경 격리와 gs go 시나리오 시험의 공용 fixture."""
+import atexit
 import contextlib
 import io
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -14,6 +16,49 @@ from pathlib import Path
 from unittest import mock
 
 from gs import adapters, cli, config, state, worker
+
+APPLE_GIT_SHIM = "/usr/bin/git"
+_shim_dir = None  # import 때 만든 링크 디렉터리. 프로세스가 끝날 때 지운다
+
+
+def real_git_for_shim(path=None, shim=APPLE_GIT_SHIM):
+    """`git`이 Apple shim(/usr/bin/git)이면 `xcrun --find git`이 가리키는 진짜 git 경로, 아니면 None.
+
+    xcrun이 없거나 실패하거나 진짜 git이 실행 파일이 아니면 None이다(리눅스 포함)."""
+    git = shutil.which("git", path=path)
+    if git != shim:
+        return None
+    try:
+        found = subprocess.run(["xcrun", "--find", "git"], capture_output=True, text=True, timeout=30,
+                               env={**os.environ, "PATH": path} if path is not None else None)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    real = found.stdout.strip()
+    if found.returncode != 0 or not real or real == git or not os.access(real, os.X_OK):
+        return None
+    return real
+
+
+def link_real_git(real, parent=None):
+    """진짜 git 링크 하나만 든 새 디렉터리를 만들어 경로를 돌려준다. 디렉터리 통째로 PATH에 얹으면 python3·make 등을 가린다."""
+    directory = tempfile.mkdtemp(prefix="gs-test-git-", dir=parent)
+    os.symlink(real, os.path.join(directory, "git"))
+    return directory
+
+
+def bypass_git_shim():
+    """Apple shim이면 링크 디렉터리를 PATH 맨 앞에 올린다. 아니면 아무것도 바꾸지 않는다."""
+    global _shim_dir
+    real = real_git_for_shim()
+    if real is None:
+        return None
+    _shim_dir = link_real_git(real)
+    atexit.register(shutil.rmtree, _shim_dir, ignore_errors=True)
+    os.environ["PATH"] = _shim_dir + os.pathsep + os.environ.get("PATH", "")
+    return _shim_dir
+
+
+bypass_git_shim()
 
 
 def fake_clis(test, *names):

@@ -2,6 +2,15 @@
 
 ## 미출시
 
+### goldstack-v12
+
+- 티켓 검증이 실패하면 새 시도 전에 수리 worker가 같은 브랜치·worktree에서 실패 로그를 보고 한 번 고친다. 커밋이 있으면 `tiers.rereview` 등급으로 재리뷰하고 없으면 바로 다시 검증한다. 또 실패하면 지금처럼 새 시도다. 보고서 티켓 결과에 `수리: …` 줄이 붙는다.
+- 수정·수리 worker는 전체 검증 대신 좁은 시험만 돌린다. 첫 구현 worker는 그대로다. codex worker 시험 환경(`[worktree] setup`, `.venv/bin/python -m unittest`) 안내를 더했다.
+- `gs notify <파일>`로 파일 내용을 텔레그램에 보낸다(`notify.telegram`이 꺼져 있어도 보낸다). `/overnight`의 사전 점검 빈틈을 막고 아침 보고를 이 명령으로 보낸다.
+- `/grill`은 공백이 든 인자를 feature 이름이 아니라 요청으로 읽고 라운드 1에서 이름을 제안한다. `/go`·`/idea`·`/adopt`·`/retro`의 잘못 이끄는 문장을 고쳤다(`/go`가 옛 보고서를 먼저 읽던 것, `/idea`가 다른 레포에 없는 README를 가리키던 것, `/retro` 쓰기 금지와 `gs retro-log`의 충돌 등).
+- skill 본문 단어 상한을 `WORD_LIMITS` 한 곳에 모으고, 정리한 단어 수의 약 10% 위로 낮췄다. `writing-for-agents`·`diagnosing-bugs`의 되풀이를 줄였다.
+- 시험에서 Apple git shim을 우회해 느린 시험을 줄였다.
+
 ### goldstack-v11
 
 - `gs feedback statsu`처럼 알 수 없는 공백 없는 한 단어는 보내지 않고 오류로 끝난다(`draft` 모드에서도 공개 issue를 올리던 결함, #19). `status`는 `list`의 별칭이다. `draft` 모드의 전송 실패는 `gs feedback send`로 보내라고 안내한다.
