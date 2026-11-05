@@ -908,7 +908,7 @@ def _review_step(r: Run, rv: Reviewing, active: dict[str, Active], runner) -> bo
     if rv.future is not None:
         if not rv.future.done():
             return False
-        if r.net.active and rv.future.exception() is None:
+        if r.net.active and not _ended_in_error(rv.future):
             _wait_phase(r, a.t.id, "network")
             return False
         done, rv.future = rv.future, None
@@ -923,6 +923,14 @@ def _review_step(r: Run, rv: Reviewing, active: dict[str, Active], runner) -> bo
         rv.ended, rv.rows = {}, metrics.reviewer_rows(r)
         rv.future, rv.call = reviews.executor.submit(_off_loop, rv.call, rv.ended), None
     return rv.finished and _leave_review(r, rv, active, runner)
+
+
+def _ended_in_error(future: Future) -> bool:
+    """끝난 호출이 예외로 끝났나: 던졌거나, 함께 돌린 호출(run_together)의 결과 목록에 중단 예외(NetworkAbort)가 있다."""
+    if future.exception() is not None:
+        return True
+    res = future.result()
+    return isinstance(res, list) and any(isinstance(x, transient.NetworkAbort) for x in res)
 
 
 def _resume_flow(r: Run, rv: Reviewing, done: Future | None = None) -> None:

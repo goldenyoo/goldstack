@@ -313,6 +313,20 @@ class SeatRulesTest(unittest.TestCase):
         self.assertFalse(self.reviews(go.Reviewing(None, future=running)).fix_waiting())
 
 
+class EndedInErrorTest(unittest.TestCase):
+    def done(self, result=None, error=None):
+        f = Future()
+        f.set_result(result) if error is None else f.set_exception(error)
+        return f
+
+    def test_an_abort_inside_a_result_list_counts_as_an_error_so_the_outage_does_not_defer_it(self):
+        abort = go.transient.NetworkAbort("review wait limit exceeded")
+        self.assertTrue(go._ended_in_error(self.done(error=abort)))
+        self.assertTrue(go._ended_in_error(self.done([{"findings": []}, abort])))
+        self.assertFalse(go._ended_in_error(self.done([{"findings": []}, {"findings": []}])))
+        self.assertFalse(go._ended_in_error(self.done([RuntimeError("x")])))
+
+
 class LoopThreadOnlyTest(Base):
     def test_state_is_saved_only_on_the_loop_thread_through_waits_and_two_reviewers(self):
         self.minute()
