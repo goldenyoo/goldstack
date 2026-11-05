@@ -153,7 +153,8 @@ class GoReviewRetryTest(support.GoTest):
             echo "$GS_TICKET" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
         '''))
         with self.review_with([{"severity": "high", "location": "file_01", "claim": "FIX: 틀렸다", "evidence": "e"}]), \
-                mock.patch("gs.go._idle_seconds", return_value=0.4), mock.patch.object(worker, "POLL_SECONDS", 0.05):
+                mock.patch("gs.go._idle_seconds", return_value=support.IDLE_SECONDS), \
+                mock.patch.object(worker, "POLL_SECONDS", 0.05):
             code, out, err = self.go("--only", "01")
         pid = int((self.bin / "fix.pid").read_text())
         self.addCleanup(kill_quietly, pid)
@@ -224,20 +225,20 @@ class GoReviewRetryTest(support.GoTest):
         self.timeout_retry("herdr")
 
     def test_output_or_commits_reset_idle_timeout(self):
-        # 각각 전체 실행 시간은 유휴 제한보다 길지만, 출력 또는 커밋이 계속 생긴다.
+        # 각각 전체 실행 시간(6초)은 유휴 제한(5초)보다 길지만, 출력 또는 커밋이 2초마다 생긴다.
         for mode in ("output", "commits"):
             with self.subTest(mode=mode):
                 tid = "17" if mode == "output" else "18"
                 self.add_ticket(tid)
                 (self.bin / "worker.sh").write_text(textwrap.dedent(f'''\
-                    for i in 1 2 3 4 5 6; do
-                      sleep 0.15
+                    for i in 1 2 3; do
+                      sleep 2
                       if [ '{mode}' = 'output' ]; then echo "working $i";
                       else echo "$i" > file_$GS_TICKET; git add -A; git commit -qm "step $i"; fi
                     done
                     echo done > file_$GS_TICKET; git add -A; git commit -qm done
                 '''))
-                with mock.patch("gs.go._idle_seconds", return_value=0.4):
+                with mock.patch("gs.go._idle_seconds", return_value=support.IDLE_SECONDS):
                     code, out, err = self.go("--only", tid)
                 self.assertEqual(code, 0, out + err)
                 self.assertEqual(state.load(self.rundir, "demo").tickets[tid].attempts, 1)

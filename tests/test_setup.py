@@ -11,7 +11,7 @@ from unittest import mock
 import support
 from gs import config, finish, setup, state, verify
 from support import sh
-from test_verify import wait_dead
+from test_verify import times_out_once_ready, wait_dead
 
 
 class SetupCommandTest(unittest.TestCase):
@@ -48,9 +48,10 @@ class SetupCommandTest(unittest.TestCase):
         self.assertFalse(self.log.exists())
 
     def test_timeout_stops_children_including_sigterm_ignored(self):
-        for trap in ("", "trap '' TERM;"):
-            with self.subTest(trap=trap), mock.patch.object(verify, "GRACE", 0.2):
-                res = self.run_setup(f"{trap} sleep 300 & echo $! > child; echo $$ > shell; wait", seconds=0.2)
+        for n, trap in enumerate(("", "trap '' TERM;")):
+            ready = self.wt / f"ready{n}"
+            with self.subTest(trap=trap), mock.patch.object(verify, "GRACE", 0.2), times_out_once_ready(ready):
+                res = self.run_setup(f"{trap} sleep 300 & echo $! > child; echo $$ > shell; touch {ready}; wait", seconds=0.2)
                 pids = [int((self.wt / name).read_text()) for name in ("child", "shell")]
                 try:
                     self.assertTrue(res.timed_out)
@@ -67,7 +68,7 @@ class SetupCommandTest(unittest.TestCase):
 
     def test_timeout_uses_setup_minutes_not_verify_timeout(self):
         with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "0.01"}):
-            self.assertTrue(self.run_setup("sleep 0.05; echo done", seconds=1).ok)
+            self.assertTrue(self.run_setup("sleep 0.05; echo done", seconds=600).ok)
 
     def test_launch_error_is_a_setup_failure(self):
         with mock.patch("gs.setup.subprocess.Popen", side_effect=OSError("cannot start bash")):

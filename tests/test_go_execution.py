@@ -152,7 +152,10 @@ class GoExecutionTest(support.GoTest):
 
     def test_integration_change_during_verify_is_not_committed(self):  # 04 #1
         self.add_ticket("15")
-        self.parallel(3, verify=f"touch {self.bin / 'verifying'}; test ! -f BROKEN && sleep 1")
+        # 첫 검증은 15가 integration에 BROKEN을 만들 때까지 붙잡혀 있다가 통과한다(검증 도중에 바뀌었다). 실제 시간에 기대지 않는다
+        seen, verifying = self.bin / "seen", self.bin / "verifying"
+        self.parallel(3, verify=f"if [ ! -f {seen} ]; then touch {seen} {verifying}; test ! -f BROKEN || exit 1; "
+                                f"for i in $(seq 1200); do [ -f BROKEN ] && break; sleep 0.05; done; exit 0; fi; test ! -f BROKEN")
         code, out, err = self.go("--only", "01,15")
         self.assertEqual(code, 0, out + err)
         st = state.load(self.rundir, "demo").tickets

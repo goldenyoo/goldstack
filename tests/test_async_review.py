@@ -1105,7 +1105,7 @@ class CancelCallTest(test_review_network.Base):
         thread = threading.Thread(target=run)
         thread.start()
         for _ in range(3000):
-            if (self.bin / "child").exists() and (self.bin / "child").read_text().strip():
+            if (self.bin / "leader").exists() and (self.bin / "leader").read_text().strip():  # child 다음에 쓴다
                 break
             threading.Event().wait(0.01)
         cancel.set()
