@@ -302,7 +302,7 @@ class FinalCommitTest(Base):
         self.assertIn(UNFIXED, self.report_line("FIX A"))
 
     def test_head_moving_again_after_second_rereview_is_unchecked(self):
-        """대조로 다시 본 뒤에도 head가 움직이면 아무도 최종 커밋을 보지 않았다. 마지막 커밋이 A를 되돌려도 수정됨으로 세지 않는다."""
+        """대조로 다시 본 뒤에도 head가 움직이면 아무도 브랜치 끝을 보지 않았다. 그 커밋은 병합에 들지 않고 판정은 수정됨으로 세지 않는다."""
         self.findings("codex", A, B)
         self.a_fixed_first()
         (self.bin / "late_codex_2.sh").write_text("touch late1\n")
@@ -310,7 +310,7 @@ class FinalCommitTest(Base):
         out = self.run_ok()
         self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])  # 더 부르지 않는다
         self.assert_second_fix_got_only_b()
-        self.assertNotIn("fixed_A", self.files())
+        self.assertIn("fixed_A", self.files())  # A를 되돌린 늦은 커밋은 아무도 보지 않아 병합하지 않는다
         self.assertIn("경고: 병합 전 대조", out)
         rec = self.ts().review
         a, b = rec["findings"]

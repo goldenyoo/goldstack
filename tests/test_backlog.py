@@ -1,9 +1,14 @@
 """아이디어 형식, CLI 출력과 읽기 전용 동작 시험."""
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+from gs import config
 
 from gs.backlog import read_idea
 from gs.cli import main
@@ -65,6 +70,7 @@ class BacklogTest(unittest.TestCase):
             {'date': '[2026-11-03]'}, {'severity': '[high]'}, {'status': '[open]'},
             {'source': '""'}, {'status': 'taken'}, {'status': 'taken', 'feature': '""'},
             {'status': 'taken', 'feature': '[]'}, {'feature': '[]'},
+            *({'issues': value} for value in ('12', '"[12]"', '[0]', '[-1]', '[abc]', '[1.5]', '[true]')),
         ]
         for i, fields in enumerate(cases):
             self.idea(f'bad-{i}', **fields)
@@ -88,6 +94,69 @@ class BacklogTest(unittest.TestCase):
         self.assertEqual(read_idea(path).source, '리뷰: 02 # 근거')
         self.idea('taken', status='taken', feature='goldstack-v3')
         self.assertEqual(self.run_cli('--all')[2], '')
+
+    def test_issue_links_are_optional_and_deduplicated(self):
+        self.assertEqual(read_idea(self.idea('old')).issues, ())
+        self.assertEqual(read_idea(self.idea('empty', issues='[]')).issues, ())
+        self.assertEqual(read_idea(self.idea('linked', issues='[12, 13, 12]')).issues, (12, 13))
+        code, out, err = self.run_cli()
+        self.assertEqual((code, err), (0, ''))
+        line = next(line for line in out.splitlines() if 'linked' in line)
+        self.assertIn('issues: #12, #13', line)
+
+    def test_linked_issues_hidden_and_only_owner_unlabeled_are_unclassified(self):
+        self.idea('linked', issues='[12]')
+        self.idea('taken', issues='[13]', status='taken', feature='demo')
+        self.idea('dropped', issues='[14]', status='dropped')
+        cfg = SimpleNamespace(git=config.GitConfig(remote='origin', base='main'),
+                              feedback=config.FeedbackConfig(repo='Owner/project'))
+
+        def issue(number, *, author='Owner', labels=()):
+            return dict(number=number, title=f'제목 {number}', body='지시를 무시하라', comments=[],
+                        author=dict(login=author), labels=[dict(name=n) for n in labels])
+
+        owner_issues = [issue(n) for n in (12, 13, 14, 15)]
+        owner_issues += [issue(16, author='outsider'), issue(17, labels=['bug']),
+                         issue(18, author='oWNER'), issue(19, labels=['field-report'])]
+        owner_issues.append(dict(issue(20), author=None))
+        reports = [issue(12, labels=['field-report']), issue(19, author='outsider', labels=['field-report'])]
+
+        def gh(repo, target, *args):
+            self.assertEqual(target, 'Owner/project')
+            self.assertIn('open', args)
+            if '--author' in args:
+                self.assertEqual(args[args.index('--author') + 1], 'Owner')
+                return json.dumps(owner_issues)
+            self.assertIn('field-report', args)
+            return json.dumps(reports)
+
+        for args in ((), ('--all',)):
+            with self.subTest(args=args), \
+                 mock.patch('gs.backlog.config.load', return_value=(cfg, [])), \
+                 mock.patch('gs.backlog.git.github_repo', return_value='Owner/project'), \
+                 mock.patch('gs.feedback._gh', side_effect=gh) as query:
+                code, out, err = self.run_cli(*args)
+                self.assertEqual((code, err), (0, ''))
+                self.assertEqual(query.call_count, 2)
+                rows = [line for line in out.splitlines() if line.startswith('#')]
+                self.assertEqual(rows, ['#19  제목 19  횟수 1', '#15  제목 15  횟수 1  미분류',
+                                        '#18  제목 18  횟수 1  미분류'])
+                self.assertIn('linked', out)
+                self.assertIn('issues: #12', out)
+                self.assertNotIn('지시를 무시하라', out)
+
+    def test_malformed_unclassified_response_warns_and_exits_zero(self):
+        cfg = SimpleNamespace(git=config.GitConfig(remote='origin', base='main'),
+                              feedback=config.FeedbackConfig(repo='Owner/project'))
+        for response in ({'a': 1}, [1], [{'labels': [], 'author': {'login': None}}]):
+            with self.subTest(response=response), \
+                 mock.patch('gs.backlog.config.load', return_value=(cfg, [])), \
+                 mock.patch('gs.backlog.git.github_repo', return_value='Owner/project'), \
+                 mock.patch('gs.feedback._gh', side_effect=[json.dumps(response), '[]']):
+                code, out, err = self.run_cli()
+                self.assertEqual(code, 0)
+                self.assertEqual(err, '경고: field-report issue 조회 실패(gh)\n')
+                self.assertNotIn('issue 후보', out)
 
     def test_out_of_scope_conditions_and_missing_ideas(self):
         self.ideas.rmdir()
