@@ -835,7 +835,7 @@ low     2026-11-03  status-review-count  gs status가 끝난 티켓의 리뷰 �
 gitlab-support  GitHub 밖 레포에 goldstack을 쓰려 할 때.
 same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이 또 버려지면.
 ```
-열린 아이디어를 severity(high→low) → 날짜(오래된 것 먼저) → slug 순으로 보이고, 아래에 `.goldstack/out-of-scope/*.md`마다 `**다시 볼 조건**:` 문장을 보인다. 조건이 맞았으면 그 개념을 다음 grill에서 다시 꺼낸다. `--all`은 taken·dropped도 보이고 status 열을 더한다. 형식이 틀린 아이디어 파일은 `경고: <파일>: <이유>`로 알리고 목록에서 뺀다(`gs check`는 아이디어를 보지 않는다). 파일 형식은 `.goldstack/ideas/README.md`와 [internals.md](internals.md#아이디어-함).
+열린 아이디어를 severity(high→low) → 날짜(오래된 것 먼저) → slug 순으로 보이고, 아래에 `.goldstack/out-of-scope/*.md`마다 `**다시 볼 조건**:` 문장을 보인다. 조건이 맞았으면 그 개념을 다음 grill에서 다시 꺼낸다. `--all`은 taken·dropped도 보이고 status 열을 더한다. 형식이 틀린 아이디어 파일은 `경고: <파일>: <이유>`로 알리고 목록에서 뺀다(`gs check`는 아이디어를 보지 않는다). 파일 형식은 `skills/idea/templates/idea.md`와 [internals.md](internals.md#아이디어-함).
 
 **`/grill`의 후보 질문** — 열린 아이디어가 있을 때 라운드 1의 첫 질문:
 ```

@@ -179,8 +179,11 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertEqual(data["name"], "idea")
         self.assertEqual(data["disable-model-invocation"], "true")
         self.assertIn("/idea <한 줄>", data["description"])
-        self.assertIn(".goldstack/ideas/README.md", body)  # 형식은 README 한 곳에
-        self.assertTrue((REPO / ".goldstack/ideas/README.md").is_file())
+        self.assertIn("templates/idea.md", body)  # 형식 원본은 플러그인 안에 있다
+        template = (SKILLS / "idea" / "templates" / "idea.md").read_text(encoding="utf-8")
+        for key in ("date", "severity", "source", "status", "feature"):
+            self.assertIn(f"{key}:", template)
+        self.assertNotIn("ideas/README.md", body)  # 다른 레포에는 없다
         parts = steps(body)
         self.assertIn("gs backlog", parts[1])  # 비슷한 것을 먼저 찾는다
         self.assertIn("덧붙일까", parts[2])
@@ -199,7 +202,7 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertIn('feature: "<f>"', parts[6])
 
     def test_ideas_committed_by_grill_and_go(self):
-        for name, step, feature_name in (("grill", 6, "<f>"), ("go", 2, "$ARGUMENTS")):
+        for name, step, feature_name in (("grill", 6, "<f>"), ("go", 2, "<f>")):
             with self.subTest(name):
                 text = steps(self.read(name))[step]
                 self.assertRegex(text, rf"git add -- \.goldstack/work/{re.escape(feature_name)} \.goldstack/out-of-scope \.goldstack/ideas \.goldstack/profile\.md &&")
@@ -227,6 +230,19 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertIn("5단계(회고)는 따르지 않는다", overnight)
         self.assertIn("회고: /retro a, /retro b", overnight)
         self.assertIn("`/retro <feature>` 권고", overnight)
+
+    def test_go_uses_f_and_reads_this_runs_report(self):
+        go = self.read("go")
+        self.assertNotIn("$ARGUMENTS", go.partition("\n1. ")[2])  # 단계 안은 `<f>`만 쓴다
+        self.assertNotIn("매번", go)
+        step4 = steps(go)[4]
+        integration = step4.index("git show gs/<f>/integration:")
+        fetched = step4.index("git fetch <remote> <base>")
+        self.assertLess(integration, fetched)
+        self.assertLess(fetched, step4.index("git show <remote>/<base>:"))
+        self.assertIn("작업 트리의 파일은 읽지 않는다", step4)
+        self.assertIn("옛 판", step4)  # 재실행 때 옛 보고서를 막는다
+        self.assertEqual(sorted(steps(go)), [1, 2, 3, 4, 5])
 
     def test_adopt_asks_feedback_once(self):
         body = self.read("adopt")
