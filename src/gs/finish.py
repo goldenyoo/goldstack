@@ -6,8 +6,8 @@ base 브랜치와 원격은 `.goldstack/config.toml`의 `git.base`·`git.remote`
 병합 방식은 `git.merge_method`(merge·squash)다. 병합을 요청할 때 finish에 남기고(`merge_method`) 그 PR의
 확인·revert·재개는 남긴 방식을 따른다. merge는 병합 커밋이 검증한 integration(`merge_head`)을 조상으로 갖는지,
 squash는 squash 커밋(부모 하나)의 tree가 `merge_head`의 tree와 같은지로 확인한다. revert는 둘 다 그 커밋 하나다.
-merged 티켓의 closes 번호는 PR 본문과 squash 메시지에 종료 키워드로 남긴다. PR 없이 base에 직접 반영된
-티켓은 base의 표시를 확인해 issue를 직접 닫는다.
+이 PR이 base에 들이는 merged 티켓의 closes 번호를 PR 본문과 squash 메시지에 종료 키워드로 남긴다. 그 뒤 `sync_issues`가 issue를 base의 지금
+상태에 맞춘다: 반영된 티켓의 issue는 고정 문구 댓글을 달고 닫고(앞 PR이 있어도), 되돌린 티켓의 issue는 다시 연다.
 squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에서도 병합된 티켓·이 feature의 병합을 알아본다.
 
 보호된 base(`git.direct_push = false`)에는 아무것도 직접 push하지 않는다. revert는 `gs/<f>/revert`, 병합 뒤 최종
@@ -43,6 +43,7 @@ import re
 import subprocess
 import tempfile
 import time
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 from urllib.parse import quote
@@ -58,6 +59,9 @@ PENDING_PHASES = ("revert_pending", "report_pending")
 # gs go가 새 worker보다 먼저 마무리를 회복하는 phase. revert_closing: 재검증을 통과했고 revert PR 닫기가 남았다.
 RESUME_PHASES = (*CHECK_PHASES, "merge_requested", "merge_pending", "merged", "main_failed", "base_unverified",
                  "revert_closing", *PENDING_PHASES)
+# 마무리 결과(verified·reverted)가 아직 정해지지 않은 phase. report_pending은 결과가 report_result에 정해져 있다.
+UNSETTLED_PHASES = tuple(phase for phase in RESUME_PHASES if phase != "report_pending")
+REVERT_LINE = re.compile(r"^This reverts commit ([0-9a-f]{40,64})", re.M)  # git revert의 기본 메시지
 CHECK_INTERVAL = 10
 MAX_FINISH_ERRORS = 20  # state.finish_errors에 남길 서로 다른 오류 수. 넘으면 오래된 것부터 잊는다
 
@@ -439,8 +443,14 @@ def _closing_lines(r, tids=None) -> str:
 
 
 def _pr_body(r, path: Path) -> Path:
-    """PR head에 포함된 티켓의 종료 키워드를 보고서 길이 제한 밖에 보존한다."""
-    closing = _closing_lines(r, _trailers(r, git.sha(r.iwt, "HEAD")))
+    """이 PR이 base에 들이는 티켓의 종료 키워드를 보고서 길이 제한 밖에 보존한다.
+
+    앞서 base에 들어가 지금도 있는 티켓은 뺀다(squash 메시지도 같다). 넣으면 그 뒤 다시 열린 issue를 이 PR의 병합이 또 닫는다."""
+    tickets = _trailers(r, git.sha(r.iwt, "HEAD"))
+    if _closing_numbers(r, tickets):
+        merge = r.st.finish.get("merge_sha")  # 이 PR이 이미 병합됐으면 그 티켓은 키워드를 그대로 둔다
+        tickets -= {tid for tid, (kept, commit) in _base_tickets(r).items() if kept and commit != merge}
+    closing = _closing_lines(r, tickets)
     if not closing:
         return path
     suffix = "\n\n" + closing
@@ -450,20 +460,137 @@ def _pr_body(r, path: Path) -> Path:
     return target
 
 
-def _close_without_pr(r) -> None:
-    """PR 없이 직접 반영한 티켓은 base의 표시까지 확인한 뒤 닫는다."""
-    if r.st.finish.get("url") or not _closing_numbers(r):
+def _base_tickets(r) -> dict[str, tuple[bool, str]]:
+    """원격 base 이력에서 티켓마다 (지금 들어 있는가, 그렇게 만든 base 커밋)을 정한다. 마지막으로 바뀐 티켓이 뒤에 온다.
+
+    gs-ticket 표시는 revert 뒤에도 이력에 남아 표시만으로는 반영을 알 수 없다. 그래서 표시와 `This reverts commit` 줄을
+    base에 들어온 순서대로 적용한다. revert의 revert는 되살림이고, 병합을 되돌리면 그 가지가 들인 티켓이 함께 빠진다.
+    base 커밋은 첫 부모 줄의 커밋이다(PR 병합 커밋, squash 커밋, 직접 push).
+    """
+    fields = git.run(r.repo, "log", "--topo-order", "--reverse", "--format=%H%x00%P%x00%B%x00", r.base_ref).stdout.split("\0")
+    commits = {sha.strip(): (parents.split(), body)
+               for sha, parents, body in zip(fields[::3], fields[1::3], fields[2::3])}
+    marker = f"gs-ticket: {r.name}/"
+
+    def changes(sha: str) -> dict[str, bool]:
+        """sha 자신이 티켓을 어떻게 바꾸는가. 병합이 들인 가지는 가지의 커밋이 저마다 바꾼다."""
+        body = commits[sha][1]
+        found: dict[str, bool] = {}
+        for target in REVERT_LINE.findall(body):
+            if target in commits:
+                found.update((tid, not kept) for tid, kept in brought(target).items())
+        if marker in body:  # 어느 커밋의 표시를 셀지는 ticket_trailers의 규칙을 따른다(worker 일반 커밋은 세지 않는다)
+            found.update(dict.fromkeys(git.ticket_trailers(r.repo, r.name, "--no-walk", sha, base_ref=r.base_ref), True))
+        return found
+
+    def brought(sha: str) -> dict[str, bool]:
+        """sha를 되돌리면 뒤집힐 변화: sha 자신과, 병합이면 그 가지."""
+        parents = commits[sha][0]
+        found: dict[str, bool] = {}
+        if len(parents) > 1:
+            for commit in git.out(r.repo, "rev-list", "--topo-order", "--reverse", f"{parents[0]}..{parents[1]}").split():
+                found.update(changes(commit))
+        found.update(changes(sha))
+        return found
+
+    chain, sha = [], git.sha(r.repo, r.base_ref)
+    while sha in commits:
+        chain.append(sha)
+        sha = next(iter(commits[sha][0]), "")
+    chain.reverse()
+    owner: dict[str, str] = {}  # 커밋 → 그 커밋을 base에 들인 첫 부모 줄의 커밋
+    for head in chain:
+        stack = [head]
+        while stack:
+            sha = stack.pop()
+            if sha in commits and sha not in owner:
+                owner[sha] = head
+                stack.extend(commits[sha][0])
+    rank = {head: position for position, head in enumerate(chain)}
+    status: dict[str, tuple[bool, str]] = {}
+    for sha in sorted(commits, key=lambda commit: rank[owner[commit]]):  # 안정 정렬: 한 줄의 커밋 안에서는 log의 순서(부모 먼저)다
+        for tid, kept in changes(sha).items():
+            status.pop(tid, None)
+            status[tid] = (kept, owner[sha])
+    return status
+
+
+def _issue_plan(r) -> dict[int, tuple[str, str]]:
+    """{issue: ("close"|"reopen", 근거 base 커밋)}. 같은 issue의 티켓 중 하나라도 되돌렸으면 다시 연다.
+
+    결과가 정해지지 않은 PR의 티켓은 base에 보여도 아직 닫지 않는다(검증 실패로 되돌릴 수 있다). 끝나면 _run이 다시 부른다."""
+    f = r.st.finish
+    waiting = _trailers(r, f["merge_head"]) if f.get("phase") in UNSETTLED_PHASES and f.get("merge_head") else set()
+    close: dict[int, str] = {}
+    reopen: dict[int, str] = {}
+    for tid, (kept, commit) in _base_tickets(r).items():
+        if tid not in r.feat.tickets:
+            continue
+        if not kept:
+            reopen.update(dict.fromkeys(r.feat.tickets[tid].closes, commit))
+        elif tid not in waiting:
+            close.update(dict.fromkeys(_closing_numbers(r, [tid]), commit))
+    return {**{n: ("close", c) for n, c in close.items()}, **{n: ("reopen", c) for n, c in reopen.items()}}
+
+
+def _fixed_version(r, commit: str) -> str:
+    """commit의 `pyproject.toml` 버전. 실행 중인 gs는 설치본이라 고친 버전이 아니다. 없거나 형식이 다르면 feature 이름."""
+    shown = git.run(r.repo, "show", f"{commit}:pyproject.toml", check=False).stdout
+    try:
+        version = tomllib.loads(shown)["project"]["version"]
+    except (tomllib.TOMLDecodeError, KeyError, TypeError):
+        return r.name
+    return version if isinstance(version, str) and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]*", version) else r.name
+
+
+def _apply_issue(r, target: str, number: int, action: str, commit: str) -> None:
+    """지금 상태를 읽어 할 일만 한다. 댓글은 고정 문구뿐이고, 같은 문구가 이미 있으면 달지 않는다(지난 응답을 못 받았어도).
+
+    닫기는 언제나 completed다. not planned는 사람이 치는 `gh issue close --reason "not planned"`로만 한다."""
+    view = json.loads(feedback._gh(r.repo, target, "issue", "view", str(number), "--json", "state,comments"))
+    if view["state"] not in ("OPEN", "CLOSED"):
+        raise ValueError("issue 상태를 모른다")
+    if action == "reopen":
+        if view["state"] == "CLOSED":
+            feedback._gh(r.repo, target, "issue", "reopen", str(number))
         return
-    landed = git.ticket_trailers(r.repo, r.name, r.base_ref, base_ref=r.base_ref)
-    numbers = _closing_numbers(r, landed)
-    if not numbers:
+    comment = f"{_fixed_version(r, commit)}에서 고침 ({commit})"
+    if comment not in [c["body"].strip() for c in view["comments"]]:
+        feedback._gh(r.repo, target, "issue", "comment", str(number), "--body", comment)
+    if view["state"] == "OPEN":
+        feedback._gh(r.repo, target, "issue", "close", str(number), "--reason", "completed")
+
+
+def sync_issues(r) -> None:
+    """티켓 `closes`의 issue를 base의 지금 상태에 맞춘다. 실패는 finish와 보고서에만 남고 병합·결과를 바꾸지 않는다.
+
+    끝낸 일은 finish.issues에 (할 일, 근거 커밋)으로 남겨 base가 바뀌기 전에는 gh를 다시 부르지 않는다. 사람이 그 뒤에 issue를
+    열거나 닫아도 되돌리지 않는다. 실패한 일은 다음 gs go가 다시 시도한다."""
+    if not any(ticket.closes for ticket in r.feat.tickets.values()):
         return
-    target = git.github_repo(r.repo, r.remote)
-    for number in numbers:
+    f = r.st.finish
+    try:
+        plan = _issue_plan(r)
+        target = git.github_repo(r.repo, r.remote)
+    except (git.GitError, OSError) as e:
+        _save(r, issues_error=str(e))
+        print(f"■ 경고: issue 상태를 맞추지 못했다. 다음 gs go가 다시 시도한다: {e}", flush=True)
+        return
+    f.pop("issues_error", None)
+    issues = dict(f.get("issues", {}))
+    for number, (action, commit) in sorted(plan.items()):
+        done = {"action": action, "commit": commit, "ok": True}
+        if issues.get(str(number)) == done:
+            continue
+        close = action == "close"
         try:
-            feedback._gh(r.repo, target, "issue", "close", str(number))
-        except (OSError, subprocess.TimeoutExpired):
-            print(f"■ 경고: issue #{number} 닫기 실패(gh)", flush=True)
+            _apply_issue(r, target, number, action, commit)
+            print(f"■ issue #{number} {'닫음' if close else '다시 엶'}", flush=True)
+        except (git.GitError, OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.TimeoutExpired):
+            done["ok"] = False
+            print(f"■ 경고: issue #{number} {'닫기' if close else '다시 열기'} 실패(gh). 다음 gs go가 다시 시도한다", flush=True)
+        issues[str(number)] = done
+        _save(r, issues=issues)
 
 
 @metrics.stage("publish")
@@ -968,7 +1095,7 @@ def _run(r, cleanup: bool) -> tuple[str | None, bool]:
     directory = r.rundir / "finish"
     directory.mkdir(parents=True, exist_ok=True)
     f = r.st.finish
-    _close_without_pr(r)
+    sync_issues(r)
     # 외부 병합 후 재개. 최종 보고서 갱신 전이면 merge_head가 integration의 끝이다.
     anchor = f.get("head") or f.get("merge_head")
     # 정리 후 integration은 base에서 다시 만들 수 있다. 최종 integration 보고서 커밋은
@@ -1007,6 +1134,7 @@ def _run(r, cleanup: bool) -> tuple[str | None, bool]:
             f["reintroduced"] = again
         if prev.get("phase") == "closed":
             f["closed_pr"] = prev.get("url", "")
+        f.update({key: prev[key] for key in ("issues", "issues_error") if key in prev})  # issue는 PR이 바뀌어도 같다
         _save(r, phase="preparing", outcome="integration 검증 중")
         ok = _verify(r, r.iwt, "integration")
         verified_head = git.sha(r.iwt, "HEAD") if ok else ""
@@ -1072,6 +1200,7 @@ def _run(r, cleanup: bool) -> tuple[str | None, bool]:
         # revert를 되돌리는 일만 그 앞에 한다. 보고서에 그 커밋을 남기고, base에 보고서 커밋이 없어 report.md가 충돌하지 않는다.
         git.run(r.repo, "fetch", "-q", r.remote, r.base)
         _restore_reverts(r)
+        sync_issues(r)  # 결과가 정해졌다. 실패도 보고서에 남도록 보고서 앞에서 한다
         _update(r, summary)
         _report_to_base(r)
         if f["phase"] in PENDING_PHASES:

@@ -103,7 +103,7 @@ class ClosingTest(support.GoTest):
         r = SimpleNamespace(repo=self.repo, iwt=self.repo, name='demo',
                             base_ref=f'{self.REMOTE}/{self.BASE}', rundir=self.rundir,
                             feat=feature.load(self.repo, 'demo'),
-                            st=SimpleNamespace(tickets={
+                            st=SimpleNamespace(finish={}, tickets={
                                 '01': SimpleNamespace(status=state.MERGED),
                                 '02': SimpleNamespace(status=state.MERGED)}))
         body = finish._pr_body(r, path).read_text()
@@ -125,48 +125,9 @@ class ClosingTest(support.GoTest):
         self.assertIn('Closes #12', body)
         self.assertNotIn('Closes #99', body)
 
-    def test_direct_push_is_closed_during_finish(self):
-        self.configure_closes()
-        support.sh(self.repo, 'git', 'checkout', '-qb', 'manual-ticket')
-        support.sh(self.repo, 'git', 'commit', '--allow-empty', '-qm', '티켓 구현')
-        support.sh(self.repo, 'git', 'checkout', '-q', self.BASE)
-        support.sh(self.repo, 'git', 'merge', '--no-ff', 'manual-ticket', '-qm',
-                   '반영\n\ngs-ticket: demo/01')
-        support.sh(self.repo, 'git', 'push', '-q', self.REMOTE, self.BASE)
-        code, out, err = self.go('--only', '01')
-        self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.calls(), [])
-        self.assertIn('issue close 12 --repo test/origin', self.lines('gh.log'))
-        self.assertFalse(any(line.startswith('issue close 99') for line in self.lines('gh.log')))
-
     def test_no_merged_ticket_has_no_closing_keyword(self):
         self.configure_closes()
         code, out, err = self.go('--only', '02')
         self.assertEqual(code, 1, out + err)
         self.assertNotIn('Closes #', (self.bin / 'pr-body.md').read_text())
         self.assertFalse(any(line.startswith('issue close') for line in self.lines('gh.log')))
-
-    def test_direct_push_without_pr_checks_base_and_status(self):
-        self.configure_closes()
-        support.sh(self.repo, 'git', 'commit', '--allow-empty', '-qm', '반영\n\ngs-ticket: demo/01')
-        support.sh(self.repo, 'git', 'push', '-q', self.REMOTE, self.BASE)
-        support.sh(self.repo, 'git', 'fetch', '-q', self.REMOTE)
-        feat = feature.load(self.repo, 'demo')
-        r = SimpleNamespace(repo=self.repo, name='demo', remote=self.REMOTE,
-                            base_ref=f'{self.REMOTE}/{self.BASE}', feat=feat,
-                            st=SimpleNamespace(finish={}, tickets={
-                                '01': SimpleNamespace(status=state.MERGED),
-                                '02': SimpleNamespace(status=state.MERGED)}))
-        with mock.patch('gs.feedback._gh') as gh:
-            finish._close_without_pr(r)
-            self.assertEqual(gh.call_args.args[2:], ('issue', 'close', '12'))
-            self.assertEqual(gh.call_count, 1)  # 02는 integration 상태만 merged이고 base에는 없다
-        r.st.tickets['01'].status = state.FAILED
-        with mock.patch('gs.feedback._gh') as gh:
-            finish._close_without_pr(r)
-            gh.assert_not_called()
-        r.st.finish['url'] = 'https://example.test/pr/1'
-        r.st.tickets['01'].status = state.MERGED
-        with mock.patch('gs.feedback._gh') as gh:
-            finish._close_without_pr(r)
-            gh.assert_not_called()

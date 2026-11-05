@@ -177,6 +177,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
             if _finished_after_clean(r):
                 url, finished = r.st.finish.get("url"), r.st.finish["phase"] == "verified"
                 say(f"■ 이미 끝남: {r.name} ({r.st.finish['phase']})")
+                finish.sync_issues(r)  # 지난 gh 실패를 다시 시도하고, 끝난 뒤 base에서 되돌린 티켓의 issue를 다시 연다
                 clean.integration(r)  # 지난 자동 정리가 원격 삭제에서만 실패했을 수 있다
             else:
                 r.no_merge = _only_stops(r)  # 준비 전에 정한다. 준비에서 끝나도 지난 마무리를 이번 결과로 보이지 않는다
