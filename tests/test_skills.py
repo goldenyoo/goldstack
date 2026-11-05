@@ -242,6 +242,7 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertLess(fetched, step4.index("git show <remote>/<base>:"))
         self.assertIn("작업 트리의 파일은 읽지 않는다", step4)
         self.assertIn("옛 판", step4)  # 재실행 때 옛 보고서를 막는다
+        self.assertIn("`준비 실패`로 시작하면", step4)  # 준비 실패는 보고서를 커밋하지 않아 integration 판이 옛 판이다
         self.assertEqual(sorted(steps(go)), [1, 2, 3, 4, 5])
 
     def test_adopt_asks_feedback_once(self):
