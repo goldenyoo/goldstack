@@ -1,0 +1,103 @@
+"""`finish._postmerge`의 되돌리기 판단: 이미 읽은 사실(`Facts`) → 다음 단계 이름(`next_step`).
+
+git·gh·파일·시각을 부르지 않는다. 사실을 읽고 단계를 실행하는 일은 `_postmerge`가 한다.
+
+읽는 데 fetch·worktree·gh가 들거나 읽다가 실패할 수 있는 사실은 값이 `None`(아직 안 읽음)이다. 답이 그 사실에 달렸을 때만
+`next_step`이 읽기 단계(`READ_BASE`, `READ_REVERT_PR`, `READ_REVERT_PARENT`, `PREPARE_BASE`)로 답하고, `_postmerge`가 읽어 채운 뒤
+다시 묻는다. 그래서 끝난 마무리는 fetch하지 않고, 앞 줄에서 답이 나온 revert는 부모를 읽지 않으며, 필요 없던 재검증도 돌지 않는다.
+
+revert 브랜치를 올린 적이 있으면(보호된 base) PR 상태를 base 이동보다 먼저 본다. PR 병합이 곧 base 이동이기 때문이다. 병합되지 않았고
+base가 그대로면 그 PR을 기다리고, base가 움직였으면 옛 revert를 병합하지 않고 재검증한다. 통과하면 PR을 닫고(phase `revert_closing`이
+"재검증 통과, 닫기가 남음"이다), 실패하면 최신 base 위에 revert를 다시 만들어 같은 브랜치를 갱신한다. 직접 push 경로는 브랜치를 올리지 않아 이 줄들을 지나지 않는다.
+재검증이 도는 동안 PR이 병합될 수 있어 `_postmerge`는 그 브랜치를 덮어쓰기 직전에 PR을 다시 읽어 묻는다. 병합됐으면 검증 결과와 상관없이 그 PR로 끝난다.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+# 끝난 마무리. 아무것도 읽지 않는다.
+ALREADY_VERIFIED = "already_verified"
+ALREADY_REVERTED = "already_reverted"
+# 사실 읽기.
+READ_BASE = "read_base"  # fetch, 병합 커밋 확인, revert_in_base, external_revert, base_moved(받아 온 끝 기준)
+READ_REVERT_PR = "read_revert_pr"  # revert_pr_merged
+READ_REVERT_PARENT = "read_revert_parent"  # revert_parent_is_tip
+PREPARE_BASE = "prepare_base"  # 임시 worktree, setup, base_ready, base_moved(검증할 커밋 기준)
+# 이미 있는 revert로 끝낸다.
+REREAD_REVERT_PR = "reread_revert_pr"  # 지난 실행이 올린 revert 브랜치의 PR을 다시 읽는다
+RECORD_PUSHED_REVERT = "record_pushed_revert"  # base에 든 revert를 reverted로 남긴다
+RECORD_EXTERNAL_REVERT = "record_external_revert"  # gs가 아닌 누군가의 revert를 reverted로 남긴다
+PUSH_REVERT = "push_revert"  # 만들어 둔 revert를 일반 push한다
+OPEN_REVERT_PR = "open_revert_pr"  # 만들어 둔 revert를 PR로 올린다
+# base를 검증하고 결과를 남긴다.
+RECORD_UNVERIFIED = "record_unverified"  # setup 실패: base_unverified, revert하지 않는다
+VERIFY_MAIN = "verify_main"  # 검증 로그 main
+RECHECK_MAIN = "recheck_main"  # 검증 로그 main-recheck
+RECORD_VERIFIED = "record_verified"
+CLOSE_REVERT_PR = "close_revert_pr"  # 재검증을 통과해 쓰지 않는 revert PR을 닫고 브랜치를 지운 뒤 verified로 끝낸다
+MAKE_REVERT_PUSH = "make_revert_push"  # base 끝 위에 revert를 새로 만들어 일반 push한다
+MAKE_REVERT_PR = "make_revert_pr"  # base 끝 위에 revert를 새로 만들어 PR로 올린다
+
+
+@dataclass(frozen=True)
+class Facts:
+    phase: str  # finish의 phase
+    direct_push: bool  # git.direct_push
+    has_revert: bool  # revert_sha가 있다
+    revert_head_matches: bool  # revert_head가 revert_sha와 같다: 그 커밋으로 revert 브랜치를 올린 적이 있다
+    revert_in_base: bool | None = None  # revert_sha가 원격 base의 조상이다
+    external_revert: bool | None = None  # 병합 커밋 뒤 base에 그 병합을 되돌린 커밋이 있다
+    revert_parent_is_tip: bool | None = None  # revert_sha의 부모가 원격 base의 끝이다
+    base_ready: bool | None = None  # 임시 worktree의 setup이 통과했다(setup이 없으면 True)
+    base_moved: bool = True  # 지난 main_head와 지금 base 끝이 다르다. 모르면 다시 검증한다
+    main_ok: bool | None = None  # 이번에 돈 base 검증의 결과. 돌리지 않았으면 None
+    revert_pushed: bool = False  # revert_head가 있다: revert 브랜치를 올린 적이 있어 그 PR이 남았을 수 있다
+    revert_pr_merged: bool | None = None  # 그 PR이 이미 병합됐다
+
+
+def next_step(f: Facts) -> str:
+    """위에서 아래로 처음 맞는 줄이 답이다. 순서가 곧 우선순위다."""
+    if f.phase == "verified":
+        return ALREADY_VERIFIED
+    if f.phase == "reverted":
+        return ALREADY_REVERTED
+    if f.revert_in_base is None or f.external_revert is None:
+        return READ_BASE
+    if f.revert_pushed:
+        if f.revert_pr_merged is None:
+            return READ_REVERT_PR
+        # 병합 직후 중단 포함. 그 병합이 base를 옮겼으니 재검증하지 않는다. squash면 revert_sha는 base에 들지 않으니 base 확인보다 먼저 본다.
+        if f.revert_pr_merged:
+            return REREAD_REVERT_PR
+    # 재검증은 이미 통과했다. 닫기만 다시 한다.
+    if f.phase == "revert_closing":
+        return CLOSE_REVERT_PR
+    # 승인 대기, PR 생성 응답 오류. base가 그대로면 지난 실패가 아직 맞으니 같은 PR을 기다린다.
+    if f.has_revert and f.revert_head_matches and not f.base_moved:
+        return REREAD_REVERT_PR
+    if f.has_revert and f.revert_in_base:
+        return RECORD_PUSHED_REVERT
+    # 같은 병합을 두 번 revert하지 않는다.
+    if f.external_revert:
+        return RECORD_EXTERNAL_REVERT
+    # 브랜치를 올렸으면 설정이 직접 push로 바뀌어도 그 PR을 갱신한다. 옛 revert PR을 열린 채 버려 두지 않는다.
+    via_pr = not f.direct_push or f.revert_pushed
+    if f.has_revert and not f.revert_head_matches:
+        if f.revert_parent_is_tip is None:
+            return READ_REVERT_PARENT
+        # revert push 직전에 중단됐고 base가 그대로다. 같은 커밋을 쓴다(두 번 revert하지 않는다).
+        if f.revert_parent_is_tip:
+            return OPEN_REVERT_PR if via_pr else PUSH_REVERT
+    if f.base_ready is None:
+        return PREPARE_BASE
+    if not f.base_ready:
+        return RECORD_UNVERIFIED
+    if f.main_ok is None:
+        if f.phase != "main_failed" and not f.revert_pushed:
+            return VERIFY_MAIN
+        # 실패 뒤 base가 움직였다(사람이 고쳤거나 그사이 push로 revert push가 거부됐다). 그대로면 지난 실패를 믿고 아래로 간다.
+        if f.base_moved:
+            return RECHECK_MAIN
+    if f.main_ok:
+        return CLOSE_REVERT_PR if f.revert_pushed else RECORD_VERIFIED
+    return MAKE_REVERT_PR if via_pr else MAKE_REVERT_PUSH

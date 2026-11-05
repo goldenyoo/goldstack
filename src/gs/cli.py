@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("go", help="티켓 실행·보고·PR 병합·main 재검증(실패하면 revert)")
     p.add_argument("feature", nargs="+", help=".goldstack/work/<feature>. 여러 개면 verified 뒤 차례로 실행")
-    p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다")
+    p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다. integration까지만 하고 병합하지 않는다(병합은 옵션 없는 gs go)")
 
     p = sub.add_parser("clean", help="feature의 worktree·로컬·원격 브랜치를 지운다(실행 기록은 남김)")
     p.add_argument("feature", help=".goldstack/work/<feature>")
