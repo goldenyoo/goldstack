@@ -469,7 +469,9 @@ def _render(r, summary: str, tail: int) -> str:
     summary_status = status_line(r)
     if counts := finding_counts(r):
         summary_status += f"\n{counts}"
-    text = (f"# {r.name} 결과\n\n## Summary\n\n{summary}\n\n{summary_status}\n\n"
+    missing_docs = docs_missing(r)
+    docs_notice = "".join(f"문서 미반영: {tid}\n\n" for tid in missing_docs)
+    text = (f"# {r.name} 결과\n\n{docs_notice}## Summary\n\n{summary}\n\n{summary_status}\n\n"
             f"## Evidence\n\n{verification_failure(r)}{evidence(r, tail)}\n"
             f"## Merge Danger\n\n결과: {f.get('outcome', f.get('phase', '준비'))}\n\n"
             f"PR: {f.get('url') or '아직 없음'}\n\n"
@@ -505,3 +507,21 @@ def _render(r, summary: str, tail: int) -> str:
              f"git -C \"$dir\" push {remote} HEAD:{shlex.quote('refs/heads/' + r.base)}\n"
              "git worktree remove \"$dir\"\n```\n")
     return text
+
+
+def docs_missing(r) -> list[str]:
+    """병합된 코드가 있지만 실패·건너뜀 문서 티켓이 있는지 ticket 선언 기준으로 찾는다."""
+    tickets = getattr(r.feat, "tickets", {})
+    merged = {tid for tid, ts in r.st.tickets.items() if ts.status == state.MERGED}
+    if not merged:
+        return []
+    missing = []
+    for tid, ticket in tickets.items():
+        ts = r.st.tickets.get(tid)
+        if ts is None or ts.status not in (state.FAILED, state.SKIPPED) or not (merged - {tid}):
+            continue
+        touches = getattr(ticket, "touches", [])
+        if any(path == "CHANGELOG.md" or path.startswith("docs/") or path.startswith("docs\\")
+               for path in touches):
+            missing.append(tid)
+    return missing
