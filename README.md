@@ -138,7 +138,7 @@ PR https://github.com/you/tally/pull/7
 | `gs doctor [--write]` | GitHub의 병합 방식, base 보호, 필수 승인, 필수 검사를 읽어 표와 맞는 config 줄을 보인다. 못 읽으면 `모름`. `--write`는 제안한 `git.merge_method`·`direct_push`·`wait_checks`만 config에 쓴다(`gs init` 끝에는 `--write` 없이 돈다). `worktree.setup`이 lockfile을 바꾸는 명령이면 `npm ci` 같은 명령을 권한다 | 레포에 들일 때, 저장소 설정이 바뀌었을 때 |
 | `gs config <섹션.키>` | 설정 값 한 줄(`gs config git.base` → `main`) | 값 확인, skill이 base를 읽을 때 |
 | `gs check <f> [--only 01,02]` | spec·티켓 그래프·config·CLI 검사. `touches` 겹침, agy 배정이 상한을 넘으면 경고 | grill 끝, `gs go` 전 |
-| `gs go <f> [--only 01,02]` | 티켓 실행 → 리뷰 → 수정·재리뷰(수정 최대 2회) → integration 병합·검증 → PR 병합 → main 재검증(실패하면 revert). 지난 마무리(승인·CI 대기 등)가 남았으면 그것만 끝내고 멈추고, 남은 티켓은 다음 `gs go`가 한다. 네트워크가 끊기면 기다렸다 잇고, 상한을 넘기면 `중단(네트워크)`(종료 코드 3)로 멈춘다. 다시 치면 같은 worktree에서 잇는다 | `/go`가 부른다 |
+| `gs go <f> [--only 01,02]` | `--only`는 그 티켓만 돌려 integration에 병합·검증한 뒤 멈춘다(PR·병합·최종 보고서 없음, 범위가 전체여도 같다. 병합은 옵션 없는 `gs go <f>`가 한다). 옵션 없이는 티켓 실행 → 리뷰 → 수정·재리뷰(수정 최대 2회) → integration 병합·검증 → PR 병합 → main 재검증(실패하면 revert). 지난 마무리(승인·CI 대기 등)가 남았으면 그것만 끝내고 멈추고, 남은 티켓은 다음 `gs go`가 한다. 네트워크가 끊기면 기다렸다 잇고, 상한을 넘기면 `중단(네트워크)`(종료 코드 3)로 멈춘다. 다시 치면 같은 worktree에서 잇는다 | `/go`가 부른다 |
 | `gs go <a> <b> …` | 여러 feature를 차례로. 앞 것이 `verified`가 아니면 거기서 멈춘다. `--only`와 함께 못 쓴다 | 이어 돌릴 feature가 여럿일 때 |
 | `gs clean <f> [--force]` | 그 feature의 worktree(`run/wt/*`)와 `gs/<f>/*` 브랜치(로컬·원격)를 지운다. 실행 기록은 남긴다 | 끝난 feature의 남은 흔적(실패 worktree, 옛 integration 브랜치)을 치울 때 |
 | `gs status [<f>]` | 실행 상태 표와 진행 줄(읽기 전용) | 실행 중 언제든 |

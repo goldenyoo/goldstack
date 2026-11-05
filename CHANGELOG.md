@@ -2,8 +2,19 @@
 
 ## 미출시
 
-- 시험이 실제 `claude`·`codex`·`agy`에 기대지 않게 고쳤다. 이 CLI가 없는 리눅스 CI에서도 전체 시험이 돈다.
+### goldstack-v10
+
+- `gs go --only`는 범위가 전체여도 병합하지 않고 integration 검증까지만 하고 멈춘다. 병합은 옵션 없는 `gs go`가 하며, 반쪽 기능이 main에 들어가거나 보고서에서 앞서 돌린 티켓이 빠지는 일이 없어졌다.
+- 보호된 base에서 되돌리기 PR이 승인을 기다리는 동안 base가 바뀌면 최신 base를 다시 검증한다. 통과하면 gs가 그 PR을 닫고 브랜치를 지우며, 실패하면 최신 base 위에 되돌리기를 다시 만든다.
+- `finish._postmerge`의 되돌리기 판단을 순수 함수 모듈 `revert_decision.py`로 분리했다(동작 그대로).
+- agy worker의 `grep_search`·`find_by_name`·`list_dir`을 `Grep`·`Glob`으로 번역해 비밀 파일 재귀 검사를 받게 했다. 실제 agy 이벤트로 확인하지 않았다.
+- worker 지시문, 리뷰 지시문, codex 안내가 sandbox 면책(네트워크·localhost·홈 디렉터리 쓰기)을 하나로 말한다.
 - 리뷰어가 worker의 마지막 메시지(`worker-last.txt`, 4,000자 상한)를 믿을 수 없는 자료로 읽고, worker가 시험을 못 돌렸다는 사유가 맞는지 확인한다.
+- 문서가 비밀 차단의 실제 범위를 적는다: claude·agy는 hook이 막고, codex worker는 sandbox가 쓰기와 네트워크만 막아 비밀 파일 읽기는 막지 못한다.
+
+### 그 밖의 변경
+
+- 시험이 실제 `claude`·`codex`·`agy`에 기대지 않게 고쳤다. 이 CLI가 없는 리눅스 CI에서도 전체 시험이 돈다.
 
 ## 0.1.0 — 2026-11-05
 
