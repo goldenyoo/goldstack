@@ -150,7 +150,7 @@ fi
         self.assertFalse(any(x.startswith("pr merge ") for x in self.lines("gh.log")))
         self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), initial)
         self.assertIn("merged 티켓 없음", self.final_report())
-        self.assertIn("| 02 | t02 | failed | worker 종료 코드 1 |", self.final_report())
+        self.assertRegex(self.final_report(), r"\| 02 \| t02 \| failed \| worker 종료 코드 1(?:<br>| \|)")
         self.assertIn("| 03 | t03 | skipped | 막힘: 02 |", self.final_report())
         self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
 

@@ -65,6 +65,8 @@ class Base(unittest.TestCase):
         """부를 때마다 회차 n을 세는 가짜 CLI. 인자·stdin은 시험이 볼 수 있게 남긴다."""
         path = self.bin / name
         path.write_text('#!/bin/bash\nhere="$HERE"\n'
+                        # 플러그인 조회는 모델 호출·재시도 횟수에 포함하지 않는다.
+                        'if [ "$1 $2 $3" = "plugin list --json" ]; then echo "[]"; exit 0; fi\n'
                         f'n=$(( $(cat "$here/n_{name}" 2>/dev/null || echo 0) + 1 )); echo $n > "$here/n_{name}"\n'
                         f'echo "$@" > "$here/args_{name}"\n' + textwrap.dedent(body))
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
