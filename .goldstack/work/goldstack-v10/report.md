@@ -24,7 +24,7 @@ v10은 의도하지 않은 병합과 옛 되돌리기 병합을 막고, 비밀 �
 - **codex worker 비밀 읽기:** 결정대로 문서만 고쳤고 차단 hook은 넣지 않았습니다. 사전 측정에서 sandbox 안의 `cat`으로 `.goldstack/local.env`를 읽을 수 있었으며, 이 한계는 그대로입니다.
 - **되돌리기 PR 닫기:** 입력 자료의 재현은 가짜 git과 PR로 돌렸고, 실제 GitHub에서 돈 기록은 없습니다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/17 병합 · main 검증 통과
 리뷰 지적: 수정됨 8 · 보고만 3
 
 ## Evidence
@@ -108,15 +108,22 @@ gs 검증별 측정
 | ticket-02/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | c5ccf1985118327d8c4a745b2c729d9d523f7c6b | 389.192206 | passed |
 | ticket-07/1 | uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate . | f132137758c1f7b1c73399c3a6879556e3f6b184 | 0.781798 | passed |
 | integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 4868f749d1a642289f7ab4cec47e474195873198 | 399.089663 | passed |
+| main/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 032aba0a6c32643859678498fe59bd15e55738b5 | 420.911099 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 433.0 |
-| verify | 399.154 |
+| total | 868.0 |
+| verify | 820.149 |
 | summary | 34.216 |
-| report | 0 |
+| report | 0.176 |
+| push | 3.942 |
+| publish | 3.484 |
+| merge-pr | 3.865 |
+| confirm-merge | 0.004 |
+| postmerge | 421.989 |
+| restore-reverts | 0.018 |
 
 ### 티켓별 결과
 
@@ -189,91 +196,10 @@ unittest.TextTestRunner().run(ReproTest())'` → 결과: `FINISH: reverted main 
 
 #### 01/1/verify.log
 
-앞 7824자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/01/1/verify.log`
+앞 10824자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/01/1/verify.log`
 
 ```text
-n 8 tests in 11.754s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 3 tests in 0.010s
-
-OK
-.............
-----------------------------------------------------------------------
-Ran 13 tests in 0.056s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.059s
-
-OK
-..
-----------------------------------------------------------------------
-Ran 4 tests in 6.598s
-
-OK
-.........................................
-----------------------------------------------------------------------
-Ran 23 tests in 135.153s
-
-OK
-.....
-----------------------------------------------------------------------
-Ran 4 tests in 1.222s
-
-OK
-............
-----------------------------------------------------------------------
-Ran 37 tests in 124.434s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 28 tests in 64.414s
-
-OK
-.....
-----------------------------------------------------------------------
-Ran 15 tests in 73.470s
-
-OK
-..........
-----------------------------------------------------------------------
-Ran 13 tests in 42.589s
-
-OK
-........................................
-----------------------------------------------------------------------
-Ran 70 tests in 48.575s
-
-OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/marketplace.json
-
-⚠ Found 1 warning:
-
-  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
-
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/plugin.json
-
-  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
-  ❯ types ./types/index.d.ts declares state: goldstack.line
-
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/hooks/hooks.json
-
-  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
-  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
-  ❯ ./register.tsx state writes: goldstack.line
-  ❯ ./register.tsx state reads: goldstack.line
-
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
-
-⚠ Found 1 plugin directory warning:
-
-  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
-    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+2 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
 About these checks:
 
@@ -289,89 +215,10 @@ The directory also runs a safety scan and a policy review that this command does
 
 #### 02/1/fix/verify.log
 
-앞 8111자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/02/1/fix/verify.log`
+앞 11111자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/02/1/fix/verify.log`
 
 ```text
-K
-.............
-----------------------------------------------------------------------
-Ran 13 tests in 0.056s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.059s
-
-OK
-..........
-----------------------------------------------------------------------
-Ran 4 tests in 6.612s
-
-OK
-......................................
-----------------------------------------------------------------------
-Ran 37 tests in 129.295s
-
-OK
-.............
-----------------------------------------------------------------------
-Ran 15 tests in 75.533s
-
-OK
-......
-----------------------------------------------------------------------
-Ran 4 tests in 1.213s
-
-OK
-.............
-----------------------------------------------------------------------
-Ran 20 tests in 6.958s
-
-OK
-.
-----------------------------------------------------------------------
-Ran 28 tests in 65.304s
-
-OK
-...........
-----------------------------------------------------------------------
-Ran 13 tests in 43.009s
-
-OK
-.................................................
-----------------------------------------------------------------------
-Ran 70 tests in 49.271s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 37 tests in 238.978s
-
-OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/marketplace.json
-
-⚠ Found 1 warning:
-
-  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
-
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/plugin.json
-
-  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
-  ❯ types ./types/index.d.ts declares state: goldstack.line
-
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/hooks/hooks.json
-
-  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
-  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
-  ❯ ./register.tsx state writes: goldstack.line
-  ❯ ./register.tsx state reads: goldstack.line
-
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
-
-⚠ Found 1 plugin directory warning:
-
-  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
-    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+2 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
 About these checks:
 
@@ -387,91 +234,10 @@ The directory also runs a safety scan and a policy review that this command does
 
 #### 03/1/fix/verify.log
 
-앞 7946자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/03/1/fix/verify.log`
+앞 10946자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/03/1/fix/verify.log`
 
 ```text
-tests in 12.224s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.010s
-
-OK
-..............
-----------------------------------------------------------------------
-Ran 13 tests in 0.057s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.060s
-
-OK
-.
-----------------------------------------------------------------------
-Ran 4 tests in 6.612s
-
-OK
-.......................................................
-----------------------------------------------------------------------
-Ran 37 tests in 127.128s
-
-OK
-.......
-----------------------------------------------------------------------
-Ran 4 tests in 1.227s
-
-OK
-.
-----------------------------------------------------------------------
-Ran 23 tests in 138.689s
-
-OK
-........
-----------------------------------------------------------------------
-Ran 28 tests in 66.356s
-
-OK
-.....
-----------------------------------------------------------------------
-Ran 15 tests in 75.814s
-
-OK
-......
-----------------------------------------------------------------------
-Ran 13 tests in 45.203s
-
-OK
-........................................
-----------------------------------------------------------------------
-Ran 70 tests in 51.252s
-
-OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/marketplace.json
-
-⚠ Found 1 warning:
-
-  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
-
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/plugin.json
-
-  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
-  ❯ types ./types/index.d.ts declares state: goldstack.line
-
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/hooks/hooks.json
-
-  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
-  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
-  ❯ ./register.tsx state writes: goldstack.line
-  ❯ ./register.tsx state reads: goldstack.line
-
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
-
-⚠ Found 1 plugin directory warning:
-
-  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
-    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+2 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
 About these checks:
 
@@ -487,91 +253,10 @@ The directory also runs a safety scan and a policy review that this command does
 
 #### 04/1/fix/verify.log
 
-앞 7927자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/04/1/fix/verify.log`
+앞 10927자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/04/1/fix/verify.log`
 
 ```text
-s in 6.664s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.019s
-
-OK
-.............
-----------------------------------------------------------------------
-Ran 13 tests in 0.092s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 3 tests in 0.160s
-
-OK
-.......
-----------------------------------------------------------------------
-Ran 8 tests in 20.310s
-
-OK
-.............................................
-----------------------------------------------------------------------
-Ran 23 tests in 222.511s
-
-OK
-.....
-----------------------------------------------------------------------
-Ran 4 tests in 1.339s
-
-OK
-..........
-----------------------------------------------------------------------
-Ran 37 tests in 210.032s
-
-OK
-.....
-----------------------------------------------------------------------
-Ran 28 tests in 107.876s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 15 tests in 124.481s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 13 tests in 69.900s
-
-OK
-..............................................
-----------------------------------------------------------------------
-Ran 70 tests in 77.066s
-
-OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/marketplace.json
-
-⚠ Found 1 warning:
-
-  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
-
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/plugin.json
-
-  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
-  ❯ types ./types/index.d.ts declares state: goldstack.line
-
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/hooks/hooks.json
-
-  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
-  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
-  ❯ ./register.tsx state writes: goldstack.line
-  ❯ ./register.tsx state reads: goldstack.line
-
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
-
-⚠ Found 1 plugin directory warning:
-
-  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
-    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+2 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
 About these checks:
 
@@ -587,89 +272,10 @@ The directory also runs a safety scan and a policy review that this command does
 
 #### 05/1/verify.log
 
-앞 8065자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/05/1/verify.log`
+앞 11065자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/05/1/verify.log`
 
 ```text
-OK
-.............
-----------------------------------------------------------------------
-Ran 13 tests in 0.056s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.058s
-
-OK
-..
-----------------------------------------------------------------------
-Ran 4 tests in 6.632s
-
-OK
-..........................................................
-----------------------------------------------------------------------
-Ran 37 tests in 122.088s
-
-OK
-...........
-----------------------------------------------------------------------
-Ran 23 tests in 132.248s
-
-OK
-.....
-----------------------------------------------------------------------
-Ran 4 tests in 1.221s
-
-OK
-................
-----------------------------------------------------------------------
-Ran 20 tests in 6.880s
-
-OK
-..
-----------------------------------------------------------------------
-Ran 28 tests in 63.554s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 15 tests in 72.504s
-
-OK
-......
-----------------------------------------------------------------------
-Ran 13 tests in 43.323s
-
-OK
-........................................
-----------------------------------------------------------------------
-Ran 70 tests in 49.421s
-
-OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/marketplace.json
-
-⚠ Found 1 warning:
-
-  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
-
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/plugin.json
-
-  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
-  ❯ types ./types/index.d.ts declares state: goldstack.line
-
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/hooks/hooks.json
-
-  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
-  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
-  ❯ ./register.tsx state writes: goldstack.line
-  ❯ ./register.tsx state reads: goldstack.line
-
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
-
-⚠ Found 1 plugin directory warning:
-
-  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
-    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+2 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
 About these checks:
 
@@ -685,91 +291,10 @@ The directory also runs a safety scan and a policy review that this command does
 
 #### 06/1/fix/verify.log
 
-앞 7715자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/06/1/fix/verify.log`
+앞 10715자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/06/1/fix/verify.log`
 
 ```text
-86s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.168s
-
-OK
-.............
-----------------------------------------------------------------------
-Ran 13 tests in 0.525s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 3 tests in 0.345s
-
-OK
-..............
-----------------------------------------------------------------------
-Ran 8 tests in 29.900s
-
-OK
-.....................................................
-----------------------------------------------------------------------
-Ran 23 tests in 310.097s
-
-OK
-.....
-----------------------------------------------------------------------
-Ran 4 tests in 2.249s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 37 tests in 278.504s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 28 tests in 159.930s
-
-OK
-.
-----------------------------------------------------------------------
-Ran 15 tests in 181.190s
-
-OK
-....
-----------------------------------------------------------------------
-Ran 13 tests in 106.389s
-
-OK
-...............................................
-----------------------------------------------------------------------
-Ran 70 tests in 115.103s
-
-OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/marketplace.json
-
-⚠ Found 1 warning:
-
-  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
-
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/plugin.json
-
-  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
-  ❯ types ./types/index.d.ts declares state: goldstack.line
-
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/hooks/hooks.json
-
-  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
-  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
-  ❯ ./register.tsx state writes: goldstack.line
-  ❯ ./register.tsx state reads: goldstack.line
-
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
-
-⚠ Found 1 plugin directory warning:
-
-  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
-    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+2 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
 About these checks:
 
@@ -785,38 +310,10 @@ The directory also runs a safety scan and a policy review that this command does
 
 #### 07/1/fix/verify.log
 
+앞 2045자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/07/1/fix/verify.log`
+
 ```text
-$ uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate .
-cwd: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration
-....................
-----------------------------------------------------------------------
-Ran 20 tests in 0.045s
-
-OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/marketplace.json
-
-⚠ Found 1 warning:
-
-  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
-
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/plugin.json
-
-  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
-  ❯ types ./types/index.d.ts declares state: goldstack.line
-
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/hooks/hooks.json
-
-  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
-  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
-  ❯ ./register.tsx state writes: goldstack.line
-  ❯ ./register.tsx state reads: goldstack.line
-
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
-
-⚠ Found 1 plugin directory warning:
-
-  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
-    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+2 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
 About these checks:
 
@@ -830,90 +327,41 @@ The directory also runs a safety scan and a policy review that this command does
 ✔ Validation passed with warnings
 ```
 
-#### finish/integration-verify.log
+integration-final: 보고서만 바뀜, 건너뜀
 
-앞 8078자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/finish/integration-verify.log`
+#### finish/integration-final-verify.log
 
 ```text
-......
-----------------------------------------------------------------------
-Ran 13 tests in 0.062s
+integration-final: 보고서만 바뀜, 건너뜀
+```
 
-OK
-....
-----------------------------------------------------------------------
-Ran 3 tests in 0.065s
+#### finish/integration-verify.log
 
-OK
-.......
-----------------------------------------------------------------------
-Ran 4 tests in 6.642s
+앞 11078자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/finish/integration-verify.log`
 
-OK
-........................................
-----------------------------------------------------------------------
-Ran 37 tests in 129.803s
+```text
+px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
-OK
-...........
-----------------------------------------------------------------------
-Ran 15 tests in 76.958s
+About these checks:
 
-OK
-.....
-----------------------------------------------------------------------
-Ran 4 tests in 1.258s
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
 
-OK
-......
-----------------------------------------------------------------------
-Ran 28 tests in 67.186s
+These plugin directory checks do not change the result below.
 
-OK
-..........
-----------------------------------------------------------------------
-Ran 20 tests in 7.233s
+The directory also runs a safety scan and a policy review that this command does not.
 
-OK
-...........
-----------------------------------------------------------------------
-Ran 13 tests in 44.450s
+✔ Validation passed with warnings
 
-OK
-.................................................
-----------------------------------------------------------------------
-Ran 70 tests in 51.208s
+종료 코드: 0
+```
 
-OK
-....
-----------------------------------------------------------------------
-Ran 37 tests in 245.277s
+#### finish/main-verify.log
 
-OK
-Validating marketplace manifest: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/marketplace.json
+앞 11442자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/finish/main-verify.log`
 
-⚠ Found 1 warning:
-
-  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
-
-Validating plugin: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/.claude-plugin/plugin.json
-
-  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
-  ❯ types ./types/index.d.ts declares state: goldstack.line
-
-Validating hooks: /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration/hooks/hooks.json
-
-  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
-  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
-  ❯ ./register.tsx state writes: goldstack.line
-  ❯ ./register.tsx state reads: goldstack.line
-
-Plugin directory checks for /Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v10/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
-
-⚠ Found 1 plugin directory warning:
-
-  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
-    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+```text
+px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
 
 About these checks:
 
@@ -934,13 +382,15 @@ agy 사용: 2/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/17
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `032aba0a6c32643859678498fe59bd15e55738b5`
 
 ### 되돌리는 법
 
@@ -950,7 +400,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 032aba0a6c32643859678498fe59bd15e55738b5
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v10/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
