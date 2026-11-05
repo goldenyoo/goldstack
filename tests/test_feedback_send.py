@@ -32,7 +32,9 @@ if args[:2] == ['issue', 'list']:
         print('secret auth failure', file=sys.stderr)
         sys.exit(1)
     issues = json.loads((root / 'issues').read_text()) if (root / 'issues').exists() else []
-    print(json.dumps([i for i in issues if value('--search') in i['body'] and not i.get('closed')]))
+    for issue in issues:
+        issue['state'] = 'CLOSED' if issue.get('closed') else 'OPEN'
+    print(json.dumps([i for i in issues if value('--search') in i['body'] and (value('--state') == 'all' or not i.get('closed'))]))
 elif args[:2] == ['label', 'list']:
     print(os.environ.get('FAKE_LABELS', '[]'))
 elif args[:2] == ['label', 'create']:
@@ -45,6 +47,16 @@ elif args[:2] == ['issue', 'create']:
     issues.append({'number': number, 'body': value('--body')})
     (root / 'issues').write_text(json.dumps(issues))
     print('https://github.com/owner/inbox/issues/' + str(number))
+elif args[:2] == ['issue', 'view']:
+    issues = json.loads((root / 'issues').read_text())
+    issue = next(i for i in issues if str(i['number']) == args[2])
+    print(json.dumps({'comments': issue.get('comments', [])}))
+elif args[:2] == ['issue', 'reopen']:
+    if os.environ.get('FAKE_FAIL') == 'reopen':
+        sys.exit(1)
+    issues = json.loads((root / 'issues').read_text())
+    next(i for i in issues if str(i['number']) == args[2])['closed'] = False
+    (root / 'issues').write_text(json.dumps(issues))
 elif args[:2] == ['issue', 'comment']:
     sys.exit(1 if os.environ.get('FAKE_FAIL') == 'comment' else 0)
 else:
@@ -145,6 +157,113 @@ class FeedbackSendTest(unittest.TestCase):
         self.assertEqual(self.send(), 1)
         self.assertEqual(len(self.calls('issue', 'create')), 1)
         self.assertEqual(self.calls('issue', 'comment'), [])
+
+    def closed_issue(self, version='0.1.0', *, observed='0.1.0'):
+        with mock.patch('gs.feedback.environment', return_value=dataclasses.replace(ENV, gs_version=observed)), \
+                mock.patch('gs.feedback.metadata.version', return_value=observed):
+            path = self.record()
+        draft = feedback.read_draft(path, self.cfg)
+        (self.repo / 'issues').write_text(json.dumps([{
+            'number': 12, 'body': draft.body, 'closed': True,
+            'comments': [{'body': f'{version}에서 고침 ({"a" * 40})'}]}]))
+        return path
+
+    def test_closed_issue_reopens_on_newer_gs_with_safe_count_and_daily_cap(self):
+        path = self.closed_issue(observed='0.2.0')
+        self.cfg = dataclasses.replace(self.cfg, feedback=dataclasses.replace(self.cfg.feedback, max_per_day=1))
+        with mock.patch('gs.feedback.metadata.version', return_value='0.2.0'):
+            self.assertEqual(self.send(), 1)
+            self.record()
+            self.assertEqual(self.send(), 0)
+        self.assertEqual(len(self.calls('issue', 'reopen')), 1)
+        comment, = self.calls('issue', 'comment')
+        self.assertEqual(comment[2], '12')
+        body = comment[comment.index('--body') + 1]
+        self.assertIn('- 횟수: 1', body)
+        self.assertIn('- 이번 추가: 1', body)
+        self.assertNotIn('ghp_SUPERSECRET', body)
+        self.assertNotIn(str(self.repo), body)
+        self.assertEqual(self.calls('issue', 'create'), [])
+        self.assertEqual(feedback.read_draft(path, self.cfg).meta['sent_count'], '1')
+
+    def test_closed_issue_on_old_or_same_gs_only_guides_update(self):
+        path = self.closed_issue('0.10.0')
+        before = path.read_bytes()
+        for current in ('0.2.0', '0.10.0', '0.11.0'):
+            with self.subTest(current=current), mock.patch('gs.feedback.metadata.version', return_value=current):
+                self.assertEqual(self.send(), 0)
+                self.assertIn('gs self-update', self.err.getvalue())
+        self.assertEqual(self.calls('issue', 'reopen'), [])
+        self.assertEqual(self.calls('issue', 'comment'), [])
+        self.assertEqual(self.calls('issue', 'create'), [])
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_closed_issue_same_observed_version_stays_closed_after_update(self):
+        path = self.closed_issue('0.1.0')
+        before = path.read_bytes()
+        with mock.patch('gs.feedback.metadata.version', return_value='0.3.0'):
+            self.assertEqual(self.send(), 0)
+        self.assertEqual(self.calls('issue', 'reopen'), [])
+        self.assertEqual(self.calls('issue', 'comment'), [])
+        self.assertEqual(self.calls('issue', 'create'), [])
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_closed_issue_unknown_observed_version_creates_new_issue(self):
+        self.closed_issue('0.1.0', observed='모름')
+        with mock.patch('gs.feedback.metadata.version', return_value='0.3.0'):
+            self.assertEqual(self.send(), 1)
+        self.assertEqual(len(self.calls('issue', 'create')), 1)
+        self.assertEqual(self.calls('issue', 'reopen'), [])
+        self.assertEqual(self.calls('issue', 'comment'), [])
+
+    def test_deferred_old_counts_do_not_reopen_after_update(self):
+        path = self.closed_issue('0.0.1')
+        self.assertEqual(self.send(), 1)
+        with mock.patch('gs.feedback.metadata.version', return_value=ENV.gs_version):
+            self.record()
+        self.assertEqual(self.send(), 0)  # 오늘 이미 댓글을 달아 한 건이 남는다
+        issues = json.loads((self.repo / 'issues').read_text())
+        issues[0]['closed'] = True
+        issues[0]['comments'].append({'body': f'0.2.0에서 고침 ({"b" * 40})'})
+        (self.repo / 'issues').write_text(json.dumps(issues))
+        before = path.read_bytes()
+        self.tomorrow()
+        with mock.patch('gs.feedback.metadata.version', return_value='0.3.0'):
+            self.assertEqual(self.send(), 0)
+        self.assertEqual(len(self.calls('issue', 'reopen')), 1)
+        self.assertEqual(len(self.calls('issue', 'comment')), 1)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_closed_issue_unknown_fixed_version_creates_safe_new_issue(self):
+        self.closed_issue('demo')
+        self.assertEqual(self.send(), 1)
+        create, = self.calls('issue', 'create')
+        body = create[create.index('--body') + 1]
+        self.assertNotIn('ghp_SUPERSECRET', body)
+        self.assertNotIn(str(self.repo), body)
+        self.assertEqual(self.calls('issue', 'reopen'), [])
+        self.assertEqual(self.calls('issue', 'comment'), [])
+
+    def test_closed_issue_uses_last_fix_and_open_issue_takes_priority(self):
+        self.closed_issue('0.1.0')
+        issues = json.loads((self.repo / 'issues').read_text())
+        issues[0]['comments'].append({'body': f'0.3.0에서 고침 ({"b" * 40})'})
+        (self.repo / 'issues').write_text(json.dumps(issues))
+        with mock.patch('gs.feedback.metadata.version', return_value='0.2.0'):
+            self.assertEqual(self.send(), 0)
+        issues.append({'number': 13, 'body': issues[0]['body']})
+        (self.repo / 'issues').write_text(json.dumps(issues))
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(self.calls('issue', 'comment')[0][2], '13')
+        self.assertEqual(self.calls('issue', 'reopen'), [])
+
+    def test_failed_reopen_keeps_draft_and_quota_for_retry(self):
+        path = self.closed_issue('0.0.1')
+        with mock.patch.dict(os.environ, {'FAKE_FAIL': 'reopen'}):
+            self.assertEqual(self.send(), 0)
+        self.assertNotIn('sent_count', feedback.read_draft(path, self.cfg).meta)
+        self.assertEqual(self.calls('issue', 'comment'), [])
+        self.assertEqual(self.send(), 1)
 
     def test_daily_cap_persists_and_deferred_drafts_send_tomorrow(self):
         self.cfg = dataclasses.replace(self.cfg, feedback=dataclasses.replace(self.cfg.feedback, max_per_day=1))
