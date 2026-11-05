@@ -96,6 +96,7 @@ class Run:
     ihead: str = ""  # gs가 아는 integration 끝. 병합할 때만 움직인다
     saved: float = 0.0  # 마지막 save()의 time.monotonic(). heartbeat가 본다
     history_median_s: float | None = None  # 실행 시작에 한 번 읽은 다른 feature의 ETA 표본 중앙값
+    finish_median_s: float | None = None  # 실행 시작에 한 번 읽은 다른 feature의 마무리 시간 중앙값
     net: Outage | None = None  # 지금의 네트워크 끊김. _loop가 새로 만든다: 대기 합계는 gs go마다 새로 센다
     reviews: Reviews | None = None  # 루프 밖 리뷰. _loop가 만든다
     no_merge: bool = False  # 지난 마무리를 회복하지 않는 --only 실행이다. 마무리 없이 멈추고, 지난 마무리의 기록을 이번 결과로 보이지 않는다
@@ -130,7 +131,7 @@ class Run:
         self.st.progress = state.calculate_progress(
             self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
             models={tid: self.feat.tickets[tid].model for tid in self.order},
-            history_median_s=self.history_median_s)
+            history_median_s=self.history_median_s, deps=self.g, finish_median_s=self.finish_median_s)
         state.save(self.rundir, self.st)
         self.saved = time.monotonic()
 
@@ -326,6 +327,7 @@ def _begin(r: Run) -> None:
     r.st = st
     metrics.runtime(r)
     r.history_median_s = state.load_eta_history(r.repo, r.name)
+    r.finish_median_s = state.load_finish_history(r.repo, r.name)
     r.save()
 
 
