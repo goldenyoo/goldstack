@@ -260,6 +260,34 @@ class SeatsTest(Base):
                          ["worker", "review", "fix_wait", "fix", "rereview", "verify", "finish"])
         self.assertEqual(self.ts("11").review["findings"][0]["rereview"], review.RESOLVED)
 
+    def test_review_finished_before_a_merge_gets_the_free_seat_before_a_new_ticket(self):
+        # 11 병합, 12 리뷰 끝남(지적 있음), 14 대기. 13은 자리 하나를 붙잡고 있어 남은 자리는 하나뿐이다
+        self.setup_tickets(2, "11", "12", "13", "14", deps={"14": '["11"]'})
+        self.answer_file("review_12", findings=[finding("FIX A: 값이 틀렸다")])
+        self.answer_file("rereview_12", verdicts=[{"id": 1, "status": "resolved", "evidence": "확인"}], findings=[])
+        self.hook("review_11", 'await "$here/events.log" "^review 12$"\n')
+        self.hook("review_12", 'await "$here/events.log" "^review 11$"\n')
+        self.hook("start_13", textwrap.dedent("""\
+            for i in $(seq 3000); do grep -qE '^(fix 12|start 14)$' "$here/events.log" && break; sleep 0.02; done
+            grep -qE '^(fix 12|start 14)$' "$here/events.log" || echo "seat" >> "$here/timeouts"
+        """))
+        real = go._merge_stage
+
+        def merge(r, a):  # 11을 병합하기 전에 두 리뷰가 모두 끝난다: 병합이 돌아간 뒤 12의 결과는 거두지 않은 채 끝나 있다
+            if a.t.id == "11":
+                for _ in range(3000):
+                    if sum(line.startswith("review-end") for line in self.events()) == 2:
+                        break
+                    threading.Event().wait(0.01)
+            return real(r, a)
+
+        with mock.patch.object(go, "_merge_stage", merge):
+            code, out, err = self.go(*self.only("11", "12", "13", "14"))
+        self.assertEqual(code, 0, out + err)
+        self.assert_no_timeouts()
+        self.assertEqual(self.merged(), ["11", "12", "13", "14"])
+        self.before("fix 12", "start 14")  # 빈 자리는 수정 worker가 새 티켓보다 먼저 얻는다
+
 
 class SeatRulesTest(unittest.TestCase):
     def reviews(self, *tickets):
@@ -276,6 +304,13 @@ class SeatRulesTest(unittest.TestCase):
     def test_new_tickets_wait_only_for_a_fix_worker_that_has_something_to_fix(self):
         self.assertFalse(self.reviews(go.Reviewing(None), go.Reviewing(None, finished=True)).fix_waiting())
         self.assertTrue(self.reviews(go.Reviewing(None, finished=True, todo=[{"id": 1}])).fix_waiting())
+
+    def test_a_finished_call_not_yet_collected_may_have_something_to_fix(self):
+        done, running = Future(), Future()
+        done.set_result([])
+        self.addCleanup(running.cancel)
+        self.assertTrue(self.reviews(go.Reviewing(None, future=done)).fix_waiting())
+        self.assertFalse(self.reviews(go.Reviewing(None, future=running)).fix_waiting())
 
 
 class LoopThreadOnlyTest(Base):
@@ -936,6 +971,47 @@ class OutageDuringReviewTest(support.GoTest):
         self.assertNotEqual(sh(self.repo, "git", "log", "-1", "--format=%s", first), "late")
         self.assertEqual(ts.review["reviewed_head"], second)
         self.assertIn("병합 전 대조", out)
+
+    def test_second_review_waits_for_the_outage_and_reviews_the_latest_head(self):
+        # 11의 첫 리뷰가 끝나기 전에 커밋이 생긴다. 끝난 결과는 끊김 중에 받지 않고(단계는 network), 끊김이 끝난 뒤 최신 head를 리뷰한다
+        self.fake("claude", AWAIT + textwrap.dedent(f"""\
+            status="$GS_WORKTREE/../../state.json"
+            case "$GS_TICKET" in
+              12) if [ "$n" = 1 ]; then await "$here/reviewing" up; echo '{test_network_wait.ERROR_RESULT}'; exit 1; fi
+                  git -C "$GS_WORKTREE/../11" commit -q --allow-empty -m early
+                  echo ok > "$here/early_done"
+                  for i in $(seq 3000); do [ "$(grep -c '"phase": "network"' "$status")" -ge 2 ] && break; sleep 0.02; done
+                  [ "$(grep -c '"phase": "network"' "$status")" -ge 2 ] || echo network >> "$here/timeouts"
+                  git -C "$GS_WORKTREE/../11" commit -q --allow-empty -m late
+                  git -C "$GS_WORKTREE/../11" rev-parse HEAD > "$here/late_11" ;;
+            esac
+            echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
+        """))
+        (self.bin / "reviewer.sh").write_text('here="$(dirname "$0")"\n' + AWAIT + textwrap.dedent("""\
+            cat > /dev/null
+            if [ "$(basename "$PWD")" = 11 ]; then
+              git rev-parse HEAD >> "$here/reviewed_11"
+              if [ ! -f "$here/reviewing" ]; then
+                echo up > "$here/reviewing"
+                await "$PWD/../../state.json" '네트워크 대기'
+                await "$here/early_done" ok
+              fi
+            fi
+            echo '{"findings": []}'
+        """))
+        self.tickets({"11": ticket("11"), "12": ticket("12")}, spec_workers=2)
+        code, out, err = self.go("--only", "11,12")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("timeouts"), [])
+        self.assertEqual(self.merged(), ["11", "12"])
+        ts = state.load(self.rundir, "demo").tickets["11"]
+        self.assertEqual([p["phase"] for p in ts.phases], ["worker", "review", "network", "review", "verify", "finish"])
+        first, second = self.lines("reviewed_11")
+        [late] = self.lines("late_11")
+        self.assertEqual(second, late)  # 끊김 중에 준비하지 않아 그사이 들어온 커밋까지 본다
+        self.assertNotEqual(first, late)
+        self.assertEqual(ts.review["reviewed_head"], late)
+        self.assertNotIn("리뷰하지 못했다", out)
 
 
 class CallWaitOffLoopTest(unittest.TestCase):
