@@ -25,7 +25,7 @@ GUIDE = "docs/guide.md의 tmux 절"
 PROBE = r'''
 import json, os, shutil, subprocess, sys
 from pathlib import Path
-repo, commit, minimum = sys.argv[1:]
+repo, commit, minimum, remote = sys.argv[1:]
 p = Path(repo).expanduser()
 valid = p.is_dir() and (p / '.git').exists()
 cwd = str(p) if valid else None
@@ -81,7 +81,7 @@ result['grill'] = False
 if valid and commit:
     result['grill'] = (run(['git', 'cat-file', '-e', commit + '^{commit}'])[0]
                        or run(['git', '-c', 'credential.interactive=false',
-                               'fetch', '--dry-run', 'origin', commit])[0])
+                               'fetch', '--dry-run', remote, commit])[0])
 print(json.dumps(result), flush=True)
 '''
 
@@ -100,7 +100,8 @@ def grill_commit(repo: Path) -> str:
     return cp.stdout.strip() if cp.returncode == 0 else ""
 
 
-def probe(machine: str, repo_path: str, commit: str, timeout: float = TIMEOUT) -> dict:
+def probe(machine: str, repo_path: str, commit: str, timeout: float = TIMEOUT, *,
+          git_remote: str = "origin") -> dict:
     """workspace/pane으로 검사하고 고유한 끝 줄까지 기다린다. 모든 herdr 호출에 제한 시간이 있다."""
     deadline = time.monotonic() + timeout
     prefix = [herdr.bin(), "--machine", machine]
@@ -129,17 +130,29 @@ def probe(machine: str, repo_path: str, commit: str, timeout: float = TIMEOUT) -
         raise herdr.HerdrError("remote", "workspace 응답에 root_pane.pane_id가 없다")
     token = uuid.uuid4().hex
     start, end = f"GS_CHECK_START_{token}", f"GS_CHECK_END_{token}"
-    # macOS 터미널의 canonical 입력 한도 안에 들게 한 줄로 압축한다.
-    packed = base64.b64encode(zlib.compress(PROBE.encode())).decode()
-    script = f"import base64,zlib;exec(zlib.decompress(base64.b64decode({packed!r})))"
-    command = ("printf '\\n%s\\n' " + shlex.quote(start) + "; "
-               + shlex.join(["python3", "-c", script, repo_path, commit, str(MIN_FREE)])
-               + "; printf '\\n%s\\n' " + shlex.quote(end))
-    try:
-        call(["pane", "run", pane, shlex.join(["sh", "-c", command])])
+    # 새 셸이 canonical 모드여도 받도록 각 입력을 1024바이트보다 짧게 나눈다.
+    # 경로·원격 이름도 payload에 넣어 인자가 길어져도 입력 한도를 지킨다.
+    payload = "import sys;sys.argv=" + repr(["gs-check", repo_path, commit, str(MIN_FREE), git_remote]) + "\n" + PROBE
+    packed = base64.b64encode(zlib.compress(payload.encode())).decode()
+    variable = f"GS_CHECK_{token}"
+
+    def run_and_wait(command: str, marker: str) -> None:
+        call(["pane", "run", pane, command])
         remaining_ms = max(1, int((deadline - time.monotonic()) * 1000))
-        call(["pane", "wait-output", pane, "--regex", f"(?m)^{end}\\r?$",
+        call(["pane", "wait-output", pane, "--regex", f"(?m)^{marker}\\r?$",
               "--timeout", str(remaining_ms), "--source", "recent-unwrapped"])
+
+    try:
+        for index, offset in enumerate(range(0, len(packed), 400)):
+            chunk = packed[offset:offset + 400]
+            previous = f'"${variable}"' if offset else ""
+            marker = f"GS_CHECK_CHUNK_{token}_{index}"
+            run_and_wait(f"{variable}={previous}{shlex.quote(chunk)}; printf '\\n%s\\n' {marker}", marker)
+        script = "import base64,zlib,sys;exec(zlib.decompress(base64.b64decode(sys.argv[1])))"
+        command = ("printf '\\n%s\\n' " + shlex.quote(start) + "; "
+                   + shlex.join(["python3", "-c", script]) + f' "${variable}"'
+                   + f"; unset {variable}; printf '\\n%s\\n' " + shlex.quote(end))
+        run_and_wait(command, end)
         cp = call(["pane", "read", pane, "--format", "text", "--source", "recent-unwrapped", "--lines", "200", "--raw"])
         # --raw는 pane read의 JSON 포장 대신 텍스트를 받는다.
         lines = cp.stdout.replace("\r", "").splitlines()
@@ -196,8 +209,13 @@ def check(repo: Path, machine: str, out: TextIO, err: TextIO) -> int:
         item("레포 경로 설정", bool(path), f".goldstack/local.env에 {key}=<원격 레포 절대 경로>를 쓴다")
         if not path:
             return 1
+        cfg, problems = config.load(repo)
+        if cfg is None:
+            for problem in problems:
+                print(problem, file=err)
+            return 1
         commit = grill_commit(repo)
-        data = probe(machine, path, commit)
+        data = probe(machine, path, commit, git_remote=cfg.git.remote)
         local = version.installation(repo)
         remote_gs = data.get("gs")
         item("gs", remote_gs == f"gs {local.version}", "원격에서 gs self-update(미설치면 gs 설치)")
@@ -209,7 +227,7 @@ def check(repo: Path, machine: str, out: TextIO, err: TextIO) -> int:
         item("레포 경로", data.get("repo") is True, f"{key} 경로에 레포를 clone한다")
         item(".goldstack/local.env", data.get("env") is True, "원격 레포에 .goldstack/local.env를 직접 준비한다(값은 검사하지 않음)")
         item("grill 커밋 수신", bool(commit) and data.get("grill") is True,
-             "feature spec을 커밋·push하고 원격 레포의 origin과 git 인증을 확인한다")
+             f"feature spec을 커밋·push하고 원격 레포의 {cfg.git.remote}과 git 인증을 확인한다")
         for name in ("claude", "codex", "agy"):
             current, remote = _local_cli(repo, name), data.get(name + "_version")
             if current != remote or current is None:

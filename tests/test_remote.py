@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from support import isolate_git_env
-from gs import cli, remote, version
+from gs import cli, config, remote, version
 
 HERDR = r'''
 import json, os, re, subprocess, sys
@@ -29,13 +29,25 @@ if a == ['machine', 'status']:
 assert a[:2] == ['--machine', 'runner'], a
 a = a[2:]
 if a[:2] == ['workspace', 'create']:
+    (root / 'shell').write_text('')
     print(json.dumps({'result': {'root_pane': {'pane_id': 'remote:p1'}}}))
 elif a[:2] == ['pane', 'run']:
-    cp = subprocess.run(' '.join(a[3:]), shell=True, text=True, capture_output=True)
+    command = ' '.join(a[3:])
+    # 새 pane에 아직 프롬프트가 없어 canonical 모드인 macOS를 재현한다.
+    if len(command.encode()) >= 1024:
+        print('command exceeds canonical line-input limit', file=sys.stderr)
+        sys.exit(1)
+    # pane의 셸 변수는 다음 pane run에서도 유지된다.
+    history = root / 'shell'
+    previous = history.read_text()
+    cp = subprocess.run(previous + command, shell=True, text=True, capture_output=True)
+    if command.startswith('GS_CHECK_'):
+        history.write_text(previous + command.split(';', 1)[0] + '\n')
     # 터미널 입력 에코와 완료 뒤 프롬프트도 섞는다.
     (root / 'output').write_text('echo ' + ' '.join(a[3:]) + '\n' + cp.stdout + '\nshell$ unrelated\n')
 elif a[:2] == ['pane', 'wait-output']:
-    if os.environ.get('WAIT_FAIL'):
+    failure = os.environ.get('WAIT_FAIL')
+    if failure == '1' or (failure == 'final' and 'GS_CHECK_END_' in a[a.index('--regex') + 1]):
         print(json.dumps({'error': {'code': 'timeout', 'message': 'wait timed out'}}), file=sys.stderr)
         sys.exit(1)
     assert re.search(a[a.index('--regex') + 1], (root / 'output').read_text())
@@ -93,6 +105,7 @@ class RemoteTest(unittest.TestCase):
         (self.target / '.goldstack').mkdir()
         (self.target / '.goldstack/local.env').write_text('TOKEN=SECRET_ENV_VALUE')
         (self.repo / '.goldstack/local.env').write_text(f'GS_REMOTE_REPO_runner={self.target}\n')
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
         for name, script in [('herdr', HERDR)] + [(n, CLI) for n in ('gs', 'gh', 'claude', 'codex', 'agy')]:
             p = self.bin / name
             p.write_text(f'#!{sys.executable}\n' + script)
@@ -129,8 +142,39 @@ class RemoteTest(unittest.TestCase):
         self.assertEqual(output.count('통과:'), 11)
         calls = [json.loads(line) for line in (self.root / 'calls').read_text().splitlines()]
         self.assertTrue(all(a[:2] == ['--machine', 'runner'] for a in calls[1:]))
-        self.assertEqual([a[2:4] for a in calls[1:]], [['workspace', 'create'], ['pane', 'run'],
-                         ['pane', 'wait-output'], ['pane', 'read'], ['pane', 'close']])
+        actions = [a[2:4] for a in calls[1:]]
+        self.assertEqual(actions[0], ['workspace', 'create'])
+        self.assertEqual(actions[-2:], [['pane', 'read'], ['pane', 'close']])
+        self.assertEqual(actions[1:-2], [['pane', 'run'], ['pane', 'wait-output']] * ((len(actions) - 3) // 2))
+        commands = [a[5] for a in calls if a[2:4] == ['pane', 'run']]
+        self.assertGreater(len(commands), 1)
+        self.assertTrue(all(len(command.encode()) < 1024 for command in commands))
+
+    def test_long_arguments_stay_below_canonical_limit(self):
+        # 경로·원격 이름은 압축 전송하여 마지막 실행 명령도 짧게 유지한다.
+        data = remote.probe('runner', str(self.target) + '/x' * 300,
+                            remote.grill_commit(self.repo), git_remote='upstream' * 300)
+        self.assertIs(data['repo'], False)
+
+    def test_grill_fetch_uses_configured_remote(self):
+        path = self.repo / config.CONFIG_PATH
+        path.write_text(path.read_text().replace('remote = "origin"', 'remote = "upstream"'))
+        self.git(self.target, 'remote', 'rename', 'origin', 'upstream')
+        # 커밋이 없는 원격 레포에서 upstream으로 dry-run fetch해야 한다.
+        self.assertNotEqual(subprocess.run(['git', 'cat-file', '-e', remote.grill_commit(self.repo)],
+                                          cwd=self.target, capture_output=True).returncode, 0)
+        code, output = self.check()
+        self.assertEqual(code, 0, output)
+        # dry-run도 받은 객체를 저장할 수 있으므로 실패 검사에는 새 커밋을 쓴다.
+        (self.repo / '.goldstack/work/demo/spec.md').write_text('updated spec')
+        self.git(self.repo, 'commit', '-qam', 'grill: demo update')
+        self.git(self.target, 'remote', 'remove', 'upstream')
+        self.out.seek(0)
+        self.out.truncate()
+        code, output = self.check()
+        self.assertEqual(code, 1, output)
+        self.assertIn('빠짐: grill 커밋 수신', output)
+        self.assertIn('원격 레포의 upstream과 git 인증', output)
 
     def test_each_missing_tool_or_auth(self):
         for missing, label in [('gs', 'gs'), ('plugin', 'goldstack 플러그인'), ('disabled', 'goldstack 플러그인'),
@@ -195,10 +239,13 @@ class RemoteTest(unittest.TestCase):
             self.assertIn('경고: ' + name + ' 버전', output)
 
     def test_timeout_and_wait_failure_close_pane(self):
-        with mock.patch.dict(os.environ, WAIT_FAIL='1'):
-            code, output = self.check()
-            self.assertEqual(code, 1)
-            self.assertIn('시간 초과', output)
+        for stage in ('1', 'final'):
+            with self.subTest(stage=stage), mock.patch.dict(os.environ, WAIT_FAIL=stage):
+                self.out.seek(0)
+                self.out.truncate()
+                code, output = self.check()
+                self.assertEqual(code, 1)
+                self.assertIn('시간 초과', output)
         self.assertIn('pane", "close', (self.root / 'calls').read_text())
         with mock.patch('gs.remote.probe', side_effect=subprocess.TimeoutExpired('herdr', 90)):
             code, output = self.check()
