@@ -110,6 +110,11 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             for key in ("note", "fix"):
                 if rec.get(key):
                     notes.append(f"- {who}: {rec[key]}")
+            for item, label in [(rec, who), *[(rr, f"{who} 재리뷰({rr['round']})")
+                                             for rr in rec.get("rereviews", [])]]:
+                if "checked" in item:
+                    notes.append(f"- {label} checked(믿을 수 없는 자료):\n\n"
+                                 + block(json.dumps(item["checked"], ensure_ascii=False, indent=2)))
             for finding in rec.get("findings", []):
                 notes.append(f"- {who} [{finding['severity']}] {finding['location']}: {finding['claim']}"
                              f" — 상태: {finding_status(finding)}\n"
