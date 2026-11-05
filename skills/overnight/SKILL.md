@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 `$ARGUMENTS`가 `resume`이면 [이어받기](#이어받기)로 간다. 아니면 공백으로 나눈 feature 목록으로 1단계부터 한다. 5단계의 "자도 된다" 안내까지는 사람이 앞에 있다. 그 뒤로는 묻지 않고, 결정이 필요하면 [멈출 조건](#멈출-조건)을 따른다.
 
-- `/go`와 겹치는 단계는 이 skill 폴더 옆의 `go/SKILL.md`를 파일로 읽고 따른다.
+- `/go`와 겹치는 단계는 이 skill 폴더 옆의 `go/SKILL.md`를 파일로 읽고 따른다. 단 `go/SKILL.md`의 5단계(회고)는 따르지 않는다. 회고는 사람이 있어야 고르므로 밤에는 돌리지 않는다.
 - 명령은 체인·줄바꿈 없이 한 번에 하나씩 친다(`/go` 2단계의 `git add … && git commit`도 나눈다). 허용 규칙은 명령 모양으로 맞으므로 모양이 바뀌면 밤에 승인 창이 뜬다.
 
 ## 1. 시작 라운드
@@ -124,7 +124,7 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 
 ## 7. 아침 보고
 
-`결과`·`쓴 허락`·`아침에 물을 것`으로 한 장을 쓴다. 파일 끝 `## 아침 보고`에 넣고 같은 글을 세션에 보인다. PR은 state.json의 `finish.url`이다. 피드백 건수는 `gs feedback list`로 센다(명령이 없는 판이면 `.goldstack/feedback/*.md` 수).
+`결과`·`쓴 허락`·`아침에 물을 것`으로 한 장을 쓴다. 파일 끝 `## 아침 보고`에 넣고 같은 글을 세션에 보인다. PR은 state.json의 `finish.url`이다. feature마다 `/retro <feature>` 권고를 `회고:` 줄 하나에 넣는다. 피드백 건수는 `gs feedback list`로 센다(명령이 없는 판이면 `.goldstack/feedback/*.md` 수).
 
 ```markdown
 # 밤샘 보고 <날짜>
@@ -137,6 +137,7 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 고친 사소한 것: …
 남은 질문: …
 피드백: N건
+회고: /retro a, /retro b
 ```
 
 텔레그램을 켰으면 마지막에 요약 한 통을 보낸다. feature별 결과 한 줄과 남은 질문 수를 `.goldstack/overnight/<날짜>-telegram.txt`에 쓰고(3,900자 안쪽) 아래 한 줄을 친다. 이 한 줄만 체인이다(3단계에서 같은 모양을 쳐 봤다). 토큰 값은 출력하지 않는다. 실패해도 결과는 그대로이고 실패만 파일에 적는다.
