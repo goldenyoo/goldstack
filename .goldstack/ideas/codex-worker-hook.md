@@ -2,8 +2,8 @@
 date: "2026-11-03"
 severity: "medium"
 source: "goldstack-v2 grill 라운드 2 질문"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v10"
 ---
 codex worker를 sandbox 대신 hook으로 막기(agy처럼 deny+hook). 먼저 조사: codex hook이 fail-open인지, PreToolUse가 Bash 밖(apply_patch)도 잡는지, 무인 실행의 hook 신뢰(--dangerously-bypass-hook-trust). 되면 localhost 시험·git 디렉터리 우회가 사라진다
 
@@ -21,3 +21,5 @@ codex worker를 sandbox 대신 hook으로 막기(agy처럼 deny+hook). 먼저 �
 다시 볼 조건: codex가 hook 실패를 막음으로 다루는 동작이나 설정을 내면(연구 문서 §4의 네 가지 실패 모드를 다시 돌려 확인).
 
 - 2026-11-04 codex worker에는 비밀 파일 읽기 차단이 없다. `codex sandbox`(macOS, 0.166.0, 기본 정책)에서 임시 비밀 파일 `cat`은 되고 쓰기만 막혔다(worker의 `-s workspace-write`와 정책이 같은지는 추가 확인 필요). `docs/internals.md`의 "worker 차단 hook이 이 파일 읽기를 막는다"는 codex에 맞지 않는다. 위 조사와 다른 안: sandbox를 빼지 않고 그 위에 `gs hook pretooluse`를 겹치면 쓰기·네트워크는 sandbox가 그대로 막고 비밀 읽기만 보태어 막는다. hook이 fail-open이라 보조 장치이고, `--dangerously-bypass-hook-trust`가 필요하다 (출처: 2026-11-04 Gemini 리뷰, Claude가 재현)
+
+- 2026-11-05 goldstack-v10 grill 1-6: 문서 수정만 v10에 넣었다. hook 겹치기는 범위 밖 `codex-secret-hook`, sandbox를 hook으로 대신하는 안은 위 조건대로 보류다.

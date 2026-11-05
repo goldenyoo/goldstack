@@ -2,8 +2,8 @@
 date: "2026-11-04"
 severity: "medium"
 source: "2026-11-04 Codex·Gemini 리뷰 각자 발견(Claude가 재현)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v10"
 ---
 agy의 디렉터리 검색이 `Read`로 번역되어 비밀 파일 재귀 검사를 지나간다.
 

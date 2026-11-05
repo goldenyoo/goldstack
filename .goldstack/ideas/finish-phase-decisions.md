@@ -2,8 +2,8 @@
 date: "2026-11-04"
 severity: "medium"
 source: "2026-11-04 구조 점검(gs/goldstack-v7/integration e857914, 06까지 병합)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v10"
 ---
 마무리·재개의 판단("지금 phase와 사실로 다음에 무엇을 하나")을 git·gh 호출에서 떼어 순수 함수 하나로 모은다. 재개 판단을 임시 git 레포 없이 시험하고, 경로마다 답이 다른 곳을 드러내려는 것이다.
 
@@ -33,3 +33,5 @@ feature: ""
 - GitHub 호출을 `finish.py` 밖으로 옮기기: 복잡함을 옮길 뿐 줄이지 않는다.
 - `Run`에 인터페이스 정의: 구현이 하나뿐이고 이것으로 생긴 결함을 찾지 못했다.
 - 네트워크 대기(`go._net_*`, `Outage`) 분리: 순수하게 뺄 만한 후보지만 근거가 v7 06 한 장의 지적뿐이다. v7 보고서와 다음 feature에서 같은 곳에 지적이 또 나오면 다시 본다.
+
+- 2026-11-05 goldstack-v10 grill 1-5: 제안 1만 v10에 넣었다. 제안 2·3은 범위 밖 `finish-resume-decisions`다.

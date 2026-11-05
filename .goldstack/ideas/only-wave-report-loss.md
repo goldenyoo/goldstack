@@ -2,8 +2,8 @@
 date: "2026-11-04"
 severity: "medium"
 source: "2026-11-04 Gemini 리뷰(Claude가 코드 대조)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v10"
 ---
 `gs go --only`가 바로 main에 병합되는데 문서에 그 설명이 없고, 다음 wave의 보고서에서 앞 wave 티켓이 빠진다.
 
@@ -13,4 +13,4 @@ feature: ""
 
 **시나리오**: 첫 wave만 시험하려고 `gs go f --only 01,02`를 돌렸는데 반쪽 기능이 main에 들어간다. 이어 돌린 뒤 main의 보고서는 03·04만 말한다.
 
-**정할 것**: wave마다 병합이 의도인지. 의도면 문서에 적고 보고서에 앞서 merged된 범위 밖 티켓을 포함한다(S). 의도가 아니면 남은 티켓이 있을 때 병합을 미룬다(M). 코드 주석에 "새 wave" 재개 흐름이 있어 의도일 가능성이 있다. Gemini가 함께 말한 "실패 뒤 옛 verified 재사용"은 확인하지 못해 뺐다.
+**결정(goldstack-v10 grill 1-2)**: wave마다 병합은 의도가 아니다(2026-11-05 사용자 답, 이 옵션을 알지 못했다). 범위 밖 티켓이 남아 있으면 병합하지 않고 멈춘다. 옵션 제거는 시험 42개 파일의 421곳을 고쳐야 해서 뺐다. Gemini가 함께 말한 "실패 뒤 옛 verified 재사용"은 확인하지 못해 뺐다.

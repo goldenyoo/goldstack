@@ -2,8 +2,8 @@
 date: "2026-11-04"
 severity: "medium"
 source: "2026-11-04 Codex 리뷰(Claude가 코드 대조)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v10"
 ---
 보호된 base에서 revert PR이 승인을 기다리는 동안 base가 고쳐져도, 다음 `gs go`가 재검증 없이 옛 revert를 병합한다.
 

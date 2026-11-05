@@ -1,5 +1,5 @@
 # goldstack profile
-갱신: 2026-11-04 (/adopt)
+갱신: 2026-11-05 (CI만 goldstack-v10 grill에서 고침)
 
 ## 구조
 - `src/gs/`: `gs` CLI(Python, 외부 의존성 없음, 약 7,100줄). 큰 파일은 `go.py`(코디네이터, 1,168줄), `finish.py`(마무리·병합·재개, 877줄), `hook.py`(worker 차단, 669줄), `review.py`(504줄), `adapters.py`(claude·codex·agy 실행, 389줄). 모듈 표는 `docs/internals.md`.
@@ -42,4 +42,4 @@
 - `hooks/register.tsx`는 시험 파일(`register.test.tsx`)이 있지만 `tests/`와 verify에 들어가지 않는다.
 
 ## CI
-- 없음(`.github/workflows` 없음). v8 티켓 10이 ubuntu 시험을 넣을 예정이다. 필수 검사 없음, `main` 보호 없음(`gs doctor`: HTTP 404), 저장소 private.
+- `.github/workflows/tests.yml`: ubuntu에서 전체 시험. 2026-11-05 `e62af37`에서 통과. 병합을 막지 않는다(`wait_checks = false`). 저장소 public.
