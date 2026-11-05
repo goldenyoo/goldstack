@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack-v12 — spec
 
-상태: grill 완료(라운드 4개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 5개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 요청 원문: "아이디어 리스트업 해줘. overnight로 돌릴거라 규모가 커도 좋아." 한 번의 grill로 goldstack-v12–v15를 정했다. 질문과 답은 이 spec에 있다.
 
@@ -17,13 +17,13 @@ max_workers: 3
 ## 3. 결정
 | # | 항목 | 결정 |
 |---|---|---|
-| 1-1 | 넣을 후보 | 라운드 1 목록의 1–20(아이디어 15건, issue #21–#24, `gs feedback "status "` 우회). 21–27(`overnight-queue`, `remote-go-run`, `agy-high-to-medium`, `grill-tier-skill-tickets`, `async-verify-evidence`, `v7-blame-test-mapping`, `codex-linux-refs-dir`)은 뺀다. 1-7이 22, 23, 21 일부를 되살린다 |
+| 1-1 | 넣을 후보 | 라운드 1 목록의 1–20(아이디어 15건, issue #21–#24, `gs feedback "status "` 우회). 21–27(`overnight-queue`, `remote-go-run`, `agy-high-to-medium`, `grill-tier-skill-tickets`, `async-verify-evidence`, `v7-blame-test-mapping`, `codex-linux-refs-dir`)은 뺀다. 1-7이 22, 23, 21 일부를 되살린다. 3-1이 12번(`findings-dup-after-edit`)을, 4-1이 23번을 뒤에 뺐다 |
 | 1-2 | feature 나누기 | 넷(1-8이 고침): `/overnight`으로 잇는다 |
 | 1-3 | 버전 | 마지막 feature의 문서 티켓에서 `0.2.0`으로 올린다. 태그·릴리스는 없다 |
 | 1-4 | `wait_checks` | 꺼 둔다 |
 | 1-5 | skill 정리 | 추천(C: 결함 먼저, 분량은 맨 뒤)과 다르게 D: 결함 고치기와 분량 정리를 `overnight`까지 전부 `goldstack-v12`에 모은다. 뒤 feature인 22가 밀리는 것을 받아들인다 |
 | 1-6 | `verify`·`max_workers` | 싼 시험(`test_skills`, `test_profile_brief`)을 앞에 붙인다. `max_workers` 3 |
-| 1-7 | D에서 더할 것 | 22 `remote-go-run`(사람이 무조건 넣기로 함), 23 `agy-high-to-medium`, 21 `overnight-queue` 중 사전 점검 구멍 막기만. 21의 대기열·권한 hook·기본값 뒤집기와 24–27은 뺀다 |
+| 1-7 | D에서 더할 것 | 22 `remote-go-run`(사람이 무조건 넣기로 함), 23 `agy-high-to-medium`(4-1이 뒤에 뺐다), 21 `overnight-queue` 중 사전 점검 구멍 막기만. 21의 대기열·권한 hook·기본값 뒤집기와 24–27은 뺀다 |
 | 1-8 | feature 순서 | `goldstack-v12`(묶음 A + skill 정리, 1-5) → `goldstack-v13`(22) → `goldstack-v14`(묶음 B + 23) → `goldstack-v15`(묶음 C + 21 일부 + `0.2.0`). 약 25장이라 맨 뒤는 아침까지 안 끝날 수 있어 22를 앞으로 당겼다 |
 | 2-1 | 검증 실패 수리 | 같은 브랜치·worktree에서 실패 로그를 주고 한 번 수리한다. 커밋이 있으면 `tiers.rereview`로 재리뷰하고, 없으면 바로 다시 검증한다. 수리가 또 실패하면 지금처럼 새 시도다. 범위 밖 `repair-worker`는 마무리 실패·병합 충돌 수리만 남긴다 |
 | 2-2 | worker 전체 시험 | 수정·수리 worker만 뺀다. 첫 구현 worker는 그대로다 |
@@ -50,6 +50,7 @@ max_workers: 3
 | 2-23 | 리뷰한 SHA로 병합 | 고친다. 브랜치가 움직였으면 재리뷰한다. 두 번째 리뷰어를 붙인다 |
 | 3-1 | 중복 지적(다시) | `findings-dup-after-edit`를 이번에 고치지 않고 아이디어로 연다. 수리로 재시도가 줄면 중복이 주는지 보고 정한다 |
 | 3-2 | v14의 issue 닫기 | 지금 경로(PR `Closes #`)로 닫는다. `v14`가 `reverted`이면 사람이 #21–#24를 다시 연다 |
+| 4-1 | `agy-high-to-medium` | 새 계정에 전용 한도가 없어 근거가 사라졌다. 이번에 하지 않고 아이디어로 연다 |
 
 ## 5. 티켓 그래프
 경로 앞 `src/gs/`, `tests/`도 그대로 적었다. 구현이 전부 claude인 이유: codex 시험 환경은 티켓 04가 병합되고 재설치한 뒤에야 쓰인다.
@@ -81,7 +82,7 @@ max_workers: 3
 - skill 글 단어 수: `grill` 445(상한 450, `tests/test_skills.py`), `go` 421(상한 480), `adopt` 423(상한 450, `tests/test_profile_brief.py`). `grill`을 고치는 티켓은 5단어 안에서 끝내야 한다.
 - 실행 시간 실측: v9 8장 301분(장당 38분), v10 7장 132분(장당 19분), v11 11장 약 272분(세 번 실행 합, 장당 25분).
 - CI: `.github/workflows/tests.yml`. 2026-11-05 최근 8회 중 실패 2회는 v11 integration PR이다. 시각(17:53)이 v11 둘째 실행의 통합 검증 실패와 같지만 CI 로그는 열어 보지 않았다. main push는 전부 성공. `wait_checks = false`(`.goldstack/config.toml`에 키 없음, 기본값).
-- agy 한도(`agy -p /usage`, 20:55): Gemini 공용 주간 34%, 5시간 90%, Argon 전용 주간 65%. 공용 주간은 2026-11-10 리셋.
+- agy 한도(`agy -p /usage`, 22시대): 사람이 계정을 바꿨다. 새 계정은 Gemini 공용 주간 73.6%(리셋 2026-11-08), 5시간 98.6%, Claude·GPT 100%, 크레딧 0, Argon 전용 항목 없음. 이전 계정(20:55)은 공용 주간 34%, 5시간 90%, 전용 65%였다. 비율만 보이므로 절대량 비교는 못 한다. `gemini-4-argon-high`·`medium` 짧은 호출(`--sandbox`, 도구 없음) 성공, 각 약 7,700토큰.
 - `overnight` 글 1690단어(상한 1700, `tests/test_overnight_skill.py`), `/idea` 상한 400은 `tests/test_skills.py`에 따로 있다.
 - `.goldstack/config.toml`의 `[worktree] setup`은 없다(기본 빈 값).
 - git 링크 우회 측정(레포 복제본, 부하 약 2): git 하나만 든 임시 디렉터리에 `/Library/Developer/CommandLineTools/usr/bin/git` 링크를 두고 PATH 앞에 놓으면 `test_ticket_verify.py` 시험 28개가 55.9초 → 38.0초(-32%), 둘 다 통과. 각 1회다.
@@ -122,3 +123,7 @@ max_workers: 3
 - 결정을 안 바꾸고 고침: v14 09 verify(`gs config`가 점 둘 키를 못 읽어 TOML 직접 읽기로), v15 07에 `tests/test_version.py`, v15 07 "태그 없음"(기존 `v0.1.0` 보존), v12 09 `blocked_by`에 07, v14 08의 문서 티켓 조건.
 1. 같은 지적 판별: 라운드 2의 "실제 사례는 둘 다 `check.py:24`"는 Claude의 사실 오류였다. 실제는 206행과 24행이고 문장 유사도 0.29로 다른 지적(0.10–0.18)과 잘 갈리지 않는다. A 티켓 빼고 아이디어 열기 / B 판단 모델 / C 줄 근처 그대로 — 추천 A(피해가 중복 파일 하나) → 확정 A. 그래서 전체 31장이다.
 2. v14 issue 닫기가 v15의 보호를 못 받는다: A 그대로 두고 기록 / B v14·v15 순서 바꿈 / C `closes` 뺌 — 추천 A(발생 조건이 좁고 아침에 고칠 수 있다) → 확정 A.
+
+### 라운드 5 — agy 계정 변경 (추천대로)
+사람이 agy 계정을 바꾸고 동작과 한도를 확인해 달라고 했다. 값은 §6에 있다.
+1. `v14 09`(`/retro` 요약과 `small`을 Medium으로): A 뺌 / B 그대로 — 추천 A(Argon 전용 한도가 없어 근거가 사라졌고 요약 품질은 비교하지 않았다) → 확정 A. 그래서 전체 30장이다.

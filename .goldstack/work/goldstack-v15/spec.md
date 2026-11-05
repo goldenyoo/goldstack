@@ -5,7 +5,7 @@ max_workers: 3
 ---
 # goldstack-v15 — spec
 
-상태: grill 완료(라운드 4개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
+상태: grill 완료(라운드 5개) · 2026-11-05 · 티켓 [tickets/](tickets/) · 범위 밖 [out-of-scope/](../../out-of-scope/)
 
 결정과 grill 기록은 [goldstack-v12 spec](../goldstack-v12/spec.md)의 §3·§7에 있다. 이 feature의 결정 번호: 1-1, 1-2, 1-3, 1-7, 1-8, 2-20–2-23.
 
