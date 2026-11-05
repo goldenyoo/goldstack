@@ -26,10 +26,21 @@
 - **05 [low]:** 요약 호출 중 코디네이터가 죽고 재개하면, 격리 경고가 `마무리` 항목으로 잘못 표시됐다가 새 마무리에서 지워질 수 있다. 드문 경로이고 코드로만 확인됐다.
 - **06 [low]:** 판단 모델 답이 `## Summary ##`로 시작하면 Summary 제목이 여전히 중복된다.
 
-마무리: preparing · 병합 전
+마무리: not_merged · integration 검증 실패
 리뷰 지적: 수정됨 6 · 보고만 5
 
 ## Evidence
+
+### 검증 실패
+
+검증: `integration` · 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/finish/integration-verify.log`
+
+```text
+FAIL: test_adopt_skill (test_profile_brief.ProfileSkillTest.test_adopt_skill)
+FAILED (failures=1)
+```
+
+후보 티켓(추정): 후보 없음
 
 ### 실행 측정
 
@@ -156,19 +167,19 @@ gs 검증별 측정
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 1354.674 |
+| total | 1361.674 |
 | verify | 1183.837 |
 | summary | 147.868 |
-| report | 0.154 |
-| push | 5.332 |
-| publish | 3.688 |
+| report | 0.237 |
+| push | 7.224 |
+| publish | 7.714 |
 | merge-pr | 3.525 |
 | confirm-merge | 0.005 |
 | postmerge | 398.946 |
 | restore-reverts | 0.033 |
 | report-to-base | 2.396 |
 | sync-integration | 2.047 |
-| restore-integration | 0.053 |
+| restore-integration | 0.119 |
 
 ### 티켓별 결과
 
@@ -510,9 +521,9 @@ agy 사용: 0/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration 검증 실패 → 병합 안 함
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/26
 
 integration verify: False
 
