@@ -150,7 +150,7 @@ fi
         self.assertFalse(any(x.startswith("pr merge ") for x in self.lines("gh.log")))
         self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), initial)
         self.assertIn("merged 티켓 없음", self.final_report())
-        self.assertIn("| 02 | t02 | failed | worker 종료 코드 1 |", self.final_report())
+        self.assertRegex(self.final_report(), r"\| 02 \| t02 \| failed \| worker 종료 코드 1(?:<br>| \|)")
         self.assertIn("| 03 | t03 | skipped | 막힘: 02 |", self.final_report())
         self.assertEqual((self.bin / "pr-body.md").read_text().strip(), self.final_report())
 
@@ -343,7 +343,7 @@ fi
     def test_integration_verify_timeout_does_not_merge(self):
         self.hang_verify("integration")
         initial = sh(self.remote, "git", "rev-parse", "main")
-        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}):
+        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}), support.times_out_once_ready(self.bin / "hung"):  # 멈춘 verify만 시간 초과
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         f = state.load(self.rundir, "demo").finish
@@ -361,7 +361,7 @@ fi
     def test_main_verify_timeout_reverts_merge(self):
         self.hang_verify("main")
         initial = sh(self.remote, "git", "rev-parse", "main")
-        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}):
+        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}), support.times_out_once_ready(self.bin / "hung"):  # 멈춘 verify만 시간 초과
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         f = state.load(self.rundir, "demo").finish

@@ -1,6 +1,8 @@
 """goldstack-v6 01: 수정 뒤 재리뷰, 2차 수정, 새 지적, 두 리뷰어, 시간 상한, agy 횟수."""
+import contextlib
 import json
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -55,7 +57,7 @@ if [ -f "$here/rereview.barrier" ]; then  # 다른 재리뷰가 시작할 때까
   for i in $(seq 100); do [ "$(grep -c '^start' "$here/rereview.events")" -ge 2 ] && break; sleep 0.05; done
 fi
 [ -f "$here/refail_$who" ] && { echo "boom $who" >&2; exit 1; }
-[ -f "$here/rehang_$who" ] && exec sleep 5
+[ -f "$here/rehang_$who" ] && { echo $$ > "$here/hanging_$who"; exec sleep 300; }
 echo "end $who" >> "$here/rereview.events"
 # 미커밋 변경이 보이면 파일을 읽고 고쳐졌다고 믿는 리뷰어: 커밋된 트리를 받아야 속지 않는다
 [ -f pending_fix ] && [ -f "$here/rereview_${who}_dirty.json" ] && exec cat "$here/rereview_${who}_dirty.json"
@@ -462,19 +464,33 @@ class UncheckedTest(Base):
         self.answer("agy", 1, [(1, "resolved", "고침")])
         self.answer("codex", 2, [(1, "resolved", "다시 봐도 고침")])
         (self.bin / "rehang_codex").touch()
-        call = review._call
+        call, communicate = review._call, review._communicate
         seen = []
 
-        def short(argv, **kw):
+        def record(argv, **kw):
             seen.append(kw["timeout"])
             try:
-                return call(argv, **{**kw, "timeout": 1 if kw["timeout"] == 7 * 60 else kw["timeout"]})
+                return call(argv, **kw)
             except review.ReviewTimeout:
                 (self.bin / "rehang_codex").unlink()  # 첫 호출만 멈춘다
                 raise
 
+        def times_out_when_hung(p, prompt, timeout, cancel):
+            """멈춘 호출(스크립트가 `hanging_<리뷰어>`에 자기 pid를 남기고 잔다)만 실제 시간 대신 멈춘 것을 보고 시간 초과로 본다.
+            짧은 제한을 걸면 부하에서 멀쩡한 리뷰어도 시간 초과가 된다."""
+            while True:
+                try:
+                    return communicate(p, prompt, 0.05, cancel)
+                except subprocess.TimeoutExpired:
+                    prompt = None
+                    for marker in self.bin.glob("hanging_*"):
+                        with contextlib.suppress(OSError, ValueError):
+                            if os.getpgid(int(marker.read_text())) == p.pid:
+                                raise
+
         with mock.patch.dict(os.environ, {"GS_NETWORK_MINUTE": "0.01"}), \
-                mock.patch.object(review, "_call", side_effect=short):
+                mock.patch.object(review, "_call", side_effect=record), \
+                mock.patch.object(review, "_communicate", times_out_when_hung):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertIn(7 * 60, seen)

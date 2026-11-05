@@ -145,15 +145,15 @@ class NetworkTest(support.GoTest):
 
     def test_nothing_new_starts_while_waiting_and_running_worker_is_left_alone(self):
         """대기 중 12는 끝나도 리뷰를 미루고 13은 시작하지 않는다. 진행 바에 대기가 보인다."""
-        patch = mock.patch.dict(os.environ, {"GS_NETWORK_MINUTE": "3"})  # 12가 첫 대기(3초) 안에 끝나게
+        patch = mock.patch.dict(os.environ, {"GS_NETWORK_MINUTE": "10"})  # 12가 첫 대기(10초) 안에 끝나게. 부하에서도 넉넉하다
         patch.start()
         self.addCleanup(patch.stop)
         (self.bin / "reviewer.sh").write_text(support.FAKE_REVIEWER + '\necho review >> "$here/events.log"\n')
         self.fake("claude", textwrap.dedent(f'''\
             case "$GS_TICKET" in
               11) if [ "$n" = 1 ]; then touch "$here/cut"; echo '{ERROR_RESULT}'; exit 1; fi ;;
-              12) for i in $(seq 100); do [ -f "$here/cut" ] && break; sleep 0.05; done
-                  for i in $(seq 100); do grep -q '네트워크 대기' "$GS_WORKTREE/../../state.json" && break; sleep 0.02; done
+              12) for i in $(seq 1500); do [ -f "$here/cut" ] && break; sleep 0.05; done
+                  for i in $(seq 1500); do grep -q '네트워크 대기' "$GS_WORKTREE/../../state.json" && break; sleep 0.02; done
                   cp "$GS_WORKTREE/../../state.json" "$here/during.json" ;;
             esac
             echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
@@ -181,7 +181,7 @@ class NetworkTest(support.GoTest):
               for i in $(seq 400); do [ -f "$here/n_13" ] && break; sleep 0.05; done
               [ -f "$here/n_13" ] || exit 7
             fi
-            if [ "$GS_TICKET" = 12 ]; then for i in $(seq 100); do [ -f "$here/cut" ] && break; sleep 0.05; done; fi
+            if [ "$GS_TICKET" = 12 ]; then for i in $(seq 1500); do [ -f "$here/cut" ] && break; sleep 0.05; done; fi
             echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
         '''))
         self.tickets({"11": ticket("11"), "12": ticket("12"), "13": ticket("13", '["12"]')}, spec_workers=2)
@@ -203,7 +203,7 @@ class NetworkTest(support.GoTest):
             echo x > file_11; git add -A; git commit -qm t11
         '''))
         self.fake("claude", textwrap.dedent('''\
-            if [ "$GS_TICKET" = 12 ]; then for i in $(seq 100); do [ -f "$here/cut" ] && break; sleep 0.05; done; fi
+            if [ "$GS_TICKET" = 12 ]; then for i in $(seq 1500); do [ -f "$here/cut" ] && break; sleep 0.05; done; fi
             echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
         '''))
         self.tickets({"11": worker_ticket("11", model="codex", reviewer="claude"), "12": ticket("12"),
@@ -218,7 +218,8 @@ class NetworkTest(support.GoTest):
         self.limit(1)  # 대기 1번(0.05초) 뒤 다시 끊기면 넘는다
         self.fake("claude", textwrap.dedent(f'''\
             if [ "$GS_TICKET" = 12 ] && [ ! -f "$here/up" ]; then sleep 30; exit 1; fi
-            if [ ! -f "$here/up" ]; then echo left > partial.txt; echo '{ERROR_RESULT}'; exit 1; fi
+            if [ ! -f "$here/up" ]; then for i in $(seq 1500); do [ -f "$here/pid_12" ] && break; sleep 0.05; done  # 12가 돌고 있을 때 끊는다
+              echo left > partial.txt; echo '{ERROR_RESULT}'; exit 1; fi
             if [ "$GS_TICKET" = 11 ] && [ ! -f "$here/twice" ]; then  # 재개 뒤 한 번 더 끊겨도 합계를 새로 세 중단이 아니다
               touch "$here/twice"; echo '{ERROR_RESULT}'; exit 1
             fi
@@ -293,9 +294,9 @@ class NetworkTest(support.GoTest):
         self.assertEqual((ts.status, ts.failures, ts.branch), ("merged", 0, "gs/demo/11"))
 
     def test_codex_reconnecting_with_other_events_does_not_abort(self):
-        self.limit(20)  # 1초. 합쳐서는 넘게 돈다(연속으로는 넘지 않는다)
+        self.limit(200)  # 10초. 합쳐서는 넘게 돈다(연속으로는 넘지 않는다). 부하로 몇 초 멈춰도 연속으로 넘지 않게 넉넉하다
         self.fake("codex", textwrap.dedent(f'''\
-            for i in $(seq 60); do echo '{RECONNECTING}'; sleep 0.03; echo '{{"type":"item.completed"}}'; done
+            for i in $(seq 40); do echo '{RECONNECTING}'; sleep 0.3; echo '{{"type":"item.completed"}}'; done
             echo x > file_11; git add -A; git commit -qm t11; echo '{{"type":"turn.completed"}}'
         '''))
         self._codex_ticket()

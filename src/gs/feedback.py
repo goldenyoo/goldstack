@@ -719,18 +719,20 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         failed = True
     if failed:
-        print("gs feedback: 전송하지 못한 초안은 남겨 두고 다음 실행 때 다시 보냅니다.", file=err or sys.stderr)
+        retry = ("gs feedback send로 보내세요." if cfg.feedback.mode == "draft"
+                 else "다음 실행 때 다시 보냅니다.")
+        print(f"gs feedback: 전송하지 못한 초안은 남겨 두고 {retry}", file=err or sys.stderr)
     return sent
 
 
 def command(repo: Path, args: list[str], out, err) -> int:
-    """gs feedback [list|send|사람의 글]. 전송 실패는 다른 gs 실행을 막지 않는다."""
+    """gs feedback [list|status|send|사람의 문장]. 전송 실패는 다른 gs 실행을 막지 않는다."""
     cfg, problems = config.load(repo)
     for problem in problems:
         print(problem, file=err)
     if cfg is None:
         return 1
-    if args == ["list"]:
+    if args in (["list"], ["status"]):
         for path in sorted((repo / FEEDBACK_DIR).glob("*.md")):
             try:
                 draft = read_draft(path, cfg)
@@ -748,6 +750,9 @@ def command(repo: Path, args: list[str], out, err) -> int:
         return 1
     if not args:
         print('사용: gs feedback "한 줄" | list | send', file=err)
+        return 2
+    if len(args) == 1 and args != ["send"] and not any(char.isspace() for char in args[0]):
+        print('gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"', file=err)
         return 2
     only_path = None
     if args != ["send"]:

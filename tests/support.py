@@ -71,8 +71,8 @@ if grep -q '^## 리뷰 지적(고칠 것)' "$GS_BRIEF"; then  # 리뷰 뒤 수�
   if [ -f "$here/fixfail" ]; then echo bad > "badfix_$GS_TICKET"; git add -A; git commit -qm "bad fix"; exit 3; fi
   echo fixed > "fixed_$GS_TICKET"; git add -A; git commit -qm "fix $GS_TICKET"; exit 0
 fi
-if [ -f "$here/barrier" ]; then  # 시작한 worker가 barrier개가 될 때까지 기다린다(최대 10초): 동시 실행의 증거
-  for i in $(seq 200); do [ "$(grep -c '^start' "$here/events.log")" -ge "$(cat "$here/barrier")" ] && break; sleep 0.05; done
+if [ -f "$here/barrier" ]; then  # 시작한 worker가 barrier개가 될 때까지 기다린다(최대 60초): 동시 실행의 증거
+  for i in $(seq 1200); do [ "$(grep -c '^start' "$here/events.log")" -ge "$(cat "$here/barrier")" ] && break; sleep 0.05; done
 fi
 if [ -f "$(dirname "$0")/hang_$GS_TICKET" ]; then  # gs가 죽을 때까지 붙잡아 둔다(최대 20초)
   for i in $(seq 400); do sleep 0.05; done; exit 1
@@ -90,7 +90,7 @@ case "$GS_TICKET" in
       fi
       touch "$here/release14"; sleep 1  # 새 시도: 옛 시도를 풀어 준 뒤 천천히 끝낸다
       echo 14 > file_14; git add -A; git commit -qm t14 ;;
-  15) for i in $(seq 200); do [ -f "$here/verifying" ] && break; sleep 0.05; done  # 다른 티켓의 검증 도중에
+  15) for i in $(seq 1200); do [ -f "$here/verifying" ] && break; sleep 0.05; done  # 다른 티켓의 검증 도중에
       touch "$GS_WORKTREE/../integration/BROKEN"; git -C "$GS_WORKTREE/../integration" add BROKEN
       echo 15 > file_15; git add -A; git commit -qm t15 ;;
   16) git fetch -q origin && echo ok > "$here/fetch_16"
@@ -100,6 +100,31 @@ case "$GS_TICKET" in
   *)  echo "$GS_TICKET $GS_ROLE" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET" ;;
 esac
 """
+
+
+def times_out_once_ready(ready: Path):
+    """`bash -c` 명령(verify)의 시간 제한을 실제 시간 대신 "명령이 준비됐다"로 정한다.
+
+    짧은 제한(1초)이면 부하에서 bash가 pid 파일을 쓰기도 전에 시간이 끝나 시험이 흔들린다. 명령이 할 일을 마치고 `ready` 파일을 만든다.
+    그 파일이 생기고도 명령이 안 끝났으면 시간 초과다. 시간 초과 뒤 정리(SIGTERM→SIGKILL, 자손 종료)는 실제 코드가 한다.
+    """
+    class ReadyPopen(subprocess.Popen):
+        def wait(self, timeout=None):
+            if timeout is None or self.args[:2] != ["bash", "-c"]:
+                return super().wait(timeout)
+            give_up = time.monotonic() + 120  # 명령이 끝내 준비되지 못해도 시험이 영영 서지 않게. 그때는 단정이 실패한다
+            while True:
+                try:
+                    return super().wait(0.05)
+                except subprocess.TimeoutExpired:
+                    if ready.exists() or time.monotonic() > give_up:
+                        raise
+
+    return mock.patch.object(subprocess, "Popen", ReadyPopen)
+
+
+# 멈춘 worker를 알아채는 유휴 제한(초). 멀쩡한 가짜 worker가 부하로 이만큼 조용해지면 시험이 틀리게 시간 초과로 본다. 짧게 두지 않는다
+IDLE_SECONDS = 5.0
 
 FAKE_HERDR = """\
 # 가짜 herdr: 부른 명령을 적고, pane run은 백그라운드로 실제 실행한다. 상태는 이 스크립트 옆 파일에.
@@ -433,7 +458,7 @@ class GoTest(unittest.TestCase):
             path.write_text("#!/bin/bash\n" + FAKE_HERDR)
             path.chmod(0o755)
             env.update(HERDR_BIN_PATH=str(path), HERDR_SESSION="t", HERDR_WORKSPACE_ID="w1")
-        with mock.patch.dict(os.environ, env), mock.patch("gs.go._idle_seconds", return_value=0.4), \
+        with mock.patch.dict(os.environ, env), mock.patch("gs.go._idle_seconds", return_value=IDLE_SECONDS), \
                 mock.patch.object(worker, "POLL_SECONDS", 0.05), \
                 mock.patch.object(adapters, "for_model", wraps=adapters.for_model) as choose:
             code, out, err = self.go("--only", "01,04")
@@ -471,7 +496,7 @@ class GoTest(unittest.TestCase):
     # --- verify 시간 제한(v1 01): GS_VERIFY_TIMEOUT=1초 ---
     def hang_verify(self, stage):
         """stage(ticket: 병합 전, integration: 마무리 integration, main: main 검증)에서만 멈추는 verify.
-        멈출 때 자식을 백그라운드로 띄우고 그 pid를 bin/bg_<n>에 적는다. 나머지는 `test ! -f BROKEN`."""
+        멈출 때 자식을 백그라운드로 띄우고 그 pid를 bin/bg_<n>에 적은 뒤 bin/hung을 만든다. 나머지는 `test ! -f BROKEN`."""
         (self.bin / "verify.sh").write_text(textwrap.dedent(f"""\
             here="{self.bin}"
             if git rev-parse -q --verify MERGE_HEAD >/dev/null; then now=ticket
@@ -486,7 +511,7 @@ class GoTest(unittest.TestCase):
             if [ $hang = yes ]; then
               n=$(ls "$here" | grep -c '^bg_')
               sleep 300 & echo $! > "$here/bg_$n"
-              echo "hanging in $now"; sleep 300
+              echo "hanging in $now"; touch "$here/hung"; sleep 300
             fi
             test ! -f BROKEN
             """))

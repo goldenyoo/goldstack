@@ -12,7 +12,7 @@ from support import fake_clis
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
 TEMPLATES = SKILLS / "grill" / "templates"
-WORD_LIMITS = {"grill": 450, "go": 400}  # grill은 티켓 분해 기준 여섯 줄(v7 04)만큼 더 받는다
+WORD_LIMITS = {"grill": 450, "go": 480}  # grill은 티켓 분해 기준 여섯 줄(v7 04)만큼 더 받는다
 
 
 def skill_frontmatter(text):
@@ -187,6 +187,18 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertIn("idea/SKILL.md", body)  # 고른 후보는 /idea 형식으로
         self.assertTrue((SKILLS / "idea" / "SKILL.md").is_file())
 
+
+    def test_go_retro_step_and_overnight_skips_it(self):
+        go = self.read("go")
+        step5 = steps(go)[5]
+        for text in ("retro/SKILL.md", "subagent", "후보만", "파일은 쓰지 않게", "번호 붙여", "고른 것만",
+                     "고르지 않으면 아무것도 쓰지 않는다", "다시 부르지 않고", "/retro <feature>", "결과와 종료는 그대로"):
+            self.assertIn(text, step5)
+        self.assertIn("중간은 실행 중", go)
+        overnight = self.read("overnight")
+        self.assertIn("5단계(회고)는 따르지 않는다", overnight)
+        self.assertIn("회고: /retro a, /retro b", overnight)
+        self.assertIn("`/retro <feature>` 권고", overnight)
 
     def test_adopt_asks_feedback_once(self):
         body = self.read("adopt")

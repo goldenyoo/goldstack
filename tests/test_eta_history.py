@@ -20,7 +20,7 @@ def completed(st, tid, seconds, *, start=0):
     return ts
 
 
-class EtaHistoryTest(unittest.TestCase):
+class HistoryCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -30,6 +30,8 @@ class EtaHistoryTest(unittest.TestCase):
     def save(self, st):
         state.save(self.work / st.feature / "run", st)
 
+
+class EtaHistoryTest(HistoryCase):
     def test_median_pools_merged_tickets_from_other_features(self):
         a, b = state.State(feature="a"), state.State(feature="b")
         completed(a, "01", 600)
@@ -62,6 +64,20 @@ class EtaHistoryTest(unittest.TestCase):
         completed(st, "negative", -600)
         self.save(st)
         self.assertIsNone(state.load_eta_history(self.repo, "current"))
+
+    def test_broken_ticket_times_are_left_out(self):
+        self.save(finished("good", tail=600))
+        backwards = finished("backwards", tail=600, ticket_start=800)
+        backwards.ticket("01").ended_at = clock(600)  # 종료가 시작보다 빠르다
+        self.save(backwards)
+        invalid = finished("invalid", tail=600)
+        invalid.ticket("01").ended_at = "invalid"
+        self.save(invalid)
+        last_bad = finished("last-bad", tail=600)
+        merged = completed(last_bad, "02", 300, start=0)
+        merged.ended_at = "invalid"
+        self.save(last_bad)
+        self.assertEqual(state.load_finish_history(self.repo, "current"), 600)
 
     def test_unreadable_history_is_skipped(self):
         good = state.State(feature="good")
@@ -99,14 +115,14 @@ class EtaHistoryTest(unittest.TestCase):
         p = state.calculate_progress(st, ["old", "01", "02", "03", "04"], 2,
                                      prior={"old"}, at=clock(0), history_median_s=900)
         self.assertEqual(p["eta_s"], 1800)
-        self.assertTrue(p["line"].endswith("약 30분 남음(이전 실행 기준)"))
+        self.assertTrue(p["line"].endswith("약 30분 남음 + 마무리(이전 실행 기준)"))
 
     def test_current_completion_switches_to_current_average(self):
         st = state.State(feature="current", started_at=clock(0))
         order = ["01", "02", "03", "04", "05"]
         for tid in order:
             st.ticket(tid)
-        for tid, seconds, expected in (("01", 300, 600), ("02", 900, 900), ("03", 6000, 2400)):
+        for tid, seconds, expected in (("01", 300, 600), ("02", 900, 1200), ("03", 6000, 2400)):
             with self.subTest(completed=tid):
                 completed(st, tid, seconds)
                 p = state.calculate_progress(st, order, 2, at=clock(6000), history_median_s=9000)
@@ -126,15 +142,89 @@ class EtaHistoryTest(unittest.TestCase):
         r = go.Run(self.repo, feat, None, cfg)
         with mock.patch.object(state, "load_eta_history", wraps=state.load_eta_history) as history:
             go._begin(r)
-            self.assertEqual(r.st.progress["eta_s"], 900)
+            self.assertEqual(r.st.progress["eta_s"], 1200)
             completed(old, "01", 9000)
             self.save(old)
             r.save()
             r.save()
             history.assert_called_once_with(self.repo, "current")
         saved = json.loads(state.path(r.rundir).read_text())
-        self.assertEqual(saved["progress"]["eta_s"], 900)
-        self.assertTrue(saved["progress"]["line"].endswith("약 15분 남음(이전 실행 기준)"))
+        self.assertEqual(saved["progress"]["eta_s"], 1200)
+        self.assertTrue(saved["progress"]["line"].endswith("약 20분 남음 + 마무리(이전 실행 기준)"))
+
+
+def finished(feature, *, tail, phase="verified", ticket_start=0, run_start=0):
+    """티켓 하나(10분)가 끝나고 tail초 뒤 실행이 끝난 state."""
+    st = state.State(feature=feature, started_at=clock(run_start), finished_at=clock(ticket_start + 600 + tail))
+    st.finish = {"phase": phase}
+    ts = completed(st, "01", 600, start=ticket_start)
+    state.begin_phase(ts, "worker", "codex", attempt=1, at=clock(ticket_start))
+    state.end_phase(ts, clock(ticket_start + 600))
+    return st
+
+
+class FinishHistoryTest(HistoryCase):
+    def test_median_of_finish_times_from_other_features(self):
+        for name, tail in (("a", 600), ("b", 1200), ("c", 5400)):
+            self.save(finished(name, tail=tail))
+        self.save(finished("current", tail=60))
+        self.assertEqual(state.load_finish_history(self.repo, "current"), 1200)
+
+    def test_no_sample_is_none(self):
+        self.assertIsNone(state.load_finish_history(self.repo, "current"))
+        self.save(finished("current", tail=60))
+        self.assertIsNone(state.load_finish_history(self.repo, "current"))
+
+    def test_resumed_runs_are_left_out(self):
+        self.save(finished("fresh", tail=600))
+        # 이번 시작(1000초) 전에 시작한 단계를 가진 티켓이 있다
+        self.save(finished("resumed", tail=60, ticket_start=0, run_start=1000))
+        legacy = finished("legacy", tail=60, run_start=1000)  # 단계 기록이 없는 옛 state도 티켓 시작 시각으로 본다
+        legacy.ticket("01").phases = []
+        self.save(legacy)
+        self.assertEqual(state.load_finish_history(self.repo, "current"), 600)
+
+    def test_unfinished_or_inconsistent_runs_are_left_out(self):
+        self.save(finished("good", tail=600))
+        self.save(finished("stopped", tail=5, phase="not_merged"))
+        self.save(finished("no-finish", tail=5, phase=""))
+        bad = finished("negative", tail=-60)
+        self.save(bad)
+        missing = finished("missing", tail=5)
+        missing.finished_at = ""
+        self.save(missing)
+        empty = state.State(feature="empty", started_at=clock(0), finished_at=clock(100))
+        empty.finish = {"phase": "verified"}
+        self.save(empty)
+        self.assertEqual(state.load_finish_history(self.repo, "current"), 600)
+
+    def test_unreadable_history_is_skipped(self):
+        self.save(finished("good", tail=600))
+        for name, content in (("broken", b"{broken json"), ("shape", b"[]"), ("encoding", b"\xff")):
+            p = self.work / name / "run/state.json"
+            p.parent.mkdir(parents=True)
+            p.write_bytes(content)
+        self.assertEqual(state.load_finish_history(self.repo, "current"), 600)
+
+    def test_finish_history_is_loaded_once_and_used_by_saves(self):
+        self.save(finished("old", tail=900))
+        feat = SimpleNamespace(name="current", root=self.work / "current",
+                               spec=SimpleNamespace(max_workers=2),
+                               tickets={"01": SimpleNamespace(id="01", model="codex", blocked_by=[]),
+                                        "02": SimpleNamespace(id="02", model="codex", blocked_by=["01"])})
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+        cfg, _ = config.load(self.repo)
+        r = go.Run(self.repo, feat, None, cfg)
+        with mock.patch.object(state, "load_finish_history", wraps=state.load_finish_history) as history:
+            go._begin(r)
+            self.save(finished("old", tail=9000))
+            r.save()
+            r.save()
+            history.assert_called_once_with(self.repo, "current")
+        self.assertEqual(r.finish_median_s, 900)
+        # 표본이 없으니 이전 실행 기준: 직렬 두 티켓(각 10분) + 마무리 15분
+        self.assertEqual(r.st.progress["eta_s"], (600 * 2 + 900))
+        self.assertTrue(r.st.progress["line"].endswith("약 35분 남음(이전 실행 기준)"))
 
 
 if __name__ == "__main__":

@@ -1,12 +1,13 @@
 """마무리 검증 실패의 원본 줄·후보 티켓과 후보 탐색 실패 시 보고서 보존."""
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from gs import finish, report, state
+from gs import config, failure, finish, git, go, report, review, state
 import support
 
 
@@ -190,6 +191,69 @@ class FinishFailureReportTest(support.GoTest):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         self.assert_failure("integration-final")
+
+
+class ChangedFilesLogTest(support.GoTest):
+    """티켓 검증이 트리를 바꾸면 verify.log에 바뀐 파일을 남긴다."""
+
+    def run_changed(self, command):
+        self.configure(command)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        return (self.rundir / "01/1/verify.log").read_text()
+
+    def configure(self, command):
+        path = self.repo / ".goldstack/work/demo/spec.md"
+        path.write_text('---\nfeature: demo\nmax_workers: 1\n'
+                        f'verify_ticket: {json.dumps(command)}\nverify: "true"\n---\n')
+        support.sh(self.repo, "git", "add", "-A")
+        support.sh(self.repo, "git", "commit", "-qm", "ticket verify")
+        support.sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
+
+    def test_log_names_file_left_by_verify_command(self):
+        text = self.run_changed("echo x > stray_file_from_verify")
+        self.assertIn("검증 중 worktree가 바뀌었다", text)
+        self.assertIn("?? stray_file_from_verify", text)
+        self.assertLess(text.index("검증 중 worktree가 바뀌었다"), text.index("stray_file_from_verify\n", text.index("git status")))
+
+    def test_log_shows_merge_state_before_and_after(self):
+        text = self.run_changed("git commit -qm 'merge by verify'")
+        self.assertIn("병합 상태가 달라졌다", text)
+        self.assertIn("HEAD: ", text)
+        self.assertIn(" -> ", text)
+
+    def test_unreadable_file_list_is_logged_without_changing_result(self):
+        real = git.run
+
+        def run(cwd, *args, **kw):
+            if args[:2] == ("status", "--porcelain") and "-z" not in args:
+                return subprocess.CompletedProcess(["git", *args], 128, "", "boom")
+            return real(cwd, *args, **kw)
+
+        with mock.patch.object(go.git, "run", side_effect=run):
+            text = self.run_changed("echo x > stray_file_from_verify")
+        self.assertIn("바뀐 파일 목록을 읽지 못했다", text)
+        self.assertIn("boom", text)
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual((ts.status, ts.attempts), ("failed", 2))
+        self.assertIn("검증 중 worktree가 바뀌었다", ts.reason)
+
+
+class SummaryPromptTest(unittest.TestCase):
+    def test_prompt_says_merge_tree_is_normal_and_forbids_guessing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            (repo / config.CONFIG_PATH).parent.mkdir(parents=True)
+            (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+            cfg, problems = config.load(repo)
+            self.assertEqual(problems, [])
+            log = repo / "failure.log"
+            log.write_text("failed")
+            with mock.patch.object(review, "_call", return_value="요약") as called:
+                failure.summarize(repo, log, cfg)
+            prompt = called.call_args.kwargs["prompt"]
+        self.assertIn("integration의 병합 트리에서 도는 것이 정상", prompt)
+        self.assertIn("추측하지 말고, 모른다고 적어라", prompt)
 
 
 if __name__ == "__main__":
