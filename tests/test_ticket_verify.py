@@ -276,7 +276,7 @@ class TicketVerifyRunTest(support.GoTest):
                          "티켓 검증 명령: `fast`\n\n티켓 검증 명령(a): `own`\n\n")
         self.assertEqual(commands(None, a=None), "")
 
-    def test_brief_tells_when_to_run_for_worker_and_fix_worker(self):
+    def test_brief_names_ticket_command_for_worker_and_fix_worker(self):
         own = self.record("own")
         self.configure("true", tickets={"01": own})
         with self.review_with([{"severity": "high", "location": "file_01", "claim": "FIX: 틀렸다", "evidence": "e"}]):
@@ -284,8 +284,9 @@ class TicketVerifyRunTest(support.GoTest):
         self.assertEqual(code, 0, out + err)
         fix = (self.rundir / "01/1/fix/brief.md").read_text()
         self.assertIn("## 리뷰 지적(고칠 것)", fix)
+        self.assertIn(f"검증 명령 `{own}`: {SUFFIX}", self.brief("01"))
+        self.assertIn(f"검증 명령 `{own}`: 전체 검증은 gs가", fix)  # 수정 worker는 좁은 시험만(tests/test_fix_brief.py)
         for brief in (self.brief("01"), fix):
-            self.assertIn(f"검증 명령 `{own}`: {SUFFIX}", brief)
             self.assertNotIn("검증 명령 `true`", brief)
 
     # --- 마무리는 늘 spec verify ---
