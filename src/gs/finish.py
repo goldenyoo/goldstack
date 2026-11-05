@@ -31,6 +31,9 @@ finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행�
 base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
 병합 뒤 무엇을 할지는 `revert_decision.next_step`이 정하고 `_postmerge`는 사실을 읽어 그 답을 실행한다.
 integration 전체 검증 실패로 not_merged가 되면 실패한 검증 단계를 남겨 보고서가 로그·후보 티켓을 붙인다.
+
+마무리를 멈춘 git 오류는 어느 단계에서 났든 `run`이 finish.error에 남긴다(`_note_failure`). 준비·보고서·PR 단계(`_publish` 등)도 같다.
+결함 수집(feedback.finish_anomaly)이 이 글로 gs 결함과 환경 오류를 가른다. push 설정 변경은 go.go가 남긴다.
 """
 from __future__ import annotations
 
@@ -56,6 +59,7 @@ PENDING_PHASES = ("revert_pending", "report_pending")
 RESUME_PHASES = (*CHECK_PHASES, "merge_requested", "merge_pending", "merged", "main_failed", "base_unverified",
                  "revert_closing", *PENDING_PHASES)
 CHECK_INTERVAL = 10
+MAX_FINISH_ERRORS = 20  # state.finish_errors에 남길 서로 다른 오류 수. 넘으면 오래된 것부터 잊는다
 
 
 def _save(r, **fields) -> None:
@@ -67,6 +71,29 @@ def _clear_error(r) -> None:
     """성공했으니 지난 거부·일시 오류는 끝난 일이다. 보고서 Merge Danger에 남기지 않는다."""
     if r.st.finish.pop("error", None) is not None:
         r.save()
+
+
+def _note_failure(r, e: Exception) -> None:
+    """마무리를 멈춘 오류를 남긴다. `error`는 보고서 Merge Danger와 결함 수집이 읽는다.
+
+    verified·reverted는 결과가 이미 정해졌으니 outcome을 그대로 둔다(다음 마무리의 `_clear_error`가 error만 지운다).
+    다른 phase는 `integration 검증 중` 같은 옛 글이 결과로 남지 않게 outcome도 바꾼다.
+    `finish_errors`에도 적는다. 새 마무리가 finish를 비워도 결함 수집이 같은 오류를 알아본다.
+    """
+    text = str(e)
+    if text not in r.st.finish_errors:
+        r.st.finish_errors = [*r.st.finish_errors, text][-MAX_FINISH_ERRORS:]
+    fields = {} if r.st.finish.get("phase") in BASE_REPORT_PHASES else {"outcome": f"{feedback.FINISH_FAILED}: {e}"}
+    _save(r, error=text, **fields)
+
+
+def _noted(r, e: BaseException | None) -> bool:
+    """e가 이미 남긴 오류이거나 그것을 처리하다 난 오류인가. 뒤따른 보고서 갱신 실패로 원인을 덮지 않는다."""
+    while e is not None:
+        if str(e) == r.st.finish.get("error"):
+            return True
+        e = e.__context__
+    return False
 
 
 def _gh(r, *args: str, deadline: float | None = None) -> str:
@@ -926,6 +953,18 @@ def _landed(r, commit: str, prev: dict) -> bool:
 
 @metrics.stage("total")
 def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
+    """마무리 한 번. git 오류는 state에 남기고 그대로 올린다(go.go가 받는다). OSError 등 그 밖의 예외는 `cli.main`까지 가서 내부 예외로 수집된다."""
+    try:
+        return _run(r, cleanup)
+    except git.PushSettingsChanged:
+        raise
+    except git.GitError as e:
+        if not _noted(r, e):
+            _note_failure(r, e)
+        raise
+
+
+def _run(r, cleanup: bool) -> tuple[str | None, bool]:
     directory = r.rundir / "finish"
     directory.mkdir(parents=True, exist_ok=True)
     f = r.st.finish
@@ -947,7 +986,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
         except git.PushSettingsChanged:
             raise
         except (git.GitError, OSError) as e:
-            _save(r, error=str(e), outcome=f"마무리 실패: {e}")  # report_pending 그대로. 다음 gs go가 다시 읽는다
+            _note_failure(r, e)  # report_pending 그대로. 다음 gs go가 다시 읽는다
             raise git.GitError(str(e)) from e
         if f["phase"] in PENDING_PHASES:
             return f.get("url"), False
@@ -1020,7 +1059,7 @@ def run(r, *, cleanup: bool = True) -> tuple[str | None, bool]:
     except git.PushSettingsChanged:
         raise  # _update도 push에서 멈춘다. 보낼 수 없는 보고서 커밋을 만들지 않는다
     except (git.GitError, OSError) as e:
-        _save(r, error=str(e), outcome=f"마무리 실패: {e}")
+        _note_failure(r, e)
         if f["phase"] not in (*CHECK_PHASES, "merge_requested", "merge_pending"):
             _update(r, summary)
         raise git.GitError(str(e)) from e

@@ -105,6 +105,9 @@ class State:
     finished_at: str = ""
     tickets: dict[str, TicketState] = field(default_factory=dict)
     finish: dict = field(default_factory=dict)  # 08: PR·병합·main 검증·revert의 재개 지점
+    # 마무리를 멈춘 오류의 글(finish._note_failure). finish와 달리 새 마무리가 비우지 않고 실행을 넘어 남는다.
+    # 결함 수집이 같은 오류를 다시 올리지 않게 대조한다(feedback.finish_anomaly). 옛 state에는 없다.
+    finish_errors: list[str] = field(default_factory=list)
     phase: str = ""  # feature 전체 마무리 중이면 finish
     progress: dict = field(default_factory=dict)
     agy_calls: int = 0  # 이번 실행에서 gs가 띄운 agy 호출 수(worker 1번·리뷰 1번 = 1회, 재시도·수정·재리뷰 포함). 실행마다 0에서
