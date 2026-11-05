@@ -851,7 +851,7 @@ class SecondRereviewWaitTest(test_recheck_resolved.Base):
         (self.bin / "late_codex_2.sh").write_text("touch late1\n")  # 재리뷰 중의 커밋이 "한 번 더"를 쓴다
         out = self.commit_while_waiting("rm fixed_A")
         self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])  # 더 부르지 않는다
-        self.assertNotIn("fixed_A", self.files())
+        self.assertIn("fixed_A", self.files())  # A를 되돌린 늦은 커밋은 아무도 보지 않아 병합하지 않는다
         self.assertIn("경고: 병합 전 대조", out)
         rec = self.ts().review
         for f in rec["findings"]:
