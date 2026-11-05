@@ -462,6 +462,19 @@ def status_line(r) -> str:
     return " · ".join([f"마무리: {phase}", *parts])
 
 
+def issue_notes(r) -> str:
+    """finish.sync_issues가 한 일과 실패. 번호와 커밋만 적는다. issue 본문·댓글은 옮기지 않는다."""
+    f = r.st.finish
+    lines = [f"- 확인 실패, 아무것도 바꾸지 않았다: {f['issues_error']}"] if f.get("issues_error") else []
+    for number, x in sorted(f.get("issues", {}).items(), key=lambda item: int(item[0])):
+        close = x["action"] == "close"
+        if x["ok"]:
+            lines.append(f"- #{number} 닫음: `{x['commit']}`에 반영" if close else f"- #{number} 다시 엶: `{x['commit']}`에서 되돌림")
+        else:
+            lines.append(f"- #{number} {'닫기' if close else '다시 열기'} 실패(gh). 다음 gs go가 다시 시도한다")
+    return "### issue\n\n" + "\n".join(lines) + "\n\n" if lines else ""
+
+
 def _render(r, summary: str, tail: int) -> str:
     f = r.st.finish
     merge = f.get("merge_sha", "<PR의 mergeCommit.oid>")
@@ -488,6 +501,7 @@ def _render(r, summary: str, tail: int) -> str:
     for x in f.get("reintroduced", []):
         text += (f"{r.base}가 이 feature의 병합 `{x['merge']}`을 되돌렸다(revert `{x['revert']}`). integration에서 그 "
                  f"revert를 다시 되돌렸다(`{x['commit']}`). {r.base}로 가는 다음 PR이 feature 코드를 다시 들인다.\n\n")
+    text += issue_notes(r)
     if f.get("error"):
         text += block(f["error"][-LOG_TAIL:]) + "\n"
     for label, logs in (("integration", (r.rundir / "integration").glob("*/setup.log")),

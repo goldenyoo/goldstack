@@ -559,7 +559,7 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 
 수정 worker가 실패하면(종료 코드, 멈춤, 커밋 없음) 그 수정만 버리고 재리뷰를 건너뛰어 병합·검증으로 간다. 2차 수정이 실패해도 1차 수정은 남는다. 어느 경우든 티켓 실패로 세지 않는다.
 
-리뷰어는 병합될 커밋만 읽는다. worker가 미커밋 변경을 남겼으면 그 커밋의 임시 worktree에서 리뷰하고, 남은 변경은 티켓 worktree에 그대로 둔다. 리뷰하는 동안 티켓 브랜치에 커밋이 더 생기면 한 번 다시 리뷰한다(`[04] 병합 전 대조: …`). catch-up으로 합친 최신 integration은 worker 변경이 아니라 세지 않는다.
+리뷰어는 병합될 커밋만 읽는다. worker가 미커밋 변경을 남겼으면 그 커밋의 임시 worktree에서 리뷰하고, 남은 변경은 티켓 worktree에 그대로 둔다. 리뷰하는 동안 티켓 브랜치에 커밋이 더 생기면 한 번 다시 리뷰한다(`[04] 병합 전 대조: …`). catch-up으로 합친 최신 integration은 worker 변경이 아니라 세지 않는다. 병합은 브랜치 이름이 아니라 리뷰한 SHA로 한다. 병합 직전이나 검증 중에 브랜치가 움직였으면 병합하지 않고 재리뷰로 돌아가, 리뷰하지 않은 코드가 들어가지 않는다.
 
 **리뷰 중에도 일은 이어진다** — 리뷰·판단·재리뷰는 루프 밖 스레드에서 돈다. 한 티켓의 리뷰가 도는 동안 다른 worker가 끝나면 바로 처리되고 준비된 티켓이 시작된다. 병합과 검증은 여전히 한 번에 하나라서, 두 티켓의 리뷰가 함께 끝나도 차례로 병합된다. 리뷰 중인 티켓은 `max_workers` 자리를 차지하지 않는다: worker는 최대 `max_workers`개, 리뷰 중인 티켓도 최대 `max_workers`개다. 수정 worker는 worker 자리를 쓰고, 자리가 없으면 기다린다. `gs status`와 진행 바는 리뷰 중인 티켓을 그대로 `04 리뷰 중(codex)`로 보인다. `gs go`가 루프를 떠나면(`중단(네트워크)`, Ctrl-C, 뜻밖의 오류) 돌던 리뷰어를 끝내고, 다음 `gs go`가 끝나지 않은 리뷰를 처음부터 다시 한다.
 
@@ -851,7 +851,7 @@ low     2026-11-03  status-review-count  gs status가 끝난 티켓의 리뷰 �
 gitlab-support  GitHub 밖 레포에 goldstack을 쓰려 할 때.
 same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이 또 버려지면.
 ```
-열린 아이디어를 severity(high→low) → 날짜(오래된 것 먼저) → slug 순으로 보이고, 아래에 `.goldstack/out-of-scope/*.md`마다 `**다시 볼 조건**:` 문장을 보인다. 조건이 맞았으면 그 개념을 다음 grill에서 다시 꺼낸다. `--all`은 taken·dropped도 보이고 status 열을 더한다. 형식이 틀린 아이디어 파일은 `경고: <파일>: <이유>`로 알리고 목록에서 뺀다(`gs check`는 아이디어를 보지 않는다). 파일 형식은 `skills/idea/templates/idea.md`와 [internals.md](internals.md#아이디어-함).
+아이디어 파일에 `issues: [12]`를 적으면 그 issue 번호가 줄 끝에 `issues: #12`로 붙는다. 열린 아이디어를 severity(high→low) → 날짜(오래된 것 먼저) → slug 순으로 보이고, 아래에 `.goldstack/out-of-scope/*.md`마다 `**다시 볼 조건**:` 문장을 보인다. 조건이 맞았으면 그 개념을 다음 grill에서 다시 꺼낸다. `--all`은 taken·dropped도 보이고 status 열을 더한다. 형식이 틀린 아이디어 파일은 `경고: <파일>: <이유>`로 알리고 목록에서 뺀다(`gs check`는 아이디어를 보지 않는다). 파일 형식은 `skills/idea/templates/idea.md`와 [internals.md](internals.md#아이디어-함).
 
 **`/grill`의 후보 질문** — 열린 아이디어가 있을 때 라운드 1의 첫 질문:
 ```
@@ -891,7 +891,9 @@ detail = "errors" # errors | minimal
 - `off`: 아무것도 쓰지도 보내지도 않는다. 회사 레포에 권한다. `[feedback]` 절이 아예 없는 옛 config도 `off`다.
 - `draft`: 로컬 초안만 쌓고 `gs feedback send`나 `/feedback send`로 직접 보낸다. `gs init`이 만든 config의 기본값이다.
 - `auto` + `errors`: 개인 프로젝트용. 자동으로 오류 줄까지 보낸다. `minimal`이면 오류 줄 없이 항목만 보낸다.
-`/adopt`가 새 레포에서 한 번 묻고 이 값을 적는다. 받는 쪽은 `gs backlog`와 `/grill` 1단계가 열린 `field-report` issue를 후보로 보인다. 티켓 키 `closes: [12]`면 그 PR이 병합될 때 issue가 닫힌다.
+`/adopt`가 새 레포에서 한 번 묻고 이 값을 적는다. 받는 쪽은 `gs backlog`와 `/grill` 1단계가 열린 `field-report` issue와 저장소 소유자가 올린 라벨 없는 열린 issue(`미분류`)를 후보로 보인다. 아이디어 파일의 `issues: [12]`로 연결한 issue는 후보에서 한 번만 나온다.
+
+**issue 상태** — 티켓 키 `closes: [12]`인 issue는 base에 실제로 반영된 만큼만 닫힌다. 병합된 티켓의 issue는 PR 없이 직접 반영돼도 `<버전>에서 고침 (<커밋>)` 댓글과 함께 닫히고, 그 티켓이 revert되면 다시 열린다. 실패·건너뜀 티켓이나 결과가 안 정해진 PR의 issue는 닫지 않는다. 닫힌 field-report와 같은 결함이 고친 버전보다 새 gs에서 다시 나면 issue를 다시 열고 횟수 댓글을 단다. 같거나 옛 gs면 `gs self-update`를 안내한다.
 
 명령: `gs feedback "문장"` 또는 `gs feedback --body-file <파일>`(확인한 UTF-8 본문으로 초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태. `status`도 같다), `gs feedback send`(쌓인 것 전송). skill은 `/feedback <문장 | --body-file 파일 | list | status | send>`.
 

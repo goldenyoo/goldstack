@@ -23,7 +23,7 @@
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
-| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글, `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
+| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 초안에 기록된 발생 버전이 새로우면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
 | `notify.py` | 텔레그램 전송, `gs notify` 명령 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
@@ -65,7 +65,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 - `tier`: `small`·`medium`·`large`. 아니면 오류. worker의 등급이고 없으면 `medium`이다(아래 "모델 어댑터"). 계열 표가 없으면 쓰이지 않는다. `/grill`이 적는다(템플릿에 `tier: medium`).
 - `touches`: 문자열 목록, 레포 루트 기준 경로(glob 허용). 목록이 아니거나, 빈 값·절대 경로·`..`가 든 값은 오류. 없으면 `[]`이고 겹침 검사에서 빠진다. `/grill`의 티켓 분해 라운드가 적는다(템플릿 `skills/grill/templates/ticket.md`에 `touches: []`).
 - `verify`: 비어 있지 않은 한 줄 셸 명령. 아니면 오류. 이 티켓의 검증 명령을 spec의 것 대신 정한다("검증 명령 고르기와 재시도"). 마무리는 영향을 받지 않는다. 템플릿에는 주석으로 있다(필요한 티켓에만).
-- `closes`: 양의 issue 번호 목록(선택, 예: `[12]`). 목록이 아니거나 0·음수·숫자가 아닌 값이 있으면 오류. `finish.py`는 merged 티켓만 PR 본문의 `Closes #12`에 넣고 squash 메시지에도 보존한다. PR 없이 직접 push된 티켓은 원격 base의 gs-ticket 표시를 확인해 `gh issue close`로 닫는다. 실패한 티켓과 integration에만 든 티켓은 직접 닫지 않는다.
+- `closes`: 양의 issue 번호 목록(선택, 예: `[12]`). 목록이 아니거나 0·음수·숫자가 아닌 값이 있으면 오류. `finish.py`는 그 PR이 base에 들이는 merged 티켓만 PR 본문의 `Closes #12`에 넣고 squash 메시지에도 보존한다. 그 PR 뒤에도 base에서 되돌린 채인 티켓의 번호는 다른 티켓이 같은 issue를 닫아도 넣지 않는다. `finish.sync_issues`가 마무리 시작과 결과가 정해진 뒤(그리고 `이미 끝남` 때) issue를 원격 base의 지금 상태에 맞춘다. gs-ticket 표시와 `This reverts commit` 줄을 base에 들어온 순서대로 읽는다(`_base_tickets`). 반영된 merged 티켓의 issue는 앞 PR이 있어도 `<버전>에서 고침 (<커밋>)` 댓글을 한 번 달고 `--reason completed`로 닫는다. 버전은 그 커밋의 `pyproject.toml`이고 없으면 feature 이름이다. 되돌린 티켓의 issue는 닫지 않고, 닫혀 있으면 다시 연다. 결과가 안 정해진 PR의 티켓, 실패한 티켓, integration에만 든 티켓은 닫지 않는다. 끝낸 일은 `finish.issues`에 남아 근거 커밋이 바뀌기 전에는 gh를 다시 부르지 않는다(사람이 그 뒤에 열거나 닫은 issue를 되돌리지 않는다). gh 실패는 보고서 `### issue`에 남고 다음 `gs go`가 다시 시도한다. 병합과 결과는 바뀌지 않는다. not planned 닫기는 자동으로 하지 않는다. 사람이 `gh issue close --reason "not planned"`를 친다.
 - `second_reviewer`: `claude|codex|agy` 중 `model`·`reviewer`와 모두 다른 것. 같으면 오류(`리뷰는 다른 계열이어야 한다: reviewer과 second_reviewer가 둘 다 …`). 템플릿에는 없다(필요한 티켓에만).
 
 **`touches` 겹침 검사**(`check.touches_problems`) — 범위 안에서 `touches`가 있는 티켓 쌍마다 본다. 경로를 `/`로 나눠 부분끼리 맞춘다: `*`·`?`·`[…]`는 한 부분, `**`는 0개 이상의 부분. 두 패턴이 함께 맞는 경로가 하나라도 있으면 겹침이다(같은 경로 포함). 순서는 전체 그래프(`--only` 범위 밖 포함)에서 `blocked_by`를 따라간 조상 집합으로 본다: 한쪽이 다른 쪽의 조상이면 순서가 있다. 겹치는데 순서가 없으면 쌍마다 겹친 경로 하나로 경고 `<a>·<b>가 <경로>를 함께 건드리는데 순서가 없다`. 경고라 `gs go`를 막지 않는다.
@@ -95,7 +95,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 ## 상태
 
 `run/state.json`이 상태의 원천이다. `gs go`의 요약·보고서·PR 본문·알림, `gs status`, 진행 바 mod가 모두 이 파일을 읽는다. 쓰기는 같은 디렉터리의 임시 파일 뒤 rename(원자적)이다.
-- 위: `feature`, `pid`(마지막으로 쓴 `gs go`), `only`, `started_at`, `updated_at`(heartbeat로 상태가 그대로여도 60초마다 바뀐다), `finished_at`, `phase`(feature 전체 마무리 중이면 `finish`, integration·base worktree 준비 중이면 `setup`), `finish`(마무리 재개 지점: `phase`, `outcome`, `url`, `merge_head`, `merge_method`, `merge_sha`, `revert_sha`, `integration_ok`, `main_ok`, `checks`, `revert_pr`·`revert_head`·`revert_merge`, `report_pr`·`report_head`·`report_merge`·`report_result`, `base_report_tried`, `base_report`, `reintroduced`, `error`, `head`, `docs_missing` 등. `docs_missing`은 `_begin`이 실패·건너뜀 티켓을 `pending`으로 되돌리기 전에 적어 둔 문서 티켓 id 목록이다. 마무리만 재개해도 보고서 `문서 미반영: <티켓>` 줄이 남게 한다. 조건은 `report.docs_missing`: 병합된 티켓이 있고, `failed`·`skipped` 티켓의 `touches`에 `docs/` 아래 경로나 `CHANGELOG.md`가 있을 때), `finish_errors`(마무리를 멈춘 오류의 글. 새 마무리가 `finish`를 비워도 실행을 넘어 남고, 결함 수집이 같은 오류를 다시 올리지 않게 대조한다. 옛 state에는 없다), `progress`, `agy_calls`(이번 실행에서 gs가 띄운 agy 호출 수, 실행 시작마다 0), `network`(`errors`·`waited_seconds`는 실행을 넘어 누적, `wait`는 지금의 대기 `{count, due_at}`, `due_at`이 비면 회복 확인 중, `aborted`는 중단 이유. 뒤의 둘은 실행 시작 때 지운다), `metrics`(아래), `push_record`(실행 시작 때의 push 설정, 아래 "마무리"의 "push 전 대조").
+- 위: `feature`, `pid`(마지막으로 쓴 `gs go`), `only`, `started_at`, `updated_at`(heartbeat로 상태가 그대로여도 60초마다 바뀐다), `finished_at`, `phase`(feature 전체 마무리 중이면 `finish`, integration·base worktree 준비 중이면 `setup`), `finish`(마무리 재개 지점: `phase`, `outcome`, `url`, `merge_head`, `merge_method`, `merge_sha`, `revert_sha`, `integration_ok`, `main_ok`, `checks`, `revert_pr`·`revert_head`·`revert_merge`, `report_pr`·`report_head`·`report_merge`·`report_result`, `base_report_tried`, `base_report`, `reintroduced`, `issues`(`{번호: {action, commit, ok}}`, 새 마무리에도 넘긴다)·`issues_error`, `error`, `head`, `docs_missing` 등. `docs_missing`은 `_begin`이 실패·건너뜀 티켓을 `pending`으로 되돌리기 전에 적어 둔 문서 티켓 id 목록이다. 마무리만 재개해도 보고서 `문서 미반영: <티켓>` 줄이 남게 한다. 조건은 `report.docs_missing`: 병합된 티켓이 있고, `failed`·`skipped` 티켓의 `touches`에 `docs/` 아래 경로나 `CHANGELOG.md`가 있을 때), `finish_errors`(마무리를 멈춘 오류의 글. 새 마무리가 `finish`를 비워도 실행을 넘어 남고, 결함 수집이 같은 오류를 다시 올리지 않게 대조한다. 옛 state에는 없다), `progress`, `agy_calls`(이번 실행에서 gs가 띄운 agy 호출 수, 실행 시작마다 0), `network`(`errors`·`waited_seconds`는 실행을 넘어 누적, `wait`는 지금의 대기 `{count, due_at}`, `due_at`이 비면 회복 확인 중, `aborted`는 중단 이유. 뒤의 둘은 실행 시작 때 지운다), `metrics`(아래), `push_record`(실행 시작 때의 push 설정, 아래 "마무리"의 "push 전 대조").
 - 티켓마다: `status`(`pending`, `running`, `merged`, `failed`, `skipped`), `attempts`, `branch`, `pane`(`pane <id>` 또는 `pid <n>`), `started_at`·`ended_at`, `log`, `reason`, `worktree`, `failures`, `failed_worktrees`, `kept_worktrees`, `repairs`(수리마다 한 줄: `attempt`, `verify_log`, `reason`, `base`, `worker`, `result`(`""` 진행 중 | `passed` | `failed`), `detail`. 재시도·재실행에도 보존. 보고서·`gs status`의 `수리: …` 줄은 `state.repair_summary`), `isolation_warnings`(플러그인 격리 실패, 지난 시도·수정 worker 것도 남긴다), `failure_summary`, `review`(재리뷰 필드는 아래 "재리뷰"), `second_review`(`second_reviewer`가 있을 때 두 번째 리뷰 기록, 모양은 `review`와 같다), `phases`, `transient_errors`·`network_wait_seconds`(일시 오류 수·대기 초, `failures`와 따로 누적), `network_resume`(잇는 표시: `branch`, `worktree`, `base`, `fix`, `rundir`, `done`, 수리 중이면 `repair`(`go.REPAIR_*`: `seat` 자리 기다림 | `run` 수리 worker 실행 중 | `review` 수리 재리뷰 | `verify` 다시 검증). 옛 state에는 `repairs`·`repair`가 없고 수리하지 않은 티켓으로 읽는다. 아래 "네트워크 끊김").
 - `phases`: 단계 전환마다 `{attempt, phase, model, started_at, ended_at}`를 더한다. worker·수정 단계에는 `tier`, `actual_model`, `effort`도 있다. phase는 `setup`, `worker`, `review`, `fix`, `rereview`(model은 `codex+agy`처럼 리뷰어들), `fix2`, `network`(네트워크 대기), `verify`, `finish`(티켓을 integration에 커밋하는 순간). ETA 표본은 이 단계들을 포함한 티켓 전체 시간이다. 보고서의 단계별 소요가 이것을 합산한다(지난 시도 포함). 분으로 반올림해 0분인 단계(대개 순간인 `finish`)는 줄에서 빼고, 모두 0분이면 `모두 1분 미만`이다.
 - `metrics`(선택, `metrics.py`): 재개·재시도에도 남기는 목록들이다. `runtime`은 실행별 gs 버전·설치 commit(`direct_url.json`의 VCS 기록이 있을 때만), `workers`는 구현·수정·네트워크 재시작별 실행 디렉터리·실제 모델/effort·`exit` mtime(`worker_exited_at`)·첫 처리 시작(`processing_started_at`)·실행 초·처리 대기 초다. `validations`는 gs가 돌린 검증의 재시도마다 라벨·명령·`integration_head`(검증한 worktree의 HEAD. 티켓 검증이면 병합 전 integration 끝이라 같은 티켓의 여러 검증이 같을 수 있고 티켓 코드가 아니다)·`retry`(한 검증 안의 재시도 번호)·초·종료 코드·시간 초과·결과·트리 변경 여부를 남긴다. 티켓 검증에는 `ticket_head`(병합하려던 티켓 커밋)·`ticket_attempt`(그때의 티켓 worker 시도 번호)·`tree_sha`(검증한 병합 트리)도 남기고, 마무리 검증은 `ticket_head`가 비고 `ticket_attempt`가 null이다. 옛 state의 `sha`·`attempt`·`merge_head`는 각각 `integration_head`·`retry`·`ticket_head`로 읽는다(`report.validation_row`). 보고서 판단 입력(`finish/report-input.md`)에는 통과하지 못한 검증의 `verify.log`에서 뽑은 실패 시험 줄이 "실패한 검증의 시험 줄" 칸으로 들어가고, 로그가 없으면 없다고 적는다(`report.failing_tests`). 보고서만 바뀌어 건너뛴 검증은 호출 기록을 만들지 않는다.
@@ -118,7 +118,8 @@ frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max
 - herdr 안이면(`HERDR_SOCKET_PATH`·`HERDR_SESSION`) 지금 workspace(없으면 새 workspace `gs:<f>`)의 탭 `gs:<f>`에 worker마다 새 pane을 연다. 성공한 pane은 닫고 실패한 pane은 남긴다. herdr 밖이면 subprocess로 돈다.
 - 루프는 스레드 하나다. 병합·검증은 이 루프에서 한 번에 하나씩 한다(다른 worker는 그동안 각자 돈다).
 - **리뷰 스레드와 자리**(`go._review_stage`, `go._review_tick`, `go.Reviews`) — 리뷰·판단·재리뷰는 루프 밖 스레드에서 돈다. `_finish`가 worker 결과를 확인하고(`_check_worker`) 리뷰 단계(`_review_stage`, 제너레이터)로 넘기면, 단계는 호출에서 멈추고 호출이 끝났을 때 `_review_tick`이 결과를 넣어 잇는다. 그동안 루프는 다른 worker의 종료를 처리하고 준비된 티켓을 시작한다. 리뷰가 끝난 티켓은 병합 단계(`_merge_stage`)를 기다렸다가 루프에서 하나씩 병합·검증한다.
-- **자리**: 리뷰 중인 티켓은 `max_workers` 자리를 쓰지 않는다. worker는 최대 `max_workers`, 리뷰 중인 티켓도 최대 `max_workers`다. 수정 worker는 worker 자리를 쓰고, 없으면 기다린다(단계 `fix_wait`, 리뷰 자리를 기다린 시간은 `review_wait`).
+- **자리**: 리뷰 중인 티켓은 `max_workers` 자리를 쓰지 않는다. worker는 최대 `max_workers`, 리뷰 중인 티켓도 최대 `max_workers`다. 수정 worker는 worker 자리를 쓰고, 없으면 기다린다(단계 `fix_wait`, 리뷰 자리를 기다린 시간은 `review_wait`). 빈 자리는 수정·수리 worker가 새 티켓보다 먼저 얻는다: 호출은 끝났지만 루프가 결과를 아직 받지 않은 티켓이 있어도(병합이 `_review_tick`을 일찍 돌려보낸 때) 새 티켓을 미뤄 다음 `_review_tick`이 결과를 거두게 한다(`Reviews.fix_waiting`).
+- **끊김 중의 리뷰**: 끊김 중에는 새 호출을 보내지 않고, 끝난 호출의 결과도 받지 않는다(단계 `network`). 받으면 두 번째 리뷰 준비가 끊김 중에 돌아 그사이 움직인 head를 놓친다. 끊김이 끝난 뒤 결과를 받고 그때의 head를 리뷰한다. 이 대기는 `결과 대기`에 든다. 호출이 예외로 끝났으면 미루지 않는다.
 - **state 쓰기**: `state.json`은 루프 스레드만 고친다. 리뷰 스레드는 결과를 돌려주고, 호출 도중의 대기·측정은 `Reviews.inbox`·`review.CallWait`로 루프에 넘겨 반영한다. 리뷰 스레드의 뜻밖의 오류는 첫 리뷰든 재리뷰든 그 티켓의 지금 실패 처리로 간다(확인 없이 병합하지 않는다). agy 호출 상한 검사와 세기는 호출을 보내기 전에 루프 스레드에서 하므로 동시 리뷰에서도 상한을 넘기지 않는다.
 - **루프를 떠날 때**: `중단(네트워크)`, 사람의 중단(Ctrl-C, SIGTERM, SIGHUP), 뜻밖의 오류 어느 쪽이든 돌던 리뷰어의 프로세스 그룹을 끝낸다(`go._stop_reviews`). 리뷰 단계의 티켓은 `network_resume`이 남아 다음 `gs go`가 끝나지 않은 리뷰를 처음부터 다시 한다. 리뷰가 끝나 수정 worker 자리나 끊김을 기다리던 티켓은 `network_resume.reviewed`로 표시되어, 끝난 리뷰를 다시 부르지 않고 기다리던 자리로 돌아간다. 떠날 때 head 대조는 그대로 한다.
 - **처리 대기**(`processing_wait_seconds`) — worker가 끝난 뒤 루프가 그 결과를 받기까지(`worker_exited_at` → `processing_started_at`). 리뷰를 루프 밖으로 뺀 뒤에는 다른 티켓의 리뷰가 이 값을 늘리지 않는다. 받은 뒤 리뷰 자리를 기다린 시간은 여기 들지 않는다.
@@ -153,7 +154,7 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 
 **읽는 트리**(`go._review_tree`) — 첫 리뷰와 재리뷰가 같은 규칙을 쓴다. 티켓 worktree가 대상 head 그대로이고 깨끗하면(setup 산출물 제외) 그곳이다. 미커밋 변경이 있거나 다른 곳으로 옮겨 갔으면 임시 worktree `run/gs-review-*/wt`(재리뷰는 `run/gs-rereview-*/wt`)다. 판단 모델도 같은 트리에서 돈다. 병합되지 않을 코드를 근거로 지적을 기각하거나 `resolved`로 확인하지 않게 한다. 티켓 worktree의 변경은 지우지 않는다. 트리를 못 만들면 아무도 부르지 않는다(agy 호출로 세지 않는다): 첫 리뷰는 리뷰 실패(`note`)로 적고 verify만으로 병합하고, 재리뷰는 `unchecked`(`재리뷰 실패`)다. 치우기 실패는 경고뿐이다.
 
-**병합 전 대조**(`go._review_to_head`, `go._moved_head`) — 리뷰·재리뷰가 끝날 때마다 티켓 head를 리뷰 기록의 `reviewed_head`와 비교한다. 살아 남은 자손이 리뷰 중에 커밋한 경우 같은, 아무 리뷰어도 보지 않은 head가 병합되지 않게 한다.
+**병합 전 대조**(`go._review_to_head`, `go._moved_head`) — 리뷰·재리뷰가 끝날 때마다 티켓 head를 리뷰 기록의 `reviewed_head`와 비교한다. 살아 남은 자손이 리뷰 중에 커밋한 경우 같은, 아무 리뷰어도 보지 않은 head가 병합되지 않게 한다. 병합은 브랜치 이름이 아니라 리뷰 단계가 마지막으로 대상으로 삼은 SHA(`Active.target`)로 한다(`go._merge_stage`가 `git merge --no-ff --no-commit <SHA>`). 병합 직전이나 검증 중에 브랜치가 움직였으면(`_late_commit`) 병합하지 않고 재리뷰로 돌아가고, 이미 한 번 더 봤으면 늦은 커밋을 뺀 SHA를 병합한다. catch-up으로 합친 커밋은 리뷰 대상 위인지 `_is_catch_up`이 가려낸다. `target`은 재개 표시(`network_resume`)에 남고, 비어 있으면 옛 state라 대조할 것이 없다.
 - `reviewed_head`: 이 리뷰어를 부른 마지막 리뷰·재리뷰의 대상 head. 호출이 실패해도 옮긴다(실패는 `note`·`failed`가 말한다). 수정 커밋 diff가 비어 부르지 않은 재리뷰도 그 head로 옮긴다. 부르지 못했으면(거부, 한도, 트리 실패) 옮기지 않는다. 옛 state의 기록에는 없고, 값이 하나도 없으면 대조하지 않는다.
 - 리뷰가 둘이면 어느 한쪽이 본 head면 같다(재리뷰는 지적을 낸 리뷰어만 부른다).
 - 다르면 한 번 다시 부른다. 수정 전이면 `_review`(티켓 diff 전체, 새 기록이 앞 기록을 대신한다. 답을 못 받았으면 앞 지적을 남기고 `note`에 덧붙인다), 수정 뒤면 그 회차의 `_rereview`(수정 worker가 받은 지적, `a.base..head`)다. 고칠 지적이 나오면 평소처럼 수정 worker로 가고 수정 횟수 상한은 그대로다.
@@ -414,6 +415,7 @@ date: 2026-11-03          # YYYY-MM-DD, 필수
 severity: high            # high | medium | low, 필수
 source: goldstack-v2 리뷰 02   # 자유 문장, 필수
 status: open              # open | taken | dropped, 필수
+issues: []                # 연결한 양의 issue 번호 목록(선택, 예: [12])
 feature: ""               # status가 taken이면 필수(예: goldstack-v3)
 ---
 <첫 줄: 한 줄 요약. 이어서 근거·생각. dropped면 끝에 `버린 이유: …` 한 줄>
@@ -440,7 +442,9 @@ same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이
 - `README.md`는 건너뛴다. 형식이 틀린 파일(slug, 빠진 필수 키, 허용 밖 값, 날짜, taken인데 빈 feature 등)은 `경고: <파일>: <이유>`로 보이고 목록에서 뺀다. `.goldstack/ideas/`가 없으면 빈 목록. `gs check`는 아이디어를 보지 않는다(아이디어가 실행을 막을 이유가 없다).
 - 범위 밖 줄: `.goldstack/out-of-scope/*.md`마다 `<slug>  <**다시 볼 조건**: 뒤 문장>`. 조건 줄이 없거나 비면 `(조건 없음)`.
 
-`backlog.py`는 설정된 원격의 GitHub 저장소가 `feedback.repo`와 같을 때만 열린 `field-report` issue를 조회한다. 번호·제목·횟수(본문과 횟수 댓글의 최댓값)를 보이며 gh 실패는 한 줄 경고로 끝낸다. 기존 아이디어·범위 밖 출력과 종료 코드는 그대로다.
+`issues` 키는 양의 번호 목록이다(없으면 빈 목록, 목록이 아니거나 0·음수·숫자 아닌 값이 있으면 경고). 번호는 아이디어 줄 끝에 `issues: #12`로 보이고, 같은 번호의 issue는 아래 후보에서 다시 보이지 않는다.
+
+`backlog.py`는 설정된 원격의 GitHub 저장소가 `feedback.repo`와 같을 때만 열린 `field-report` issue와 그 저장소 소유자가 올린 라벨 없는 열린 issue(`미분류` 표시)를 조회한다. 번호·제목·횟수(본문과 횟수 댓글의 최댓값)를 보이며 gh 실패는 한 줄 경고로 끝낸다. 기존 아이디어·범위 밖 출력과 종료 코드는 그대로다.
 
 ## 피드백 수집 (`feedback.py`, `cli.py`)
 
