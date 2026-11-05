@@ -515,7 +515,11 @@ def docs_missing(r) -> list[str]:
     merged = {tid for tid, ts in r.st.tickets.items() if ts.status == state.MERGED}
     if not merged:
         return []
-    missing = []
+    # _begin retries failed/skipped tickets by resetting them to PENDING. Keep
+    # the notice captured there so finish-only resumes can still report it.
+    missing = [tid for tid in r.st.finish.get("docs_missing", [])
+               if tid in tickets and r.st.tickets.get(tid) is not None
+               and r.st.tickets[tid].status != state.MERGED]
     for tid, ticket in tickets.items():
         ts = r.st.tickets.get(tid)
         if ts is None or ts.status not in (state.FAILED, state.SKIPPED) or not (merged - {tid}):
@@ -523,5 +527,6 @@ def docs_missing(r) -> list[str]:
         touches = getattr(ticket, "touches", [])
         if any(path == "CHANGELOG.md" or path.startswith("docs/") or path.startswith("docs\\")
                for path in touches):
-            missing.append(tid)
+            if tid not in missing:
+                missing.append(tid)
     return missing

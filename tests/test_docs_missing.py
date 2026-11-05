@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from gs import report, state
+from gs import config, go, report, state
 
 
 class DocsMissingReportTest(unittest.TestCase):
@@ -45,6 +45,34 @@ class DocsMissingReportTest(unittest.TestCase):
         self.ticket("07", state.FAILED, ["src/gs/report.py"])
         self.ticket("08", state.MERGED, ["docs/guide.md"])
         self.assertNotIn("문서 미반영", self.render())
+
+    def test_notice_survives_failed_ticket_reset_before_finish_resume(self):
+        self.ticket("07", state.FAILED, ["docs/guide.md"])
+        self.ticket("08", state.MERGED, ["src/gs/report.py"])
+        self.r.st.finish["docs_missing"] = ["07"]
+        self.r.st.tickets["07"].status = state.PENDING
+        self.assertIn("문서 미반영: 07", self.render())
+
+    def test_begin_preserves_notice_before_resetting_failed_tickets(self):
+        repo = self.rundir
+        feature_root = repo / ".goldstack/work/demo"
+        feature_root.mkdir(parents=True)
+        (repo / config.CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
+        (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+        cfg, _ = config.load(repo)
+        feat = SimpleNamespace(name="demo", root=feature_root, spec=SimpleNamespace(max_workers=1),
+                               tickets={"07": SimpleNamespace(id="07", model="codex", blocked_by=[],
+                                                              touches=["docs/guide.md"]),
+                                        "08": SimpleNamespace(id="08", model="codex", blocked_by=[],
+                                                              touches=["src/gs/report.py"])})
+        st = state.State(feature="demo")
+        st.ticket("07").status = state.FAILED
+        st.ticket("08").status = state.MERGED
+        state.save(feature_root / "run", st)
+        run = go.Run(repo, feat, None, cfg)
+        go._begin(run)
+        self.assertEqual(run.st.tickets["07"].status, state.PENDING)
+        self.assertEqual(run.st.finish["docs_missing"], ["07"])
 
 
 if __name__ == "__main__":
