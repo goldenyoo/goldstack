@@ -1,4 +1,4 @@
-"""claude worker 플러그인 격리(08): 명령 문자열에 격리 옵션이 들어가는가.
+"""claude worker·리뷰·판단 플러그인 격리: 명령 인자에 격리 옵션이 들어가는가.
 
 실제 claude는 부르지 않는다. `claude plugin list --json`은 가짜 실행 파일(GS_CLAUDE)로 바꿔 끼운다.
 격리 옵션이 실제로 goldstack hook을 남기고 다른 플러그인 skill을 빼는지는
@@ -11,10 +11,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import support
-from gs import adapters, config, state
+from gs import adapters, config, report, review, state
 from gs.adapters import AdapterError, WorkerInput
 
 MODELS = config.ModelsConfig("judge-test", "review-test", "agy-test", "")
@@ -102,7 +103,7 @@ class IsolationCommand(unittest.TestCase):
         self.assertIn("--disable-slash-commands", cmd)
 
     def test_listing_failure_keeps_other_isolation_and_notes(self):
-        cases = {"exit": "echo boom >&2; exit 3", "not json": "echo nope", "not list": "echo '{}'"}
+        cases = {"exit": "echo boom >&2; exit 3", "not json": "echo nope", "not list": "echo '{}'", "decode": r"printf '\377'"}
         for why, body in cases.items():
             with self.subTest(why):
                 self.fake_claude(body)
@@ -121,6 +122,90 @@ class IsolationCommand(unittest.TestCase):
         self.assertNotIn("--settings", a.command(self.inp))
         self.assertIn("가 없다", a.outcome(1, self.inp)[1])
         self.assertEqual(a.outcome(1, self.inp)[0], 1)
+
+    def review_and_judge_argv(self, on_wait=None):
+        argv, prompt, to_file = review.reviewer_argv(
+            "claude", self.wt, "review prompt", self.root / "review.txt", MODELS, on_wait=on_wait)
+        self.assertEqual((prompt, to_file), ("review prompt", False))
+        return [(argv, "Read,Grep,Glob"),
+                (review.judge_argv(SimpleNamespace(models=MODELS), cwd=self.wt, on_wait=on_wait), "Read")]
+
+    def assert_readonly_isolation(self, argv, tools):
+        self.assertEqual(argv[argv.index("--tools") + 1], tools)
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertEqual(json.loads(argv[argv.index("--mcp-config") + 1]), {"mcpServers": {}})
+        self.assertIn("--disable-slash-commands", argv)
+
+    def test_review_and_judge_share_worker_isolation_in_their_worktree(self):
+        os.environ.pop("GS_REVIEWER_CMD", None)
+        calls = self.listing(PLUGINS)
+        worker_argv = self.argv(adapters.Claude(MODELS).command(self.inp))
+        expected = json.loads(worker_argv[worker_argv.index("--settings") + 1])
+        for argv, tools in self.review_and_judge_argv():
+            self.assert_readonly_isolation(argv, tools)
+            self.assertEqual(json.loads(argv[argv.index("--settings") + 1]), expected)
+        lines = calls.read_text().splitlines()
+        self.assertEqual(len(lines), 3)
+        for line in lines:
+            cwd, args = line.split("|")
+            self.assertEqual(os.path.realpath(cwd), os.path.realpath(self.wt))
+            self.assertEqual(args, "plugin list --json")
+
+    def test_review_and_judge_listing_failure_warns_and_keeps_other_isolation(self):
+        os.environ.pop("GS_REVIEWER_CMD", None)
+        for body in ("exit 3", "echo nope", "echo '{}'", r"printf '\377'", None):
+            with self.subTest(body=body):
+                if body is None:
+                    os.environ["GS_CLAUDE"] = str(self.root / "missing")
+                else:
+                    self.fake_claude(body)
+                with mock.patch("sys.stderr") as stderr:
+                    commands = self.review_and_judge_argv()
+                self.assertEqual("".join(c.args[0] for c in stderr.write.call_args_list)
+                                 .count("플러그인 격리 못 함:"), 2)
+                for argv, tools in commands:
+                    self.assert_readonly_isolation(argv, tools)
+                    self.assertNotIn("--settings", argv)
+
+    def test_review_and_judge_warnings_are_queued_and_saved_in_report(self):
+        os.environ.pop("GS_REVIEWER_CMD", None)
+        self.fake_claude("exit 3")
+        for caller in ("review", "judge", "summary"):
+            with self.subTest(caller=caller):
+                st = state.State("demo")
+                pending = []
+                save = mock.Mock()
+                wait = review.CallWait(st, save, "01" if caller != "summary" else "", post=pending.append)
+                with mock.patch("sys.stderr"):
+                    if caller == "review":
+                        review.reviewer_argv("claude", self.wt, "prompt", self.root / "out", MODELS, on_wait=wait)
+                    else:
+                        review.judge_argv(SimpleNamespace(models=MODELS), cwd=self.wt, on_wait=wait)
+                self.assertEqual(st.tickets, {})  # 스레드는 상태를 직접 고치지 않는다.
+                save.assert_not_called()
+                self.assertEqual(len(pending), 1)
+                pending[0]()
+                save.assert_called_once()
+                warnings = (st.tickets["01"].isolation_warnings if caller != "summary"
+                            else st.finish["isolation_warnings"])
+                self.assertEqual(len(warnings), 1)
+                state.save(self.root, st)
+                restored = state.load(self.root, "demo")
+                risks = report.isolation_risks(SimpleNamespace(st=restored))
+                self.assertIn("### 남은 위험", risks)
+                self.assertIn(warnings[0], risks)
+
+    def test_review_and_judge_seams_are_preserved(self):
+        os.environ["GS_REVIEWER_CMD"] = "custom reviewer --flag"
+        os.environ["GS_JUDGE"] = str(self.root / "custom judge")
+        with mock.patch.object(adapters, "claude_plugins", return_value=[]) as listing:
+            self.assertEqual(review.reviewer_argv("claude", self.wt, "prompt", self.root / "out", MODELS),
+                             (["bash", "-c", "custom reviewer --flag"], "prompt", False))
+            listing.assert_not_called()
+            argv = review.judge_argv(SimpleNamespace(models=MODELS), model="summary-model", cwd=self.wt)
+        self.assertEqual(argv[0], os.environ["GS_JUDGE"])
+        self.assertEqual(argv[argv.index("--model") + 1], "summary-model")
+        self.assert_readonly_isolation(argv, "Read")
 
     def test_plugins_to_disable_ignores_junk(self):
         got = adapters.plugins_to_disable([{"id": "a@m"}, {"id": ""}, {"id": 3}, {}, {"id": "a@m"},
@@ -172,6 +257,25 @@ bash "$here/worker.sh"
         self.assert_report_warning()
         # 완료한 실행을 이어가도 경고가 사라지지 않는다.
         self.assertEqual(self.go("--only", "01")[0], 0)
+        self.assert_report_warning()
+
+    def test_codex_worker_claude_reviewer_reports_isolation_failure(self):
+        os.environ["GS_WORKER_CMD"] = f"bash {self.bin / 'worker.sh'}"
+        os.environ.pop("GS_REVIEWER_CMD")
+        ticket = self.repo / ".goldstack/work/demo/tickets/01-t.md"
+        ticket.write_text(ticket.read_text().replace("model: claude", "model: codex")
+                          .replace("reviewer: codex", "reviewer: claude"))
+        support.sh(self.repo, "git", "add", "-A")
+        support.sh(self.repo, "git", "commit", "-qm", "리뷰어 변경")
+        support.sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
+        (self.bin / "claude").write_text("#!/bin/bash\n"
+                                        "if [ \"$1\" = plugin ]; then echo 'listing denied' >&2; exit 3; fi\n"
+                                        "echo '{\"findings\":[]}'\n")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual(ts.status, state.MERGED)
+        self.assertEqual(ts.review["note"], "")
         self.assert_report_warning()
 
     def test_failed_worker_keeps_isolation_warning_in_result_and_risks(self):
