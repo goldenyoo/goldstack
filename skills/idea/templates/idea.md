@@ -8,6 +8,7 @@ date: 2026-11-03          # YYYY-MM-DD, 필수
 severity: high            # high | medium | low, 필수
 source: goldstack-v2 리뷰 02   # 자유 문장, 필수
 status: open              # open | taken | dropped, 필수
+issues: []                # 연결한 양의 issue 번호 목록(예: [12])
 feature: ""               # taken이면 비어 있지 않은 feature 이름 필수
 ---
 첫 줄은 한 줄 요약. 이어서 근거·생각을 쓴다.
