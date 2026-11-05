@@ -626,12 +626,32 @@ def _save_send_state(path: Path, data: dict) -> None:
         raise
 
 
+def _release_parts(value: str) -> tuple[int, ...] | None:
+    """비교할 수 있는 정식 버전만 받는다. feature 이름 등은 고친 버전으로 추측하지 않는다."""
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", value, re.ASCII):
+        return None
+    parts = tuple(int(n) for n in value.split("."))
+    return parts + (0,) * (3 - len(parts))
+
+
+def _fixed_release(repo: Path, target: str, number: int) -> tuple[int, ...] | None:
+    """마지막 고침 댓글을 읽는다. 옛 feature 이름 댓글도 새 issue로 처리한다."""
+    view = json.loads(_gh(repo, target, "issue", "view", str(number), "--json", "comments"))
+    for comment in reversed(view["comments"]):
+        match = re.fullmatch(r"([^\s]+)에서 고침 \([0-9a-f]{40}\)", comment["body"].strip())
+        if match:
+            return _release_parts(match[1])
+    return None
+
+
 def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path | None = None, err=None) -> int:
     """쌓인 초안을 보내고 성공한 issue/댓글 수를 돌려준다. draft는 명시적 force만 보낸다.
 
     실패는 한 줄로 알리고 초안을 보존한다. 시작 때 재전송할 호출 지점은 수집 쪽에서 맡는다.
     성공한 횟수는 초안에, 일일 한도와 issue별 댓글 날짜는 전송 장부에 남긴다.
     only_path가 있으면 그 초안만 보낸다. 손상된 초안은 보존하고 다음 초안으로 넘어간다.
+    닫힌 issue는 고친 버전보다 새 gs일 때 다시 열고, 같거나 옛 gs면 업데이트를 안내한다.
+    고친 버전이나 지금 버전을 비교할 수 없으면 새 issue를 만든다.
     장부가 손상되면 당일 잔여 한도를 알 수 없으므로 다음 날까지 전송을 미룬다.
     """
     import fcntl
@@ -682,15 +702,29 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path
                     continue
                 if draft.count <= already:
                     continue
-                matches = json.loads(_gh(repo, target, "issue", "list", "--state", "open", "--search",
-                                         draft.fingerprint, "--json", "number,body", "--limit", "100"))
+                matches = json.loads(_gh(repo, target, "issue", "list", "--state", "all", "--search",
+                                         draft.fingerprint, "--json", "number,body,state", "--limit", "100"))
                 # 검색은 부분 일치일 수 있다. 본문의 지문 줄까지 대조한다.
-                number = next((item["number"] for item in matches
-                               if f"- 지문: {draft.fingerprint}" in item.get("body", "").splitlines()), None)
+                matches = [item for item in matches
+                           if f"- 지문: {draft.fingerprint}" in item.get("body", "").splitlines()]
+                issue = next((item for item in matches if item["state"] == "OPEN"), None)
+                reopen = False
+                if issue is None and matches:
+                    closed = matches[0]
+                    fixed = _fixed_release(repo, target, closed["number"])
+                    current = _release_parts(metadata.version("goldstack"))
+                    if fixed is not None and current is not None:
+                        if current <= fixed:
+                            print("gs feedback: 고친 버전 이하의 gs입니다 → gs self-update", file=err or sys.stderr)
+                            continue
+                        issue, reopen = closed, True
+                number = issue["number"] if issue is not None else None
                 if number is not None:
                     key = f"{target}#{number}"
                     if key in state["issues"]:
                         continue  # 남은 횟수는 다음 날 댓글에 담는다
+                    if reopen:
+                        _gh(repo, target, "issue", "reopen", str(number))
                     _gh(repo, target, "issue", "comment", str(number), "--body",
                         f"- 지문: {draft.fingerprint}\n- 횟수: {draft.count}\n- 이번 추가: {draft.count - already}")
                 else:
