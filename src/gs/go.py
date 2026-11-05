@@ -21,6 +21,7 @@ gs가 띄우는 agy 호출(worker·리뷰·수정·재리뷰·재시도)을 stat
 끊겨서 다시 부르는 agy 호출은 상한을 보지 않지만 루프가 센 뒤에 나간다(review.CallWait): 상한 판단은 이미 나간 호출을 모두 본다.
 끝에는 보고서·PR·base 검증·revert를 한다(08). 지난 마무리가 남았으면 그것만 끝내고 멈춘다. 남은 티켓은 다음 gs go가 한다.
 `--only`는 범위와 상관없이 그 앞에서 멈춘다: integration에 병합·검증까지만 하고 PR·병합·최종 보고서는 옵션 없는 gs go가 한다(_only_stops). 지난 마무리의 회복은 `--only`여도 먼저 한다.
+끝난 마무리(verified·reverted)에 새 티켓이 integration에 들어오면 merged 기록과 같은 저장에서 phase를 reopened로 바꾼다(_reopen_finished). `--only`든 옵션 없는 gs go든, 그 뒤 어디서 죽어도 같다.
 worker를 띄우기 전에 push 설정을 state에 기록한다(_begin). 재개해도 유지하고, gs의 push마다 대조한다(git.push).
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
@@ -61,7 +62,9 @@ NETWORK_ABORT = "중단(네트워크)"
 NETWORK_ABORT_LINE = f"■ {NETWORK_ABORT}: 다음 gs go가 이어 간다"
 ONLY_MERGES_ENV = "GS_TEST_ONLY_MERGES"  # 시험 전용. 있으면 --only도 마무리까지 간다(옛 시험이 그 동작을 본다)
 ONLY_NOT_MERGED = "병합하지 않음(--only)"
-ONLY_STOPPED = "only_stopped"  # 끝난 마무리 뒤에 --only가 새 티켓을 integration에 넣었다. 그 티켓은 base에 없으니 끝난 것으로 보지 않는다
+REOPENED = "reopened"  # 끝난 마무리 뒤에 새 티켓이 integration에 들어왔다. 그 티켓은 base에 없으니 끝난 것으로 보지 않는다(_reopen_finished)
+REOPENED_OUTCOME = "새 티켓이 base에 없음 → 이어서 gs go"
+ONLY_STOPPED = "only_stopped"  # REOPENED인 채로 --only가 멈췄다(_stop_only)
 REVIEW_WAIT, FIX_WAIT = "review_wait", "fix_wait"  # 자리를 기다리는 단계(state.PHASE_LABELS)
 # 리뷰 단계: 루프 스레드에서 돌다가 루프 밖에서 부를 호출을 내고 멈춘다. 호출의 결과를 받아 잇고, 끝에 고칠 지적을 돌려준다.
 ReviewFlow = Generator[Callable[[], list], list, list[dict]]
@@ -248,14 +251,35 @@ def _only_stops(r: Run) -> bool:
 def _stop_only(r: Run) -> tuple[None, bool]:
     """마무리 없이 멈춘다. push·PR·보고서가 없고, 이어서 치는 옵션 없는 gs go가 integration에서 잇는다. 종료 코드는 범위 안 티켓만 본다.
 
-    끝난 마무리(verified·reverted)는 끝난 범위를 뜻한다. 새 티켓을 넣었는데 그대로 두면 `gs clean`이 --force 없이
-    integration을 지우고, 그 뒤 gs go는 base에 없는 티켓을 두고 "이미 끝남"으로 멈춘다. 그때만 phase를 바꾼다.
-    다른 phase(closed 등)와 나머지 기록은 다음 마무리가 읽으니 그대로 둔다.
+    무효화된 마무리는 이번 실행이 했든 중단된 지난 실행이 했든 --only로 멈췄다고 적는다.
+    다른 phase(끝난 마무리, closed 등)와 나머지 기록은 다음 마무리가 읽으니 그대로 둔다.
     """
-    new = any(r.st.tickets[tid].status == state.MERGED and tid not in r.prior for tid in r.order)
-    if new and r.st.finish.get("phase") in finish.BASE_REPORT_PHASES:
+    if r.st.finish.get("phase") == REOPENED:
         r.st.finish.update(phase=ONLY_STOPPED, outcome=ONLY_NOT_MERGED)
     return None, True
+
+
+def _reopen_finished(r: Run) -> None:
+    """끝난 마무리(verified·reverted)는 끝난 범위를 뜻한다. 새 티켓이 integration에 들어왔는데 그대로 두면 `gs clean`이
+    --force 없이 integration을 지우고, 그 뒤 gs go는 base에 없는 티켓을 두고 "이미 끝남"으로 멈춘다. 그때만 phase를 바꾼다.
+    다른 phase와 나머지 기록(head, merge_head 등)은 다음 마무리가 읽으니 그대로 둔다. 저장은 부르는 쪽이 한다.
+    """
+    if r.st.finish.get("phase") in finish.BASE_REPORT_PHASES:
+        r.st.finish.update(phase=REOPENED, outcome=REOPENED_OUTCOME)
+
+
+def _merged_after_finish(r: Run) -> bool:
+    """끝난 마무리의 범위에 없던 티켓이 integration에 있다. 그 마무리의 integration 끝 뒤에 있는 병합 표시로 본다(finish.run의 새 병합 기준과 같다).
+
+    끝이 integration에 없으면(정리 뒤 base에서 다시 만들었다) 병합한 PR head, squash 커밋, base 순으로 기준을 찾는다.
+    """
+    f = r.st.finish
+    if f.get("phase") not in finish.BASE_REPORT_PHASES:
+        return False
+    for anchor in (f.get("head"), f.get("merge_head"), f.get("merge_sha"), r.base_ref):
+        if anchor and git.run(r.iwt, "merge-base", "--is-ancestor", anchor, "HEAD", check=False).returncode == 0:
+            return bool(git.ticket_trailers(r.iwt, r.name, f"{anchor}..HEAD", merges_only=True))
+    return False
 
 
 def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
@@ -391,7 +415,7 @@ def _reset_integration(r: Run, to: str = "HEAD") -> bool:
 
 
 def _finished_after_clean(r: Run) -> bool:
-    """정리된 완료 범위는 재생성하지 않는다. 새 티켓·남긴 worktree가 있으면 기존 재개 흐름으로 간다."""
+    """정리된 완료 범위는 재생성하지 않는다. 새 티켓·남긴 worktree가 있으면 기존 재개 흐름으로 간다. 새 티켓이 병합돼 무효화된 마무리(REOPENED)도 그렇다."""
     return bool(r.st.finish.get("phase") in finish.BASE_REPORT_PHASES and r.st.finish.get("base_report_tried")
             and not r.iwt.exists()
             and not git.out(r.repo, "for-each-ref", "--format=%(refname)", f"refs/heads/gs/{r.name}/")
@@ -450,7 +474,14 @@ def _already_merged(r: Run, tid: str) -> bool:
 
 
 def _resume_merged(r: Run) -> None:
-    """integration의 표시로 상태를 회복하고, 중단 전에 남은 성공 worktree를 정리한다."""
+    """integration의 표시로 상태를 회복하고, 중단 전에 남은 성공 worktree를 정리한다.
+
+    integration 커밋 뒤 저장 전에 죽었으면 끝난 마무리의 범위에 없던 티켓이 표시로만 남는다(옛 gs가 merged만 저장한 state도 같다).
+    범위 안 티켓은 표시로 회복해도 완료 상태를 건드리지 않는다. merged를 적기 전에 무효화를 먼저 저장한다.
+    """
+    if _merged_after_finish(r):
+        _reopen_finished(r)
+        r.save()
     for tid in dict.fromkeys([*r.order, *r.st.tickets]):
         ts = r.st.tickets[tid]
         if tid not in r.order and ts.status != state.MERGED:
@@ -1427,6 +1458,7 @@ def _merge_stage(r: Run, a: Active) -> None:
     setup.clean(r.iwt, "-q", "-fd")
     r.ihead = new
     a.proc.finish(True)
+    _reopen_finished(r)  # 아래 _set이 merged와 함께 저장한다: 어느 지점에서 죽어도 "merged인데 끝난 마무리"가 남지 않는다
     _set(r, t.id, status=state.MERGED, ended_at=state.now(), reason="", network_resume={})
     say(f"[{t.id}] 검증 통과 → integration 병합")
     _cleanup_merged(r, t.id)
