@@ -15,7 +15,6 @@ Claude Code로 feature 하나를 끝까지 보내는 개인 운영 kit.
 uv tool install git+https://github.com/goldenyoo/goldstack@v0.1.0
 gs --version
 ```
-태그 `v0.1.0`은 v8이 끝난 뒤 사람이 확인하고 만든다. 태그가 아직 없으면 `@v0.1.0` 대신 `@main`을 쓴다.
 저장소가 private이면 접근 권한(collaborator)이 필요하다.
 
 **이후 업데이트** — 태그가 아니라 main 채널이다. `gs self-update`가 CLI를 main으로 재설치하고 플러그인도 갱신한다(`--version v0.1.0`처럼 태그로 고정할 수도 있다). `gs go`·`gs doctor`는 시작할 때 설치본이 main보다 뒤처졌으면 경고하고, 이 머신에서 `gs go`가 돌고 있으면 `gs self-update`는 거부한다. 레포가 `[goldstack] requires = ">=0.1"`을 적어 두었는데 설치본이 더 낮으면 `gs check`·`gs go`가 멈춘다. 자세히는 [docs/guide.md](docs/guide.md#버전-맞추기gs-self-update-requires).
