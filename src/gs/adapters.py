@@ -135,7 +135,7 @@ def claude_plugins(worktree: Path) -> list[dict]:
                             text=True, stdin=subprocess.DEVNULL, timeout=60)
     except FileNotFoundError:
         raise AdapterError(f"`{claude_bin()}`가 없다") from None
-    except (OSError, subprocess.TimeoutExpired) as e:
+    except (OSError, subprocess.TimeoutExpired, UnicodeError) as e:
         raise AdapterError(f"`claude plugin list --json`을 돌리지 못했다: {e}") from e
     if cp.returncode != 0:
         raise AdapterError(f"`claude plugin list --json` 종료 {cp.returncode}: {cp.stderr.strip()[:120]}")

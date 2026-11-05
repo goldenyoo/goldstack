@@ -34,7 +34,7 @@ def summarize(repo: Path, log: Path, cfg: config.Config, on_wait=None) -> Path:
     summary = log.with_name("failure-summary.md")
     judge_log = log.with_name("judge.log")
     try:
-        text = review.call_waiting(lambda: review._call(review.judge_argv(cfg, model=cfg.models.failure_summary, cwd=repo),
+        text = review.call_waiting(lambda: review._call(review.judge_argv(cfg, model=cfg.models.failure_summary, cwd=repo, on_wait=on_wait),
                                                         prompt=prompt, cwd=repo, env=env, log=judge_log,
                                                         timeout=cfg.timeouts.summary_seconds, family="claude"),
                                    cfg, on_wait).strip()
