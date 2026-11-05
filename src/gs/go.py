@@ -95,7 +95,7 @@ class Run:
     history_median_s: float | None = None  # 실행 시작에 한 번 읽은 다른 feature의 ETA 표본 중앙값
     net: Outage | None = None  # 지금의 네트워크 끊김. _loop가 새로 만든다: 대기 합계는 gs go마다 새로 센다
     reviews: Reviews | None = None  # 루프 밖 리뷰. _loop가 만든다
-    no_merge: bool = False  # --only로 티켓을 돌리는 실행이다. 마무리 없이 멈추고, 지난 마무리의 기록을 이번 결과로 보이지 않는다
+    no_merge: bool = False  # 지난 마무리를 회복하지 않는 --only 실행이다. 마무리 없이 멈추고, 지난 마무리의 기록을 이번 결과로 보이지 않는다
 
     @property
     def name(self) -> str:
@@ -163,6 +163,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 say(f"■ 이미 끝남: {r.name} ({r.st.finish['phase']})")
                 clean.integration(r)  # 지난 자동 정리가 원격 삭제에서만 실패했을 수 있다
             else:
+                r.no_merge = _only_stops(r)  # 준비 전에 정한다. 준비에서 끝나도 지난 마무리를 이번 결과로 보이지 않는다
                 prepared = _prepare_integration(r)
                 _resume_merged(r)
                 # 병합 확인·base 검증·revert를 먼저 회복한다. 새 worker가 미완료 PR의 head를 바꾸지 않게 한다.
@@ -171,7 +172,6 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 elif _resuming(r):
                     url, finished = _resume_finish(r)
                 else:
-                    r.no_merge = _only_stops(r)
                     with _stop_signals():
                         _loop(r)
                     url, finished = _stop_only(r) if r.no_merge else _finish_run(r)
@@ -238,8 +238,11 @@ def _pending(r: Run) -> int:
 
 
 def _only_stops(r: Run) -> bool:
-    """이 실행은 integration까지만 한다. 범위가 feature의 모든 티켓을 포함해도 같다: 병합은 옵션 없는 gs go만 한다."""
-    return r.only is not None and not os.environ.get(ONLY_MERGES_ENV)
+    """이 실행은 integration까지만 한다. 범위가 feature의 모든 티켓을 포함해도 같다: 병합은 옵션 없는 gs go만 한다.
+
+    지난 마무리를 회복하는 실행은 아니다(_resuming). 준비는 phase를 회복 대상으로 바꾸지 않으니 준비 전에 판단해도 그대로다.
+    """
+    return r.only is not None and not os.environ.get(ONLY_MERGES_ENV) and not _resuming(r)
 
 
 def _stop_only(r: Run) -> tuple[None, bool]:
@@ -422,6 +425,9 @@ def _prepare_integration(r: Run) -> bool:
         finally:
             r.st.phase = ""
         if not res.ok:
+            if r.no_merge:  # 마무리가 아니다. 보고서를 쓰지 않고 지난 마무리 기록은 다음 마무리가 읽게 둔다
+                say(f"■ integration 준비 실패. setup.log를 확인하라: {directory / 'setup.log'}")
+                return False
             # 이미 진행한 병합·base 검증·revert·보고서의 재개 상태를 준비 실패로 덮지 않는다.
             if r.st.finish.get("phase") not in (*finish.RESUME_PHASES, *finish.BASE_REPORT_PHASES):
                 r.st.finish.update(phase="setup_failed", outcome="준비 실패 → 병합 안 함")

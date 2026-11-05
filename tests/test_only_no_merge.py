@@ -4,6 +4,7 @@
 """
 import contextlib
 import io
+import json
 import os
 from unittest import mock
 
@@ -271,6 +272,83 @@ class OnlyTest(support.GoTest):
         self.assertNotIn(LINE, out)
         self.assertEqual(self.tip(), tip)
 
+    # --- integration 준비가 실패한 --only ---
+    def integration_setup(self, command):
+        sh(self.repo, "git", "pull", "-q", "--ff-only", self.REMOTE, self.BASE)
+        path = self.repo / config.CONFIG_PATH
+        path.write_text(path.read_text().replace('setup = ""', "setup = " + json.dumps(command)))
+        sh(self.repo, "git", "add", "-A")
+        sh(self.repo, "git", "commit", "-qm", "integration setup")
+        sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
+
+    def test_setup_failure_on_first_run_writes_no_report(self):
+        self.integration_setup("echo integration-boom; exit 8")
+        tip = self.tip()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.calls(), [])
+        self.assert_stopped(out, tip)
+        self.assert_no_report()
+        self.assertFalse((self.rundir / "wt/integration" / REPORT).exists())
+        self.assert_reads_unmerged(out)
+        self.assertIn("integration 준비 실패", out)
+        self.assertIn("integration-boom", (self.rundir / "integration/1/setup.log").read_text())
+
+    def test_setup_failure_after_finish_does_not_read_as_merged(self):
+        blocked = self.bin / "setup-blocked"
+        self.keep("01")
+        self.assertEqual(self.go()[0], 0)
+        self.add_ticket("09")
+        self.integration_setup(f"test ! -f {blocked} || exit 8")
+        blocked.touch()
+        tip, gh, before = self.tip(), self.lines("gh.log"), self.finish_state()
+        self.assertEqual(before["phase"], "verified")
+        code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.calls(), ["01"])
+        self.assert_stopped(out, tip, gh)
+        self.assert_reads_unmerged(out)  # 지난 verified의 "PR 병합 완료"를 이번 결과로 보이지 않는다
+        self.assertEqual(self.finish_state(), before)
+        self.assertEqual(sh(self.rundir / "wt/integration", "git", "status", "--porcelain"), "")  # 보고서를 쓰지 않았다
+        # 준비를 고치면 옵션 없는 gs go가 그 티켓까지 병합한다
+        blocked.unlink()
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.calls(), ["01", "09"])
+        self.assertIn("file_09", self.remote_files())
+
+    def test_git_error_while_preparing_does_not_read_as_merged(self):
+        self.keep("01")
+        self.go()
+        self.add_ticket("09")
+        with mock.patch("gs.finish.merge_base", side_effect=git.GitError("boom")):
+            code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("git 오류: boom", err)
+        self.assertEqual(out.strip().splitlines()[-1], LINE)
+        self.assert_reads_unmerged(out)
+        self.assertEqual(self.finish_state()["phase"], "verified")
+
+    def test_setup_failure_while_recovering_keeps_the_old_path(self):
+        """남은 마무리를 회복하는 --only는 준비가 실패해도 지금처럼 보고서를 쓰고 그 마무리를 보인다."""
+        blocked = self.bin / "setup-blocked"
+        self.keep("01", "04")
+        self.integration_setup(f"test ! -f {blocked} || exit 8")
+        (self.bin / "gh.queue").touch()
+        self.assertEqual(self.go()[0], 1)
+        before = self.finish_state()
+        self.assertEqual(before["phase"], "merge_pending")
+        wt = self.rundir / "wt/integration"
+        sh(self.repo, "git", "worktree", "remove", "--force", str(wt))
+        blocked.touch()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assertNotIn(LINE, out)
+        self.assertEqual(self.finish_state(), before)
+        self.assertIn(f"■ 마무리: {before['outcome']}", out)
+        self.assertIn(f"■ 보고서: {REPORT.rsplit('/', 1)[0]}/report.md", out)
+        self.assertIn("integration 준비 실패", (wt / REPORT).read_text())
+
     # --- 텔레그램 ---
     def enable_telegram(self):
         sh(self.repo, "git", "pull", "-q", "--ff-only", self.REMOTE, self.BASE)
@@ -299,6 +377,16 @@ class OnlyTest(support.GoTest):
         code, text, output = self.telegram("--only", "01,02")
         self.assertEqual(code, 1, output)
         self.assertEqual(text, "❌ demo · 병합하지 않음(--only) · 티켓 1/2 (02 실패: worker 종료 코드 1) · 이어서 gs go demo")
+
+    def test_telegram_setup_failure_after_finish_does_not_read_as_merged(self):
+        self.keep("01")
+        self.enable_telegram()
+        self.assertEqual(self.telegram()[0], 0)
+        self.add_ticket("09")
+        self.integration_setup("exit 8")
+        code, text, output = self.telegram("--only", "09")
+        self.assertEqual(code, 1, output)
+        self.assertEqual(text, "❌ demo · 병합하지 않음(--only) · 티켓 0/1 · 이어서 gs go demo")
 
     # --- 도움말 ---
     def test_help_says_it_does_not_merge(self):
