@@ -315,6 +315,19 @@ def _begin(r: Run) -> None:
     metrics.close_interrupted_stages(st)
     r.g = _graph(r)
     r.order = graph.topo_order(r.g)
+    # Keep the document warning across a finish-only resume. The retry loop
+    # below resets FAILED/SKIPPED tickets to PENDING before finish renders again.
+    merged = {tid for tid, ts in st.tickets.items() if ts.status == state.MERGED}
+    prior_docs = set(st.finish.get("docs_missing", []))
+    tickets = getattr(getattr(r, "feat", None), "tickets", {})
+    for tid, ticket in tickets.items():
+        ts = st.tickets.get(tid)
+        touches = getattr(ticket, "touches", [])
+        if (ts is not None and ts.status in (state.FAILED, state.SKIPPED) and merged - {tid}
+                and any(path == "CHANGELOG.md" or path.startswith(("docs/", "docs\\")) for path in touches)):
+            prior_docs.add(tid)
+    if prior_docs:
+        st.finish["docs_missing"] = sorted(prior_docs)
     for tid, ts in sorted(st.tickets.items()):
         state.end_phase(ts, st.updated_at or state.now())
         if ts.status == state.RUNNING:
