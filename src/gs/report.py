@@ -3,6 +3,7 @@
 모델에는 파일 경로만 넘긴다. 모델의 문장은 판단이고, 상태·원본 검증 출력·revert 명령은
 스크립트가 보존한다. 모델 호출 실패도 보고서에 남기며 검증 결과를 대신하지 않는다.
 마무리 전체 검증 실패에는 실패 줄·로그 경로와 파일이 겹치는 후보 티켓(추정)을 붙인다.
+수리한 티켓은 티켓별 결과의 이유 칸에 그 사실과 결과가 있다(state.repair_summary).
 """
 from __future__ import annotations
 
@@ -84,6 +85,8 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
     for tid in r.order:
         ts = r.st.tickets[tid]
         reason = ts.reason or ("integration에 병합·검증됨" if ts.status == "merged" else "")
+        if repaired := state.repair_summary(ts):
+            reason += "\n" + repaired
         durations = state.phase_durations(ts)
         if durations:
             # 반올림해 0분인 단계(병합 커밋만 하는 마무리 등)는 줄에서 뺀다. 모두 0분이면 1분 미만으로 적는다.
