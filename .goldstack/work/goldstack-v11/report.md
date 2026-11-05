@@ -25,7 +25,7 @@ diff-stat에는 `gs check`, 문서, skill, 시험 파일과 보고서 등 일부
 - **ETA:** 재시도와 수정을 예측하지 않아, 긴 실행에서는 여전히 실제보다 짧게 말할 수 있습니다.
 - **불안정한 시험:** 티켓 09 검증이 세 번 실패했지만 입력 자료에는 그 원인이 없습니다. 불안정한 시험이 모두 사라졌다고 단정할 수 없습니다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/26 병합 · main 검증 통과
 리뷰 지적: 수정됨 6 · 보고만 5
 
 ## Evidence
@@ -157,21 +157,22 @@ gs 검증별 측정
 | integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 373e8b2910dbdfab92f87d120acb67fe74ea1c8d | 389.512458 | failed |
 | ticket-11/1 | uv run python -m unittest discover -s tests -p test_profile_brief.py && uv run python -m unittest discover -s tests -p test_skills.py && claude plugin validate . | 7121525930e3ce98a37c0ed24e58621b6f7cd57d | 0.873557 | passed |
 | integration/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | f8139dcd6bdedbaa8e8b4ee310473a2c9b111aaf | 390.707975 | passed |
+| main/1 | ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | e38ca72caf5f5ea61cb657896295907eb98e141b | 391.995972 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 1804.221 |
-| verify | 1574.606 |
+| total | 2209.221 |
+| verify | 1966.68 |
 | summary | 195.758 |
-| report | 0.666 |
-| push | 8.965 |
-| publish | 7.714 |
-| merge-pr | 3.525 |
-| confirm-merge | 0.005 |
-| postmerge | 398.946 |
-| restore-reverts | 0.033 |
+| report | 0.739 |
+| push | 10.831 |
+| publish | 11.376 |
+| merge-pr | 7.696 |
+| confirm-merge | 0.012 |
+| postmerge | 791.934 |
+| restore-reverts | 0.052 |
 | report-to-base | 2.396 |
 | sync-integration | 2.047 |
 | restore-integration | 0.119 |
@@ -483,7 +484,7 @@ The directory also runs a safety scan and a policy review that this command does
 
 #### finish/main-verify.log
 
-앞 11707자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/finish/main-verify.log`
+앞 11712자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v11/run/finish/main-verify.log`
 
 ```text
 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
@@ -507,13 +508,15 @@ agy 사용: 0/3
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/26
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `e38ca72caf5f5ea61cb657896295907eb98e141b`
 
 ### 되돌리는 법
 
@@ -523,7 +526,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 e38ca72caf5f5ea61cb657896295907eb98e141b
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v11/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
