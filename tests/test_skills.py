@@ -251,6 +251,21 @@ class IdeaFlowTest(unittest.TestCase):
                      "다시 묻지 않는다", "gs feedback send", "사람이 고른 것이 아니니 묻는다", "개인 프로젝트는 `auto` + `errors`", "회사 레포는 `off` 또는 `minimal`"):
             self.assertIn(text, body)
 
+    def test_retro_scopes_write_ban_and_narrows_style_read(self):
+        _, body = skill_frontmatter(self.read("retro"))
+        self.assertLessEqual(len(body.split()), 850)
+        intro = body.partition("## 단계")[0]
+        for text in ("개선 대상(코드·문서·설정)과 아이디어 파일을 바꾸지 않는다", "`run/retro-log.md`는 만들어도 된다"):
+            self.assertIn(text, intro)
+        self.assertNotIn("아무 파일도", body)
+        self.assertEqual(body.count("writing-for-agents/SKILL.md"), 1)
+        self.assertIn("문서(skill, `CLAUDE.md`, docs)를 고치는 후보가 있을 때만", body)
+        step5 = steps(self.read("go"))[5]
+        self.assertIn("개선 대상과 아이디어 파일은 쓰지 않게", step5)
+        self.assertIn("`run/retro-log.md`는 만들어도 된다", step5)
+        self.assertIn("`retro/SKILL.md` 4단계대로", step5)  # retro의 고른 후보 다루기 단계 번호
+        self.assertTrue(body.partition("\n4. ")[2].startswith("고른 후보를 다룬다"))
+
     def test_retro_can_file_issue(self):
         body = self.read("retro")
         for text in ("issue로 올리기", '`gs feedback "<사람이 확인한 한 줄>"`', "레포 이름·파일 이름을 넣지 않는다"):
