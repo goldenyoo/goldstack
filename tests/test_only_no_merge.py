@@ -9,8 +9,9 @@ import os
 from unittest import mock
 
 import support
-from gs import cli, config, git, state, transient
+from gs import cli, config, git, go, state, transient
 from support import sh
+from test_squash import squash_gh
 
 REPORT = ".goldstack/work/demo/report.md"
 LINE = "■ --only 범위만 돌았다: 병합하지 않음 → 이어서 gs go demo"
@@ -235,6 +236,280 @@ class OnlyTest(support.GoTest):
         self.assertNotIn("이미 끝남", out)
         self.assertEqual(self.calls(), ["01", "09", "09"])
         self.assertIn("file_09", self.remote_files())
+
+    # --- 끝난 마무리 뒤의 병합과 중단 ---
+    def finished_with_new_ticket(self):
+        """verified로 끝난 feature에 새 티켓 09를 더한다. 지난 마무리 기록을 돌려준다."""
+        self.keep("01")
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.finish_state()["phase"], "verified")
+        before = self.finish_state()
+        self.add_ticket("09")
+        return before
+
+    def die_after_merge(self, *args):
+        """09의 merged를 저장한 바로 뒤에 죽는다. 이어지는 worktree 정리·마무리·_stop_only를 건너뛴다."""
+        real = go._cleanup_merged
+
+        def dying(r, tid):
+            if tid == "09":
+                raise KeyboardInterrupt
+            real(r, tid)
+
+        with mock.patch("gs.go._cleanup_merged", dying), self.assertRaises(KeyboardInterrupt):
+            self.go(*args)
+
+    def die_before_save(self, *args):
+        """09의 integration 커밋 뒤, 무효화·merged를 메모리에 적기 전에 죽는다. 첫 실행의 _resume_merged는 이것을 부르지 않는다."""
+        with mock.patch("gs.go._reopen_finished", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            self.go(*args)
+
+    def assert_reopened(self, before):
+        """완료 상태만 무효화했다: 다음 마무리가 읽는 기록(head 등)은 그대로고, --only로 멈췄다고 적지 않는다."""
+        after = self.finish_state()
+        self.assertEqual(after["phase"], "reopened")
+        self.assertNotEqual(after["outcome"], go.ONLY_NOT_MERGED)
+        self.assertTrue(after["head"])
+        rest = {k: v for k, v in before.items() if k not in ("phase", "outcome")}
+        self.assertEqual({k: v for k, v in after.items() if k not in ("phase", "outcome")}, rest)
+
+    def assert_only_stopped(self, out, tip, gh):
+        """--only가 09를 다시 돌리지 않고 멈췄다. 그때만 --only로 멈췄다고 적는다."""
+        self.assertEqual(self.calls(), ["01", "09"])
+        self.assertIn("■ 요약: integration에 이미 병합 1", out)
+        self.assert_stopped(out, tip, gh)
+        self.assert_reads_unmerged(out)
+        self.assertNotIn("file_09", self.remote_files())
+        self.assertEqual(self.finish_state()["phase"], "only_stopped")
+        self.assertEqual(self.finish_state()["outcome"], go.ONLY_NOT_MERGED)
+
+    def assert_landed(self, out):
+        """옵션 없는 gs go가 09를 다시 돌리지 않고 base까지 병합했다."""
+        self.assertNotIn("이미 끝남", out)
+        self.assertEqual(self.calls(), ["01", "09"])
+        self.assertIn("file_09", self.remote_files())
+        self.assertEqual(self.finish_state()["phase"], "verified")
+        self.assertIn("| 09 | t09 | merged |", self.base_report())
+
+    @contextlib.contextmanager
+    def saves(self):
+        """state.json에 쓸 때마다 (finish phase, 09의 status)를 모은다."""
+        seen, real = [], state.save
+
+        def spy(rundir, st):
+            real(rundir, st)
+            seen.append((st.finish.get("phase"), st.tickets["09"].status if "09" in st.tickets else ""))
+
+        with mock.patch("gs.state.save", spy):
+            yield seen
+
+    def first_merged_save(self, seen):
+        return next(i for i, (_, status) in enumerate(seen) if status == state.MERGED)
+
+    def assert_same_save(self, seen):
+        """merged와 무효화가 한 번의 저장에 함께 들어갔다: 바로 앞 저장은 둘 다 전이다."""
+        first = self.first_merged_save(seen)
+        self.assertEqual(seen[first][0], "reopened")
+        self.assertEqual(seen[first - 1][0], "verified")
+
+    def test_only_merge_saves_merged_and_invalidation_together(self):
+        self.finished_with_new_ticket()
+        with self.saves() as seen:
+            self.die_after_merge("--only", "09")
+        self.assert_same_save(seen)
+
+    def test_plain_merge_saves_merged_and_invalidation_together(self):
+        self.finished_with_new_ticket()
+        with self.saves() as seen:
+            self.die_after_merge()
+        self.assert_same_save(seen)
+
+    def test_interrupted_after_merge_only_rerun_stops_then_plain_go_merges(self):
+        before = self.finished_with_new_ticket()
+        tip, gh = self.tip(), self.lines("gh.log")
+        self.die_after_merge("--only", "09")
+        self.assert_reopened(before)
+        code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 0, out + err)
+        self.assert_only_stopped(out, tip, gh)
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assert_landed(out)
+
+    def test_interrupted_after_merge_plain_rerun_merges(self):
+        before = self.finished_with_new_ticket()
+        self.die_after_merge()
+        self.assert_reopened(before)
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assert_landed(out)
+
+    def test_interrupted_plain_go_then_only_says_only_stopped(self):
+        """옵션 없는 gs go가 넣어 두고 죽었어도 --only로 멈춘 실행은 그렇게 적는다."""
+        self.finished_with_new_ticket()
+        tip, gh = self.tip(), self.lines("gh.log")
+        self.die_after_merge()
+        code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 0, out + err)
+        self.assert_only_stopped(out, tip, gh)
+
+    def test_interrupted_before_save_only_rerun_invalidates(self):
+        before = self.finished_with_new_ticket()
+        tip, gh = self.tip(), self.lines("gh.log")
+        self.die_before_save("--only", "09")
+        self.assertEqual(self.finish_state(), before)  # 아직 무효화 전이다: 표시만 있다
+        self.assertEqual(state.load(self.rundir, "demo").tickets["09"].status, state.RUNNING)
+        self.assertIn("09", self.merged())
+        code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 0, out + err)
+        self.assert_only_stopped(out, tip, gh)
+        code, err = self.clean()
+        self.assertEqual(code, 1, err)
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assert_landed(out)
+
+    def test_interrupted_before_save_plain_rerun_merges(self):
+        self.finished_with_new_ticket()
+        self.die_before_save()
+        with self.saves() as seen:
+            code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(seen[self.first_merged_save(seen)][0], "reopened")  # 회복도 완료 상태로 merged를 저장하지 않는다
+        self.assert_landed(out)
+
+    def test_recovering_a_ticket_of_the_finished_scope_keeps_finished_phase(self):
+        """끝난 범위 안의 티켓은 표시로 회복해도 무효화하지 않는다."""
+        self.keep("01")
+        self.assertEqual(self.go()[0], 0)
+        st = state.load(self.rundir, "demo")
+        before, gh = dict(st.finish), self.lines("gh.log")
+        st.tickets["01"].status = state.RUNNING  # 범위 안 티켓을 잃은 state
+        state.save(self.rundir, st)
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.calls(), ["01"])
+        self.assertEqual(self.finish_state()["phase"], "verified")
+        self.assertEqual(self.finish_state()["url"], before["url"])
+        self.assertNotIn("pr create", "\n".join(self.lines("gh.log")[len(gh):]))
+
+    def test_clean_before_recovery_only_costs_a_rerun(self):
+        """저장 전에 죽었으면 state가 아직 모른다: clean이 --force 없이 지워도 09가 merged가 아니니 gs go가 다시 돌려 base까지 간다."""
+        self.finished_with_new_ticket()
+        self.die_before_save("--only", "09")
+        code, err = self.clean()
+        self.assertEqual(code, 0, err)
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("이미 끝남", out)
+        self.assertEqual(self.calls(), ["01", "09", "09"])
+        self.assertIn("file_09", self.remote_files())
+        self.assertEqual(self.finish_state()["phase"], "verified")
+
+    # --- squash: 범위 안 티켓의 병합 커밋이 base에 없다 ---
+    def use_squash(self):
+        (self.bin / "gh").write_text("#!/bin/bash\n" + squash_gh())
+        path = self.repo / config.CONFIG_PATH
+        path.write_text(path.read_text().replace('merge_method = "merge"', 'merge_method = "squash"'))
+        sh(self.repo, "git", "commit", "-qam", "squash only")
+        sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
+
+    def test_squash_keeps_finished_phase_for_its_own_tickets(self):
+        self.use_squash()
+        self.keep("01")
+        self.assertEqual(self.go()[0], 0)
+        st = state.load(self.rundir, "demo")
+        before, gh = dict(st.finish), self.lines("gh.log")
+        self.assertEqual((before["phase"], before["merge_method"]), ("verified", "squash"))
+        st.tickets["01"].status = state.RUNNING
+        state.save(self.rundir, st)
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.finish_state()["phase"], "verified")
+        self.assertNotIn("pr create", "\n".join(self.lines("gh.log")[len(gh):]))
+
+    def test_squash_interrupted_before_save_merges_the_new_ticket(self):
+        self.use_squash()
+        self.finished_with_new_ticket()
+        self.die_before_save("--only", "09")
+        tip, gh = self.tip(), self.lines("gh.log")
+        code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 0, out + err)
+        self.assert_only_stopped(out, tip, gh)
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assert_landed(out)
+
+    def test_interrupted_after_merge_clean_refuses_and_go_does_not_call_it_finished(self):
+        self.finished_with_new_ticket()
+        self.die_after_merge("--only", "09")
+        code, err = self.clean()
+        self.assertEqual(code, 1, err)
+        self.assertIn("reopened", err)
+        self.assertTrue((self.rundir / "wt/integration").exists())
+        self.assertIn("09", self.merged())  # 미병합 변경이 그대로 있다
+        code, err = self.clean("--force")
+        self.assertEqual(code, 0, err)
+        code, out, err = self.go()  # state는 09를 merged로 적고 있지만 base에는 없다. 끝났다고 멈추면 09를 잃는다
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("이미 끝남", out)
+        self.assertEqual(self.calls(), ["01", "09", "09"])
+        self.assertIn("file_09", self.remote_files())
+
+    def test_reverted_phase_is_invalidated_too(self):
+        self.keep("01")
+        self.break_main()
+        code, out, err = self.go()
+        self.assertEqual(code, 1, out + err)
+        before = self.finish_state()
+        self.assertEqual(before["phase"], "reverted")
+        self.add_ticket("09")
+        self.die_after_merge("--only", "09")
+        self.assert_reopened(before)
+        code, err = self.clean()
+        self.assertEqual(code, 1, err)
+        self.assertIn("reopened", err)
+
+    def test_finished_run_without_new_ticket_stays_finished(self):
+        self.keep("01")
+        self.assertEqual(self.go()[0], 0)
+        before, gh = self.finish_state(), self.lines("gh.log")
+        for args in ((), ("--only", "01")):
+            with self.subTest(args=args):
+                code, out, err = self.go(*args)
+                self.assertEqual(code, 0, out + err)
+                self.assertIn("■ 이미 끝남: demo (verified)", out)
+                self.assertEqual(self.finish_state(), before)
+        self.assertEqual(self.calls(), ["01"])
+        self.assertEqual(self.lines("gh.log"), gh)
+        code, err = self.clean()
+        self.assertEqual(code, 0, err)
+
+    def old_state_after_merge(self, *args):
+        """이 변경 전의 gs가 남긴 state: 끝난 마무리인 채로 09만 merged다."""
+        before = self.finished_with_new_ticket()
+        self.die_after_merge(*args)
+        st = state.load(self.rundir, "demo")
+        st.finish = dict(before)
+        state.save(self.rundir, st)
+        self.assertEqual(st.tickets["09"].status, state.MERGED)
+        return before
+
+    def test_old_state_with_merged_ticket_only_rerun_invalidates(self):
+        self.old_state_after_merge("--only", "09")
+        tip, gh = self.tip(), self.lines("gh.log")
+        code, out, err = self.go("--only", "09")
+        self.assertEqual(code, 0, out + err)
+        self.assert_only_stopped(out, tip, gh)
+        code, err = self.clean()
+        self.assertEqual(code, 1, err)
+
+    def test_old_state_with_merged_ticket_plain_rerun_merges(self):
+        self.old_state_after_merge()
+        code, out, err = self.go()
+        self.assertEqual(code, 0, out + err)
+        self.assert_landed(out)
 
     def test_failed_ticket_after_finish_keeps_finished_phase(self):
         """새로 들어간 티켓이 없으면 끝난 마무리는 그대로 끝난 것이다."""
