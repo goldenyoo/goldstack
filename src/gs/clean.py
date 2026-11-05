@@ -60,6 +60,8 @@ def _remove(repo: Path, paths: list[Path], branches: list[str], remote: str,
                 removed.remote += 1
             except (git.GitError, OSError) as e:
                 warn(e)
+    except git.PushSettingsChanged:
+        raise
     except (git.GitError, OSError) as e:
         warn(e)
     return removed
@@ -71,7 +73,7 @@ def _local_branches(repo: Path, prefix: str, *, exact: bool = False) -> list[str
 
 
 def integration(r) -> None:
-    """base 보고서 시도 뒤 verified만 자동 정리한다. 오류는 실행 결과를 바꾸지 않는다."""
+    """base 보고서 시도 뒤 verified만 자동 정리한다. push 설정 변경은 실행을 실패시키고, 나머지 정리 오류는 경고만 낸다."""
     if r.st.finish.get("phase") != "verified" or not r.st.finish.get("base_report_tried"):
         return
     try:
@@ -79,6 +81,8 @@ def integration(r) -> None:
         paths = [r.iwt] if r.iwt.exists() or r.iwt.resolve() in git.worktrees(r.repo) else []
         _remove(r.repo, paths, _local_branches(r.repo, branch, exact=True), r.remote,
                 branch, sys.stdout, sys.stdout, record=r.st.push_record, exact=True)
+    except git.PushSettingsChanged:
+        raise
     except Exception as e:  # noqa: BLE001 — 자동 정리는 최선. verified 결과를 바꾸지 않는다
         print(f"경고: integration 정리 실패: {e}", flush=True)
 
