@@ -367,17 +367,140 @@ class ThreadErrorTest(Base):
         self.assertEqual((ts.status, ts.failures, ts.attempts), ("merged", 1, 2))
         self.assertIn("worker 결과 처리 중 오류: GitError: git이 죽었다", out)
 
-    def test_error_escaping_the_rereview_thread_is_unchecked_and_merges(self):
+    def test_error_escaping_the_rereview_thread_fails_the_ticket_and_retries(self):
         self.setup_tickets(1, "11")
         self.answer_file("review_11", findings=[finding("FIX A: 값이 틀렸다")])
-        with mock.patch.object(go, "_call_rereviewers", side_effect=RuntimeError("스레드가 죽었다")):
+        real = go._call_rereviewers
+        calls = []
+
+        def call(jobs, tree):
+            calls.append(threading.current_thread())
+            if len(calls) == 1:
+                raise RuntimeError("스레드가 죽었다")
+            return real(jobs, tree)
+
+        with mock.patch.object(go, "_call_rereviewers", call):
+            code, out, err = self.go(*self.only("11"))
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn(threading.main_thread(), calls)
+        ts = self.ts("11")
+        self.assertEqual((ts.status, ts.failures, ts.attempts), ("merged", 1, 2))  # 확인 없이 병합하지 않고 다시 한다
+        self.assertIn("[11] 실패: worker 결과 처리 중 오류: ReviewThreadError: RuntimeError: 스레드가 죽었다", out)
+        self.assertNotIn("뜻밖의 오류 ReviewThreadError", str(ts.review))
+
+
+class RereviewCallErrorTest(Base):
+    def test_error_inside_a_rereview_call_is_unchecked_like_a_failed_review(self):
+        """호출 안의 오류는 첫 리뷰처럼 리뷰 실패다(spec 2-1). 호출 밖으로 새어 나온 오류만 티켓 실패다."""
+        self.setup_tickets(1, "11")
+        self.answer_file("review_11", findings=[finding("FIX A: 값이 틀렸다")])
+        with mock.patch("gs.review.rereview", side_effect=RuntimeError("뜻밖")):
             code, out, err = self.go(*self.only("11"))
         self.assertEqual(code, 0, out + err)
         ts = self.ts("11")
         self.assertEqual((ts.status, ts.failures), ("merged", 0))
         f = ts.review["findings"][0]
         self.assertEqual((f["rereview"], f["rereview_reason"]), (review.UNCHECKED, review.REASON_FAILED))
-        self.assertIn("ReviewThreadError", f["rereview_evidence"])
+
+
+class ResumeAfterFinishedReviewTest(Base):
+    """리뷰가 끝난 뒤 수정 worker 자리를 기다리다 멈췄으면 다음 gs go가 끝난 리뷰를 다시 부르지 않는다."""
+
+    # 11이 fix_wait에 n번째 들어가면 알리고 자리를 쥔 채 붙잡힌다. 그 자리에서 gs를 끝낸다
+    @staticmethod
+    def hold_until_fix_wait(n):
+        count = (f"\"{sys.executable}\" -c \"import json,sys;print(sum(p['phase']=='fix_wait' for p in "
+                 "json.load(open(sys.argv[1]))['tickets']['11']['phases']))\" \"$status\"")
+        return (f'for i in $(seq 1500); do [ "$({count})" -ge {n} ] && break; sleep 0.02; done\n'
+                'echo up > "$here/in_fix_wait"\nsleep 30\n')
+
+    def stop_in_fix_wait(self, *tids):
+        with self.leave_when(self.bin / "in_fix_wait", KeyboardInterrupt()), self.assertRaises(KeyboardInterrupt):
+            self.go(*self.only(*tids))
+
+    def test_first_review_is_not_called_again(self):
+        self.setup_tickets(1, "11", "12")
+        self.answer_file("review_11", findings=[finding("FIX A: 값이 틀렸다")])
+        self.answer_file("rereview_11", verdicts=[{"id": 1, "status": "resolved", "evidence": "고침"}], findings=[])
+        self.hook("start_12", self.hold_until_fix_wait(1))
+        self.stop_in_fix_wait("11", "12")
+        self.assertTrue(self.ts("11").network_resume.get("reviewed"))
+        (self.bin / "start_12.sh").unlink()
+        code, out, err = self.go(*self.only("11", "12"))
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.events().count("review 11"), 1, self.events())
+        self.assertIn("[11] 지난 리뷰는 끝났다", out)
+        ts = self.ts("11")
+        self.assertEqual((ts.status, ts.failures), ("merged", 0))
+        self.assertEqual(ts.review["findings"][0]["rereview"], review.RESOLVED)
+        self.assertEqual(ts.network_resume, {})
+        self.assert_no_timeouts()
+
+    def test_first_rereview_is_not_called_again_and_findings_are_not_repeated(self):
+        self.setup_tickets(1, "11", "12", "13")
+        self.answer_file("review_11", findings=[finding("FIX A: 1차 지적")])
+        self.answer_file("rereview_11", verdicts=[{"id": 1, "status": "resolved", "evidence": "고침"}],
+                         findings=[finding("FIX B: 재리뷰 새 지적")])
+        self.hook("start_12", 'await "$status" "fix_wait"\n')  # 11의 첫 수정 대기 동안 자리를 쥔다
+        self.hook("rereview_11", 'await "$here/events.log" "^start 13$"\n')  # 13이 자리를 쥔 뒤에 끝난다
+        self.hook("start_13", self.hold_until_fix_wait(2))
+        self.hook("fix_11", 'echo x >> "extra_11"\n')  # 2차 수정도 커밋이 있게
+        self.stop_in_fix_wait("11", "12", "13")
+        self.assertEqual([x["round"] for x in self.ts("11").review["rereviews"]], [1])
+        (self.bin / "start_13.sh").unlink()
+        (self.bin / "rereview_11.sh").unlink()
+        self.answer_file("rereview_11", verdicts=[{"id": 1, "status": "resolved", "evidence": "확인"},
+                                                  {"id": 2, "status": "resolved", "evidence": "확인"}], findings=[])
+        code, out, err = self.go(*self.only("11", "12", "13"))
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts("11")
+        self.assertEqual([x["round"] for x in ts.review["rereviews"]], [1, 2], self.events())  # 1차가 두 번 돌지 않는다
+        self.assertEqual([f["claim"] for f in ts.review["findings"]], ["FIX A: 1차 지적", "FIX B: 재리뷰 새 지적"])
+        self.assertEqual(ts.review["findings"][1]["fix_round"], 2)
+        self.assertEqual((ts.status, ts.failures), ("merged", 0))
+        self.assert_no_timeouts()
+
+    def test_old_mark_without_reviewed_reviews_again(self):
+        self.setup_tickets(1, "11", "12")
+        self.answer_file("review_11", findings=[finding("FIX A: 값이 틀렸다")])
+        self.answer_file("rereview_11", verdicts=[{"id": 1, "status": "resolved", "evidence": "고침"}], findings=[])
+        self.hook("start_12", self.hold_until_fix_wait(1))
+        self.stop_in_fix_wait("11", "12")
+        st = state.load(self.rundir, "demo")
+        del st.tickets["11"].network_resume["reviewed"]
+        state.save(self.rundir, st)
+        (self.bin / "start_12.sh").unlink()
+        code, out, err = self.go(*self.only("11", "12"))
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.events().count("review 11"), 2, self.events())
+        self.assertEqual(self.ts("11").status, "merged")
+
+
+class ReplyEscapeTest(unittest.TestCase):
+    """코드 인용의 잘못된 이스케이프 하나로 리뷰어 답 전체를 버리지 않는다."""
+
+    def test_invalid_escape_is_repaired_and_valid_ones_stay(self):
+        text = '{"findings": [{"severity": "high", "location": "a.py:1", "claim": "줄\\n바꿈", ' \
+               '"evidence": "echo \'\\\'\'{\\"x\\": 1}\'\\\'\' 경로 C:\\\\tmp"}]}'
+        with self.assertRaises(ValueError):
+            json.loads(text)
+        found = review.parse_findings(text)
+        self.assertEqual(found[0].claim, "줄\n바꿈")
+        self.assertEqual(found[0].evidence, "echo \'\'\'{\"x\": 1}\'\'\' 경로 C:\\tmp")
+
+    def test_valid_reply_is_not_touched(self):
+        text = '{"findings": [{"severity": "low", "location": "a", "claim": "c", "evidence": "역슬래시 \\\\\' 그대로"}]}'
+        self.assertEqual(review.parse_findings(text)[0].evidence, "역슬래시 \\\' 그대로")
+
+    def test_other_invalid_escapes_stay_errors_so_a_verdict_cannot_flip(self):
+        text = '{"verdicts":[{"id":1,"status":"unresolved","statu\\s":"resolved","evidence":"e"}],"findings":[]}'
+        with self.assertRaises(review.ReviewError):
+            review.parse_verdicts(text)
+
+    def test_not_json_is_still_an_error(self):
+        for text in ("리뷰를 못 했다", '{"findings": [{"claim": "끊긴 답\\\'', ""):
+            with self.assertRaises(review.ReviewError):
+                review.parse_findings(text)
 
 
 class LeavingTheLoopTest(Base):

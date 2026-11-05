@@ -553,6 +553,7 @@ class Active:
     held_at: float = 0.0  # 네트워크 대기에 들어간 시각
     parked: bool = False  # 끝났지만 끊김 때문에 리뷰를 미뤘다. 돌아오면 끝 줄을 다시 찍지 않는다
     reviewed_again: bool = False  # 이 worker의 리뷰 단계가 병합 전 대조로 한 번 더 봤다. 더 부르지 않는다(_review_again)
+    review_done: bool = False  # 지난 실행에서 리뷰까지 끝나고 수정 worker 자리나 끊김을 기다리다 멈췄다. 리뷰를 다시 하지 않는다(_finish)
 
     def quiet_seconds(self) -> float:
         """일시 오류 없이 돈 시간. 시작 이후 마지막 Reconnecting부터 잰다. Reconnecting 뒤 다른 이벤트가 아직 없으면 0이다."""
@@ -652,7 +653,7 @@ class Reviews:
 
 
 class ReviewThreadError(Exception):
-    """리뷰 스레드에서 올라온 뜻밖의 오류. 그 티켓의 실패로 처리한다(재리뷰는 unchecked다, _rereview)."""
+    """리뷰 스레드에서 올라온 뜻밖의 오류. 첫 리뷰든 재리뷰든 그 티켓의 실패로 처리한다."""
 
 
 @contextmanager
@@ -810,6 +811,10 @@ def _resume_flow(r: Run, rv: Reviewing, done: Future | None = None) -> None:
             rv.call = rv.flow.send(done.result())
     except StopIteration as end:
         rv.flow, rv.call, rv.todo, rv.finished = None, None, end.value, True
+        mark = r.st.ticket(rv.a.t.id).network_resume
+        if mark:  # 여기서 멈춰도 다음 gs go가 끝난 리뷰를 다시 부르지 않게(_finish)
+            mark["reviewed"] = True
+            r.save()
 
 
 def _off_loop(call: Callable[[], list]) -> list:
@@ -1136,6 +1141,9 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         return None
 
     if mark.get("done"):
+        if mark.get("reviewed"):
+            say(f"[{t.id}] 지난 리뷰는 끝났다. 수정 worker 또는 병합으로 잇는다({wt})")
+            return replace(stand_in(0), review_done=True)
         say(f"[{t.id}] 지난 worker는 끝났다. 같은 worktree에서 리뷰부터 잇는다({wt})")
         return stand_in(0)
     if _is_agy(t.model) and state.agy_reached(r.st, _agy_limit(r)):
@@ -1256,8 +1264,13 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
     일시 오류로 끝났으면 실패로 세지 않고 세워 둔다(_net_tick이 다시 띄운다). 네트워크 끊김 중이면 리뷰·재리뷰를 미룬다.
     리뷰로 갈 때 리뷰부터 잇는 표시를 먼저 남긴다: 끝나기 전에 gs가 어떻게 끝나든 다음 gs go가 worker를 다시 띄우지 않고 리뷰를 다시 한다.
     그 뒤는 _review_tick이 맡는다: 리뷰(재리뷰)가 티켓 head까지 닿으면(_review_to_head, 병합 전 대조가 거기 있다. 기다린 뒤의 대조는 _leave_review) 고칠 지적이 있으면 수정 worker(최대 2회), 없으면 병합·검증이다.
+    지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review).
     오류는 _loop가 처리한다.
     """
+    if a.review_done:
+        todo = _todo(r, a.t, a.fix + 1) if a.fix < 2 else []  # 수정은 티켓당 최대 2회다
+        r.reviews.tickets[a.t.id] = Reviewing(a, finished=True, todo=todo, waited=True)
+        return
     step = _check_worker(r, a, code, others, error)
     if step == TO_REVIEW:
         _mark_resume(r, a, done=True)
@@ -1787,8 +1800,8 @@ def _mark_fixes(r: Run, t: Ticket, nth: int, result: str, reason: str = "") -> N
 def _rereview(r: Run, a: Active) -> ReviewFlow:
     """지적을 낸 리뷰어들에게 수정 커밋을 다시 보게 하고, 결과를 지적에 적는다. 2차 수정이 고칠 지적을 돌려준다.
 
-    호출은 루프 밖 스레드에서 돈다(_review_stage). 여기서 난 오류는 병합을 막지 않는다: 이 head의 결과가 없는 지적은 unchecked(재리뷰 실패)다.
-    중단 예외(NetworkAbort)만 올린다. 다음 gs go가 재리뷰부터 잇는다.
+    호출은 루프 밖 스레드에서 돈다(_review_stage). 재리뷰 자체의 오류는 병합을 막지 않는다: 이 head의 결과가 없는 지적은 unchecked(재리뷰 실패)다.
+    중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 재리뷰부터 잇고, 뒤는 티켓 실패다: 확인 없이 병합하지 않는다.
     병합 전 대조로 다시 불려도 같은 지적을 본다(a.base..head이므로 수정 뒤에 생긴 커밋도 diff에 든다).
     2차면 수정 worker가 받은 지적에 더해 앞서 resolved인 지적도 최종 커밋에서 본다. 수정 커밋의 diff가 비면 받은 지적만 unresolved다:
     트리가 앞 재리뷰가 본 그대로이니 앞 판정은 그대로 맞다.
@@ -1806,7 +1819,7 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
                 rec["reviewed_head"] = head
                 review.mark_rereview(found, nth, review.UNRESOLVED, "", "수정 커밋의 diff가 비었다")
                 _append_fix(rec, f"재리뷰 {nth}차: 수정 커밋의 diff가 비어 부르지 않았다(unresolved)")
-    except transient.NetworkAbort:
+    except (transient.NetworkAbort, ReviewThreadError):
         raise
     except Exception as e:  # noqa: BLE001 — verify가 병합 관문이다
         say(f"[{t.id}] 재리뷰 {nth}차 실패: {_err(e)}")
