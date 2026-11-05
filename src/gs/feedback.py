@@ -762,7 +762,10 @@ def command(repo: Path, args: list[str], out, err, *, body_file: Path | None = N
             print(f"gs feedback: 본문 파일을 읽지 못했습니다: {exc}", file=err)
             return 1
     if (body_file is not None or args != ["send"]) and len(message.split()) < 2:
-        print('gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"', file=err)
+        if body_file is not None:
+            print("gs feedback: 본문 파일이 비었거나 한 단어입니다. 파일에 증상·근거·제안을 채워 --body-file로 다시 보내세요.", file=err)
+        else:
+            print('gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"', file=err)
         return 2
     only_path = None
     if body_file is not None or args != ["send"]:

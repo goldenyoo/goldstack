@@ -335,6 +335,22 @@ class FeedbackSendTest(unittest.TestCase):
         self.assertEqual(len(self.calls('issue', 'create')), 1)
         self.assertEqual(len(self.calls('issue', 'comment')), 1)
 
+    def test_empty_or_single_word_body_file_explains_how_to_complete_file(self):
+        path = self.repo / 'body.md'
+        for mode in ('auto', 'draft'):
+            for message in ('', ' \t\n', 'status \n'):
+                with self.subTest(mode=mode, message=message):
+                    path.write_text(message, encoding='utf-8')
+                    code, out, err = self.run_cli('--body-file', str(path), mode=mode)
+                    self.assertEqual(code, 2)
+                    self.assertEqual(out, '')
+                    self.assertIn('본문 파일이 비었거나 한 단어입니다.', err)
+                    self.assertIn('파일에 증상·근거·제안을 채워 --body-file로 다시 보내세요.', err)
+                    self.assertNotIn('subcommand', err)
+                    self.assertNotIn('gs feedback "문장"', err)
+        self.assertFalse((self.repo / feedback.FEEDBACK_DIR).exists())
+        self.assertEqual(self.calls(), [])
+
     def test_body_file_errors_and_off_leave_no_draft(self):
         path = self.repo / 'body.md'
         # off는 파일 읽기도 하지 않는다.
