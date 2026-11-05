@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 미출시
+
+- 시험이 실제 `claude`·`codex`·`agy`에 기대지 않게 고쳤다. 이 CLI가 없는 리눅스 CI에서도 전체 시험이 돈다.
+
 ## 0.1.0 — 2026-11-05
 
 ### goldstack-v0

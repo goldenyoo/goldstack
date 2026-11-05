@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from gs import cli, config
-from support import isolate_git_env
+from support import fake_clis, isolate_git_env
 
 SPEC = '---\nfeature: demo\nverify: "true"\n---\n'
 TICKET = '---\nid: "01"\ntitle: a\nblocked_by: []\nmodel: claude\nreviewer: codex\n---\n## 목표\na\n'
@@ -29,6 +29,7 @@ class MigrateTest(unittest.TestCase):
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
         })
         self.env.start()
+        fake_clis(self, "gh", "claude", "codex")
         self.repo.mkdir()
         sh(self.repo, "git", "init", "-q", "-b", "main")
         sh(self.repo, "git", "remote", "add", "origin", "https://github.com/owner/repo.git")
