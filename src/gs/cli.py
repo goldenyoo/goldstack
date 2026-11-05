@@ -56,6 +56,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("feedback", help="피드백을 보내거나 초안·전송 상태를 본다")
     p.add_argument("feedback_args", nargs="*", help="한 줄 또는 list | send")
 
+    p = sub.add_parser("notify", help="파일 내용을 텔레그램으로 보낸다(--check는 토큰만 확인). notify.telegram이 꺼져 있어도 보낸다")
+    p.add_argument("notify_args", nargs="*", help="<파일> 또는 --check")
+
     p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
     p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
                    help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON)")
@@ -88,6 +91,9 @@ def _run(args: argparse.Namespace) -> int:
     if args.cmd == "feedback":
         from .feedback import command
         return command(repo, args.feedback_args, sys.stdout, sys.stderr)
+    if args.cmd == "notify":
+        from .notify import command
+        return command(repo, args.notify_args, sys.stdout, sys.stderr)
     if args.cmd == "init":
         config.init(repo, sys.stdout)
         return 0

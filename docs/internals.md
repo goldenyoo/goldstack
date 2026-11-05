@@ -23,7 +23,7 @@
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
 | `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글, `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
-| `notify.py` | 텔레그램 전송 |
+| `notify.py` | 텔레그램 전송, `gs notify` 명령 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
 | `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건 |
@@ -460,6 +460,7 @@ PR <url>
 ```
 종료 코드가 0이 아니면 한 줄: `❌ <feature> · <마무리 결과> · 티켓 <병합>/<전체> (<id> 실패: <이유 첫 줄>, …) · 보고서 .goldstack/work/<feature>/report.md`.
 - 전송(`notify.py`): 표준 라이브러리 urllib로 `<api>/bot<TG_TOKEN>/sendMessage`(JSON, 링크 미리보기 끔). api는 `GS_TELEGRAM_API`, 없으면 `https://api.telegram.org`. 3900자를 넘으면 `… (잘림)`으로 자른다.
+- `gs notify <파일>`: 파일 내용을 같은 전송으로 보낸다(3900자 잘림). `notify.telegram`이 꺼져 있어도 보낸다(사람이 친 명령). `gs notify --check`는 `getMe`로 토큰만 확인한다. 성공 종료 0, 값 없음·실패는 이유 한 줄과 종료 1. 오류에서 토큰을 가린다.
 - 3번까지 시도한다(1초, 2초 쉬고). 연결 실패·5xx·429·응답 해석 실패는 재시도, 그 밖의 4xx(토큰·채팅 ID 오류)는 바로 멈춘다.
 - 예외를 밖으로 내지 않는다. 토큰·채팅 ID가 없거나, `local.env`를 못 읽거나, 전송이 실패하면 stderr에 `경고: 텔레그램 …` 한 줄만 쓰고 종료 코드·보고서는 그대로다. 오류 문자열에서도 토큰을 `***`로 가린다.
 
