@@ -276,8 +276,11 @@ class IdeaFlowTest(unittest.TestCase):
 
     def test_retro_can_file_issue(self):
         body = self.read("retro")
-        for text in ("issue로 올리기", '`gs feedback "<사람이 확인한 한 줄>"`', "레포 이름·파일 이름을 넣지 않는다"):
+        for text in ("issue로 올리기", 'gs feedback --body-file', "증상·근거·제안", "초안 전체를 보이고 확인받는다", "레포 이름·파일 이름을 넣지 않는다"):
             self.assertIn(text, body)
+
+    def test_feedback_documents_body_file(self):
+        self.assertIn("--body-file <파일>", self.read("feedback"))
 
 
 MATT_COMMIT = "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d"

@@ -305,6 +305,63 @@ class FeedbackSendTest(unittest.TestCase):
                 self.assertIn(' '.join(args), create[create.index('--body') + 1])
         self.assertEqual(len(self.calls('issue', 'create')), 4)
 
+    def test_single_word_whitespace_bypasses_are_rejected(self):
+        for mode in ('auto', 'draft'):
+            for args in (('status ',), ('status', ''), ('', 'status'), ('\tstatus\n',),
+                         ('send ',), ('list', ' '), (' ', ''), ('',)):
+                with self.subTest(mode=mode, args=args):
+                    self.assertEqual(self.run_cli(*args, mode=mode)[0], 2)
+        self.assertFalse((self.repo / feedback.FEEDBACK_DIR).exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_body_file_preserves_text_redacts_environment_and_deduplicates(self):
+        message = '## 증상\n재개 후 멈춤\n\n## 근거\n두 번 관찰\n\n## 제안\n재개 검사 추가\n'
+        path = self.repo / '본문 파일.md'
+        path.write_text(message, encoding='utf-8')
+        unsafe_env = dataclasses.replace(ENV, os=f'Linux {self.repo}/private token=ghp_SUPERSECRET')
+        with mock.patch('gs.feedback.environment', return_value=unsafe_env):
+            for mode in ('draft', 'auto'):
+                self.assertEqual(self.run_cli('--body-file', str(path), mode=mode)[0], 0)
+        create, = self.calls('issue', 'create')
+        body = create[create.index('--body') + 1]
+        self.assertIn(message, body)
+        self.assertNotIn(str(self.repo), body)
+        self.assertNotIn('ghp_SUPERSECRET', body)
+        drafts = list((self.repo / feedback.FEEDBACK_DIR).glob('*.md'))
+        self.assertEqual(len(drafts), 1)
+        self.assertEqual(feedback.read_draft(drafts[0], self.cfg).count, 2)
+        self.tomorrow()
+        self.assertEqual(self.run_cli('send')[0], 0)
+        self.assertEqual(len(self.calls('issue', 'create')), 1)
+        self.assertEqual(len(self.calls('issue', 'comment')), 1)
+
+    def test_body_file_errors_and_off_leave_no_draft(self):
+        path = self.repo / 'body.md'
+        # off는 파일 읽기도 하지 않는다.
+        code, _, err = self.run_cli('--body-file', str(path), mode='off')
+        self.assertEqual(code, 1)
+        self.assertIn('off', err)
+        self.assertEqual(self.run_cli('--body-file', str(path))[0], 1)
+        path.write_bytes(b'\xff')
+        self.assertEqual(self.run_cli('--body-file', str(path))[0], 1)
+        for message in ('', 'status \n', '본문 글\n' + feedback.LOCAL_MARKER):
+            path.write_text(message, encoding='utf-8')
+            self.assertNotEqual(self.run_cli('--body-file', str(path))[0], 0)
+        path.write_text('본문 글', encoding='utf-8')
+        for arg in ('send', 'status', '다른 글'):
+            self.assertEqual(self.run_cli(arg, '--body-file', str(path))[0], 2)
+        with mock.patch.dict(os.environ, {'GS_ROLE': 'worker'}):
+            self.assertEqual(self.run_cli('--body-file', str(path))[0], 1)
+        self.assertFalse((self.repo / feedback.FEEDBACK_DIR).exists())
+        self.assertEqual(self.calls(), [])
+
+    def test_feedback_help_documents_body_file(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit) as result:
+            cli.main(['feedback', '--help'])
+        self.assertEqual(result.exception.code, 0)
+        self.assertIn('--body-file', out.getvalue())
+
     def test_manual_cli_failure_guidance_matches_mode_and_preserves_draft(self):
         for mode in ('auto', 'draft'):
             for failure in ('list', 'create', 'missing'):

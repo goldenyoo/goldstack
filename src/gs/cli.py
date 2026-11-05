@@ -65,7 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--all", action="store_true", help="taken·dropped를 포함하고 status 열을 보인다")
 
     p = sub.add_parser("feedback", help="피드백을 보내거나 초안·전송 상태를 본다")
-    p.add_argument("feedback_args", nargs="*", help="한 줄 또는 list | send")
+    p.add_argument("feedback_args", nargs="*", help="한 줄 또는 list | status | send")
+    p.add_argument("--body-file", type=Path, help="사람이 확인한 피드백 본문 파일(UTF-8)")
 
     p = sub.add_parser("notify", help="파일 내용을 텔레그램으로 보낸다(--check는 토큰만 확인). notify.telegram이 꺼져 있어도 보낸다")
     p.add_argument("notify_args", nargs="*", help="<파일>")
@@ -109,7 +110,7 @@ def _run(args: argparse.Namespace) -> int:
         return remote.check(repo, args.machine, sys.stdout, sys.stderr)
     if args.cmd == "feedback":
         from .feedback import command
-        return command(repo, args.feedback_args, sys.stdout, sys.stderr)
+        return command(repo, args.feedback_args, sys.stdout, sys.stderr, body_file=args.body_file)
     if args.cmd == "notify":
         from .notify import command
         return command(repo, ["--check"] if args.check and not args.notify_args else
