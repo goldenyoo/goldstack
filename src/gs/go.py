@@ -40,6 +40,7 @@ worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 �
 돌던 worker와 리뷰어를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴 network_resume으로 다음 `gs go`가 같은 worktree에서 잇는다. 합계는 그때 새로 센다.
 어떻게 루프를 떠나든(중단, Ctrl-C·SIGTERM·SIGHUP, 뜻밖의 오류) 돌던 리뷰어의 프로세스 그룹을 끝낸다(_stop_reviews). 리뷰 단계의 티켓은 network_resume이 있어 다음 `gs go`가 리뷰를 다시 한다.
 수리 worker가 끊기면 수정 worker처럼 같은 worktree에 새 실행 디렉터리(repair-net<n>)로 다시 띄운다. 수리 재리뷰의 끊김도 리뷰와 같다.
+수정·수리 worker의 실패는 티켓 실패가 아니라 _fail을 지나지 않는다. 이유는 그 실행 디렉터리에 따로 남겨 결함 수집이 읽는다(feedback.note_worker_failure).
 """
 from __future__ import annotations
 
@@ -56,7 +57,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import adapters, clean, config, failure, finish, git, graph, herdr, metrics, notify, report, review, setup, state, transient, verify, worker
+from . import adapters, clean, config, failure, feedback, finish, git, graph, herdr, metrics, notify, report, review, setup, state, transient, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -367,6 +368,22 @@ def _stop_previous(tid: str, ts: state.TicketState) -> None:
 
 def _err(e: BaseException) -> str:
     return f"{type(e).__name__}: {e}"
+
+
+def _exit_reason(proc: worker.Proc | worker.Finished, code: int | None) -> str:
+    """0이 아닌 종료 코드로 끝난 worker의 실패 이유. 결함 수집의 패턴(feedback.ADAPTER_PATTERNS)이 이 말을 본다.
+
+    다시 띄우지 못한 자리(Finished)의 종료 코드는 정해 둔 값이다. 이유는 note에 있다.
+    """
+    if isinstance(proc, worker.Finished) and proc.note:
+        return proc.note
+    why = f"worker 종료 코드 {code}" if code is None or code >= 0 else "worker 실행기가 사라졌다"
+    return why + (f" ({proc.note})" if proc.note else "")
+
+
+def _launch_reason(e: Exception) -> str:
+    """띄우지 못한 worker의 실패 이유. 어댑터의 거부(agy 차단 장치 등)는 그 글 그대로다(_start와 같다)."""
+    return str(e) if isinstance(e, adapters.AdapterError) else f"worker를 띄우지 못했다: {_err(e)}"
 
 
 def _set(r: Run, tid: str, **fields) -> None:
@@ -1435,8 +1452,7 @@ def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error:
             return None
         return TO_REVIEW if _end_fix(r, a, code, commits, error) else TO_MERGE
     if code != 0:
-        why = f"worker 종료 코드 {code}" if code >= 0 else "worker 실행기가 사라졌다"
-        return _fail_worker(r, a, why + (f" ({note})" if note else ""))
+        return _fail_worker(r, a, _exit_reason(a.proc, code))
     if commits == 0:
         return _fail_worker(r, a, "커밋 없음")
     if not setup.is_clean(wt):
@@ -1854,6 +1870,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
     except Exception as e:  # noqa: BLE001 — 수정은 덤이다. 지금 브랜치의 구현은 그대로 병합한다
         if proc is not None:
             proc.stop()
+        feedback.note_worker_failure(job.rundir, _launch_reason(e))
         _skip_fix(r, t, nth, f"띄우지 못함: {_err(e)}", f"{_ordinal(nth)}수정 worker를 띄우지 못했다: {_err(e)}")
         return None
     say(f"[{t.id}] {_ordinal(nth)}수정 worker 시작: 지적 {len(todo)}개 ({adapter.name}, {proc.where}, 로그 {job.log})")
@@ -1906,6 +1923,7 @@ def _end_fix(r: Run, a: Active, code: int | None, commits: int, error: str) -> b
         ids = ", ".join(str(f["id"]) for f in _todo(r, t, nth))
         _note_fix(r, t, nth, f"{_ordinal(nth)}수정 커밋 {commits}개(fix 지적 {ids}): 재리뷰로 확인한다")
         return True
+    feedback.note_worker_failure(a.proc.job.rundir, why if error or code == 0 else _exit_reason(a.proc, code))
     a.proc.finish(False)  # 들여다볼 수 있게 pane을 남긴다
     git.run(wt, "merge", "--abort", check=False)
     git.run(wt, "checkout", "-q", "-f", branch)
@@ -1984,6 +2002,7 @@ def _start_repair(r: Run, a: Active, runner) -> Active:
     except Exception as e:  # noqa: BLE001 — 수리는 덤이다. 지금 브랜치를 다시 검증한다
         if proc is not None:
             proc.stop()
+        feedback.note_worker_failure(job.rundir, _launch_reason(e))
         return skip(f"띄우지 못함: {_err(e)}")
     say(f"[{t.id}] 수리 worker 시작: 실패 로그 {ts.repairs[-1]['verify_log']} ({adapter.name}, {proc.where}, 로그 {job.log})")
     nxt = Active(t, proc, a.branch, a.wt, a.base, repair=REPAIR_RUN, watch=_watch(adapter, job))
@@ -1996,12 +2015,15 @@ def _end_repair(r: Run, a: Active, code: int | None, commits: int, error: str) -
 
     실패(종료 코드, 시간 초과, 이전 커밋을 지움)면 수리 커밋을 버리고 수리 전 head로 되돌린다. 실패해도 티켓은 실패가 아니다: 다시 검증이 판정한다.
     되돌리기 자체가 git 오류면 어느 트리를 병합할지 모르니 그 오류는 올린다(_loop가 티켓 실패로 처리해 다시 한다). 돌고 있던 worker는 _check_worker가 이미 끝냈다.
+    커밋 없음은 실패가 아니어도(불안정한 시험이면 고칠 것이 없다) 이유로 남긴다: ref 잠금으로 커밋하지 못한 worker도 이렇게 끝난다. 결함인지는 수집이 로그까지 보고 가린다.
     """
     t, wt, branch = a.t, a.wt, a.branch
     ts = r.st.ticket(t.id)
     kept = git.run(r.repo, "merge-base", "--is-ancestor", a.base, branch, check=False).returncode == 0
     note = a.proc.note
     failed = error or ("" if code == 0 else f"종료 코드 {code}" + (f": {note}" if note else "")) or ("" if kept else "이전 커밋을 지웠다")
+    if failed or not commits:
+        feedback.note_worker_failure(a.proc.job.rundir, (failed if error or code == 0 else _exit_reason(a.proc, code)) or "커밋 없음")
     if failed:
         a.proc.finish(False)  # 들여다볼 수 있게 pane을 남긴다
         git.run(wt, "merge", "--abort", check=False)
