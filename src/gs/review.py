@@ -50,6 +50,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -373,6 +374,16 @@ class CallWait:
         self.mine: set[int] = set()  # 이 호출에서 기다리는 스레드
         self.since = 0.0
 
+    def isolation_warning(self, warning: str) -> None:
+        """호출 격리 실패를 티켓(또는 마무리)에 보존한다. 리뷰 스레드는 루프로 넘긴다."""
+        def record() -> None:
+            warnings = (self.st.ticket(self.tid).isolation_warnings if self.tid
+                        else self.st.finish.setdefault("isolation_warnings", []))
+            if warning not in warnings:
+                warnings.append(warning)
+                self.save()
+        metrics.on_state(self, record)
+
     def __call__(self, why: str, count: int, seconds: float, family: str = "") -> None:
         me = threading.get_ident()
         start, due_at = time.monotonic(), state.after(seconds)
@@ -476,7 +487,7 @@ def reviewer_selection(reviewer: str, cfg: config.Config, *, rereview: bool = Fa
 
 
 def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path,
-                  models: config.ModelsConfig, selection: config.ModelEffort | None = None) -> tuple[list[str], str | None, bool]:
+                  models: config.ModelsConfig, selection: config.ModelEffort | None = None, *, on_wait=None) -> tuple[list[str], str | None, bool]:
     """(명령, stdin 프롬프트, 답이 out 파일에 남는가). 모두 읽기 전용으로 띄운다."""
     custom = os.environ.get("GS_REVIEWER_CMD")
     if custom:
@@ -490,7 +501,8 @@ def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path,
                     else ["--effort", selection.effort])
     if reviewer == "claude":
         return ["claude", "-p", *options, "--output-format", "json",
-                "--permission-mode", "bypassPermissions", "--tools", "Read,Grep,Glob"], prompt, False
+                "--permission-mode", "bypassPermissions", "--tools", "Read,Grep,Glob",
+                *_claude_isolation(models, worktree, on_wait)], prompt, False
     if reviewer == "codex":
         return ["codex", "exec", "--json", *options, "-s", "read-only", "--skip-git-repo-check", "-C", str(worktree),
                 "--output-last-message", str(out), "-"], prompt, True
@@ -616,10 +628,22 @@ def write_diff(repo: Path, base: str, branch: str, out: Path) -> tuple[str, bool
     return mb, not diff.strip()
 
 
-def judge_argv(cfg: config.Config, *, model: str | None = None) -> list[str]:
-    """판단 호출은 기본 models.judge, 실패 요약만 별도 모델이다. 파일 경로만 넘기므로 읽기 도구만 준다."""
+def _claude_isolation(models: config.ModelsConfig, worktree: Path, on_wait=None) -> list[str]:
+    """worker의 격리 인자를 재사용한다. 목록 실패는 호출을 막지 않고 표준 오류와 상태에 남긴다."""
+    adapter = adapters.Claude(models)
+    argv = adapter.isolation_argv(worktree)
+    if adapter.isolation_warning:
+        print(f"claude 리뷰·판단: {adapter.isolation_warning}", file=sys.stderr)
+        if isinstance(on_wait, CallWait):
+            on_wait.isolation_warning(adapter.isolation_warning)
+    return argv
+
+
+def judge_argv(cfg: config.Config, *, model: str | None = None, cwd: Path | None = None, on_wait=None) -> list[str]:
+    """판단·요약은 읽기 도구와 worker 격리를 쓴다. 플러그인은 호출할 디렉터리에서 찾는다."""
     return [os.environ.get("GS_JUDGE", "claude"), "-p", "--model", cfg.models.judge if model is None else model, "--output-format", "json",
-            "--permission-mode", "bypassPermissions", "--tools", "Read"]
+            "--permission-mode", "bypassPermissions", "--tools", "Read",
+            *_claude_isolation(cfg.models, cwd if cwd is not None else Path.cwd(), on_wait)]
 
 
 def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket: Path, spec: Path, cfg: config.Config,
@@ -630,7 +654,7 @@ def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket:
                     encoding="utf-8")
     prompt = judge_prompt(path.resolve(), diff, ticket, spec, diff_label)
     (rdir / "judge-prompt.md").write_text(prompt, encoding="utf-8")
-    argv = judge_argv(cfg)
+    argv = judge_argv(cfg, cwd=cwd, on_wait=on_wait)
     try:
         text = call_waiting(lambda: _call(argv, prompt=prompt, cwd=cwd, env=_env(cwd), log=rdir / "judge.log",
                                           timeout=cfg.timeouts.judge_minutes * 60, family="claude",
@@ -648,7 +672,7 @@ def _ask_reviewer(reviewer: str, worktree: Path, prompt: str, rdir: Path, timeou
                   selection: config.ModelEffort) -> str:
     """reviewer를 부르고 답을 rdir/review.txt에도 남긴다. 끊기면 기다렸다 다시 부른다(call_waiting)."""
     out = rdir / "review.txt"
-    argv, stdin, to_file = reviewer_argv(reviewer, worktree, prompt, out.resolve(), cfg.models, selection)
+    argv, stdin, to_file = reviewer_argv(reviewer, worktree, prompt, out.resolve(), cfg.models, selection, on_wait=on_wait)
     env = {**_env(worktree), "GS_REVIEWER": reviewer}
 
     def once() -> str:
