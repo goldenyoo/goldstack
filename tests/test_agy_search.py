@@ -65,12 +65,28 @@ class AgySearchTest(unittest.TestCase):
         self.assertIsNotNone(self.decide("find_by_name", {"DirectoryPath": str(agents)}))
         self.assertIsNotNone(self.decide("list_dir", {"Cwd": str(agents)}))
 
-    def test_single_file_read_translation_is_unchanged(self):
+    def test_search_falls_back_to_other_path_keys(self):
+        agents = self.root / ".agents"
+        agents.mkdir()
+        for name, key in (("grep_search", "Path"),
+                          ("find_by_name", "SearchPath"),
+                          ("list_dir", "AbsolutePath")):
+            with self.subTest(name=name, key=key):
+                translated, _ = hook_agy.translate({"workspacePaths": [str(self.root)],
+                    "toolCall": {"name": name, "args": {key: str(agents)}}})
+                self.assertEqual(translated["tool_input"], {"path": str(agents)})
+                self.assertIsNotNone(self.decide(name, {key: str(agents)}))
+
+    def test_single_file_read_and_write_translation_is_unchanged(self):
         path = str(self.root / "file.txt")
-        translated, _ = hook_agy.translate({"workspacePaths": [str(self.root)],
-            "toolCall": {"name": "read_file", "args": {"Path": path}}})
-        self.assertEqual(translated["tool_name"], "Read")
-        self.assertEqual(translated["tool_input"], {"file_path": path})
+        for name, expected_tool in (("read_file", "Read"), ("write_file", "Write")):
+            with self.subTest(name=name):
+                payload = {"workspacePaths": [str(self.root)],
+                           "toolCall": {"name": name, "args": {"Path": path}}}
+                translated, _ = hook_agy.translate(payload)
+                self.assertEqual(translated["tool_name"], expected_tool)
+                self.assertEqual(translated["tool_input"], {"file_path": path})
+                self.assertIsNone(hook_agy.decide(payload, self.env))
 
 
 if __name__ == "__main__":

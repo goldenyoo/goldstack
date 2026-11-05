@@ -44,6 +44,9 @@ def translate(payload: Mapping) -> tuple[dict, str] | None:
     if name in search_tools:
         tool, key = search_tools[name]
         path = args.get(key)
+        if not isinstance(path, str) or not path:
+            path = next((args[k] for k in PATH_KEYS
+                         if isinstance(args.get(k), str) and args[k]), None)
         tool_input = {"path": path} if isinstance(path, str) and path else {}
         return {"tool_name": tool, "cwd": cwd, "tool_input": tool_input}, workspace
     path = next((str(args[k]) for k in PATH_KEYS if isinstance(args.get(k), str) and args[k]), "")
