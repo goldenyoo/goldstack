@@ -44,7 +44,7 @@ COMMAND_NAME = re.compile(r"[\w.+-]{1,80}")
 UNKNOWN_CALL = "(이름을 읽지 못함)"
 MAX_CALL_NAMES = 8
 SHELL_LEADING_WORDS = {"if", "then", "elif", "else", "while", "until", "do", "time", "!", "{"}  # 뒤에 명령이 온다
-SHELL_NO_COMMAND_WORDS = {"for", "case", "select", "function", "fi", "done", "esac", "}"}  # 이 줄의 첫 단어는 명령이 아니다
+SHELL_NO_COMMAND_WORDS = {"for", "select", "function", "in", "fi", "done", "}"}  # 이 말로 시작하는 명령에는 이름이 없다
 
 FORCE_FLAGS = ("--force", "--force-with-lease", "--force-if-includes")
 # worktree 밖(-C, cd)에서 돌면 다른 체크아웃이나 ref를 바꾸는 git 하위 명령
@@ -124,7 +124,7 @@ class Ctx:
 def main(argv: list[str], stdin=None, env: Mapping[str, str] | None = None) -> int:
     env = os.environ if env is None else env
     if argv[:1] == ["permissionrequest"]:
-        return permission_request(stdin or sys.stdin, sys.stdout, env)
+        return permission_request(stdin or sys.stdin, sys.stdout)
     if argv[:1] != ["pretooluse"]:
         print("사용법: gs hook pretooluse | permissionrequest", file=sys.stderr)
         return 2
@@ -147,7 +147,7 @@ def main(argv: list[str], stdin=None, env: Mapping[str, str] | None = None) -> i
     return 2
 
 
-def permission_request(stdin, stdout, env: Mapping[str, str]) -> int:
+def permission_request(stdin, stdout) -> int:
     """켜진 세션이면 창 대신 거부를 낸다. 언제나 종료 0이고, 판정이 실패하면 아무것도 내지 않아 창으로 돌아간다."""
     from . import overnight
 
@@ -162,7 +162,7 @@ def permission_request(stdin, stdout, env: Mapping[str, str]) -> int:
         root = overnight.armed_root(Path(cwd if cwd and isinstance(cwd, str) else os.getcwd()))
         if root is None:
             return 0
-        call = call_name(payload, env)
+        call = call_name(payload)
         with contextlib.suppress(OSError):  # 기록을 못 해도 거부는 낸다. 창이 뜨면 아침까지 선다
             overnight.record_denied(root, call)
         json.dump({"hookSpecificOutput": {"hookEventName": "PermissionRequest",
@@ -181,7 +181,7 @@ def denial(call: str) -> str:
             f"거부 기록: {DENIED_LOG}. 사람이 돌아오면 이 세션에서 `gs overnight disarm`으로 끈다.")
 
 
-def call_name(payload: Mapping, env: Mapping[str, str]) -> str:
+def call_name(payload: Mapping) -> str:
     """기록과 거부 이유에 쓸 호출 이름. 인자는 비밀을 담을 수 있어 넣지 않는다. Bash는 명령 이름만 `Bash(git, curl)`처럼 적는다."""
     tool = payload.get("tool_name")
     if not isinstance(tool, str) or not TOOL_NAME.fullmatch(tool):
@@ -191,8 +191,8 @@ def call_name(payload: Mapping, env: Mapping[str, str]) -> str:
     if not isinstance(command, str):
         return tool
     try:
-        names = bash_command_names(command, env)
-    except Exception:  # noqa: BLE001  이름을 못 뽑아도 거부는 낸다
+        names = bash_command_names(command)
+    except Exception:  # noqa: BLE001  이름을 못 뽑아도 거부는 낸다(겹친 `$(`가 재귀 한도를 넘는 글 등)
         return tool
     if not names:
         return tool
@@ -200,24 +200,242 @@ def call_name(payload: Mapping, env: Mapping[str, str]) -> str:
     return f"{tool}({shown}{', …' if len(names) > MAX_CALL_NAMES else ''})"
 
 
-def bash_command_names(command: str, env: Mapping[str, str]) -> list[str]:
-    """명령 글에서 도는 명령의 이름들(중복 제거). 인자·앞붙임 대입·heredoc 본문은 넣지 않는다."""
-    text, subs = scan(command.replace("\\\n", " "))
+def bash_command_names(command: str) -> list[str]:
+    """명령 글에서 도는 명령의 이름들(중복 제거). 바깥 명령이 먼저다. 인자·앞붙임 대입·heredoc 본문은 넣지 않는다.
+
+    worker 차단용 `scan`·`segments`를 쓰지 않는다. 거기서는 따옴표를 벗긴 `;`도 경계로 본다. 막는 판정에는 해가 없지만
+    여기서는 경계 뒤의 인자가 이름으로 기록된다(`curl --data ';' <비밀>`). 끝까지 읽지 못한 글은 이름을 하나도 내지 않는다.
+    """
+    reader = _CommandNames(command)
     try:
-        shlex.split(text)
-    except ValueError:  # 따옴표가 닫히지 않았다. `tokens`가 거칠게 나눈 조각은 인자일 수 있다
+        reader.commands()
+    except _Unreadable:
         return []
-    ctx = Ctx(worktree="/", cwd="/", env=env)
-    names: list[str] = []
-    for argv, _, _ in segments(text, "/", ctx):
-        words = argv
-        while words and words[0] in SHELL_LEADING_WORDS:
-            words = words[1:]
-        if words and words[0] not in SHELL_NO_COMMAND_WORDS:
-            names.append(command_name(words))
-    for inner in subs:
-        names += bash_command_names(inner, env)
+    names = [name for _, name in sorted(reader.found, key=lambda found: found[0])]
     return list(dict.fromkeys(name for name in names if COMMAND_NAME.fullmatch(name)))
+
+
+SHELL_META = " \t\n;&|()<>"  # 따옴표 밖에서 단어를 끝낸다
+SHELL_REDIRECT = re.compile(r"[0-9]*(&>>?|<<<|<<-?|<>|<&|>&|>>|>\||<|>)")
+SHELL_ASSIGNMENT = re.compile(r"[A-Za-z_]\w*\+?=")
+SHELL_COMMAND_WORD = re.compile(r"[\w./+][\w./+-]*")  # 따옴표·escape·치환이 낀 단어, URL, 옵션은 이름이 아니다
+SHELL_ANSI_QUOTED = re.compile(r"\$'(?:[^'\\]|\\.)*'", re.DOTALL)
+SHELL_BACKTICK = re.compile(r"`((?:[^`\\]|\\.)*)`", re.DOTALL)
+TIMEOUT_DURATION = re.compile(r"\d+(\.\d+)?[smhd]?")
+
+
+def _command_of(words: list[str]) -> str | None:
+    """한 명령의 단어들(원문 조각)에서 도는 명령의 이름. 없으면 None.
+
+    wrapper 뒤의 옵션은 값을 받는지 모른다(`sudo -u <값> curl`, `command -v <값>`). 그 값을 명령으로 읽지 않게 wrapper에서 멈춘다.
+    """
+    k = 0
+    while k < len(words) and words[k] in SHELL_LEADING_WORDS:
+        k += 1
+    if k < len(words) and words[k] in SHELL_NO_COMMAND_WORDS:
+        return None
+    name = None
+    for word in words[k:]:
+        if SHELL_ASSIGNMENT.match(word) or (name == "timeout" and TIMEOUT_DURATION.fullmatch(word)):
+            continue
+        if not SHELL_COMMAND_WORD.fullmatch(word):
+            break
+        name = os.path.basename(word)
+        if name not in WRAPPERS:
+            break
+    return name
+
+
+class _Unreadable(Exception):
+    """어디까지가 명령인지 보장하지 못한다."""
+
+
+class _CommandNames:
+    """셸 글을 한 번 훑어 명령 자리의 단어를 모은다. 따옴표 밖의 제어 연산자만 명령을 나눈다.
+
+    단어는 원문 조각 그대로 판정한다. 따옴표·escape·치환이 낀 단어(`'if'`, `\\time`, `$CMD`)는 예약어도 이름도 아니게 된다.
+    명령과 인자를 가르지 못하는 모양(`case` 패턴, 함수 정의, 배열, extglob, 짝이 안 맞는 괄호)은 `_Unreadable`로 포기한다.
+    이름이 모자란 기록은 괜찮지만 비밀이 든 기록은 괜찮지 않다.
+    """
+
+    def __init__(self, text: str, depth: int = 0, found: list[tuple[int, str]] | None = None):
+        self.text = text
+        self.i = 0
+        self.depth = depth  # 명령 치환 깊이
+        self.found = [] if found is None else found  # (깊이, 이름)
+        self.heredocs: list[tuple[str, bool]] = []  # 이 줄에서 열린 heredoc의 (끝말, 앞 탭을 떼는가)
+
+    def commands(self, closer: str | None = None) -> None:
+        """명령들을 읽는다. `closer`를 먹거나 글이 끝나면 돌아온다."""
+        words: list[str] = []
+        while True:
+            self.blanks()
+            if self.i >= len(self.text):
+                if closer:
+                    raise _Unreadable
+                self.flush(words)
+                return
+            c = self.text[self.i]
+            redirect = SHELL_REDIRECT.match(self.text, self.i)
+            at_command = all(word in SHELL_LEADING_WORDS for word in words)
+            if c == "#":  # 여기는 언제나 단어 처음이다
+                newline = self.text.find("\n", self.i)
+                self.i = len(self.text) if newline < 0 else newline
+            elif c == "\n":
+                self.i += 1
+                self.flush(words)
+                self.heredoc_bodies()
+            elif redirect and redirect.group(1) in ("<", ">") and self.text.startswith("(", redirect.end()):
+                self.i = redirect.end() + 1
+                self.substitution()
+                words.append("<(")  # 리다이렉션이 아니라 단어다. 뒤의 단어는 그 인자다
+            elif redirect:
+                self.i = redirect.end()
+                self.redirect(redirect.group(1))
+            elif c in ";&|":
+                self.i += 1
+                self.flush(words)
+            elif c == ")":
+                if closer != ")" or self.heredocs:
+                    raise _Unreadable
+                self.i += 1
+                self.flush(words)
+                return
+            elif c == "(":
+                if not at_command:
+                    raise _Unreadable
+                self.i += 1
+                if self.text.startswith("(", self.i):
+                    self.i += 1
+                    self.arithmetic()
+                else:
+                    self.commands(")")
+                words.append("(")  # 닫은 뒤의 단어는 명령이 아니다
+            else:
+                word = self.word()
+                if at_command and word == "case":
+                    raise _Unreadable
+                if at_command and word == "[[":
+                    self.test_expression()
+                words.append(word)
+
+    def flush(self, words: list[str]) -> None:
+        name = _command_of(words)
+        if name:
+            self.found.append((self.depth, name))
+        words.clear()
+
+    def peek(self) -> str:
+        if self.i >= len(self.text):
+            raise _Unreadable
+        return self.text[self.i]
+
+    def blanks(self) -> None:
+        while self.text.startswith((" ", "\t", "\\\n"), self.i):
+            self.i += 2 if self.text[self.i] == "\\" else 1
+
+    def word(self) -> str:
+        """단어 하나를 지나가고 그 원문 조각을 돌려준다."""
+        start = self.i
+        while self.i < len(self.text) and self.text[self.i] not in SHELL_META:
+            self.part()
+        return self.text[start:self.i]
+
+    def part(self, quoted: bool = False) -> None:
+        """단어의 한 조각을 지나간다. `quoted`면 큰따옴표 안이다."""
+        c = self.peek()
+        if c == "\\":
+            self.i += 2
+        elif c == "$":
+            self.dollar(quoted)
+        elif c == "`":
+            self.backtick()
+        elif c == "'" and not quoted:
+            end = self.text.find("'", self.i + 1)
+            if end < 0:
+                raise _Unreadable
+            self.i = end + 1
+        elif c == '"' and not quoted:
+            self.i += 1
+            while self.peek() != '"':
+                self.part(quoted=True)
+            self.i += 1
+        else:
+            self.i += 1
+
+    def dollar(self, quoted: bool) -> None:
+        if self.text.startswith("$((", self.i):
+            self.i += 3
+            self.arithmetic()
+        elif self.text.startswith("$(", self.i):
+            self.i += 2
+            self.substitution()
+        elif self.text.startswith("${", self.i):
+            self.i += 2
+            while self.peek() != "}":
+                if quoted and self.peek() == "'":  # 연산자마다 글자이거나 따옴표다. 어디서 닫히는지 모른다
+                    raise _Unreadable
+                self.part()
+            self.i += 1
+        elif self.text.startswith("$'", self.i) and not quoted:
+            m = SHELL_ANSI_QUOTED.match(self.text, self.i)
+            if not m:
+                raise _Unreadable
+            self.i = m.end()
+        else:
+            self.i += 1
+
+    def substitution(self) -> None:
+        self.depth += 1
+        self.commands(")")
+        self.depth -= 1
+
+    def backtick(self) -> None:
+        m = SHELL_BACKTICK.match(self.text, self.i)
+        if not m:
+            raise _Unreadable
+        self.i = m.end()
+        _CommandNames(re.sub(r"\\([`$\\])", r"\1", m.group(1)), self.depth + 1, self.found).commands()
+
+    def arithmetic(self) -> None:
+        """`((` 뒤. 식은 명령이 아니다. 여는 괄호 둘이 닫힐 때까지 지나간다."""
+        depth = 2
+        while depth:
+            c = self.peek()
+            if c in "'\"\\`":  # 괄호를 세지 못한다
+                raise _Unreadable
+            depth += (c == "(") - (c == ")")
+            self.i += 1
+
+    def test_expression(self) -> None:
+        """`[[` 뒤. 안의 `&&`·`||`·괄호·`<`는 명령을 나누지 않는다. `]]`까지 지나간다."""
+        while True:
+            self.blanks()
+            if self.peek() in SHELL_META:
+                self.i += 1
+            elif self.word() == "]]":
+                return
+
+    def redirect(self, op: str) -> None:
+        """연산자 뒤. 대상 단어는 명령이 아니다."""
+        self.blanks()
+        target = self.word()
+        if not target:
+            raise _Unreadable
+        if op in ("<<", "<<-"):
+            self.heredocs.append(("".join(shlex.split(target)), op == "<<-"))
+
+    def heredoc_bodies(self) -> None:
+        """줄바꿈 뒤. 이 줄에서 열린 heredoc의 본문을 건너뛴다. 끝말은 줄 전체가 같아야 한다. 끝말이 없으면 글 끝까지가 본문이다."""
+        for end, strip_tabs in self.heredocs:
+            while self.i < len(self.text):
+                newline = self.text.find("\n", self.i)
+                stop = len(self.text) if newline < 0 else newline
+                line = self.text[self.i:stop]
+                self.i = stop + 1
+                if (line.lstrip("\t") if strip_tabs else line) == end:
+                    break
+        self.heredocs.clear()
 
 
 def message(reason: str) -> str:

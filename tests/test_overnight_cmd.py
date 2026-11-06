@@ -326,8 +326,106 @@ class OvernightTest(unittest.TestCase):
                 self.assertNotIn("SECRET", message)
                 self.assertEqual(self.log()[len(before):].rstrip("\n").split(" ", 1)[1], name)
 
+    def denied_call(self, command):
+        """켠 세션의 거부 경로를 프로세스 안에서 돌려 기록된 이름을 돌려준다. 세션 판정은 위 시험들이 진짜 `ps`로 본다."""
+        (self.repo / overnight.OVERNIGHT_DIR).mkdir(parents=True, exist_ok=True)
+        before = self.log()
+        out = io.StringIO()
+        with mock.patch("gs.overnight.armed_root", return_value=self.repo), contextlib.redirect_stdout(out):
+            code = hook.main(["permissionrequest"], stdin=io.StringIO(self.payload(command=command)), env={})
+        self.assertEqual(code, 0)
+        name = self.log()[len(before):].rstrip("\n").split(" ", 1)[1]
+        self.assertEqual(self.denial(out.getvalue()), hook.denial(name))
+        return name
+
+    def assertCallNames(self, commands):
+        """기대한 이름과 같아야 한다. 거부 이유도 그 이름만 담으므로 인자는 어디에도 남지 않는다."""
+        for command, name in commands.items():
+            with self.subTest(command=command):
+                self.assertEqual(self.denied_call(command), name)
+
+    def test_quoted_separators_do_not_split_commands(self):
+        s = "hunter2-SECRET"
+        self.assertCallNames({f"curl --data ';' {s}": "Bash(curl)",
+                              f'grep "|" {s}': "Bash(grep)",
+                              f"find . -exec rm {{}} \\; {s}": "Bash(find)",
+                              f"echo $'a\\'b;' {s}": "Bash(echo)",
+                              f'echo "a\n{s}"': "Bash(echo)",
+                              f"echo a\\\n{s}": "Bash(echo)",
+                              f"curl y # {s}": "Bash(curl)",
+                              f"# {s}\nls": "Bash(ls)"})
+
+    def test_substitutions_do_not_expose_following_arguments(self):
+        s = "hunter2-SECRET"
+        self.assertCallNames({f"curl -H Authorization:$(cat token) https://x/{s}": "Bash(curl, cat)",
+                              f"curl `cat token` https://x/{s}": "Bash(curl, cat)",
+                              f"curl \"$(printf ')')\" {s}": "Bash(curl, printf)",
+                              f"echo ${{X:-;}} {s}": "Bash(echo)",
+                              f'echo "${{X:-$(cat y)}}" {s}': "Bash(echo, cat)",
+                              f"echo $((1+2)) {s}": "Bash(echo)",
+                              f"diff <(cat a) {s}": "Bash(diff, cat)",
+                              f"curl y >(tee /tmp/z) {s}": "Bash(curl, tee)",
+                              f"<(cat a) {s}": "Bash(cat)",  # 명령 자리의 `<(`도 단어다. 뒤는 그 인자다
+                              f"$(cat token) {s}": "Bash(cat)"})
+
+    def test_heredoc_bodies_of_every_shape_are_skipped(self):
+        s = "hunter2-SECRET"
+        self.assertCallNames({f"cat <<\\EOF\n{s}\nEOF": "Bash(cat)",
+                              f"cat <<'E O F'\n{s}\nE O F": "Bash(cat)",
+                              f'cat <<"EOF"\n{s}\nEOF': "Bash(cat)",
+                              f'cat <<E"O"F\n{s}\nEOF': "Bash(cat)",
+                              f"cat <<EOF\n  EOF\n{s}\nEOF\nls": "Bash(cat, ls)",  # 끝말은 줄 전체가 같아야 한다
+                              f"cat <<-EOF\n\t{s}\n\tEOF\nls": "Bash(cat, ls)",
+                              f"cat <<EOF\n{s}": "Bash(cat)",
+                              f"curl -d @- <<< {s}": "Bash(curl)",
+                              f"curl y 2>&1 {s}": "Bash(curl)",
+                              f"curl y &> {s}": "Bash(curl)",
+                              f"curl y >| {s}": "Bash(curl)",
+                              f"2>/tmp/e curl {s}": "Bash(curl)"})
+
+    def test_compound_commands_name_only_what_runs(self):
+        s = "hunter2-SECRET"
+        self.assertCallNames({f"[[ a == b && {s} == c ]] && curl y": "Bash(curl)",
+                              f"(( {s} > 1 )) && curl y": "Bash(curl)",
+                              f"(curl {s})": "Bash(curl)",
+                              f"{{ curl {s}; }} > /tmp/x": "Bash(curl)",
+                              f"if curl {s}; then ls {s}; fi": "Bash(curl, ls)",
+                              f"while read l; do curl {s}; done < /tmp/x": "Bash(read, curl)",
+                              f"for x\nin a {s}\ndo curl y; done": "Bash(curl)",
+                              f"case $x in a) curl y;; {s}) ls;; esac": "Bash",  # 패턴을 명령과 가르지 않고 이름을 내지 않는다
+                              f"y=$(case $x in a) ls;; {s}) ls;; esac)": "Bash",
+                              f"A=({s} b); curl y": "Bash",
+                              f"f() {{ curl {s}; }}": "Bash",
+                              f"ls @(a|{s}) y": "Bash"})
+
+    def test_only_a_plain_word_in_command_position_is_a_name(self):
+        s = "hunter2-SECRET"
+        self.assertCallNames({f"sudo -u {s} curl y": "Bash(sudo)",  # 옵션 값은 명령과 구별할 수 없다
+                              f"command -v {s}": "Bash(command)",
+                              f"env -u {s} curl y": "Bash(env)",
+                              f"timeout -s {s} 5 curl y": "Bash(timeout)",
+                              f"timeout 5 curl {s}": "Bash(curl)",
+                              f"sudo FOO={s} curl y": "Bash(curl)",
+                              f"/usr/bin/curl {s}": "Bash(curl)",
+                              f"'if' {s}": "Bash",  # 따옴표를 씌운 말은 셸 예약어가 아니다
+                              f"\\time {s}": "Bash",
+                              f"$CMD {s}": "Bash",
+                              f"https://x/{s} y": "Bash",
+                              f"-x {s}": "Bash"})
+
+    def test_unfinished_command_gives_no_names(self):
+        s = "hunter2-SECRET"
+        self.assertCallNames({f'curl "$(cat {s}': "Bash",
+                              f"curl $(cat {s}": "Bash",
+                              f"curl `cat {s}": "Bash",
+                              f"curl ${{X {s}": "Bash",
+                              f"curl $'{s}": "Bash",
+                              f"echo ) {s}": "Bash",
+                              f"curl $(cat <<EOF) {s}\nx\nEOF": "Bash",
+                              f"{'$(' * 5000}{s}": "Bash"})  # 재귀 한도를 넘어도 거부는 낸다
+
     def test_many_commands_are_cut(self):
-        names = hook.call_name({"tool_name": "Bash", "tool_input": {"command": "; ".join(f"c{i} x" for i in range(20))}}, {})
+        names = self.denied_call("; ".join(f"c{i} x" for i in range(20)))
         self.assertIn("c7", names)
         self.assertNotIn("c8", names)
         self.assertTrue(names.endswith(", …)"), names)
