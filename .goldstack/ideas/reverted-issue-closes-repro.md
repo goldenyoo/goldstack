@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "high"
 source: "goldstack-v15 리뷰 02(agy), goldstack-v12–v15 아침 보고"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v17"
 ---
 되돌린 티켓의 issue가 다음 PR의 `Closes #N`으로 다시 닫히는데 보고서는 `다시 엶`으로 남는지, 재현 시험으로 확인한다.
 

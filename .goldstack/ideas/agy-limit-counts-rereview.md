@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "high"
 source: "/retro goldstack-v12, v13, v14, v15"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v17"
 ---
 `gs check`의 agy 상한 검사가 재리뷰를 세지 않아, 경고 0으로 시작한 실행에서 두 번째 리뷰가 빠진다.
 

@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "high"
 source: "/retro goldstack-v12, v13, v14, v15"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v17"
 ---
 완료 조건을 못 채운 high 지적이 `보고만`으로 병합되어도 `gs go`는 종료 0, `/overnight` 판정은 `verified`라 사람이 보고서를 읽어야 안다.
 

@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "high"
 source: "goldstack-v15 리뷰 03"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v17"
 ---
 지문에 gs 버전이 들어 있어, 새 gs에서 재발해도 닫힌 issue를 찾지 못한다. 0.1.0에서 올린 issue가 고쳐진 뒤 더 새 gs에서 재발하면 다시 열리지 않고 언제나 새 issue가 생긴다. 완료 조건의 '다시 열고 횟수 댓글'과 목표 '이전 기록과 잇는다'가 실제 경로에서 이뤄지지 않는다.
 

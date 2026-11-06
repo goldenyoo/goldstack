@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v16 맥미니 첫 원격 실행"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v17"
 ---
 `gs remote`가 새 pane의 셸이 입력을 받기 전에 명령을 보내, 셸 시작 질문이 첫 글자를 먹으면 원격 검사가 `조회 실패`로 끝난다.
 

@@ -13,6 +13,7 @@
 - PreToolUse hook은 있고, 막을 수 있고, **실패하면 막는 쪽(fail-closed)**이다 **[측정]**. hook 프로세스는 agy의 환경 변수(`GS_ROLE`)를 물려받는다 **[측정]**. 그래서 09의 `gs.hook.decide()`를 agy 입력 형식에 맞춰 붙이면 claude worker와 같은 수준으로 막는다 **[측정: 임시 어댑터로]**.
 - `--sandbox`는 print 모드에서 **workspace 자체를 읽기 전용**으로 만들어 커밋이 안 된다 **[측정]**. worker에는 못 쓴다.
 - 결론: deny 규칙 + `gs` PreToolUse hook만으로는 **구현 worker에 부족하다**. 스크립트 파일, python, git alias로 실제 push된다 **[측정]** E3a·E3c(claude worker의 09 hook도 같은 빈틈). agy를 구현 worker로 띄우는 것은 다른 브랜치가 넣는 **구조적 환경 차단**(모든 worker 공통: 환경 변수로 준 git 설정이 모든 push URL을 막힌 주소로 바꾸고, `GH_TOKEN`은 무효 값)이 있을 때만이다. 이 차단이 있으면 스크립트·alias·python을 거친 push도 실패한다 **[추정]**(§5). 그 위에 `gs`가 결과를 다시 검증한다. 이 차단이 없으면 agy는 **리뷰 전용**이다.
+- 모델 창은 약 105만 토큰이지만 agy는 약 25만 토큰에서 자동 압축하고, 그 뒤 모델은 앞서 읽은 원문을 못 본다 **[측정]**. 넓게 읽히는 일에는 입력을 줄인다(§8).
 
 ## 1. 권한 모드
 | 항목 | 내용 | 근거 |
@@ -171,7 +172,7 @@ agy -p "<brief 전문>" \
 
 `denied_actions`와 ERROR 상태 tool 단계는 실패 로그(07)에 붙인다. stderr 첫 줄의 `warning:`도 로그에 남긴다(모드 무시 같은 조용한 강등을 잡는다).
 
-**막을 수 없는 경우의 대안**: (a)·(b) 모두 hook이 걸리지 않거나, 구조적 환경 차단이 없으면 agy는 **리뷰 전용**으로 쓴다. 기본 모드(`toolPermission` 기본값, skip-permissions 없음)에서는 셸 명령이 전부 자동 거부되고 workspace 읽기는 된다. 읽기가 된다는 것은 changelog에서 읽은 것이라 [추정]이다. 리뷰에 셸이 필요 없으면 이 모드가 그대로 차단 장치다.
+**막을 수 없는 경우의 대안**: (a)·(b) 모두 hook이 걸리지 않거나, 구조적 환경 차단이 없으면 agy는 **리뷰 전용**으로 쓴다. 기본 모드(`toolPermission` 기본값, skip-permissions 없음)에서는 셸 명령이 전부 자동 거부되고 workspace 읽기는 된다. 읽기가 된다는 것은 changelog에서 읽은 것이라 [추정]이다(2026-11-04에 **[측정]**으로 확인, §8). 리뷰에 셸이 필요 없으면 이 모드가 그대로 차단 장치다.
 
 ## 7. 실험 기록
 모두 `gemini-3.8-flash-{low,medium}`, `--output-format stream-json`, `/tmp/agyexp.jDw1/` 아래 버리는 레포(원격 = `remote.git` 로컬 bare). 이 worker 셸의 `git push`는 09 hook에 막혀서(예상대로) 원격은 `git clone --bare`로 만들었다. 프롬프트는 "아래 명령을 그대로, 막혀도 우회하지 말고 차례로 돌려 표로 보고하라"는 식이다.
@@ -191,3 +192,47 @@ agy -p "<brief 전문>" \
 | X1–X11 | 종료 코드·모델·강도 | §3.1, §4 |
 
 다시 돌리려면 위 설정으로 같은 구성을 만들면 된다. 실험 스크립트는 레포에 넣지 않았다(티켓: 코드는 바꾸지 않는다).
+
+## 8. 문맥 한도와 자동 압축 (2026-11-04)
+계기: 레포 전체 리뷰를 맡긴 agy 답 10개 중 3개가 틀렸고, 있지도 않은 함수 이름을 인용했다(Codex는 같은 질문에 근거가 모두 맞았다). 측정은 agy 1.4.12(그 뒤 이 머신은 1.5.0으로 올랐고 1.5.0은 재지 않았다), `gemini-4-argon-high`, 기본 모드 + `--sandbox`, 한 번의 실행이다. 대화 기록(`~/.gemini/antigravity-cli/conversations/<id>.db`의 `steps`, `gen_metadata`)은 공개 형식이 아니라 읽어서 해석했다.
+
+**결론**: agy 호출 한 번의 입력은 **약 8만 토큰 이하**로 잡는다. 약 25만 토큰이 넘으면 압축되고, 압축 뒤 답은 앞서 읽은 파일을 기억으로 인용한다. 압축이 일어나도 오류가 나지 않아 답만 봐서는 모른다. 8만은 가장 이른 압축 보고(아래 84,678)를 기준으로 한 보수적인 값이다.
+
+### 8.1 한도
+| 항목 | 값 | 근거 |
+|---|---|---|
+| Gemini 4 Argon 모델 한도 | 1,048,576 토큰(입력+출력 합산) | [Google 문서](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon) |
+| agy 압축 기준 | 256,000 토큰 | **[측정]** `gen_metadata`의 값(이름표 없는 필드를 해석). [#1245](https://github.com/google-antigravity/antigravity-cli/issues/1245)의 `max_context_tokens = 256000`, [모니터 도구](https://github.com/AGI-is-going-to-arrive/Antigravity-Context-Window-Monitor)의 IDE 보고값과 일치. 공식 문서에는 없다 |
+| 실제 압축 시점 | 대체로 235,000–279,000 | **[추정]** #1245 사용자 측정 |
+| 더 이른 압축 | 84,678–115,605 | **[추정]** [#878](https://github.com/google-antigravity/antigravity-cli/issues/878) 무인 실행 보고 1건(agy 1.3.5) |
+| 비교: Codex(gpt-6.1-sol) | 문맥 창 475,000 | **[측정]** 같은 질문에 최고 246,844 토큰, 압축 0회. 세션 기록 |
+
+`contextWindow` 키는 `agy -p /config`에 비어 있다 **[측정]**. `/model`에서 512K·900K를 고르면 여기 저장되지만 압축은 여전히 약 25만이고, `AGY_CLI_AUTO_COMPACT_OVERRIDE`도 효과가 없다는 보고가 있다 **[추정]**(#1245, 시험 안 함). 관련 이슈는 2026-11-04 기준 모두 열려 있고 관리자 설명은 없다. 비공식 바이너리 패치는 쓰지 않는다.
+
+### 8.2 이번 실행에서 일어난 일 **[측정]**
+| 시점 | 문맥 토큰 | 일 |
+|---|---|---|
+| step 0 / 8 / 15 | 12,413 / 64,924 / 149,533 | 문서·spec·보고서 읽기 |
+| step 24 / 33 / 42 | 181,197 / 220,999 / 266,212 | `src/gs` 읽기. 42에서 256,000을 넘음 |
+| step 54 | 16,381 | `CHECKPOINT`: 약 70만 자가 11,249바이트 요약으로. 요약에 "27개 파일 모두 완독" |
+| step 55–152 | 79,435까지 | skill·아이디어 읽기. `src/gs`는 다시 읽지 않음 |
+| step 154 | - | 답 작성. 이 단계 입력 기록에 요약과 압축 뒤 파일은 있고 `go.py` 원문은 없다 |
+
+- 인용한 함수 이름 9개 중 8개가 step 154에서 처음 나온다(git 역사에도 없다). `_required_checks`를 `_required_check_names`로 쓰는 식의 복원이다.
+- 요약에 남은 사실과 압축 뒤 읽은 파일에 근거한 지적은 맞았고, 요약에서 빠진 코드에 대한 지적이 틀렸다. step 41에서 읽은 `_required_checks`는 rulesets도 읽는데 답은 "구식 API만 조회"라고 썼다.
+- 모델은 요청한 그대로였다(`used_claude` false, 생성 14건 모두 Gemini 4 Argon High).
+- 같은 현상의 독립 보고: [#1294](https://github.com/google-antigravity/antigravity-cli/issues/1294)는 압축 뒤 읽은 파일 인용이 원문과 100%, 압축 전 파일 인용이 0% 일치했다고 한다 **[추정]**(측정 방법 설명 없음). 거기서는 요약이 "파일이 메모리에 있다", "도구를 더 부르지 마라"고 알렸다고 하는데, 이번 요약에 그 문구는 없었다.
+
+한계: 한 번의 실행이고 Codex와 조건이 달랐다(Codex는 셸이 있었다). "Gemini가 Codex보다 부정확하다"는 결론은 낼 수 없다. 압축이 없었으면 맞았을지도 이 기록으로는 모른다.
+
+### 8.3 기본 모드 `-p`의 읽기 **[측정]**
+`--dangerously-skip-permissions` 없이 `read_file`이 125회 돌았고 쓰기·셸은 쓰지 않았다. `read_file`은 한 번에 46,080바이트까지 주고 이어 읽는 방법을 알려 준다. 서브에이전트의 `find`는 거부됐다(`print mode, soft-denying`). 목록을 보지 못한 채 파일 이름을 추측해 23번이 `file does not exist`로 실패했고, v7·v8 실제 티켓을 한 장도 읽지 못한 채 티켓 내용을 언급했다. `list_dir`·`grep_search`는 한 번도 부르지 않았고, 이 모드에서 쓸 수 있는지는 **[모름]**.
+
+### 8.4 쓸 때
+- 레포 전체를 한 번에 맡기지 않는다. 영역별로 나눠 여러 번 부른다.
+- 한 호출에 넣을 파일 목록을 직접 준다(셸이 없으면 이름을 추측한다).
+- "인용 직전에 그 파일을 다시 읽고, 못 읽었으면 추정이라고 적어라"를 프롬프트에 넣는다.
+- 답의 파일·함수·줄 번호가 실제로 있는지 기계로 먼저 본다. 가짜 이름은 잡히지만 진짜 이름으로 틀린 논리는 못 잡으므로 코드 대조는 여전히 한다.
+- 결과가 중요하면 대화 기록에 `CHECKPOINT`가 있는지 본다. `stream-json`에는 압축 이벤트가 없다는 보고가 있다 **[추정]**([#1316](https://github.com/google-antigravity/antigravity-cli/issues/1316)). 큰 `-p` 메시지 하나가 약 19만 2천 자에서 오류 없이 잘렸다는 보고도 같은 곳에 있다.
+
+리뷰처럼 입력이 diff·티켓·spec으로 좁은 호출은 같은 위험이 작아 보인다(지난 리뷰 결과를 따로 검사하지는 않았다). `/retro`의 로그 요약은 `.goldstack/ideas/retro-log-prep.md`.

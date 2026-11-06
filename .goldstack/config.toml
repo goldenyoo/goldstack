@@ -38,3 +38,6 @@ summary_seconds = 60
 
 [notify]
 telegram = false
+
+[agy]
+max_calls_per_run = 6

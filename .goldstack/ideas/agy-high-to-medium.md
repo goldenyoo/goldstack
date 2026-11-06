@@ -2,7 +2,7 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v11 실행 중 대화(Gemini면 Argon 위주로 쓰고 싶다) + 같은 날 한도 측정"
-status: "open"
+status: "dropped"
 feature: ""
 ---
 이 레포의 agy에서 `/retro` 요약과 쓰이지 않는 `small`만 Argon Medium으로 옮기고, 첫 리뷰는 High에 둔다. High는 공용 "Gemini Models" 한도를 쓰고 Medium은 Argon 전용 한도를 쓰지만, 품질 비교에서 Medium이 High의 지적을 많이 놓쳤다.
@@ -49,3 +49,5 @@ feature: ""
 **관련**: [[model-tiering]], [[agy-gemini-usage]].
 
 - 2026-11-05 22시대 사람이 agy 계정을 바꿨다. 새 계정의 `/usage`에는 Argon 전용 한도 항목이 없어 위 근거가 그 계정에 맞지 않는다. 이전 계정으로 돌아가거나 전용 한도가 다시 보이면 다시 잰다. (출처: goldstack-v12 grill 4-1)
+
+버린 이유: 새 계정에는 Argon 전용 한도가 없고 한도도 높아져 Medium으로 옮길 근거가 사라졌다. 이후 방향은 [[agy-high-limit-rollout]].

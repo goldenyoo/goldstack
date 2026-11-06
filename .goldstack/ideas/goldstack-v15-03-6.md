@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v15 리뷰 03"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v17"
 ---
 발생 버전만 비교하게 되면서, 닫힌 issue를 다시 여는 경로가 실제 흐름에서는 거의 닿지 않는다. 티켓 완료 조건의 '지금 gs가 고친 버전보다 새로우면 다시 열고 횟수 댓글을 단다'가 시험 밖에서는 실질적으로 일어나지 않는다.
 
