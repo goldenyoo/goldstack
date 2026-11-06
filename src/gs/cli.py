@@ -72,9 +72,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("notify_args", nargs="*", help="<파일>")
     p.add_argument("--check", action="store_true", help="메시지를 보내지 않고 토큰만 확인한다")
 
-    p = sub.add_parser("hook", help="worker 차단 hook 진입점(Claude plugin·agy가 부른다). GS_ROLE=worker일 때만 막는다")
-    p.add_argument("event", choices=["pretooluse", "agy-pretooluse"],
-                   help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON)")
+    p = sub.add_parser("overnight", help="무인 세션의 승인 창을 거부로 바꾼다")
+    overnight_sub = p.add_subparsers(dest="overnight_cmd", required=True)
+    overnight_sub.add_parser("arm", help="이 Claude 세션에서 뜰 승인 창을 거부로 바꾼다. 다른 세션은 그대로다")
+    overnight_sub.add_parser("disarm", help="이 Claude 세션의 거부를 끈다. 창이 다시 뜬다")
+
+    p = sub.add_parser("hook", help="hook 진입점(Claude plugin·agy가 부른다). 차단은 GS_ROLE=worker일 때, 거부는 gs overnight arm을 친 세션에서만 한다")
+    p.add_argument("event", choices=["pretooluse", "agy-pretooluse", "permissionrequest"],
+                   help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON), "
+                        "permissionrequest: Claude Code 승인 창(stdout JSON으로 거부)")
 
     args = parser.parse_args(argv)
     if args.cmd == "go" and len(args.feature) > 1 and args.only is not None:
@@ -101,6 +107,10 @@ def _run(args: argparse.Namespace) -> int:
     if repo is None:
         print("오류: git 레포 안이 아니다(--repo로 지정)", file=sys.stderr)
         return 2
+    if args.cmd == "overnight":
+        from . import overnight
+        action = overnight.arm if args.overnight_cmd == "arm" else overnight.disarm
+        return action(repo, sys.stdout, sys.stderr)
     if args.cmd == "remote":
         from . import remote
         if args.remote_cmd == "go":
