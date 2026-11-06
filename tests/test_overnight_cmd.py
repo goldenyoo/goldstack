@@ -34,6 +34,7 @@ NIGHT = """# overnight 2026-11-06
 | a | 실행 중 | 0 | – | – |
 """
 ROW_C = "| c | 대기 | 0 | – | – |"
+REPORT = "## 아침 보고\n# 밤샘 보고 2026-11-06\n| feature | 결과 | PR |\n|---|---|---|\n| a | verified | – |\n"
 # 두 프로세스가 같은 글을 읽은 자리에서 서로를 기다린 뒤 쓴다. 잠금이 없으면 뒤에 쓴 쪽이 앞 줄을 지운다.
 # 잠금이 있으면 상대는 안으로 들어오지 못해 먼저 든 쪽이 잠깐 기다리고 혼자 쓴다. 통과는 시간에 기대지 않는다
 MEET = """
@@ -669,13 +670,53 @@ class OvernightTest(unittest.TestCase):
 
     def test_add_does_not_reopen_a_finished_night(self):
         """이 밤을 잇는 세션이 없고, 끝난 밤의 허락이 새 feature에 쓰이면 안 된다."""
-        text = NIGHT + "## 아침 보고\n# 밤샘 보고 2026-11-06\n| feature | 결과 | PR |\n|---|---|---|\n| a | verified | – |\n"
+        text = NIGHT + REPORT
         path, _ = self.night(text), self.feature("c")
         code, _, err = self.add()
         self.assertEqual(code, 1)
         self.assertIn("끝난 밤", err)
         self.assertIn("/overnight add <feature>", err)
         self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_add_joins_a_resumed_night_that_keeps_its_report(self):
+        """`/overnight resume`은 멈춘 밤의 보고를 남긴 채 같은 파일을 잇는다. 거부하면 새 파일이 생겨 코디네이터가 읽지 않는 표에 줄이 간다."""
+        path, _ = self.night(NIGHT + REPORT), self.feature("c")
+        typist, coordinator = FakeClaude(self), FakeClaude(self)
+        self.arm(coordinator)
+        code, out, err = typist.run([*GS, "overnight", "add", "c"], self.repo)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(path.read_text(encoding="utf-8"), NIGHT + ROW_C + "\n" + REPORT)
+        self.assertIn(f"코디네이터: 세션 pid {coordinator.pid}", out)
+        self.assertEqual(overnight.latest_night(self.repo), path)
+
+    def test_add_refuses_a_reported_night_once_its_coordinator_is_gone(self):
+        text = NIGHT + REPORT
+        path, _ = self.night(text), self.feature("c")
+        typist, coordinator = FakeClaude(self), FakeClaude(self)
+        self.arm(coordinator)
+        coordinator.run([*GS, "overnight", "disarm"], self.repo)
+        code, _, err = typist.run([*GS, "overnight", "add", "c"], self.repo)
+        self.assertEqual(code, 1)
+        self.assertIn("끝난 밤", err)
+        self.arm(coordinator)
+        coordinator.close()
+        code, _, err = typist.run([*GS, "overnight", "add", "c"], self.repo)
+        self.assertEqual(code, 1)
+        self.assertIn("끝난 밤", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_add_to_a_reported_night_without_ps_does_not_call_it_finished(self):
+        """끝났다고 하면 skill이 새 파일을 만든다. 모를 때는 아무것도 바꾸지 않고 다시 치게 한다."""
+        text = NIGHT + REPORT
+        path, _ = self.night(text), self.feature("c")
+        for error in (OSError("ps 안 됨"), subprocess.TimeoutExpired("ps", 1)):
+            with self.subTest(error=error):
+                out, err = io.StringIO(), io.StringIO()
+                with mock.patch("gs.overnight.processes", side_effect=error):
+                    self.assertEqual(overnight.add(self.repo, "c", out, err), 1)
+                self.assertIn("모른다", err.getvalue())
+                self.assertNotIn("끝난 밤", err.getvalue())
+                self.assertEqual(path.read_text(encoding="utf-8"), text)
 
     def test_add_picks_the_newest_night_by_name(self):
         self.feature("c")

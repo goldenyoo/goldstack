@@ -320,13 +320,22 @@ def _replace(path: Path, text: str) -> None:
         raise
 
 
-def _enqueue(night: Path, name: str) -> str | None:
+def _reopened(root: Path) -> bool:
+    """아침 보고가 있는 밤을 잇는 세션이 있는가. `/overnight resume`은 멈춘 밤의 보고를 남긴 채 같은 파일을 잇는다."""
+    try:
+        return bool(_live_markers(root, processes()))
+    except (OSError, subprocess.SubprocessError) as e:
+        # 끝났다고 하면 skill이 새 파일을 만들어 도는 코디네이터가 읽지 않는 표에 줄이 간다
+        raise ResultFileError(f"아침 보고가 있는데 프로세스 목록을 읽지 못해({e}) 이 밤을 잇는 세션이 있는지 모른다. 다시 친다") from e
+
+
+def _enqueue(root: Path, night: Path, name: str) -> str | None:
     """잠금 안에서 부른다. 줄을 더했으면 None, 이미 있으면 그 줄의 상태.
 
-    아침 보고를 쓴 밤에는 더하지 않는다. 그 밤을 잇는 세션이 없고, 며칠 전 허락이 새 feature에 쓰이게 된다.
+    아침 보고를 쓰고 잇는 세션이 없는 밤에는 더하지 않는다. 며칠 전 허락이 새 feature에 쓰이게 된다.
     """
     lines = night.read_text(encoding="utf-8").split("\n")
-    if any(line.rstrip() == REPORT_HEADING for line in lines):
+    if any(line.rstrip() == REPORT_HEADING for line in lines) and not _reopened(root):
         raise ResultFileError(f"아침 보고까지 쓴 끝난 밤이다. {MAKE_NIGHT}")
     table = _result_table(lines)
     for i in table[2:]:
@@ -370,7 +379,7 @@ def add(repo: Path, name: str, out: TextIO, err: TextIO) -> int:
     _ensure_ignored(root)
     try:
         with _queue_lock(root):
-            state = _enqueue(night, name)
+            state = _enqueue(root, night, name)
     except (ResultFileError, OSError, UnicodeDecodeError) as e:
         print(f"오류: {where}: {e}", file=err)
         return 1
