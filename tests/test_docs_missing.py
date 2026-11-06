@@ -27,6 +27,7 @@ class DocsMissingReportTest(unittest.TestCase):
         with (mock.patch.object(report, "verification_failure", return_value=""),
               mock.patch.object(report, "evidence", return_value=""),
               mock.patch.object(report, "finding_counts", return_value=""),
+              mock.patch.object(report, "remaining_line", return_value=""),
               mock.patch.object(report.setup, "warnings", return_value=[])):
             return report._render(self.r, "요약", 0)
 

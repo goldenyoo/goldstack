@@ -131,15 +131,15 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 
 ## 7. 아침 보고
 
-`결과`·`쓴 허락`·`아침에 물을 것`으로 한 장을 쓴다. 파일 끝 `## 아침 보고`에 넣고 같은 글을 세션에 보인다. PR은 state.json의 `finish.url`이다. feature마다 `/retro <feature>` 권고를 `회고:` 줄 하나에 넣는다. 피드백 건수는 `gs feedback list`로 센다.
+`결과`·`쓴 허락`·`아침에 물을 것`으로 한 장을 쓴다. 파일 끝 `## 아침 보고`에 넣고 같은 글을 세션에 보인다. PR은 state.json의 `finish.url`이다. `남은 high`는 `gs go` 출력의 `■ 남은 high …`·`■ 건너뛴 리뷰: …` 줄이나 `report.md`의 `마무리:` 줄 뒤쪽(`남은 high N(상태 n) · 건너뛴 리뷰: 티켓`)을 그대로 옮기고, 없으면 `–`다. 이 값이 있어도 `verified`는 바꾸지 않는다. feature마다 `/retro <feature>` 권고를 `회고:` 줄 하나에 넣는다. 피드백 건수는 `gs feedback list`로 센다.
 
 ```markdown
 # 밤샘 보고 <날짜>
-| feature | 결과 | PR | 이유·재개 명령 |
-|---|---|---|---|
-| a | verified | <url> | – |
-| b | 멈춤 | – | `gs check b` 경고 2개 → `/overnight resume` |
-| c | 미실행 | – | b에 의존 |
+| feature | 결과 | PR | 남은 high·건너뛴 리뷰 | 이유·재개 명령 |
+|---|---|---|---|---|
+| a | verified | <url> | 남은 high 2(보고만 1 · 확인 못 함 1) · 건너뛴 리뷰: 05 | – |
+| b | 멈춤 | – | – | `gs check b` 경고 2개 → `/overnight resume` |
+| c | 미실행 | – | – | b에 의존 |
 
 고친 사소한 것: …
 남은 질문: …

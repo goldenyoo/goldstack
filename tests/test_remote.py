@@ -46,6 +46,10 @@ if a[:2] == ['workspace', 'create']:
     if '--cwd' in a and os.environ.get('SESSION_CREATE_FAIL'):
         refuse('workspace_create_failed')
     (root / 'shell').write_text('')
+    (root / 'session').unlink(missing_ok=True)
+    if '--cwd' in a:
+        (root / 'session').write_text('')  # 임시 검사 pane이 아니라 /go 세션 workspace다.
+    (root / 'dropped').unlink(missing_ok=True)  # 새 pane의 셸은 시작 질문을 다시 띄운다.
     print(json.dumps({'result': {'workspace': {'workspace_id': 'remote:w1'}, 'root_pane': {'pane_id': 'remote:p1'}}}))
 elif a[:2] == ['agent', 'start']:
     # 실제 herdr처럼 셸이 명령을 받는 pane에만 띄운다.
@@ -64,6 +68,12 @@ elif a[:2] == ['workspace', 'close']:
         refuse('close_failed')
 elif a[:2] == ['pane', 'run']:
     command = ' '.join(a[3:])
+    if os.environ.get('SILENT'):
+        sys.exit(0)  # 응답하지 않는 pane: 입력을 받지 않고 출력도 없다.
+    if os.environ.get('DROP_FIRST') and not (root / 'dropped').exists():
+        # 셸 시작 질문 `[Y/n]`이 첫 입력 글자를 답으로 먹는다. 나머지는 엉뚱한 명령이 된다.
+        (root / 'dropped').write_text('')
+        command = command[1:]
     # 새 pane에 아직 프롬프트가 없어 canonical 모드인 macOS를 재현한다.
     if len(command.encode()) >= 1024:
         print('command exceeds canonical line-input limit', file=sys.stderr)
@@ -79,10 +89,12 @@ elif a[:2] == ['pane', 'run']:
 elif a[:2] == ['pane', 'wait-output']:
     failure = os.environ.get('WAIT_FAIL')
     pattern = a[a.index('--regex') + 1]
-    if failure == '1' or (failure == 'final' and 'GS_CHECK_END_' in pattern) or (failure == 'ready' and 'GS_REMOTE_READY_' in pattern):
+    if failure == '1' or (failure == 'final' and 'GS_CHECK_END_' in pattern) or (failure == 'ready' and 'GS_REMOTE_READY_' in pattern and (root / 'session').exists()):
         print(json.dumps({'error': {'code': 'timeout', 'message': 'wait timed out'}}), file=sys.stderr)
         sys.exit(1)
-    assert re.search(a[a.index('--regex') + 1], (root / 'output').read_text())
+    output = (root / 'output').read_text() if (root / 'output').exists() else ''
+    if not re.search(pattern, output):
+        refuse('timeout')
 elif a[:2] == ['pane', 'read']:
     print('incomplete output' if os.environ.get('BAD_OUTPUT') else (root / 'output').read_text())
 elif a[:2] == ['pane', 'close']:
@@ -303,6 +315,72 @@ class RemoteTest(RemoteFixture):
             code, output = self.check()
         self.assertEqual(code, 1)
         self.assertIn('시간 초과', output)
+
+    def test_check_survives_dropped_first_character(self):
+        """셸 시작 질문이 첫 글자를 먹어도 검사가 성공한다. 먹힌 것은 표시 줄이고 조각이 아니다."""
+        with mock.patch.dict(os.environ, DROP_FIRST='1'):
+            code, output = self.check()
+        self.assertEqual(code, 0, output)
+        commands = [json.loads(line)[5] for line in (self.root / 'calls').read_text().splitlines()
+                    if json.loads(line)[2:4] == ['pane', 'run']]
+        self.assertTrue(commands[0].startswith('printf '), commands[0])  # 첫 입력은 표시 줄이다
+        self.assertTrue(commands[1].startswith('printf '), commands[1])  # 먹힌 표시 줄을 다시 보냈다
+        self.assertNotEqual(commands[0], commands[1])
+        self.assertTrue(commands[2].startswith('GS_CHECK_'), commands[2])
+
+    def test_silent_pane_fails_within_bounded_attempts(self):
+        with mock.patch.dict(os.environ, SILENT='1'):
+            code, output = self.check()
+        self.assertEqual(code, 1, output)
+        self.assertIn('셸 시작 질문', output)
+        self.assertIn('oh-my-zsh', output)
+        runs = [a for a in (json.loads(line) for line in (self.root / 'calls').read_text().splitlines())
+                if a[2:4] == ['pane', 'run']]
+        self.assertEqual(len(runs), remote.SHELL_READY_TRIES)
+        self.assertTrue(all(a[5].startswith('printf ') for a in runs))
+        self.assertIn('pane", "close', (self.root / 'calls').read_text())
+
+    def test_shell_ready_wait_stays_within_shell_ready_ms(self):
+        waits = []
+        real = remote.herdr.machine_run
+
+        def run(machine, args, timeout=10):
+            if args[:2] == ['pane', 'wait-output']:
+                waits.append(int(args[args.index('--timeout') + 1]))
+            return real(machine, args, timeout)
+
+        with mock.patch.dict(os.environ, SILENT='1'), mock.patch('gs.remote.herdr.machine_run', side_effect=run):
+            self.check()
+        self.assertEqual(len(waits), remote.SHELL_READY_TRIES)
+        self.assertLessEqual(sum(waits), remote.SHELL_READY_MS)
+
+    def test_shell_ready_total_wait_counts_slow_send(self):
+        """전송이 느려 잔여가 줄어도 wait-output은 잔여 안에서만 기다리고 상한을 넘겨 성공하지 않는다."""
+        for out_ok in (False, True):
+            now = [0.0]
+            seen = []
+
+            def run(machine, args, timeout=10):
+                if args[:2] == ['pane', 'run']:
+                    now[0] += 29
+                    return ''
+                seen.append((int(args[args.index('--timeout') + 1]), timeout))
+                now[0] += 6
+                if not out_ok:
+                    raise remote.herdr.HerdrError('timeout', 'x')
+                return ''
+
+            with mock.patch('gs.remote.time.monotonic', side_effect=lambda: now[0]), \
+                    mock.patch('gs.remote.herdr.machine_run', side_effect=run):
+                try:
+                    remote._shell_ready('m', 'p', 30)
+                    failed = False
+                except remote.herdr.HerdrError as e:
+                    failed = e.code == 'timeout'
+            self.assertEqual(len(seen), 1)
+            self.assertLessEqual(seen[0][0], 1000)  # 잔여 1초
+            self.assertLessEqual(seen[0][1], 1)  # 프로세스 제한도 잔여 안
+            self.assertEqual(failed, not out_ok)
 
     def test_incomplete_output_fails_and_closes_pane(self):
         with mock.patch.dict(os.environ, BAD_OUTPUT='1'):
@@ -526,6 +604,35 @@ class RemoteGoTest(RemoteGoFixture):
                 calls = self.calls()
                 self.assertEqual(calls[-1][2:], ['workspace', 'close', 'remote:w1'])
                 self.assertEqual(calls[-2][2:4], last)
+
+    def test_launch_survives_dropped_first_character(self):
+        self.push_spec()
+        with mock.patch.dict(os.environ, DROP_FIRST='1'):
+            code, output = self.go()
+        self.assertEqual(code, 0, output)
+        calls = self.calls()
+        created = max(i for i, a in enumerate(calls) if a[2:4] == ['workspace', 'create'] and '--cwd' in a)
+        self.assertEqual([a[2:4] for a in calls[created + 1:]],
+                         [['pane', 'run'], ['pane', 'wait-output']] * 2 + [['agent', 'start'], ['agent', 'prompt']])
+        first, second = (a[5] for a in calls[created + 1:] if a[2:4] == ['pane', 'run'])
+        self.assertTrue(first.startswith('printf '))
+        self.assertNotEqual(first, second)
+
+    def test_silent_session_pane_closes_workspace_and_names_shell_prompt(self):
+        self.push_spec()
+        real = remote.herdr.machine_run
+
+        def run(machine, args, timeout=10):
+            if args[:2] == ['pane', 'run'] and 'GS_REMOTE_READY_' in args[-1] and (self.root / 'session').exists():
+                return ''  # 세션 pane만 입력을 버린다
+            return real(machine, args, timeout)
+
+        with mock.patch('gs.remote.herdr.machine_run', side_effect=run):
+            code, output = self.go()
+        self.assertEqual(code, 1, output)
+        self.assertIn('셸 시작 질문', output)
+        self.assertEqual(self.calls()[-1][2:], ['workspace', 'close', 'remote:w1'])
+        self.assertFalse([a for a in self.actions() if a[0] == 'agent'])
 
     def test_agent_not_ready_tells_how_to_fix(self):
         with mock.patch.dict(os.environ, AGENT_FAIL='start'):
