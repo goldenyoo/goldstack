@@ -16,9 +16,14 @@
 공용 git 설정은 `python -c`로도 고칠 수 있어, gs가 push 직전에 실행 시작 때 기록과 대조한다(`git.check_push`).
 worker 역할에서 hook 입력을 해석하지 못하면(JSON 아님, 객체 아님) 막는다(fail closed).
 알려진 경로·glob·재귀 검색 시작점을 검사한다. 인터프리터 코드·스크립트 본문·심볼릭 링크까지 추적하는 보안 경계는 아니다.
+
+`gs hook permissionrequest`는 역할과 상관없이 불리고 승인 창이 뜰 자리에서만 돈다. `gs overnight arm`을 친 세션이면 창 대신
+거부 JSON을 stdout에 낸다. 그 밖에는 아무것도 출력하지 않고 종료 0이라 창이 그대로 뜬다. exit 2는 이 이벤트를 거부하지 않는다(spec §6).
+어떤 세션이 켜진 것인지는 `overnight.py`가 정한다.
 """
 from __future__ import annotations
 
+import contextlib
 import glob
 import json
 import os
@@ -29,8 +34,17 @@ import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
+from pathlib import Path
 
 FOOTER = "이 일은 `gs`가 한다(push·PR·병합·인증). worker는 worktree 안에서 커밋까지만 한다."
+
+# 거부 기록에 남기는 이름의 모양. 이 모양이 아니면 인자가 섞였을 수 있어 적지 않는다
+TOOL_NAME = re.compile(r"[\w.:+-]{1,80}")
+COMMAND_NAME = re.compile(r"[\w.+-]{1,80}")
+UNKNOWN_CALL = "(이름을 읽지 못함)"
+MAX_CALL_NAMES = 8
+SHELL_LEADING_WORDS = {"if", "then", "elif", "else", "while", "until", "do", "time", "!", "{"}  # 뒤에 명령이 온다
+SHELL_NO_COMMAND_WORDS = {"for", "case", "select", "function", "fi", "done", "esac", "}"}  # 이 줄의 첫 단어는 명령이 아니다
 
 FORCE_FLAGS = ("--force", "--force-with-lease", "--force-if-includes")
 # worktree 밖(-C, cd)에서 돌면 다른 체크아웃이나 ref를 바꾸는 git 하위 명령
@@ -109,8 +123,10 @@ class Ctx:
 
 def main(argv: list[str], stdin=None, env: Mapping[str, str] | None = None) -> int:
     env = os.environ if env is None else env
+    if argv[:1] == ["permissionrequest"]:
+        return permission_request(stdin or sys.stdin, sys.stdout, env)
     if argv[:1] != ["pretooluse"]:
-        print("사용법: gs hook pretooluse", file=sys.stderr)
+        print("사용법: gs hook pretooluse | permissionrequest", file=sys.stderr)
         return 2
     if env.get("GS_ROLE") != "worker":
         return 0
@@ -129,6 +145,79 @@ def main(argv: list[str], stdin=None, env: Mapping[str, str] | None = None) -> i
         return 0
     print(message(reason), file=sys.stderr)
     return 2
+
+
+def permission_request(stdin, stdout, env: Mapping[str, str]) -> int:
+    """켜진 세션이면 창 대신 거부를 낸다. 언제나 종료 0이고, 판정이 실패하면 아무것도 내지 않아 창으로 돌아간다."""
+    from . import overnight
+
+    try:
+        try:
+            payload = json.load(stdin)
+        except ValueError:  # 켜진 세션이면 읽지 못한 입력도 창을 띄우지 않는다
+            payload = {}
+        if not isinstance(payload, Mapping):
+            payload = {}
+        cwd = payload.get("cwd")
+        root = overnight.armed_root(Path(cwd if cwd and isinstance(cwd, str) else os.getcwd()))
+        if root is None:
+            return 0
+        call = call_name(payload, env)
+        with contextlib.suppress(OSError):  # 기록을 못 해도 거부는 낸다. 창이 뜨면 아침까지 선다
+            overnight.record_denied(root, call)
+        json.dump({"hookSpecificOutput": {"hookEventName": "PermissionRequest",
+                                          "decision": {"behavior": "deny", "message": denial(call)}}}, stdout)
+    except Exception:  # noqa: BLE001  낮 세션의 창을 hook 오류로 바꾸지 않는다
+        pass
+    return 0
+
+
+def denial(call: str) -> str:
+    """모델이 받는 거부 이유. 무슨 호출인지와 다음에 할 일을 말한다."""
+    from .overnight import DENIED_LOG
+
+    return (f"gs overnight: 이 세션은 `gs overnight arm`으로 켠 무인 세션이라 승인 창 대신 거부했다. 거부한 호출: {call}. 허용 규칙에 없는 호출이다. "
+            "같은 호출을 다시 보내지 않는다. 허용된 다른 길이 있으면 그 길로 잇고, 없으면 막힌 일을 밤샘 파일에 적고 다음 일로 넘어간다. "
+            f"거부 기록: {DENIED_LOG}. 사람이 돌아오면 이 세션에서 `gs overnight disarm`으로 끈다.")
+
+
+def call_name(payload: Mapping, env: Mapping[str, str]) -> str:
+    """기록과 거부 이유에 쓸 호출 이름. 인자는 비밀을 담을 수 있어 넣지 않는다. Bash는 명령 이름만 `Bash(git, curl)`처럼 적는다."""
+    tool = payload.get("tool_name")
+    if not isinstance(tool, str) or not TOOL_NAME.fullmatch(tool):
+        return UNKNOWN_CALL
+    inp = payload.get("tool_input")
+    command = inp.get("command") if tool == "Bash" and isinstance(inp, Mapping) else None
+    if not isinstance(command, str):
+        return tool
+    try:
+        names = bash_command_names(command, env)
+    except Exception:  # noqa: BLE001  이름을 못 뽑아도 거부는 낸다
+        return tool
+    if not names:
+        return tool
+    shown = ", ".join(names[:MAX_CALL_NAMES])
+    return f"{tool}({shown}{', …' if len(names) > MAX_CALL_NAMES else ''})"
+
+
+def bash_command_names(command: str, env: Mapping[str, str]) -> list[str]:
+    """명령 글에서 도는 명령의 이름들(중복 제거). 인자·앞붙임 대입·heredoc 본문은 넣지 않는다."""
+    text, subs = scan(command.replace("\\\n", " "))
+    try:
+        shlex.split(text)
+    except ValueError:  # 따옴표가 닫히지 않았다. `tokens`가 거칠게 나눈 조각은 인자일 수 있다
+        return []
+    ctx = Ctx(worktree="/", cwd="/", env=env)
+    names: list[str] = []
+    for argv, _, _ in segments(text, "/", ctx):
+        words = argv
+        while words and words[0] in SHELL_LEADING_WORDS:
+            words = words[1:]
+        if words and words[0] not in SHELL_NO_COMMAND_WORDS:
+            names.append(command_name(words))
+    for inner in subs:
+        names += bash_command_names(inner, env)
+    return list(dict.fromkeys(name for name in names if COMMAND_NAME.fullmatch(name)))
 
 
 def message(reason: str) -> str:
