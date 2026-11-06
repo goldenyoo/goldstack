@@ -23,6 +23,7 @@ from . import adapters, config, git, herdr, version
 from .feature import WORK
 
 TIMEOUT = 90
+STATUS_TIMEOUT = 20  # herdr의 ssh ConnectTimeout(10초)보다 길게. 끊긴 머신은 시간 초과가 아니라 `error` 줄로 판정한다.
 PULL_TIMEOUT = 60  # 원격 git pull 하나. 준비 전체는 TIMEOUT을 더한 만큼 기다린다.
 FETCH_TIMEOUT = 60  # 로컬 git fetch 하나.
 CREATE_TIMEOUT = 30  # 세션 workspace 만들기·프롬프트 보내기 하나.
@@ -467,8 +468,9 @@ def check(repo: Path, machine: str, out: TextIO, err: TextIO, feature: str | Non
         print(f"오류: herdr가 없다 → {GUIDE}을 따른다", file=err)
         return 1
     try:
-        cp = _run([herdr.bin(), "machine", "status"], 10)
-        # 다른 저장된 머신 실패로 종료 1이어도 지정한 머신 줄만 판정한다.
+        # 지정한 머신만 묻는다. 머신을 안 주면 저장된 머신 전부에 ssh해서 끊긴 머신 하나가 전체를 늦춘다.
+        cp = _run([herdr.bin(), "machine", "status", machine], STATUS_TIMEOUT)
+        # 지정한 머신이 끊겨도 종료 1이니 그 머신의 줄로 판정한다.
         rows = [line.replace('\\t', '\t').split() for line in cp.stdout.splitlines()]
         row = next((r for r in rows if len(r) == 3 and machine in r[:2]), None)
         if row is None:

@@ -25,10 +25,17 @@ a = sys.argv[1:]
 root = Path(os.environ['FAKE_ROOT'])
 with (root / 'calls').open('a') as f:
     f.write(json.dumps(a) + '\n')
-if a == ['machine', 'status']:
-    print('id\trunner\t' + os.environ.get('CONNECTION', 'reachable'))
-    print('other-id\tbroken\terror')
-    sys.exit(1)
+if a[:2] == ['machine', 'status']:
+    # 실제 herdr처럼 머신을 안 주면 저장된 머신 전부에 ssh하고, 하나라도 실패하면 종료 1이다.
+    names = a[2:] or ['runner', 'broken']
+    for name in names:
+        if name == 'runner':
+            print('id\trunner\t' + os.environ.get('CONNECTION', 'reachable'))
+        elif name == 'broken':
+            print('other-id\tbroken\terror')
+        else:
+            print(f"unknown machine '{name}'", file=sys.stderr)
+    sys.exit(0 if names == ['runner'] and os.environ.get('CONNECTION', 'reachable') == 'reachable' else 1)
 assert a[:2] == ['--machine', 'runner'], a
 a = a[2:]
 def refuse(code):
@@ -164,13 +171,28 @@ class RemoteFixture(unittest.TestCase):
 
 
 class RemoteTest(RemoteFixture):
-    def test_all_pass_even_when_other_machine_fails(self):
+    def test_status_asks_only_the_target_machine(self):
+        """다른 저장 머신의 연결 시간 초과(실측 10.6초)가 대상 머신의 판정을 깨면 안 된다."""
+        with mock.patch('gs.remote._run', wraps=remote._run) as run:
+            code, output = self.check()
+        self.assertEqual(code, 0, output)
+        args, timeout = next(c.args for c in run.call_args_list if c.args[0][1:3] == ['machine', 'status'])
+        self.assertEqual(args[1:], ['machine', 'status', 'runner'])
+        self.assertGreater(timeout, 10)  # herdr의 ssh ConnectTimeout=10. 대상이 끊겼으면 시간 초과 대신 그 줄로 판정한다
+
+    def test_unknown_machine_is_reported_as_not_saved(self):
+        code, output = self.check('nosuch')
+        self.assertEqual(code, 1)
+        self.assertIn('저장된 머신이 아니다', output)
+
+    def test_all_pass(self):
         code, output = self.check()
         self.assertEqual(code, 0, output)
         self.assertNotIn('빠짐', output)
         self.assertNotIn('경고', output)
         self.assertEqual(output.count('통과:'), 11)
         calls = [json.loads(line) for line in (self.root / 'calls').read_text().splitlines()]
+        self.assertEqual(calls[0], ['machine', 'status', 'runner'])
         self.assertTrue(all(a[:2] == ['--machine', 'runner'] for a in calls[1:]))
         actions = [a[2:4] for a in calls[1:]]
         self.assertEqual(actions[0], ['workspace', 'create'])
