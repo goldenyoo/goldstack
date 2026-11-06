@@ -10,6 +10,7 @@
 - `gh` 쓰기 명령(읽기 전용 명령만 통과)
 - worktree 밖 쓰기(임시 디렉터리와 /dev는 통과)
 - 비밀 파일 읽기(`~/.ssh`, `.env` 등)
+- 이름으로 프로세스를 끄는 `pkill`·`killall`(기계 전체의 같은 이름 프로세스를 끄니 다른 티켓의 검증도 죽는다). `kill <PID>`와 `pgrep`은 통과한다
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
@@ -107,6 +108,7 @@ ENV_SAFE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 WRAPPERS = {"sudo", "env", "command", "builtin", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "xargs"}
 WRITE_ALL_ARGS = {"rm", "rmdir", "touch", "mkdir", "chmod", "chown", "truncate", "unlink", "mv", "tee"}
 WRITE_LAST_ARG = {"cp", "ln", "install", "rsync"}
+KILL_BY_NAME = {"pkill", "killall"}
 NO_FILE_READ = {"echo", "printf"}  # 인자를 파일로 읽지 않는다(`.env`를 .gitignore에 적는 일 등)
 
 
@@ -708,6 +710,21 @@ def _xargs_filled(words: list[str], fill: tuple[str, ...]) -> list[str]:
     return [XARGS_INPUT if any(s in word for s in fill) else word for word in words]
 
 
+SUDO_SHORT_VALUED = set("CDghpRrTtUu")
+SUDO_LONG_VALUED = ("--close-from", "--chdir", "--chroot", "--group", "--host", "--prompt", "--role", "--type",
+                    "--command-timeout", "--other-user", "--user")
+
+
+def _sudo_takes_next(word: str) -> bool:
+    """이 sudo 옵션의 값이 다음 단어인가(`-u root`, `-Eu root`, `--user root`). 그 단어는 명령이 아니다."""
+    if word.startswith("--"):
+        return "=" not in word and word in SUDO_LONG_VALUED
+    for k, ch in enumerate(word[1:], 1):
+        if ch in SUDO_SHORT_VALUED:
+            return k == len(word) - 1  # 뒤에 글자가 더 있으면 `-uroot`처럼 값이 붙어 있다
+    return False
+
+
 def strip_prefix(argv: list[str]) -> list[str]:
     """`FOO=1 sudo env -i nohup git push`에서 `git push`만 남긴다."""
     i = 0
@@ -719,9 +736,11 @@ def strip_prefix(argv: list[str]) -> list[str]:
             i += 1
         elif os.path.basename(a).lstrip("\\") in WRAPPERS:
             xargs = _is_xargs(a)  # `xargs -I {} git …`의 `{}`는 명령이 아니다
+            sudo = os.path.basename(a).lstrip("\\") == "sudo"  # `sudo -u root pkill …`의 `root`도 명령이 아니다
             i += 1
             while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i] or re.match(r"^\d+[smhd]?$", argv[i])):
-                i += 2 if xargs and _xargs_takes_next(argv[i]) else 1
+                takes = (xargs and _xargs_takes_next(argv[i])) or (sudo and argv[i].startswith("-") and _sudo_takes_next(argv[i]))
+                i += 2 if takes else 1
         else:
             break
     return argv[i:]
@@ -757,6 +776,9 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
         reason = check_git(words, seg) or check_git(_xargs_filled(words, seg.xargs_fill), seg)
         if reason:
             return reason
+    if name in KILL_BY_NAME:
+        return (f"`{name}`은 이름이 같은 프로세스를 기계 전체에서 끈다. 다른 티켓의 검증이나 다른 세션도 죽는다. "
+                "자기가 띄운 프로세스는 PID로 끈다(`kill <PID>`. `$!`나 `pgrep`으로 PID를 찾는다)")
     if name == "gh":
         reason = check_gh(args)
         if reason:
