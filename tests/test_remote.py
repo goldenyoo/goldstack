@@ -214,6 +214,16 @@ class RemoteTest(RemoteFixture):
         self.assertGreater(len(commands), 1)
         self.assertTrue(all(len(command.encode()) < 1024 for command in commands))
 
+    def test_ends_with_relogin_guidance(self):
+        code, output = self.check()
+        self.assertEqual(code, 0, output)
+        last = output.rstrip().splitlines()[-1]
+        self.assertTrue(last.startswith('안내:'), last)
+        self.assertIn('재부팅', last)
+        self.assertIn('잠자기', last)
+        self.assertIn('Claude 로그인', last)
+        self.assertIn('pane', last)
+
     def test_long_arguments_stay_below_canonical_limit(self):
         # 경로·원격 이름은 압축 전송하여 마지막 실행 명령도 짧게 유지한다.
         data = remote.probe('runner', str(self.target) + '/x' * 300,
@@ -499,7 +509,12 @@ class RemoteGoTest(RemoteGoFixture):
         self.assertEqual(start[start.index('--pane') + 1], 'remote:p1')
         self.assertRegex(start[4], r'^[a-z][a-z0-9_-]{0,31}$')  # herdr의 agent 이름 규칙
         # --wait 없이 보내고 바로 돌아온다.
-        self.assertEqual(prompt[4:], ['remote:p1', '/go demo'])
+        self.assertEqual(prompt[4:], ['remote:p1', '/go demo ' + remote.UNATTENDED])
+        # 보낸 글자가 사람 없음과 "원인 후보만 적고 멈춤"을 뜻한다.
+        self.assertIn('사람이 없다', prompt[5])
+        self.assertIn('원인 후보만 적고 멈춘다', prompt[5])
+        self.assertIn('회고·수정·재실행은 하지 않는다', prompt[5])
+        self.assertNotIn('\n', prompt[5])
         # 세션 pane은 닫지 않는다. 앞선 임시 pane만 닫았다.
         self.assertEqual(self.actions().count(['pane', 'close']), 2)
         self.assertNotIn(['workspace', 'close'], self.actions())

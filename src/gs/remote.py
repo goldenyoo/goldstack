@@ -36,6 +36,11 @@ FEATURE_NAME = re.compile(r"\w[\w.-]*")  # `/go`의 인자는 공백으로 나�
 EXIT_PREFIX = "GS_REMOTE_EXIT="
 SHELL_START_HINT = ("시간 초과; 새 셸이 입력을 받지 않는다. 셸 시작 질문(예: oh-my-zsh 업데이트 질문)이 "
                     "떠 있는지 원격에서 셸을 열어 답한다")
+# 원격 세션에는 사람이 없다. 멈춘 실행을 보고 회고·수정·재실행으로 번지지 않게 `/go` 뒤에 붙인다(한 줄이어야 herdr가 한 번에 보낸다).
+UNATTENDED = ("사람이 없다. 실행이 멈추면 로그를 읽어 원인 후보만 적고 멈춘다. "
+              "회고·수정·재실행은 하지 않는다.")
+RELOGIN_HINT = ("재부팅이나 잠자기 뒤에는 Claude 로그인이 풀릴 수 있다. 비대화형 ssh 판정은 이를 못 잡으니 "
+                "원격 pane에서 claude 화면을 직접 보고 로그인 요청이 떠 있으면 다시 로그인한다")
 NOT_REFUSED = ("timeout", "remote", "unknown")  # 서버의 거절 코드가 아니다. 요청이 적용됐는지 모른다.
 
 # 원격 python3는 gs의 실행 환경과 독립적으로 준비 상태를 검사한다.
@@ -338,7 +343,7 @@ def launch(machine: str, repo_path: str, feature: str) -> tuple[str, str, bool]:
         close(e)
         raise
     try:
-        herdr.machine_run(machine, ["agent", "prompt", pane, f"/go {feature}"], CREATE_TIMEOUT)
+        herdr.machine_run(machine, ["agent", "prompt", pane, f"/go {feature} {UNATTENDED}"], CREATE_TIMEOUT)
     except KeyboardInterrupt:
         return workspace, pane, False
     except herdr.HerdrError as e:
@@ -535,7 +540,7 @@ def check(repo: Path, machine: str, out: TextIO, err: TextIO, feature: str | Non
         item("goldstack 플러그인", bool(local.plugin_version) and data.get("plugin") == local.plugin_version,
              "원격에서 gs self-update; 로컬 플러그인 버전도 확인한다")
         for name, login in (("gh", "gh auth login"), ("claude", "claude auth login"), ("codex", "codex login")):
-            item(f"{name} 인증", data.get(name + "_auth") is True, f"원격에서 {login}")
+            item(f"{name} 인증", data.get(name + "_auth") is True, f"원격에서 {login}" + ("; 재부팅·잠자기 뒤라면 pane에서 claude 로그인 화면을 다시 본다" if name == "claude" else ""))
         item("디스크 여유", data.get("disk") is True, "원격 레포 볼륨에 1 GiB 이상 확보한다")
         item("레포 경로", data.get("repo") is True, f"{key} 경로에 레포를 clone한다")
         item(".goldstack/local.env", data.get("env") is True, "원격 레포에 .goldstack/local.env를 직접 준비한다(값은 검사하지 않음)")
@@ -551,4 +556,5 @@ def check(repo: Path, machine: str, out: TextIO, err: TextIO, feature: str | Non
         if getattr(e, "shell_start", False):
             reason = SHELL_START_HINT
         item("원격 검사", False, f"{reason}; herdr 연결·python3·pane 상태를 확인하고 다시 실행한다")
+    print(f"안내: {RELOGIN_HINT}", file=out)
     return int(failed)
