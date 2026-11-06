@@ -236,6 +236,21 @@ class OvernightSkillTest(unittest.TestCase):
         self.assertIn("■ integration 준비 실패", go_step4)
         self.assertIn("git show gs/<f>/integration:.goldstack/work/<f>/report.md", go_step4)
 
+    def test_autonomy_explains_both_values(self):
+        """`[overnight] autonomy`의 두 값을 설명한다. 값 이름은 config가 받는 값과 같아야 한다."""
+        section = self.parts["밤사이 판단"]
+        self.assertEqual(config.OVERNIGHT_AUTONOMY, ("stop", "record"))
+        self.assertIn("`gs config overnight.autonomy`를 1단계에서 읽어 `받은 허락`에 적는다", section)
+        stop, record = (next(line for line in section.splitlines() if line.startswith(f"- `{value}`:"))
+                        for value in config.OVERNIGHT_AUTONOMY)
+        self.assertIn("[멈출 조건](#멈출-조건)대로 멈춘다", stop)
+        for text in ("되돌릴 수 있으면 추천대로 진행", "이유와 되돌리는 법을 `쓴 허락`에 적는다", "force push", "태그·릴리스",
+                     "비밀", "다른 레포·외부 쓰기는 멈춘다", "grill 결정을 뒤집어야 하면 그 feature만 `미실행`"):
+            with self.subTest(text):
+                self.assertIn(text, record)
+        self.assertIn("`record`면 밤사이 판단", self.parts["멈출 조건"])
+        self.assertIn("`record`면 밤사이 판단", self.parts["하지 않는 일"])
+
     def test_stop_conditions(self):
         self.assert_all_in("멈출 조건", "결정을 바꿔야 하는 어긋남", "경고 남음", "권한 승인 창", go.NETWORK_ABORT,
                            "다음 `gs go`로 다시 잇기를 먼저 시도", "독립", "재개 명령", "미실행")
