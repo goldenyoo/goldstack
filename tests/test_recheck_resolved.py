@@ -2,12 +2,15 @@
 import json
 import unittest
 from pathlib import Path
+from unittest import mock
 
+import support
 import test_rereview
 import test_review_target
+from test_review_target import at_call, integration_moved, late_commit, merged_sha, stop
 from test_second_review import finding
 
-from gs import report, review, state
+from gs import go, report, review, state
 
 # 가짜 worker: n번째 수정 worker는 fix_<n>.sh를 worktree에서 돌리고 커밋한다. 수정을 정말 되돌릴 수 있다.
 WORKER = """\
@@ -368,6 +371,150 @@ class FinalCommitTest(Base):
         self.assertEqual(self.result(a), (1, review.UNRESOLVED, 2))
         self.assertEqual(self.result(b), (2, review.RESOLVED, 2))
         self.assertIn(UNFIXED, self.report_line("FIX A"))
+
+
+class CatchUpEmptyDiffTest(Base):
+    """goldstack-v19 01: catch-up이 a.base를 판정한 head 위로 옮긴다. 그 뒤의 빈 diff는 앞 판정을 뒤집지 않는다."""
+    subject = test_review_target.Base.subject
+
+    def wt(self):
+        return self.rundir / "wt/01"
+
+    def empty_late_commit(self, r, _t):
+        support.sh(self.wt(), "git", "commit", "-q", "--allow-empty", "-m", "empty late")
+
+    def assert_merged_the_empty_commit_over_the_catch_up(self):
+        merged = merged_sha(self)
+        self.assertEqual(self.subject(merged), "empty late")
+        self.assertEqual(self.subject(f"{merged}^"), "gs: 최신 integration을 01에 합침")
+        self.assertEqual(self.ts().review["reviewed_head"], merged)
+
+    def run_with_empty_commit_after_catch_up(self):
+        with at_call("_catch_up", integration_moved), at_call("_verify", self.empty_late_commit):
+            return self.run_ok()
+
+    def test_resolved_stands_and_no_second_fix(self):
+        self.findings("codex", A)
+        self.plan(1, "touch fixed_A")
+        self.run_with_empty_commit_after_catch_up()
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1"])  # 바뀐 것이 없어 부르지 않는다
+        rec = self.ts().review
+        [a] = rec["findings"]
+        self.assertEqual(self.result(a), (1, review.RESOLVED, 1))
+        self.assertEqual(a["rereview_evidence"], "fixed_A 있음")
+        self.assertIn("앞 판정을 유지", rec["fix"])
+        self.assertIn(FIXED, self.report_line("FIX A"))
+        self.assert_merged_the_empty_commit_over_the_catch_up()
+
+    def test_second_rereview_verdicts_stand(self):
+        self.findings("codex", A, B)
+        self.a_fixed_first()
+        self.run_with_empty_commit_after_catch_up()
+        self.assert_second_fix_got_only_b()
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
+        a, b = self.ts().review["findings"]
+        self.assertEqual(self.result(a), (1, review.RESOLVED, 2))
+        self.assertEqual(self.result(b), (2, review.RESOLVED, 2))
+        self.assert_merged_the_empty_commit_over_the_catch_up()
+
+    def test_verdicts_of_both_reviewers_stand(self):
+        self.two_reviewers()
+        self.findings("codex", A)
+        self.findings("agy", B)
+        self.plan(1, "touch fixed_A fixed_B")
+        self.run_with_empty_commit_after_catch_up()
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        self.assertEqual(sorted(self.lines("rereview.calls")), ["agy 1", "codex 1"])
+        ts = self.ts()
+        self.assertEqual(self.result(ts.review["findings"][0]), (1, review.RESOLVED, 1))
+        self.assertEqual(self.result(ts.second_review["findings"][0]), (1, review.RESOLVED, 1))
+
+    def test_unchecked_stays_unchecked_and_sends_no_second_fix(self):
+        self.findings("codex", A, B)
+        self.plan(1, "touch fixed_A fixed_B")
+        (self.bin / "drop_codex_1").write_text("2")  # B의 판정만 빠진 답이다: 고쳐졌는지 모른다
+        self.run_with_empty_commit_after_catch_up()
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        a, b = self.ts().review["findings"]
+        self.assertEqual(self.result(a), (1, review.RESOLVED, 1))
+        self.assertEqual((b["rereview"], b["rereview_reason"]), (review.UNCHECKED, review.REASON_FAILED))
+        self.assertNotIn("diff가 비었다", b["rereview_evidence"])
+
+    def test_fix_that_could_not_start_is_not_tried_again(self):
+        self.limit(2)  # 구현 + 1차 수정으로 다 써서 2차 수정 worker를 띄우지 못한다
+        self.tickets(**{"01": ("agy", "codex", None, "[]")})
+        self.findings("codex", A, B)
+        self.a_fixed_first()
+        limits = []
+        real = go._skip_fix
+
+        def counted(*args, **kw):
+            limits.append(args[2])
+            return real(*args, **kw)
+
+        with at_call("_catch_up", integration_moved), at_call("_verify", self.empty_late_commit), \
+                mock.patch.object(go, "_skip_fix", side_effect=counted):
+            self.run_ok()
+        self.assertEqual(limits, [2])
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        a, b = self.ts().review["findings"]
+        self.assertEqual(self.result(a), (1, review.RESOLVED, 1))
+        self.assertEqual((b["rereview"], b["fix_reason"]), (review.UNRESOLVED, review.REASON_LIMIT))
+
+    def test_resumed_look_after_catch_up_keeps_the_verdict(self):
+        self.findings("codex", A)
+        self.plan(1, "touch fixed_A")
+        with at_call("_catch_up", integration_moved), at_call("_verify", self.empty_late_commit), \
+                at_call("_rereview", None, stop), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        self.assertEqual(self.subject(self.ts().network_resume["base"]), "gs: 최신 integration을 01에 합침")
+        self.run_ok()
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1"])
+        [a] = self.ts().review["findings"]
+        self.assertEqual(self.result(a), (1, review.RESOLVED, 1))
+        self.assert_merged_the_empty_commit_over_the_catch_up()
+
+    def test_finding_without_a_verdict_is_unresolved_as_before(self):
+        """버린 수정의 지적은 앞서 판정이 없다. catch-up 뒤에도 빈 diff 처리는 전과 같다."""
+        self.findings("codex", A)
+        (self.bin / "fixfail_1").touch()
+        self.run_with_empty_commit_after_catch_up()
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        self.assertEqual(self.lines("rereview.calls"), [])
+        rec = self.ts().review
+        [a] = rec["findings"]
+        self.assertEqual(self.result(a), (1, review.UNRESOLVED, 1))
+        self.assertIn("diff가 비었다", a["rereview_evidence"])
+        self.assertIn("비어 부르지 않았다(unresolved)", rec["fix"])
+
+    def test_late_commit_reverting_the_fix_is_unresolved_without_catch_up(self):
+        """catch-up이 없으면 빈 diff는 수정이 사라졌다는 뜻이다. resolved여도 지금처럼 뒤집고 2차 수정으로 간다."""
+        self.findings("codex", A)
+        self.plan(1, "touch fixed_A")
+        self.plan(2, "touch fixed_A")
+
+        def revert(r, a):
+            support.sh(a.wt, "git", "revert", "--no-edit", "HEAD")
+
+        with at_call("_merge_stage", revert):
+            self.run_ok()
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
+        [a] = self.ts().review["findings"]
+        self.assertEqual(self.result(a), (2, review.RESOLVED, 2))
+        self.assertIn("fixed_A", self.files())
+
+    def test_nonempty_late_commit_after_catch_up_is_rereviewed(self):
+        self.findings("codex", A)
+        self.plan(1, "touch fixed_A")
+        with at_call("_catch_up", integration_moved), at_call("_verify", late_commit("late", self.wt())):
+            self.run_ok()
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        [a] = self.ts().review["findings"]
+        self.assertEqual(self.result(a), (1, review.RESOLVED, 1))
+        self.assertNotIn("앞 판정을 유지", self.ts().review["fix"])
 
 
 class OldStateTest(Base):
