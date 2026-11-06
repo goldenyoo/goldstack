@@ -10,7 +10,7 @@ disable-model-invocation: true
 
 `$ARGUMENTS`가 `resume`이면 [이어받기](#이어받기)로, `add <f>`이면 [대기열에 더하기](#대기열에-더하기)로 간다. 아니면 공백으로 나눈 feature 목록으로 1단계부터 한다. 5단계의 "자도 된다" 안내까지는 사람이 앞에 있다. 그 뒤로는 묻지 않고, 결정이 필요하면 [멈출 조건](#멈출-조건)을 따른다.
 
-- `/go`와 겹치는 단계는 이 skill 폴더 옆의 `go/SKILL.md`를 파일로 읽고 따른다. 단 5단계(회고)는 따르지 않는다.
+- `/go`와 겹치는 단계는 이 skill 폴더 옆 `go/SKILL.md`를 읽고 따른다. 단 5단계(회고)는 따르지 않는다.
 - 명령은 체인·줄바꿈 없이 한 번에 하나씩 친다(`/go` 2단계의 `git add … && git commit`도 나눈다).
 
 ## 1. 시작 라운드
@@ -21,11 +21,11 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 2. **사소한 수정 허락 범위**: A 경로·이름처럼 grill 결정을 바꾸지 않는 어긋남은 고치고 기록한 뒤 계속 / B 고치지 않고 멈춘다. 추천 A.
 3. **텔레그램**: 지금 값을 보이고 A 켠다(`gs go`가 끝날 때마다 한 통, 아침에 요약 한 통. `.goldstack/local.env`의 `TG_TOKEN`·`TG_CHAT_ID` 필요) / B 끈다. `local.env`에 값이 있으면 A를 추천한다.
 
-답이 짧으면 답마다 "이렇게 읽었다"를 한 줄 보인다.
+답이 짧으면 "이렇게 읽었다"를 한 줄 보인다.
 
 ## 2. 파일
 
-`.goldstack/overnight/<날짜>.md`(`date +%F`, 같은 날 파일이 있으면 `<날짜>-2.md`)를 이 모양으로 만든다.
+`.goldstack/overnight/<날짜>.md`(`date +%F`, 같은 날 파일이 있으면 `<날짜>-2.md`)를 이 모양으로 만든다. `자율`은 `gs config overnight.autonomy` 값이다(`add`도).
 
 ```markdown
 # overnight <날짜>
@@ -33,6 +33,7 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 - 순서: a → b → c (b는 a와 독립, c는 b에 의존)
 - 사소한 수정: <답>
 - 텔레그램: 켬 | 끔
+- 자율: stop | record
 ## 쓴 허락
 - <시각> <feature>: <어긋남> → <고친 것> (<커밋>)
 ## 아침에 물을 것
@@ -43,7 +44,7 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 | a | 대기 | 0 | – | – |
 ```
 
-밤사이 판단은 이 파일만 근거로 한다. 판단 직전에 다시 읽고, 파일에 없는 허락은 없는 것으로 본다. 허락을 쓰거나 물을 것이 생기거나 상태가 바뀌면 그 자리에서 Edit 도구로 고친다(Write는 더해진 줄을 지운다).
+밤사이 판단은 이 파일만 근거로 한다. 판단 직전에 다시 읽고, 파일에 없는 허락은 없다. 허락을 쓰거나 물을 것이 생기거나 상태가 바뀌면 Edit 도구로 고친다(Write는 더해진 줄을 지운다).
 
 
 ## 3. 사전 점검
@@ -125,7 +126,7 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 
 ## 밤사이 판단
 
-`gs config overnight.autonomy`를 1단계에서 읽어 `받은 허락`에 적는다.
+`받은 허락`의 `자율`을 따른다. 줄이 없으면 `stop`이다.
 
 - `stop`: [멈출 조건](#멈출-조건)대로 멈춘다.
 - `record`: 허락 밖이어도 되돌릴 수 있으면 추천대로 진행하고, 이유와 되돌리는 법을 `쓴 허락`에 적는다. force push, 태그·릴리스, 비밀, 다른 레포·외부 쓰기는 멈춘다. grill 결정을 뒤집어야 하면 그 feature만 `미실행`이다.
@@ -152,7 +153,7 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 회고: /retro a, /retro b
 ```
 
-텔레그램을 켰으면 마지막에 요약 한 통을 보낸다. feature별 결과 한 줄과 남은 질문 수를 `.goldstack/overnight/<날짜>-telegram.txt`에 쓰고 `gs notify .goldstack/overnight/<날짜>-telegram.txt`를 친다. 실패는 결과를 바꾸지 않고 파일에만 적는다.
+텔레그램을 켰으면 요약 한 통을 보낸다. feature별 결과 한 줄과 남은 질문 수를 `.goldstack/overnight/<날짜>-telegram.txt`에 쓰고 `gs notify .goldstack/overnight/<날짜>-telegram.txt`를 친다. 실패는 결과를 바꾸지 않고 파일에만 적는다.
 
 끝으로(멈춘 밤도) `gs overnight disarm`을 친다. `대기` 줄이 남아 거부하면 사이 단계로 돌아간다.
 
@@ -174,7 +175,7 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 `/overnight add <f>`는 도는 실행 뒤에 붙인다. push·`gs overnight next`로 base를 움직이지 않는다.
 
 1. 앞 feature와 독립인지만 묻는다.
-2. 3단계의 `gs check <f>`, 디스크, CLI 로그인을 본다.
+2. 3단계의 `gs check <f>`·디스크·CLI 로그인을 본다.
 3. `gs overnight add <f>`. 밤샘 파일이 없거나 끝났으면 2단계로 만들고(사소한 수정 B, 텔레그램 지금 값) 다시 친다.
 4. `순서`에 답을 적는다. 출력에 `코디네이터: 없음`이 없으면 끝낸다.
 5. `gs status`에 `실행 중(pid N)`이 없으면 `/overnight resume`을 안내하고 끝낸다. 있으면 이 세션이 잇는다: 그 feature를 `결과`에 `실행 중`으로 적고, 세션 권한 모드(push·`gs overnight next` 빼고)와 4단계 안내 뒤 이어받기의 `실행 중`처럼 묶고 "자도 된다"고 말한다.
