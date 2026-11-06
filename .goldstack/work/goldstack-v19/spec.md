@@ -35,14 +35,14 @@ v20이 흐름을 바꾸기 전에 재개·마무리의 상태 결함을 고친�
 ## 5. 티켓 그래프
 | id | 제목 | blocked_by(이유) | wave | tier(이유) | 예상 | 구현 | 수정 | 수리 | 첫 리뷰 | 재리뷰 | touches | verify |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01 | 빈 재리뷰 diff와 재개 뒤 재리뷰 상한 | – | 1 | large(재개 흐름) | – | claude opus/xhigh | claude opus/xhigh | claude opus/xhigh | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-medium | `src/gs/go.py`, `tests/test_review_target.py`, `tests/test_recheck_resolved.py` | 전체 |
-| 02 | 같은 마무리 오류는 초안 하나로 | – | 1 | medium(시험의 의도를 바꿈) | – | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | claude opus/xhigh + agy gemini-4-argon-high | claude sonnet/high + agy gemini-4-argon-medium | `src/gs/feedback.py`, `tests/test_feedback_collect.py` | 전체 |
-| 03 | `_noted`는 이번 실행에서 처리한 예외로 판단 | – | 1 | medium(마무리 상태) | – | claude sonnet/high | claude sonnet/high | claude sonnet/high | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-medium | `src/gs/finish.py`, `tests/test_finish_noted.py` | 전체 |
-| 04 | 이미 끝남 경로의 issue 실패를 끝 출력에 보인다 | 01 같은 파일 | 2 | small(출력 한 줄) | 56분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-medium | `src/gs/go.py`, `tests/test_issue_close.py` | 전체 |
-| 05 | dropped 아이디어의 열린 issue를 후보에 보인다 | – | 1 | small(목록 한 군데) | 56분 | codex gpt-6-luna/medium | codex gpt-6-luna/medium | codex gpt-6-luna/medium | claude opus/xhigh + agy gemini-4-argon-high | claude sonnet/high + agy gemini-4-argon-medium | `src/gs/backlog.py`, `tests/test_backlog.py` | 전체 |
+| 01 | 빈 재리뷰 diff와 재개 뒤 재리뷰 상한 | – | 1 | large(재개 흐름) | – | claude opus/xhigh | claude opus/xhigh | claude opus/xhigh | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-high | `src/gs/go.py`, `tests/test_review_target.py`, `tests/test_recheck_resolved.py` | 전체 |
+| 02 | 같은 마무리 오류는 초안 하나로 | – | 1 | medium(시험의 의도를 바꿈) | – | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | claude opus/xhigh + agy gemini-4-argon-high | claude sonnet/high + agy gemini-4-argon-high | `src/gs/feedback.py`, `tests/test_feedback_collect.py` | 전체 |
+| 03 | `_noted`는 이번 실행에서 처리한 예외로 판단 | – | 1 | medium(마무리 상태) | – | claude sonnet/high | claude sonnet/high | claude sonnet/high | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-high | `src/gs/finish.py`, `tests/test_finish_noted.py` | 전체 |
+| 04 | 이미 끝남 경로의 issue 실패를 끝 출력에 보인다 | 01 같은 파일 | 2 | small(출력 한 줄) | 56분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-high | `src/gs/go.py`, `tests/test_issue_close.py` | 전체 |
+| 05 | dropped 아이디어의 열린 issue를 후보에 보인다 | – | 1 | small(목록 한 군데) | 56분 | codex gpt-6-luna/medium | codex gpt-6-luna/medium | codex gpt-6-luna/medium | claude opus/xhigh + agy gemini-4-argon-high | claude sonnet/high + agy gemini-4-argon-high | `src/gs/backlog.py`, `tests/test_backlog.py` | 전체 |
 | 06 | v19 문서와 버전 0.2.3 | 01–05 앞 결과 필요 | 3 | small(문서와 버전) | 56분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `docs/guide.md`, `docs/internals.md`, `CHANGELOG.md`, `pyproject.toml`, `uv.lock`, `.claude-plugin/plugin.json`, `tests/test_version.py` | 전체 |
 
-재리뷰의 agy는 goldstack-v18 티켓 04가 병합되면 `gemini-4-argon-high`가 된다(표는 지금 `gs check` 값).
+재리뷰의 agy는 goldstack-v18 티켓 04 병합으로 `gemini-4-argon-high`가 됐다(표는 v18 뒤 `gs check` 값).
 
 계열: 01·03·04는 재개·마무리라 claude로 짓고 codex가 본다. 02·05는 범위가 좁아 codex로 지어 전체 시험을 뺀 결과를 잰다(리뷰는 claude). 코드 티켓 전부에 agy를 붙이는 시험이고 최악 5장 × 3회 = 15회로 상한 24 안이다.
 
@@ -56,7 +56,7 @@ v20이 흐름을 바꾸기 전에 재개·마무리의 상태 결함을 고친�
 - `tests/test_feedback_collect.py`의 `test_finish_error_then_stuck_on_the_next_resume`이 `["finish-error", "stuck-phase"]`를 고정한다.
 - `finish._noted`는 `str(e) == r.st.finish.get("error")`를 원인 사슬에서 비교한다.
 - `go.go`의 '이미 끝남' 경로는 `finish.sync_issues`와 `clean.integration`만 부른다.
-- `backlog.py`의 `_field_reports`는 모든 상태의 아이디어에 연결된 번호를 숨긴다. 2026-11-06 열린 issue는 0건이다.
+- `backlog.py`의 `_field_reports`는 모든 상태의 아이디어에 연결된 번호를 숨긴다. 2026-11-06 grill 때 열린 issue는 0건이었고, v18 뒤 #32–#36 5건이 열려 있다(field-report, 아이디어에 연결되지 않음). 이번 범위가 아니다.
 - 앞 feature가 `check.py`를 고치면 `gs check goldstack-v19`는 agy 배정 5 × 3 = 15회로 센다. goldstack-v18이 상한을 24로 올리므로 v18 뒤에는 경고가 없다.
 
 ## 7. grill 기록
