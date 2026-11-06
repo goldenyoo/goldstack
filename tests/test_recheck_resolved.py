@@ -541,6 +541,51 @@ class CatchUpEmptyDiffTest(Base):
         self.assert_second_fix_got_only_b()
         self.assertNotIn("kept_round", self.ts().review)
 
+    def kept_by_both_then_a_real_commit_reverts_a(self):
+        """두 리뷰어의 판정을 유지하고 멈춘 사이 A를 되돌리는 진짜 커밋이 생긴다. 다음 gs go의 대조가 이 커밋을 본다."""
+        self.two_reviewers()
+        self.findings("codex", A)
+        self.findings("agy", B)
+        self.plan(1, "touch fixed_A fixed_B")
+        self.plan(2, "touch fixed_A")
+        self.stopped_right_after_keeping_the_verdict()
+        ts = self.ts()
+        self.assertEqual((ts.review["kept_round"], ts.second_review["kept_round"]), (1, 1))
+        support.sh(self.wt(), "git", "rm", "-q", "fixed_A")
+        support.sh(self.wt(), "git", "commit", "-qm", "late")
+
+    def assert_codex_verdict_reached_the_second_fix(self, agy_reason):
+        """agy는 판정을 새로 내지 못해 unchecked다. 그 기록의 옛 유지 표시가 codex의 unresolved를 2차 수정에서 빼지 않는다."""
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
+        brief = (self.rundir / "01/1/fix2/brief.md").read_text()
+        self.assertIn("FIX A", brief)
+        self.assertNotIn("FIX B", brief)
+        ts = self.ts()
+        self.assertEqual(self.result(ts.review["findings"][0]), (2, review.RESOLVED, 2))
+        b = ts.second_review["findings"][0]
+        self.assertEqual((b["rereview"], b["rereview_reason"]), (review.UNCHECKED, agy_reason))
+        self.assertNotIn("kept_round", ts.second_review)
+
+    def test_kept_mark_of_a_reviewer_skipped_by_the_limit_blocks_no_second_fix(self):
+        self.kept_by_both_then_a_real_commit_reverts_a()
+        with mock.patch.object(state, "agy_reached", return_value=True):  # 상한은 실행마다라 이 실행의 재리뷰만 막는다
+            self.run_ok()
+        self.assertEqual(sorted(self.lines("rereview.calls")), ["agy 1", "codex 1", "codex 2", "codex 3"])
+        self.assert_codex_verdict_reached_the_second_fix(review.REASON_LIMIT)
+
+    def test_kept_mark_of_a_reviewer_that_broke_blocks_no_second_fix(self):
+        self.kept_by_both_then_a_real_commit_reverts_a()
+        real = review.apply_rereview
+
+        def agy_breaks(rec, found, res, nth):
+            if rec["reviewer"] == "agy":
+                raise RuntimeError("boom")
+            real(rec, found, res, nth)
+
+        with mock.patch.object(review, "apply_rereview", side_effect=agy_breaks):
+            self.run_ok()
+        self.assert_codex_verdict_reached_the_second_fix(review.REASON_FAILED)
+
     def test_finding_without_a_verdict_is_unresolved_as_before(self):
         """버린 수정의 지적은 앞서 판정이 없다. catch-up 뒤에도 빈 diff 처리는 전과 같다."""
         self.findings("codex", A)

@@ -2299,6 +2299,7 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
             done = rec.get("rereviews", [])
             if not done or done[-1].get("head") != head:  # 먼저 끝난 다른 리뷰어의 결과는 그대로 둔다
                 review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_FAILED, f"뜻밖의 오류 {_err(e)}")
+                rec.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
     r.save()
     return _todo(r, t, nth + 1) if nth == 1 and not _verdict_kept(r, t, nth) and not _fix_discarded(r, t, nth) else []  # 수정은 티켓당 최대 2회다
 
@@ -2308,7 +2309,8 @@ def _empty_rereview(r: Run, a: Active, head: str) -> None:
 
     이 회차 판정을 낸 head가 a.base 아래에 있으면 catch-up이 기준을 그 위로 옮겼다(_catch_up_reviewed). 트리는 판정한 트리에 integration을 합친 그대로이니 빈 diff는 판정에 대해 말해 주는 것이 없다.
     그 밖에는 고쳐졌을 수 없어 unresolved다: 앞서 이 회차 판정이 없거나(빈 수정 커밋, 버린 수정), 판정한 head가 기준 위에 있는데 diff가 비었다(늦은 커밋이 수정을 되돌렸다).
-    유지했으면 기록에 남긴다(kept_round, _verdict_kept): reviewed_head는 여기서 빈 커밋으로 옮겨 가므로 재개해 다시 오면 판정한 head로 가릴 수 없다. 새 판정이 나면 지운다(_apply_rereviews).
+    유지했으면 기록에 남긴다(kept_round, _verdict_kept): reviewed_head는 여기서 빈 커밋으로 옮겨 가므로 재개해 다시 오면 판정한 head로 가릴 수 없다.
+    그 기록의 지적에 결과를 새로 적으면 지운다: 재리뷰 결과(_apply_rereviews), 한도(_plan_rereviews), 뜻밖의 오류(_rereview). 남기면 다른 리뷰어의 새 판정까지 2차 수정에서 뺀다.
     """
     nth = a.fix
     for rec, found in _received(r, a.t, nth):
@@ -2391,6 +2393,7 @@ def _plan_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]],
         if _is_agy(who) and state.agy_reached(r.st, _agy_limit(r)):
             detail = f"이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다"
             review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_LIMIT, detail)
+            rec.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
             _append_fix(rec, f"재리뷰 {nth}차 {review.LIMIT}: {detail}")
             say(f"[{t.id}] 재리뷰 {nth}차({who}) {review.LIMIT}: {detail}")
             continue
