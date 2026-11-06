@@ -359,6 +359,19 @@ class FinishAnomalyTest(CollectTest):
         self.assertEqual(self.kinds(), ["finish-error"])
         self.assertEqual(draft.count, 2)
 
+    def test_resume_errors_hidden_by_redaction_have_separate_drafts(self):
+        errors = ("CI 재개할 PR head를 확인할 수 없다", "병합된 PR의 main 대상·병합 커밋을 확인할 수 없다")
+        self.assertEqual(feedback.Redactor().lines([errors[0]]), feedback.Redactor().lines([errors[1]]))
+        for error in (*errors, errors[0]):
+            self.run_finish({"phase": "merged"},
+                            {"phase": "merged", "outcome": f"마무리 실패: {error}", "error": error})
+        self.assertEqual(self.kinds(), ["finish-error", "finish-error"])
+        self.assertEqual(sorted(draft.count for draft in self.drafts()), [1, 2])
+        local = "\n".join(path.read_text().split(feedback.LOCAL_MARKER)[1]
+                          for path in (self.repo / feedback.FEEDBACK_DIR).glob("*.md"))
+        for error in errors:
+            self.assertIn(error, local)
+
     def test_environment_and_transient_errors_are_neither_finish_error_nor_stuck(self):
         for error in ("gh pr merge: HTTP 403 forbidden", "gh: authentication failed", "protected branch update failed",
                       "gh pr view: HTTP 503 service unavailable", "error sending request",

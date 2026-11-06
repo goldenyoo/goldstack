@@ -157,6 +157,7 @@ _SECRET = re.compile("|".join((
     r"\b\d{6,}:[A-Za-z0-9_-]{20,}",  # 텔레그램 봇 토큰
 )))
 _OPAQUE = re.compile(r"\b[A-Fa-f0-9]{32,}\b|[A-Za-z0-9+/_-]{40,}={0,2}")  # 경로를 가린 뒤에 본다(긴 경로와 헷갈리지 않게)
+_ERROR_HASH = re.compile(r"\b[A-Fa-f0-9]{7,40}\b")
 _URL = re.compile(r"""\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'"]*|(?<![\w.-])[\w.-]+@[\w.-]+:[^\s'"]+""")  # scheme URL, scp 꼴(git@host:o/r)
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _TILDE_PATH = re.compile(r"""(?<![\w<>/.-])~[/\\][^\s'"]*""")
@@ -447,7 +448,7 @@ def _clean_version(version: str) -> str:
 
 
 def _fingerprint(version: str, phase: str, kind: str, frames: list[str], error_lines: Iterable[str] = ()) -> str:
-    # 재개 마무리 오류는 프레임이 없으므로 가린 오류로 초안을 나눈다. 재발 키는 그대로다.
+    # 재개 마무리 오류는 프레임이 없으므로 정규화한 오류로 초안을 나눈다. 재발 키는 그대로다.
     errors = [_error_key("\n".join(error_lines))] if phase == "finish" and kind == "finish-error" else []
     return hashlib.sha256("\0".join((version, phase, kind, *frames, *errors)).encode()).hexdigest()[:16]
 
@@ -1026,8 +1027,19 @@ def _finish_runs(st) -> int:
 
 
 def _error_key(error: str) -> str:
-    """같은 오류인가를 볼 값. 임시 디렉터리·커밋 해시처럼 실행마다 달라지는 것은 가림이 지운다. 아무것도 남지 않으면 글 그대로다."""
-    return "\n".join(Redactor().lines(error.splitlines())) or error
+    """비교·해시용 값. 경로·커밋 해시 등은 접되 허용 낱말 밖의 오류 문구도 남긴다.
+
+    본문 가림은 Redactor가 따로 한다. 이 값 자체는 초안에 싣지 않는다.
+    """
+    lines = []
+    for raw in _raw_lines(error.splitlines()):
+        text = _normalize(raw)
+        for pattern, replacement in ((_SECRET, "<secret>"), (_URL, "<url>"), (_EMAIL, "<email>"),
+                                     (_TILDE_PATH, "<path>"), (_WINDOWS_PATH, "<path>"),
+                                     (_ABSOLUTE_PATH, "<path>"), (_OPAQUE, "<secret>"), (_ERROR_HASH, "<hash>")):
+            text = pattern.sub(replacement, text)
+        lines.append(" ".join(text.split()))
+    return "\n".join(lines)
 
 
 def finish_anomaly(before: Mapping, after: Mapping, seen: Iterable[str] = ()) -> tuple[str, list[str]] | None:
