@@ -22,4 +22,4 @@ disable-model-invocation: true
    - 이 세션은 후보를 feature별로 번호 붙여 보이고 사람이 고른 것만 `retro/SKILL.md` 4단계대로 아이디어 파일로 쓴다. 고르지 않으면 아무것도 쓰지 않는다.
    - subagent가 실패하면 다시 부르지 않고 "회고 실패, `/retro <feature>`로 돌린다"를 한 줄로 말한다. 위 결과와 종료는 그대로다.
 
-한계: 실행 중 gs를 다시 설치하지 않으므로 앞 feature가 gs 자체를 고치면 다음 feature는 옛 gs로 돈다.
+한계: 실행 중 gs를 다시 설치하지 않으므로 앞 feature가 gs 자체를 고치면 다음 feature는 옛 gs로 돈다. 실행 중에 뒤를 붙이려면 `/overnight add <f>`를 친다.

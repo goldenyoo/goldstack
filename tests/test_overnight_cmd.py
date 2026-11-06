@@ -1,4 +1,4 @@
-"""`gs overnight arm|disarm`과 `gs hook permissionrequest`: 켠 세션에서만 창이 거부로 바뀐다.
+"""`gs overnight arm|disarm`과 `gs hook permissionrequest`: 켠 세션에서만 창이 거부로 바뀐다. `gs overnight add`: 밤샘 파일의 대기열.
 
 세션 판정은 진짜 `ps`로 시험한다. `FakeClaude`는 argv[0]이 `claude`인 진짜 프로세스고, 그 자식으로 진짜 `gs`를 돌린다.
 """
@@ -21,6 +21,44 @@ REPO = Path(__file__).resolve().parents[1]
 GS = [sys.executable, "-m", "gs.cli"]
 # 줄마다 셸 명령 하나를 돌린다. 돌리는 자식은 fork 뒤 바로 exec되어 이 이름을 물려받지 않는다
 LOOP = 'while IFS= read -r line; do eval "$line"; done'
+NIGHT = """# overnight 2026-11-06
+## 받은 허락
+- 순서: a
+- 사소한 수정: A
+- 텔레그램: 끔
+## 쓴 허락
+## 아침에 물을 것
+## 결과
+| feature | 상태 | 다시 띄움 | PR | 이유·재개 명령 |
+|---|---|---|---|---|
+| a | 실행 중 | 0 | – | – |
+"""
+ROW_C = "| c | 대기 | 0 | – | – |"
+# 두 프로세스가 같은 글을 읽은 자리에서 서로를 기다린 뒤 쓴다. 잠금이 없으면 뒤에 쓴 쪽이 앞 줄을 지운다.
+# 잠금이 있으면 상대는 안으로 들어오지 못해 먼저 든 쪽이 잠깐 기다리고 혼자 쓴다. 통과는 시간에 기대지 않는다
+MEET = """
+import sys, time
+from pathlib import Path
+from gs import overnight
+
+repo, name, other, meet = Path(sys.argv[1]), sys.argv[2], sys.argv[3], Path(sys.argv[4])
+real = overnight._result_table
+
+def wait_for(path, seconds):
+    deadline = time.monotonic() + seconds
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+def meeting(lines):
+    (meet / f"{name}.inside").touch()
+    wait_for(meet / f"{other}.ready", 60)
+    wait_for(meet / f"{other}.inside", 0.5)
+    return real(lines)
+
+overnight._result_table = meeting
+(meet / f"{name}.ready").touch()
+sys.exit(overnight.add(repo, name, sys.stdout, sys.stderr))
+"""
 
 
 class FakeClaude:
@@ -535,6 +573,219 @@ class OvernightTest(unittest.TestCase):
         ignore.write_text("keep-me")
         self.arm(FakeClaude(self))
         self.assertEqual(ignore.read_text(), "keep-me\n*\n")
+
+    # ---- 대기열
+    def night(self, text=NIGHT, name="2026-11-06.md"):
+        path = self.repo / overnight.OVERNIGHT_DIR / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def feature(self, *names):
+        for name in names:
+            (self.repo / ".goldstack" / "work" / name).mkdir(parents=True)
+
+    def add(self, name="c", **kw):
+        return self.run_cmd("overnight", "add", name, **kw)
+
+    def rows(self, path):
+        table = path.read_text(encoding="utf-8").partition("## 결과\n")[2]
+        return [line.split("|")[1].strip() for line in table.splitlines()[2:] if line.startswith("|")]
+
+    def test_add_puts_a_waiting_row_after_the_last_row(self):
+        path, _ = self.night(), self.feature("c")
+        code, out, err = self.add()
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(path.read_text(encoding="utf-8"), NIGHT + ROW_C + "\n")
+        self.assertIn(f"더함: {overnight.OVERNIGHT_DIR}/2026-11-06.md", out)
+
+    def test_add_leaves_the_rest_of_the_file_alone(self):
+        self.feature("c")
+        head = NIGHT.partition("| a |")[0]
+        cases = {"뒤에 다른 절": (NIGHT + "## 메모\n| x | y |\n", NIGHT + ROW_C + "\n## 메모\n| x | y |\n"),
+                 "끝 줄바꿈 없음": (NIGHT.rstrip("\n"), NIGHT + ROW_C),
+                 "줄이 아직 없는 표": (head, head + ROW_C + "\n"),
+                 "표 앞의 빈 줄": (NIGHT.replace("## 결과\n", "## 결과\n\n"),
+                                NIGHT.replace("## 결과\n", "## 결과\n\n") + ROW_C + "\n")}
+        for label, (before, after) in cases.items():
+            with self.subTest(label):
+                path = self.night(before)
+                self.assertEqual(self.add()[0], 0)
+                self.assertEqual(path.read_text(encoding="utf-8"), after)
+
+    def test_add_twice_is_one_row(self):
+        path, _ = self.night(), self.feature("a", "c")
+        self.assertEqual(self.add()[0], 0)
+        before = path.read_text(encoding="utf-8")
+        code, out, _ = self.add()
+        self.assertEqual(code, 0)
+        self.assertIn("이미 있다", out)
+        self.assertIn("c(대기)", out)
+        code, out, _ = self.add("a")  # 끝나지 않은 다른 상태의 줄도 그대로 둔다
+        self.assertEqual(code, 0)
+        self.assertIn("a(실행 중)", out)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+        self.assertEqual(self.rows(path), ["a", "c"])
+
+    def test_add_sees_a_row_the_model_wrote_differently(self):
+        path = self.night(NIGHT + "|`c`|대기|0|–|–|\n")
+        self.feature("c")
+        before = path.read_text(encoding="utf-8")
+        code, out, _ = self.add()
+        self.assertEqual(code, 0)
+        self.assertIn("이미 있다", out)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def test_add_from_two_processes_at_once_keeps_both_rows(self):
+        path, _ = self.night(), self.feature("b", "c")
+        meet = self.base / "meet"
+        meet.mkdir()
+        procs = [subprocess.Popen([sys.executable, "-c", MEET, str(self.repo), me, other, str(meet)], env=self.session_env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                 for me, other in (("b", "c"), ("c", "b"))]
+        for proc in procs:
+            _, err = proc.communicate(timeout=120)
+            self.assertEqual(proc.returncode, 0, err)
+        self.assertEqual(sorted(self.rows(path)), ["a", "b", "c"])
+
+    def test_add_from_many_commands_at_once_keeps_every_row(self):
+        names = [f"f{i}" for i in range(8)]
+        path, _ = self.night(), self.feature(*names)
+        procs = [subprocess.Popen([*GS, "overnight", "add", name], cwd=self.repo, env=self.session_env,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True) for name in names]
+        for proc in procs:
+            _, err = proc.communicate(timeout=120)
+            self.assertEqual(proc.returncode, 0, err)
+        self.assertEqual(sorted(self.rows(path)), sorted(["a", *names]))
+
+    def test_add_without_a_night_file_says_to_make_one_and_writes_nothing(self):
+        self.feature("c")
+        code, out, err = self.add()
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("밤샘 파일이 없다", err)
+        self.assertIn("/overnight add <feature>", err)
+        self.assertIn("/overnight <feature>", err)
+        self.assertFalse((self.repo / overnight.OVERNIGHT_DIR).exists())
+
+    def test_add_does_not_reopen_a_finished_night(self):
+        """이 밤을 잇는 세션이 없고, 끝난 밤의 허락이 새 feature에 쓰이면 안 된다."""
+        text = NIGHT + "## 아침 보고\n# 밤샘 보고 2026-11-06\n| feature | 결과 | PR |\n|---|---|---|\n| a | verified | – |\n"
+        path, _ = self.night(text), self.feature("c")
+        code, _, err = self.add()
+        self.assertEqual(code, 1)
+        self.assertIn("끝난 밤", err)
+        self.assertIn("/overnight add <feature>", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_add_picks_the_newest_night_by_name(self):
+        self.feature("c")
+        older = [self.night(name=name) for name in ("2026-11-05-9.md", "2026-11-06.md", "2026-11-06-2.md")]
+        newest = self.night(name="2026-11-06-10.md")
+        self.night("메모\n", name="notes.md")
+        (newest.parent / "2026-11-07-telegram.txt").write_text("보고")
+        os.utime(newest, (1000, 1000))  # 옛 밤을 고쳐도 고른 파일이 바뀌지 않는다
+        self.assertEqual(overnight.latest_night(self.repo), newest)
+        self.assertEqual(self.add()[0], 0)
+        self.assertEqual(self.rows(newest), ["a", "c"])
+        for path in older:
+            self.assertEqual(self.rows(path), ["a"])
+
+    def test_add_needs_the_result_table_and_changes_nothing_without_it(self):
+        self.feature("c")
+        cases = {"제목 없음": "# overnight\n## 받은 허락\n",
+                 "표 없음": "## 결과\n글\n",
+                 "다른 절의 표": "## 결과\n## 메모\n| feature | 상태 |\n|---|---|\n",
+                 "구분 줄 없음": "## 결과\n| feature | 상태 |\n| a | 대기 |\n",
+                 "다른 표": "## 결과\n| 이름 | 상태 |\n|---|---|\n"}
+        for label, text in cases.items():
+            with self.subTest(label):
+                path = self.night(text)
+                code, _, err = self.add()
+                self.assertEqual(code, 1)
+                self.assertIn("표를 찾지 못했다", err)
+                self.assertEqual(path.read_text(encoding="utf-8"), text)
+
+    def test_add_refuses_names_that_are_not_a_feature(self):
+        path, _ = self.night(), self.feature("a|b", "a b")
+        for name in ("a|b", "a b", "../c", "..", ".goldstack"):  # 표의 칸을 깨거나 레포 밖을 가리킨다. `a|b`는 디렉터리가 있어도 안 된다
+            with self.subTest(name):
+                code, _, err = self.add(name)
+                self.assertEqual(code, 1)
+                self.assertIn("이름으로 쓸 수 없다", err)
+                self.assertEqual(path.read_text(encoding="utf-8"), NIGHT)
+        code, _, err = self.add("없는것")
+        self.assertEqual(code, 1)
+        self.assertIn(".goldstack/work/없는것가 없다", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), NIGHT)
+
+    def test_add_reports_an_unreadable_file(self):
+        path = self.night()
+        path.write_bytes(b"\xff\xfe")
+        self.feature("c")
+        code, _, err = self.add()
+        self.assertEqual(code, 1)
+        self.assertIn("오류: .goldstack/overnight/2026-11-06.md", err)
+        self.assertEqual(path.read_bytes(), b"\xff\xfe")
+
+    def test_add_keeps_the_mode_and_leaves_no_temporary_file(self):
+        path, _ = self.night(), self.feature("c")
+        path.chmod(0o640)
+        self.assertEqual(self.add()[0], 0)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(list(path.parent.glob("*.tmp")), [])
+
+    def test_add_stays_out_of_git_status(self):
+        self.night()
+        self.feature("c")
+        self.assertEqual(self.add()[0], 0)
+        status = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--", overnight.OVERNIGHT_DIR],
+                                cwd=self.repo, capture_output=True, text=True, check=True).stdout
+        self.assertEqual(status, "")
+
+    def test_add_from_a_linked_worktree_uses_the_main_checkout(self):
+        self.git("commit", "-q", "--allow-empty", "-m", "x")
+        worktree = self.base / "wt"
+        self.git("worktree", "add", "-q", "-b", "gs/f/01", str(worktree))
+        path, _ = self.night(), self.feature("c")
+        code, _, err = self.run_cmd("overnight", "add", "c", cwd=worktree)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.rows(path), ["a", "c"])
+        self.assertFalse((worktree / overnight.OVERNIGHT_DIR).exists())
+
+    def test_add_names_the_coordinator(self):
+        """살아 있는 켜짐 표시가 코디네이터다. 줄을 이을 세션이 없을 때만 `없음`이다."""
+        self.night()
+        self.feature("c", "d", "e", "g")
+        typist, coordinator = FakeClaude(self), FakeClaude(self)
+
+        def add_from(session, name):
+            code, out, err = session.run([*GS, "overnight", "add", name], self.repo)
+            self.assertEqual(code, 0, err)
+            return out
+
+        self.assertIn(overnight.NO_COORDINATOR, add_from(typist, "c"))
+        self.arm(coordinator)
+        out = add_from(typist, "d")
+        self.assertIn(f"코디네이터: 세션 pid {coordinator.pid}", out)
+        self.assertNotIn(overnight.NO_COORDINATOR, out)
+        self.assertIn(f"코디네이터: 이 세션(pid {coordinator.pid})", add_from(coordinator, "e"))
+        self.assertIn(f"코디네이터: 세션 pid {coordinator.pid}", add_from(typist, "c"))  # 이미 있는 줄이어도 알린다
+        coordinator.run([*GS, "overnight", "disarm"], self.repo)
+        self.assertIn(overnight.NO_COORDINATOR, add_from(typist, "c"))
+        self.arm(coordinator)
+        coordinator.close()  # 세션이 죽으면 표시가 있어도 이을 세션이 없다
+        self.assertIn(overnight.NO_COORDINATOR, add_from(typist, "g"))
+        self.assertEqual(list((self.repo / overnight.ARMED_DIR).glob("*.json")), [])
+
+    def test_add_without_ps_still_adds_and_does_not_say_none(self):
+        path, _ = self.night(), self.feature("c")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("gs.overnight.processes", side_effect=OSError("ps 안 됨")):
+            self.assertEqual(overnight.add(self.repo, "c", out, err), 0)
+        self.assertEqual(self.rows(path), ["a", "c"])
+        self.assertIn("코디네이터: 모름", out.getvalue())
+        self.assertIn("ps 안 됨", out.getvalue())
+        self.assertNotIn(overnight.NO_COORDINATOR, out.getvalue())
 
 
 if __name__ == "__main__":

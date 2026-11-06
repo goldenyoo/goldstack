@@ -2,7 +2,7 @@
 import unittest
 from pathlib import Path
 
-from gs import config, go, notify, selfupdate
+from gs import config, go, notify, overnight, selfupdate
 from test_skills import SKILLS, skill_frontmatter
 
 SRC = Path(go.__file__).resolve().parent
@@ -47,14 +47,16 @@ class OvernightSkillTest(unittest.TestCase):
     def test_frontmatter(self):
         self.assertEqual(self.data["name"], "overnight")
         self.assertEqual(self.data["disable-model-invocation"], "true")
-        self.assertIn("/overnight <feature> … | resume", self.data["description"])
-        self.assertEqual(self.data["argument-hint"], "<feature> … | resume")
+        self.assertIn("/overnight <feature> … | resume | add <feature>", self.data["description"])
+        self.assertEqual(self.data["argument-hint"], "<feature> … | resume | add <feature>")
         self.assertLessEqual(set(self.data), {"name", "description", "argument-hint", "disable-model-invocation"})
 
     def test_branches_on_resume(self):
         head = self.body.partition("\n## ")[0]
         self.assertIn("`$ARGUMENTS`가 `resume`이면", head)
         self.assertIn("이어받기", self.parts)
+        self.assertIn("`add <f>`이면 [대기열에 더하기](#대기열에-더하기)", head)
+        self.assertIn("대기열에 더하기", self.parts)
 
     def test_start_round_is_one_message(self):
         self.assert_all_in("1. 시작 라운드", "한 메시지", "순서와 독립", "사소한 수정 허락 범위", "텔레그램",
@@ -63,7 +65,7 @@ class OvernightSkillTest(unittest.TestCase):
     def test_file_is_only_ground(self):
         self.assert_all_in("2. 파일", ".goldstack/overnight/<날짜>.md", "## 받은 허락", "## 쓴 허락",
                            "## 아침에 물을 것", "## 결과", "이 파일만 근거", "파일에 없는 허락은 없는 것",
-                           "git check-ignore")
+                           "Edit 도구로 고친다")
         self.assertIn(".goldstack/overnight/", config.IGNORE_LINES)  # gs init이 넣는 gitignore 줄
 
     def test_preflight(self):
@@ -78,7 +80,8 @@ class OvernightSkillTest(unittest.TestCase):
         for text in ("git add -- .goldstack/work/<f> .goldstack/out-of-scope .goldstack/ideas .goldstack/profile.md",
                      'git commit -m "grill: <f>" --dry-run', "git pull --ff-only <remote> <base>",
                      "git show gs/<f>/integration:.goldstack/work/<f>/report.md", "Edit 도구",
-                     "6단계의 `gs self-update`", "gs self-update --from <원격 주소>"):
+                     "6단계의 `gs self-update`", "gs self-update --from <원격 주소>",
+                     "`gs overnight disarm`", "`gs overnight add <f>`"):
             with self.subTest(text):
                 self.assertIn(text, section)
         self.assertNotIn("git commit --dry-run", section)  # 밤의 `git commit -m …`과 모양이 달라 다른 규칙에 걸린다
@@ -108,6 +111,57 @@ class OvernightSkillTest(unittest.TestCase):
         self.assert_all_in("5. 띄우기", "`gs go <f>`", "run_in_background", "`gs status <f>`", "실행 중(pid N)",
                            "자도 된다")
         self.assertIn('f"{name}: 실행 중(pid {pid})"', (SRC / "status.py").read_text(encoding="utf-8"))
+
+    def test_arms_before_saying_you_can_sleep(self):
+        section = self.parts["5. 띄우기"]
+        self.assert_in_order(section, "`gs overnight arm`", "자도 된다")
+        self.assertIn("사람이 앞에 있으면", section)  # 밤에 다음 feature를 띄울 때는 다시 치지 않는다
+        self.assertIn("`gs go`, 묶기 명령, `gs overnight arm`은 5단계가 사람 앞에서 처음", self.parts["3. 사전 점검"])
+
+    def test_disarms_at_the_very_end(self):
+        """아침 보고와 알림까지 켠 채로 간다. 멈춘 밤도 7단계로 오므로 여기서 함께 끈다."""
+        self.assert_in_order(self.parts["7. 아침 보고"], "`## 아침 보고`", "`gs notify .goldstack", "`gs overnight disarm`")
+        self.assertIn("멈춘 밤도", self.parts["7. 아침 보고"])
+        self.assertIn("7단계로 간다", self.parts["멈출 조건"])
+        self.assert_in_order(self.parts["이어받기"], "`## 아침 보고`", "`gs overnight disarm`")
+
+    def test_resume_arms_when_it_binds_to_a_running_go(self):
+        bound = next(line for line in self.parts["이어받기"].splitlines() if "실행 중이면 다시 띄우지 않는다" in line)
+        self.assertIn("`gs overnight arm`", bound)
+
+    def test_chain_picks_up_rows_added_during_the_run(self):
+        section = self.parts["6. 잇기"]
+        self.assert_in_order(section, "완료 알림에 깨어나면", "파일을 다시 읽고", "판정한다")
+        self.assertIn("`<다음>`은 다시 읽은 `결과`의 첫 `대기` 줄이다", section)
+        self.assert_in_order(self.parts["7. 아침 보고"], "파일을 다시 읽어 `대기` 줄이 생겼으면 사이 단계로", "한 장을 쓴다")
+
+    def test_morning_report_moves_the_denied_log(self):
+        section = self.parts["7. 아침 보고"]
+        self.assert_in_order(section, overnight.DENIED_LOG, "`쓴 허락`에 옮긴다", "한 장을 쓴다", "거부된 호출: …")
+
+    def test_add_asks_only_independence_and_does_not_move_base(self):
+        section = self.parts["대기열에 더하기"]
+        self.assertIn("독립인지만 묻는다", section)
+        self.assertIn("base를 움직이지 않는다", section)
+        self.assert_in_order(section, "독립인지만", "`gs check <f>`", "디스크", "CLI 로그인", "`gs overnight add <f>`")
+        for text in ("git push <remote>", "git pull --", "`gs go <", "텔레그램을"):
+            with self.subTest(text):
+                self.assertNotIn(text, section)
+
+    def test_add_makes_a_missing_night_file_with_only_what_it_asked(self):
+        section = self.parts["대기열에 더하기"]
+        self.assert_in_order(section, "없거나 끝났으면 2단계로 만들고", "사소한 수정 B", "다시 친다")
+
+    def test_add_becomes_coordinator_only_when_nobody_carries_on(self):
+        section = self.parts["대기열에 더하기"]
+        self.assertTrue(overnight.NO_COORDINATOR.startswith("코디네이터: 없음"))
+        self.assert_in_order(section, f"`{overnight.NO_COORDINATOR}`이 없으면 끝낸다", "`gs status`에 `실행 중(pid N)`이 없으면",
+                             "`/overnight resume`", "있으면 이 세션이 잇는다", "세션 권한 모드(pull·push·self-update 빼고)", "4단계 안내",
+                             "이어받기의 `실행 중`처럼 묶고", "자도 된다")
+
+    def test_go_points_to_add_instead_of_a_parallel_go(self):
+        go_skill = (SKILLS / "go" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("`/overnight add <f>`", go_skill.partition("한계:")[2])
 
     def test_chain_order(self):
         section = self.parts["6. 잇기"]
