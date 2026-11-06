@@ -263,7 +263,7 @@ class SecondReviewTest(unittest.TestCase):
         with mock.patch.object(state, "save", side_effect=observe):
             code, out, err = self.go("--only", "01,04")
         self.assertEqual(code, 0, out + err)
-        self.assertIn("범위 안 agy 배정 2회가 상한 agy.max_calls_per_run=1회를 넘는다", err)  # 02의 경고
+        self.assertIn("범위 안 agy 최대 6회(배정 2 × 3)가 상한 agy.max_calls_per_run=1회를 넘는다", err)  # 02의 경고
         self.assertEqual(self.merged(), ["01", "04"])
         self.assertEqual(self.lines("review.calls").count("agy"), 1)
         self.assertEqual(self.lines("review.calls").count("codex"), 2)

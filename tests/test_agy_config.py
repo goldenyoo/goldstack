@@ -123,17 +123,17 @@ class AgyCheckTest(unittest.TestCase):
         self.assert_clean("--only", "01")
         self.assert_error("CLI `agy`가 PATH에 없다", "--only", "02")
 
-    def test_each_role_counts_once_and_equal_limit_does_not_warn(self):
+    def test_each_slot_counts_three_and_equal_limit_does_not_warn(self):
         self.add(model="agy", reviewer="codex")
         self.add("02", reviewer="agy")
-        self.add("03", second="agy")
         with mock.patch("gs.adapters.agy_probe", return_value=None):
-            self.assert_clean()  # 세 역할 각 1회: 재시도·수정은 미리 세지 않는다.
-            self.limit(2)
+            self.limit(6)
+            self.assert_clean()  # 배정 2 × 3 = 6 = 상한: 경고 없음. 재시도는 세지 않는다.
+            self.add("03", second="agy")
             code, out, err = self.run_check()
         self.assertEqual(code, 0, out + err)
         self.assertEqual(err.splitlines(),
-                         ["경고: 범위 안 agy 배정 3회가 상한 agy.max_calls_per_run=2회를 넘는다"])
+                         ["경고: 범위 안 agy 최대 9회(배정 3 × 3)가 상한 agy.max_calls_per_run=6회를 넘는다"])
         self.assertIn("오류 0, 경고 1", out)
 
     def test_missing_config_section_uses_default_limit_for_check(self):
@@ -141,17 +141,17 @@ class AgyCheckTest(unittest.TestCase):
         path.write_text(path.read_text().replace("[agy]\nmax_calls_per_run = 3\n\n", ""))
         for tid in ("01", "02", "03", "04"):
             self.add(tid, second="agy")
-        self.assertIn("agy 배정 4회가 상한 agy.max_calls_per_run=3회", self.run_check()[2])
+        self.assertIn("agy 최대 12회(배정 4 × 3)가 상한 agy.max_calls_per_run=3회", self.run_check()[2])
 
     def test_only_counts_selected_tickets_including_external_dependencies(self):
-        self.limit(1)
+        self.limit(3)
         self.add(second="agy")
         self.add("02", second="agy", deps='["01"]')
         self.add("03", second="agy", deps='["02"]')
         self.assert_clean("--only", "02")
         code, out, err = self.run_check("--only", "02,03")
         self.assertEqual(code, 0, out + err)
-        self.assertIn("agy 배정 2회가 상한 agy.max_calls_per_run=1회", err)
+        self.assertIn("agy 최대 6회(배정 2 × 3)가 상한 agy.max_calls_per_run=3회", err)
         self.assertIn("범위 밖 의존", out)
 
     def test_zero_warns_only_when_agy_is_assigned(self):
@@ -161,7 +161,7 @@ class AgyCheckTest(unittest.TestCase):
         self.add(second="agy")
         code, out, err = self.run_check()
         self.assertEqual(code, 0, out + err)
-        self.assertIn("agy 배정 1회가 상한 agy.max_calls_per_run=0회", err)
+        self.assertIn("agy 최대 3회(배정 1 × 3)가 상한 agy.max_calls_per_run=0회", err)
 
     def test_invalid_limit_is_check_error(self):
         self.add()

@@ -10,7 +10,7 @@ from unittest import mock
 import test_rereview
 import test_second_review
 
-from gs import config, report, review, state, status
+from gs import config, go, report, review, state, status
 
 
 def finding(claim="지적", **kw):
@@ -76,7 +76,8 @@ class FindingStatusTest(unittest.TestCase):
         self.five_statuses()
         text = report._render(self.r, "변경 요약", 0)
         expected = "리뷰 지적: 수정됨 1 · 미해결 1 · 보고만 1 · 수정 못 함 1 · 확인 못 함 1"
-        self.assertIn(f"{report.status_line(self.r)}\n{expected}\n\n## Evidence", text)
+        remaining = "남은 high 4(보고만 1 · 미해결 1 · 수정 못 함 1 · 확인 못 함 1)"
+        self.assertIn(f"{report.status_line(self.r)} · {remaining}\n{expected}\n\n## Evidence", text)
         lines = [line for line in text.splitlines() if " — 상태: " in line]
         self.assertEqual(len(lines), 5)
         for line, label in zip(lines, ("수정됨(재리뷰 확인)", "미해결", "보고만", "수정 못 함(한도)", "확인 못 함(시간 초과)")):
@@ -105,6 +106,63 @@ class FindingStatusTest(unittest.TestCase):
         self.assertIn("남은 오류 — 상태: 미해결", facts)
         self.assertIn("확인 안 된 오류 — 상태: 확인 못 함(시간 초과)", facts)
         self.assertNotIn("### 남은 리뷰 지적", facts)
+
+    def test_remaining_line_counts_only_high_with_remaining_status(self):
+        self.assertEqual(report.remaining_line(self.r), "")
+        self.five_statuses()
+        # 수정됨 high는 빼고, medium·low는 세지 않는다
+        ts = self.r.st.ticket("01")
+        ts.review["findings"].append(finding("중간", rereview=review.UNRESOLVED) | {"severity": "medium"})
+        self.assertEqual(report.remaining_line(self.r), "남은 high 4(보고만 1 · 미해결 1 · 수정 못 함 1 · 확인 못 함 1)")
+        ts.review = {"findings": [finding(rereview=review.RESOLVED)]}
+        ts.second_review = {}
+        self.assertEqual(report.remaining_line(self.r), "")
+
+    def test_remaining_line_lists_skipped_reviews_alone_or_with_high(self):
+        st = self.r.st
+        st.ticket("01").second_review = review.record("agy", f"{review.LIMIT}: 이번 실행의 agy 호출이 상한 1/1에 닿았다")
+        self.assertEqual(report.remaining_line(self.r), "건너뛴 리뷰: 01")
+        st.ticket("01").review = {"reviewer": "codex", "findings": [{**finding(), "action": review.REPORT}]}
+        self.assertEqual(report.remaining_line(self.r), "남은 high 1(보고만 1) · 건너뛴 리뷰: 01")
+        text = report._render(self.r, "요약", 0)
+        self.assertIn(f"{report.status_line(self.r)} · 남은 high 1(보고만 1) · 건너뛴 리뷰: 01\n", text)
+        # 거부 같은 다른 note는 건너뜀이 아니다
+        st.ticket("01").second_review = review.record("agy", "같은 계열은 거부")
+        self.assertEqual(report.remaining_line(self.r), "남은 high 1(보고만 1)")
+
+    def test_remaining_line_tolerates_old_state_without_severity_or_status(self):
+        ts = self.r.st.ticket("01")
+        ts.review = {"findings": [{"location": "a.py:1", "claim": "옛 지적", "evidence": "", "action": review.REPORT},
+                                  {"severity": "high", "location": "a.py:2", "claim": "high 지적", "evidence": ""}]}
+        ts.second_review = {"reviewer": "agy", "note": None}
+        self.assertEqual(report.remaining_line(self.r), "남은 high 1(보고만 1)")  # action이 없으면 보고만
+        self.assertIn("옛 지적 — 상태: 보고만", report._render(self.r, "요약", 0))
+
+    def run_summary(self, fn, *args):
+        with mock.patch.object(go, "say") as say:
+            fn(*args)
+        return [call.args[0] for call in say.call_args_list]
+
+    def test_go_summary_shows_line_and_only_summary_does_not(self):
+        r = self.r
+        r.no_merge = False
+        r.st.network = {}
+        r.prior = set()
+        r.st.ticket("01").review = {"reviewer": "codex", "findings": [
+            {**finding(), "action": review.REPORT}, finding(rereview=review.UNCHECKED, rereview_reason="한도")]}
+        r.st.ticket("01").second_review = review.record("agy", f"{review.LIMIT}: 상한")
+        lines = self.run_summary(go._summary, r, "https://example.com/pr/1")
+        self.assertEqual([line for line in lines if "high" in line or "건너뛴" in line],
+                         ["■ 남은 high 2(보고만 1 · 확인 못 함 1) · 건너뛴 리뷰: 01"])
+        self.assertEqual(lines[-1], "■ PR: https://example.com/pr/1")
+        self.assertTrue(lines[-2].startswith("■ 남은 high"))
+        r.no_merge = True
+        only = self.run_summary(go._summary, r, None)
+        self.assertFalse([line for line in only if "high" in line or "건너뛴" in line], only)
+        r.st.ticket("01").review = {}
+        r.st.ticket("01").second_review = {}
+        r.no_merge = False
+        self.assertFalse([line for line in self.run_summary(go._summary, r, None) if "high" in line])
 
     def test_progress_and_gs_status_show_rereview_and_second_fix(self):
         st = self.r.st
@@ -144,6 +202,18 @@ class FindingStatusFlowTest(test_rereview.Base):
         self.assertIn("수정 커밋 1개", text)
         self.assertIn("재리뷰 1차: resolved 1", text)
         self.assertNotIn("재리뷰 없음", text)
+
+    def test_go_prints_remaining_high_and_skipped_review_without_changing_verdict(self):
+        self.limit(1)
+        self.tickets(**{"01": ("claude", "codex", "agy", "[]"), "04": ("claude", "codex", "agy", '["01"]')})
+        self.findings("codex", test_second_review.finding("문서 제안"))  # FIX가 없어 보고만
+        code, out, err = self.go("--only", "01,04")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.run_state().finish["phase"], "verified")
+        lines = out.strip().splitlines()
+        self.assertEqual(lines[-2], "■ 남은 high 2(보고만 2) · 건너뛴 리뷰: 04")
+        self.assertTrue(lines[-1].startswith("■ PR:"), lines[-1])
+        self.assertRegex(self.final_report(), r"마무리: verified · .* · 남은 high 2\(보고만 2\) · 건너뛴 리뷰: 04\n")
 
 
 if __name__ == "__main__":
