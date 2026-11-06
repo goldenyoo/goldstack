@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v15 리뷰 04"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v19"
 ---
 `_late_commit`으로 재리뷰로 돌아가는 도중 `gs go`가 중단되었다가 재개되면 `moved`와 `reviewed_again` 상태가 사라져, `_review_again` 대신 `_review_to_head`로 돌면서 재리뷰 상한(합쳐 한 번)을 넘어 3번째 리뷰를 호출하고 대조 기록도 남기지 않는다.
 

@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v15 리뷰 01"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v19"
 ---
 숨길 번호는 dropped·taken을 포함한 모든 아이디어에서 모으는데, 기본 `gs backlog`의 아이디어 줄은 open만 찍는다. 그래서 dropped·taken 아이디어에 연결된 열린 issue는 issue 목록과 아이디어 줄 어디에도 나오지 않는다. `/grill` 후보에서도 사라지고, `--all`에서만 보인다.
 

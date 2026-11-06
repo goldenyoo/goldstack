@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v14 리뷰 06"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v19"
 ---
 이미 수집한 마무리 오류가 재발하면 중복 검사 뒤 stuck-phase로 다시 수집된다. merged·merge_requested·main_failed에서 같은 오류로 재개가 멈추면 별도 초안이 생기고, 이후 재실행마다 횟수가 증가한다.
 

@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v15 리뷰 04"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v19"
 ---
 catch-up이 수정 전 기준인 a.base까지 덮어써 이후 재리뷰가 이미 해결한 지적을 unresolved로 바꿀 수 있다. 수정 재리뷰가 resolved로 끝난 뒤 catch-up하고, 검증 중 빈 커밋이 추가되면 수정 diff가 사라진 것으로 판정해 불필요한 2차 수정 worker를 띄운다.
 

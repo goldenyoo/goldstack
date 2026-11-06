@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v14 리뷰 06"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v19"
 ---
 `_noted(r, e)`가 이번 `finish.run` 호출에서 `_note_failure`를 이미 불렀는지가 아니라 `str(e) == r.st.finish.get("error")`만 비교한다. `r.st.finish["error"]`는 재개 시 이전 실행의 값이 그대로 남아 있거나 `_side_pr`(`finish.py:613,631`)·`_close_revert_pr`(`finish.py:702`)·`_merge_pr`(`finish.py:1050`)에서 마무리를 멈추지 않는 경고용으로 먼저 저장될 수 있다. 그 뒤 `outcome`이 비실패 문구(`base 미검증(준비 실패)`, `revert PR 닫지 못했다` 등)로 갱신되고 `finish.py:1085-1087`(`fetch`, `merge_base`, `_update`)에서 같은 메시지의 `GitError`가 나면 `_noted(r, e)`가 `True`가 되어 `_note_failure`를 건너뛰고, `outcome`이 `마무리 실패: …`로 바뀌지 않으며 단일 실행에서는 `finish_errors`와 피드백 초안도 누락된다.
 

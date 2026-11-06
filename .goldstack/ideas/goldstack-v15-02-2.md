@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v15 리뷰 02"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v19"
 ---
 완료 후 '이미 끝남' 경로에서 발생한 issue 처리 실패는 보고서에 기록되지 않는다. 재시도가 성공해도 기존 보고서의 실패 기록은 그대로 남는다.
 
