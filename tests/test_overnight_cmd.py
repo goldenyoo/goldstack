@@ -1,4 +1,5 @@
 """`gs overnight arm|disarm`과 `gs hook permissionrequest`: 켠 세션에서만 창이 거부로 바뀐다. `gs overnight add`: 밤샘 파일의 대기열.
+`gs overnight next`: 사이 단계 묶기(`OvernightNextTest`).
 
 세션 판정은 진짜 `ps`로 시험한다. `FakeClaude`는 argv[0]이 `claude`인 진짜 프로세스고, 그 자식으로 진짜 `gs`를 돌린다.
 """
@@ -7,6 +8,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import cli, hook, overnight
+from gs import cli, config, hook, overnight
 from support import isolate_git_env
 
 REPO = Path(__file__).resolve().parents[1]
@@ -60,6 +62,37 @@ overnight._result_table = meeting
 (meet / f"{name}.ready").touch()
 sys.exit(overnight.add(repo, name, sys.stdout, sys.stderr))
 """
+
+SPEC = '---\nfeature: demo\nverify: "true"\n---\n# demo\n'
+TICKET = '---\nid: "01"\ntitle: t\nblocked_by: []\nmodel: claude\nreviewer: codex\n---\n## 목표\n'
+# 부른 순서를 $NEXT_CALLS에 남기는 가짜 외부 명령들
+FAKE_GS = f'''#!/bin/sh
+echo "gs $*" >> "$NEXT_CALLS"
+exec {shlex.quote(sys.executable)} -m gs.cli "$@"
+'''
+FAKE_UV = '''#!/bin/sh
+echo "uv $*" >> "$NEXT_CALLS"
+[ -z "$HEAD_AT_UV" ] || git rev-parse HEAD > "$HEAD_AT_UV"
+[ -z "$FAIL_UV" ] || { echo 'uv가 실패했다' >&2; exit 1; }
+[ -z "$NEW_CODE" ] || cat "$NEW_CODE" >> "$PYTHONPATH/gs/check.py"
+'''
+FAKE_CLAUDE = '''#!/bin/sh
+echo "claude $*" >> "$NEXT_CALLS"
+[ "$*" != "plugin list --json" ] || echo '[]'
+'''
+FAKE_PS = '#!/bin/sh\n[ -z "$PS_ROW" ] || echo "$PS_ROW"\n'
+NEW_CODE_MARK = "새 코드로 돌았다"
+# 가짜 재설치가 설치본 check.py 끝에 붙이는 코드. 이미 읽은 프로세스는 이 코드를 돌리지 못한다
+NEW_CHECK = f'''
+
+_installed_check = check
+
+
+def check(repo, name, only=None):
+    print("{NEW_CODE_MARK}")
+    return _installed_check(repo, name, only)
+'''
+INSTALL_URL = "https://example.test/goldstack.git"
 
 
 class FakeClaude:
@@ -916,6 +949,459 @@ class OvernightTest(unittest.TestCase):
         self.assertIn("코디네이터: 모름", out.getvalue())
         self.assertIn("ps 안 됨", out.getvalue())
         self.assertNotIn(overnight.NO_COORDINATOR, out.getvalue())
+
+
+class OvernightNextTest(unittest.TestCase):
+    """임시 레포와 bare 원격으로 진짜 git을 돌린다. uv·claude·ps만 가짜다. 이 시험을 도는 머신의 진짜 `gs go`를 ps가 찾으면 안 된다."""
+
+    def setUp(self):
+        isolate_git_env(self)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.base = Path(os.path.realpath(tmp.name))
+        self.code = REPO / "src"
+        self.calls_file = self.base / "calls"
+        self.bin = self.base / "bin"
+        self.bin.mkdir()
+        for name, text in (("gs", FAKE_GS), ("uv", FAKE_UV), ("claude", FAKE_CLAUDE), ("ps", FAKE_PS),
+                           ("gh", "#!/bin/sh\n"), ("codex", "#!/bin/sh\n"), ("agy", "#!/bin/sh\n")):
+            path = self.bin / name
+            path.write_text(text)
+            path.chmod(0o755)
+        self.origin = self.base / "origin.git"
+        self.repo = self.base / "repo"
+        self.upstream = self.base / "upstream"
+        self.git(self.base, "init", "-q", "--bare", "-b", "main", str(self.origin))
+        self.git(self.base, "clone", "-q", str(self.origin), str(self.repo))
+        github = "https://github.com/test/demo.git"  # `gs check`가 원격을 GitHub 주소로 본다. 전송은 bare 원격으로 간다
+        self.git(self.repo, "remote", "set-url", "origin", github)
+        self.git(self.repo, "config", f"url.{self.origin}.insteadOf", github)
+        self.git(self.repo, "checkout", "-q", "-B", "main")
+        self.commit(self.repo, "처음", {
+            config.CONFIG_PATH: config.DEFAULT_CONFIG.format(base='"main"'),
+            ".goldstack/work/demo/spec.md": SPEC, ".goldstack/work/demo/tickets/01-a.md": TICKET,
+            ".goldstack/ideas/x.md": "처음\n", ".goldstack/profile.md": "처음\n", "src/a.py": "처음\n",
+        })
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.base, "clone", "-q", str(self.origin), str(self.upstream))
+
+    def env(self, **extra):
+        env = {k: v for k, v in os.environ.items() if k != "GS_ROLE"}
+        env.update({"PATH": f"{self.bin}{os.pathsep}{env['PATH']}", "PYTHONPATH": str(self.code),
+                    "GS_UV": str(self.bin / "uv"), "GS_CLAUDE": str(self.bin / "claude"),
+                    "NEXT_CALLS": str(self.calls_file), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+        env.update(extra)
+        return env
+
+    def git(self, cwd, *args):
+        cp = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, env=self.env())
+        self.assertEqual(cp.returncode, 0, f"git {args}: {cp.stderr}")
+        return cp.stdout.strip()
+
+    def write(self, where, files):
+        for name, text in files.items():
+            path = where / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+
+    def commit(self, where, message, files):
+        self.write(where, files)
+        self.git(where, "add", "-A")
+        self.git(where, "commit", "-q", "-m", message)
+        return self.git(where, "rev-parse", "HEAD")
+
+    def merged(self, files=None, message="병합된 feature"):
+        """다른 곳에서 base에 올라간 커밋. 원격 꼭대기를 돌려준다."""
+        tip = self.commit(self.upstream, message, files or {"src/merged.py": "병합\n"})
+        self.git(self.upstream, "push", "-q", "origin", "main")
+        return tip
+
+    def head(self):
+        return self.git(self.repo, "rev-parse", "HEAD")
+
+    def origin_tip(self):
+        return self.git(self.origin, "rev-parse", "main")
+
+    def status(self):
+        return self.git(self.repo, "status", "--porcelain")
+
+    def calls(self):
+        return self.calls_file.read_text(encoding="utf-8").splitlines() if self.calls_file.exists() else []
+
+    def next(self, name="demo", gs=None, **env):
+        cp = subprocess.run([*(gs or GS), "overnight", "next", name], cwd=self.repo, capture_output=True, text=True,
+                            env=self.env(**env))
+        return cp.returncode, cp.stdout, cp.stderr
+
+    def assertFailedAt(self, step, result):
+        code, out, err = result
+        self.assertEqual(code, 1, out + err)
+        self.assertIn(f"{overnight.STEP_FAILED}: {step}", err)
+        return err
+
+    def assertPassed(self, result):
+        code, out, err = result
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn(overnight.STEP_FAILED, err)
+        return out
+
+    def assertStopped(self, before):
+        """base 단계에서 멈췄다. 로컬은 그대로고 다음 단계는 돌지 않았고 원격에는 아무것도 가지 않았다."""
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.git(self.repo, "symbolic-ref", "--short", "HEAD"), "main")
+        self.assertEqual(self.calls(), [])
+
+    # ---- base 위로 올리기
+    def test_up_to_date_changes_nothing_and_runs_the_check(self):
+        before = self.head()
+        out = self.assertPassed(self.next())
+        self.assertEqual(self.head(), before)
+        self.assertIn(f"■ {overnight.STEP_BASE}: 이미 origin/main 위다", out)
+        self.assertIn("demo: 티켓 1장, 오류 0", out)
+        self.assertEqual(self.calls(), ["gs check -- demo"])  # goldstack 레포가 아니므로 재설치하지 않는다
+        self.assertIn(f"■ {overnight.STEP_UPDATE}: 건너뜀", out)
+
+    def test_behind_only_fast_forwards(self):
+        before, tip = self.head(), self.merged()
+        out = self.assertPassed(self.next())
+        self.assertEqual(self.head(), tip)
+        self.assertEqual(self.git(self.repo, "merge-base", "HEAD", before), before)
+        self.assertIn("1커밋 fast-forward", out)
+
+    def test_grill_commits_on_top_of_base_stay_and_are_not_pushed(self):
+        """base가 앞서지 않았으면 올릴 것이 없다. push는 `/go` 2단계가 한다."""
+        tip = self.origin_tip()
+        mine = self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC})
+        out = self.assertPassed(self.next())
+        self.assertEqual((self.head(), self.origin_tip()), (mine, tip))
+        self.assertIn("push 안 된 grill 커밋 1개", out)
+
+    def test_diverged_grill_commits_are_rebased_onto_base_and_not_pushed(self):
+        first = self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC})
+        self.commit(self.repo, "grill: r", {".goldstack/ideas/new.md": "새 생각\n"})
+        tip = self.merged()
+        out = self.assertPassed(self.next())
+        self.assertEqual(self.origin_tip(), tip)  # force push도 그냥 push도 없다
+        self.assertEqual(self.git(self.repo, "log", "--format=%s", "-3").splitlines(), ["grill: r", "grill: q", "병합된 feature"])
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD~2"), tip)
+        self.assertEqual(self.git(self.repo, "rev-list", "--merges", "HEAD"), "")
+        self.assertNotEqual(self.git(self.repo, "rev-parse", "HEAD~1"), first)
+        self.assertEqual(self.status(), "")
+        for name in ("src/merged.py", ".goldstack/work/q/spec.md", ".goldstack/ideas/new.md"):
+            self.assertTrue((self.repo / name).exists(), name)
+        self.assertIn("grill 커밋 2개를 origin/main 위로 rebase", out)
+
+    def test_every_grill_path_may_be_rebased(self):
+        self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC, ".goldstack/out-of-scope/z.md": "z\n",
+                                            ".goldstack/ideas/x.md": "고침\n", ".goldstack/profile.md": "고침\n"})
+        tip = self.merged()
+        self.assertPassed(self.next())
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD~1"), tip)
+
+    def test_a_queued_feature_that_only_arrives_by_rebase_or_pull_passes_the_check(self):
+        """`gs check`는 올린 다음의 트리를 본다."""
+        self.merged({".goldstack/work/there/spec.md": SPEC.replace("demo", "there"),
+                     ".goldstack/work/there/tickets/01-a.md": TICKET})
+        self.assertIn("there: 티켓 1장", self.assertPassed(self.next("there")))
+
+    def other_paths(self):
+        """(이름, 로컬에 커밋을 만드는 함수, 거부 메시지에 나올 경로)."""
+        repo = self.repo
+
+        def renamed():
+            self.git(repo, "mv", "src/a.py", ".goldstack/ideas/a.py")
+            self.git(repo, "commit", "-q", "-m", "grill처럼 보이는 이동")
+
+        def merge_commit():
+            start = self.head()
+            self.git(repo, "checkout", "-q", "-b", "side")
+            self.commit(repo, "옆 코드", {"src/side.py": "옆\n"})
+            self.git(repo, "checkout", "-q", "main")
+            self.commit(repo, "grill: q", {".goldstack/ideas/q.md": "q\n"})
+            self.git(repo, "merge", "-q", "--no-edit", "side")
+            self.git(repo, "branch", "-q", "-D", "side")
+            self.assertNotEqual(self.head(), start)
+
+        def merge_commit_edits_code():
+            """옆 브랜치는 grill뿐이고 병합 커밋이 직접 코드를 고쳤다. 병합 커밋은 기본으로 경로를 내지 않는다."""
+            self.git(repo, "checkout", "-q", "-b", "side")
+            self.commit(repo, "grill: s", {".goldstack/ideas/s.md": "s\n"})
+            self.git(repo, "checkout", "-q", "main")
+            self.commit(repo, "grill: q", {".goldstack/ideas/q.md": "q\n"})
+            self.git(repo, "merge", "-q", "--no-commit", "--no-ff", "side")
+            self.commit(repo, "병합", {"src/evil.py": "x\n"})
+            self.git(repo, "branch", "-q", "-D", "side")
+
+        def reverted():
+            self.commit(repo, "코드", {"src/a.py": "고침\n"})
+            self.commit(repo, "되돌림", {"src/a.py": "처음\n"})
+
+        return [
+            ("한 커밋에 섞임", lambda: self.commit(repo, "grill: q", {".goldstack/ideas/q.md": "q\n", "src/b.py": "b\n"}), "src/b.py"),
+            ("둘째 커밋", lambda: (self.commit(repo, "grill: q", {".goldstack/ideas/q.md": "q\n"}),
+                                 self.commit(repo, "코드", {"src/b.py": "b\n"})), "src/b.py"),
+            ("옮긴 커밋의 옛 경로", renamed, "src/a.py"),
+            ("병합 커밋이 가져온 경로", merge_commit, "src/side.py"),
+            ("병합 커밋이 직접 고친 경로", merge_commit_edits_code, "src/evil.py"),
+            ("고쳤다 되돌림", reverted, "src/a.py"),
+            ("config", lambda: self.commit(repo, "설정", {config.CONFIG_PATH: config.DEFAULT_CONFIG.format(base='"main"') + "\n"}),
+             config.CONFIG_PATH),
+            ("비슷한 이름의 디렉터리", lambda: self.commit(repo, "x", {".goldstack/ideas-old/q.md": "q\n"}), ".goldstack/ideas-old/q.md"),
+            ("비슷한 이름의 파일", lambda: self.commit(repo, "x", {".goldstack/profile.md.bak": "q\n"}), ".goldstack/profile.md.bak"),
+            ("work 자체와 이름이 겹침", lambda: self.commit(repo, "x", {".goldstack/workshop/q.md": "q\n"}), ".goldstack/workshop/q.md"),
+            ("한글 경로", lambda: self.commit(repo, "x", {"문서/메모 하나.md": "q\n"}), "문서/메모 하나.md"),
+        ]
+
+    def test_other_paths_refuse_when_base_is_ahead(self):
+        self.merged()
+        start = self.head()
+        for name, make, path in self.other_paths():
+            with self.subTest(name):
+                self.git(self.repo, "reset", "-q", "--hard", start)
+                make()
+                before, tip = self.head(), self.origin_tip()
+                err = self.assertFailedAt(overnight.STEP_BASE, self.next())
+                self.assertIn(path, err)
+                self.assertIn("grill 경로 밖", err)
+                self.assertStopped(before)
+                self.assertEqual(self.origin_tip(), tip)
+
+    def test_other_paths_refuse_even_when_base_is_not_ahead(self):
+        """올릴 것은 없지만 다음 `/go` 2단계의 push가 검증 없이 base에 넣는다."""
+        before = self.commit(self.repo, "코드", {"src/b.py": "b\n"})
+        self.assertIn("src/b.py", self.assertFailedAt(overnight.STEP_BASE, self.next()))
+        self.assertStopped(before)
+
+    def test_conflict_aborts_back_to_the_original_state(self):
+        """둘째 커밋에서 충돌해도 첫 커밋까지 옮겨진 자리가 아니라 시작 전으로 돌아간다."""
+        self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC})
+        before = self.commit(self.repo, "grill: r", {".goldstack/ideas/x.md": "로컬\n"})
+        tip = self.merged({".goldstack/ideas/x.md": "병합\n"})
+        err = self.assertFailedAt(overnight.STEP_BASE, self.next())
+        self.assertIn(overnight.REBASE_CONFLICT, err)
+        self.assertIn(".goldstack/ideas/x.md", err)
+        self.assertStopped(before)
+        self.assertEqual(self.status(), "")
+        self.assertEqual((self.repo / ".goldstack/ideas/x.md").read_text(encoding="utf-8"), "로컬\n")
+        self.assertEqual(self.origin_tip(), tip)
+        for name in ("rebase-merge", "rebase-apply"):
+            self.assertFalse((self.repo / ".git" / name).exists(), name)
+
+    def test_conflict_can_be_typed_again_after_a_person_resolves_it(self):
+        self.commit(self.repo, "grill: r", {".goldstack/ideas/x.md": "로컬\n"})
+        self.merged({".goldstack/ideas/x.md": "병합\n"})
+        self.assertFailedAt(overnight.STEP_BASE, self.next())
+        self.git(self.repo, "reset", "-q", "--hard", "HEAD~1")
+        self.assertPassed(self.next())
+
+    def test_failed_abort_says_a_person_has_to_look(self):
+        """되돌렸다고 거짓말하지 않는다."""
+        self.commit(self.repo, "grill: r", {".goldstack/ideas/x.md": "로컬\n"})
+        self.merged({".goldstack/ideas/x.md": "병합\n"})
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, self.env()), mock.patch("gs.overnight._rebasing", return_value=True):
+            self.assertEqual(overnight.advance(self.repo, "demo", out, err), 1)
+        self.assertIn("되돌리지 못했다", err.getvalue())
+        self.assertIn("사람이", err.getvalue())
+
+    def test_uncommitted_change_refuses_the_rebase_even_with_autostash_set(self):
+        """git이 시작을 거부한다. 설정이 있어도 변경을 치우지 않는다."""
+        self.git(self.repo, "config", "rebase.autoStash", "true")
+        before = self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC})
+        self.merged()
+        self.write(self.repo, {".goldstack/ideas/x.md": "쓰는 중\n"})
+        err = self.assertFailedAt(overnight.STEP_BASE, self.next())
+        self.assertIn("git pull --rebase가 시작하지 못했다", err)
+        self.assertStopped(before)
+        self.assertEqual(self.status(), "M .goldstack/ideas/x.md")
+        self.assertEqual((self.repo / ".goldstack/ideas/x.md").read_text(encoding="utf-8"), "쓰는 중\n")
+        self.assertEqual(self.git(self.repo, "stash", "list"), "")
+
+    def test_untracked_file_in_the_way_leaves_the_original_state(self):
+        before = self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC})
+        self.merged({".goldstack/ideas/new.md": "병합\n"})
+        self.write(self.repo, {".goldstack/ideas/new.md": "쓰는 중\n"})
+        self.assertFailedAt(overnight.STEP_BASE, self.next())
+        self.assertStopped(before)
+        self.assertEqual((self.repo / ".goldstack/ideas/new.md").read_text(encoding="utf-8"), "쓰는 중\n")
+        self.assertEqual(self.status(), "?? .goldstack/ideas/new.md")
+        for name in ("rebase-merge", "rebase-apply"):
+            self.assertFalse((self.repo / ".git" / name).exists(), name)
+
+    def test_fast_forward_keeps_an_uncommitted_change_it_does_not_touch(self):
+        tip = self.merged()
+        self.write(self.repo, {".goldstack/ideas/x.md": "쓰는 중\n"})
+        self.assertPassed(self.next())
+        self.assertEqual(self.head(), tip)
+        self.assertEqual(self.status(), "M .goldstack/ideas/x.md")
+
+    def test_fast_forward_refuses_over_an_uncommitted_change_it_would_overwrite(self):
+        before = self.head()
+        self.merged({".goldstack/ideas/x.md": "병합\n"})
+        self.write(self.repo, {".goldstack/ideas/x.md": "쓰는 중\n"})
+        self.assertFailedAt(overnight.STEP_BASE, self.next())
+        self.assertStopped(before)
+        self.assertEqual((self.repo / ".goldstack/ideas/x.md").read_text(encoding="utf-8"), "쓰는 중\n")
+
+    def test_refuses_on_another_branch_and_detached_head(self):
+        self.merged()
+        self.git(self.repo, "checkout", "-q", "-b", "work")
+        before = self.head()
+        self.assertIn("work", self.assertFailedAt(overnight.STEP_BASE, self.next()))
+        self.assertEqual(self.head(), before)
+        self.git(self.repo, "checkout", "-q", "--detach")
+        self.assertIn("detached HEAD", self.assertFailedAt(overnight.STEP_BASE, self.next()))
+        self.assertEqual(self.head(), before)
+        self.assertEqual(self.calls(), [])
+
+    def test_unreachable_remote_fails_at_the_base_step(self):
+        before = self.head()
+        self.git(self.repo, "remote", "set-url", "origin", str(self.base / "없음.git"))
+        self.assertFailedAt(overnight.STEP_BASE, self.next())
+        self.assertStopped(before)
+
+    def test_remote_and_base_come_from_the_config(self):
+        self.git(self.repo, "remote", "rename", "origin", "upstream")
+        self.git(self.repo, "checkout", "-q", "-b", "develop")
+        text = config.DEFAULT_CONFIG.format(base='"develop"').replace('remote = "origin"', 'remote = "upstream"')
+        self.assertIn('remote = "upstream"', text)
+        self.commit(self.repo, "설정", {config.CONFIG_PATH: text})
+        self.git(self.repo, "push", "-q", "upstream", "develop")
+        self.git(self.upstream, "fetch", "-q", "origin")
+        self.git(self.upstream, "checkout", "-q", "-b", "develop", "origin/develop")
+        tip = self.commit(self.upstream, "병합", {"src/merged.py": "병합\n"})
+        self.git(self.upstream, "push", "-q", "origin", "develop")
+        self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC})
+        self.assertPassed(self.next())
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD~1"), tip)
+        self.assertEqual(self.git(self.repo, "symbolic-ref", "--short", "HEAD"), "develop")
+
+    def test_without_a_config_fails_at_the_base_step(self):
+        (self.repo / config.CONFIG_PATH).unlink()
+        self.assertIn("gs init", self.assertFailedAt(overnight.STEP_BASE, self.next()))
+        self.assertEqual(self.calls(), [])
+
+    def test_bad_name_moves_nothing(self):
+        before = self.head()
+        self.merged()
+        for name in ("a|b", "a/b", ".hidden", "a b"):
+            with self.subTest(name):
+                code, _, err = self.next(name)
+                self.assertEqual(code, 1)
+                self.assertIn("feature 이름으로 쓸 수 없다", err)
+                self.assertStopped(before)
+
+    def test_never_pushes(self):
+        """force push는 없다. `/go` 2단계가 fast-forward로만 올린다."""
+        source = Path(overnight.__file__).read_text(encoding="utf-8")
+        self.assertNotIn('"push"', source)
+        self.assertNotIn("--force", source)
+
+    # ---- 재설치
+    def install(self, url=INSTALL_URL):
+        """이 레포를 goldstack으로 만들고 옛 gs 설치본을 놓는다. 시험은 `bin/gs`로 그 설치본을 돌린다."""
+        self.code = self.base / "install"
+        shutil.copytree(REPO / "src" / "gs", self.code / "gs", ignore=shutil.ignore_patterns("__pycache__"))
+        info = self.code / "goldstack-1.0.0.dist-info"
+        info.mkdir()
+        (info / "METADATA").write_text("Metadata-Version: 2.1\nName: goldstack\nVersion: 1.0.0\n")
+        if url:
+            (info / "direct_url.json").write_text(json.dumps({"url": url, "vcs_info": {"vcs": "git", "commit_id": "abc"}}))
+        self.commit(self.repo, "pyproject", {"pyproject.toml": '[project]\nname = "goldstack"\n'})
+        self.git(self.repo, "push", "-q", "origin", "main")
+        self.git(self.upstream, "pull", "-q", "origin", "main")
+        return [str(self.bin / "gs")]
+
+    def test_check_after_the_reinstall_runs_the_new_code(self):
+        """옛 코드는 cli.py에서 check를 이미 읽었다. 새 프로세스로 불러야 재설치한 코드가 돈다."""
+        gs = self.install()
+        new_code = self.base / "new_check.py"
+        new_code.write_text(NEW_CHECK, encoding="utf-8")
+        before = subprocess.run([*gs, "check", "demo"], cwd=self.repo, capture_output=True, text=True, env=self.env())
+        self.assertEqual(before.returncode, 0, before.stderr)
+        self.assertNotIn(NEW_CODE_MARK, before.stdout)
+        self.calls_file.unlink()
+        out = self.assertPassed(self.next(gs=gs, NEW_CODE=str(new_code)))
+        self.assertIn(NEW_CODE_MARK, out)
+        self.assertEqual([call for call in self.calls() if call != "claude plugin list --json"], [
+            "gs overnight next demo",
+            f"uv tool install --reinstall git+{INSTALL_URL}@main",
+            "claude plugin marketplace update goldstack",
+            "claude plugin update goldstack@goldstack",
+            "gs check -- demo",
+        ])
+
+    def test_reinstall_runs_after_base_moved(self):
+        gs = self.install()
+        tip = self.merged()
+        at_uv = self.base / "head_at_uv"
+        self.assertPassed(self.next(gs=gs, HEAD_AT_UV=str(at_uv)))
+        self.assertEqual(at_uv.read_text().strip(), tip)
+
+    def test_running_go_refusal_is_passed_on_and_typing_again_continues(self):
+        gs = self.install()
+        tip = self.merged()
+        row = "4242 /venv/bin/python /venv/bin/gs go other"
+        err = self.assertFailedAt(overnight.STEP_UPDATE, self.next(gs=gs, PS_ROW=row))
+        self.assertIn("거부: 이 머신에서 gs go 실행 중(PID 4242)", err)
+        self.assertEqual(self.calls(), ["gs overnight next demo"])  # 설치도 check도 돌지 않는다
+        self.assertEqual(self.head(), tip)
+        self.assertPassed(self.next(gs=gs))
+        self.assertEqual(self.calls()[-1], "gs check -- demo")
+
+    def test_local_install_passes_on_the_from_refusal(self):
+        gs = self.install(url=None)
+        err = self.assertFailedAt(overnight.STEP_UPDATE, self.next(gs=gs))
+        self.assertIn("gs self-update --from", err)
+        self.assertNotIn("gs check -- demo", self.calls())
+
+    def test_failed_reinstall_stops_before_the_check(self):
+        gs = self.install()
+        err = self.assertFailedAt(overnight.STEP_UPDATE, self.next(gs=gs, FAIL_UV="1"))
+        self.assertIn("uv가 실패했다", err)
+        self.assertNotIn("gs check -- demo", self.calls())
+
+    def test_only_a_repo_named_goldstack_reinstalls(self):
+        path = self.repo / "pyproject.toml"
+        for text, expected in (('[project]\nname = "goldstack"\n', True), ('[project]\nname = "other"\n', False),
+                               ('name = "goldstack"\n', False), ('project = "goldstack"\n', False), ("이건 toml이 아니다", False)):
+            with self.subTest(text):
+                path.write_text(text, encoding="utf-8")
+                self.assertEqual(overnight._is_goldstack(self.repo), expected)
+        path.unlink()
+        self.assertFalse(overnight._is_goldstack(self.repo))
+
+    # ---- gs check
+    def test_check_failure_names_the_step_and_shows_its_output(self):
+        tip = self.merged()
+        err = self.assertFailedAt(overnight.STEP_CHECK, self.next("없음"))
+        self.assertIn("없음", err)
+        self.assertIn("종료 코드 1", err)
+        self.assertEqual(self.head(), tip)  # 다시 쳐도 되는 자리다
+
+    def test_check_warning_passes_and_stays_visible(self):
+        """경고를 허락 안에서 없앨지는 모델의 판단이다."""
+        self.commit(self.repo, "grill", {".goldstack/ideas/x.md": "고침\n"})
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"') + "\n[unknown_key]\n", encoding="utf-8")
+        code, out, err = self.next()
+        self.assertEqual(code, 0, err)
+        self.assertIn("경고 1", out)
+        self.assertIn("unknown_key", err)
+        self.assertIn("모델이 본다", out)
+
+    def test_missing_gs_names_the_check_step(self):
+        only_git = self.base / "only_git"
+        only_git.mkdir()
+        (only_git / "git").symlink_to(shutil.which("git"))
+        err = self.assertFailedAt(overnight.STEP_CHECK, self.next(PATH=str(only_git)))
+        self.assertIn("돌리지 못했다", err)
+
+    def test_name_starting_with_a_dash_is_not_an_option_of_the_check(self):
+        cp = subprocess.run([*GS, "overnight", "next", "--", "--help"], cwd=self.repo, capture_output=True, text=True, env=self.env())
+        self.assertEqual(cp.returncode, 1, cp.stdout)
+        self.assertIn(f"{overnight.STEP_FAILED}: {overnight.STEP_CHECK}", cp.stderr)
+        self.assertEqual(self.calls(), ["gs check -- --help"])
 
 
 if __name__ == "__main__":

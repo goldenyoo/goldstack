@@ -80,7 +80,7 @@ class OvernightSkillTest(unittest.TestCase):
         for text in ("git add -- .goldstack/work/<f> .goldstack/out-of-scope .goldstack/ideas .goldstack/profile.md",
                      'git commit -m "grill: <f>" --dry-run', "git pull --ff-only <remote> <base>",
                      "git show gs/<f>/integration:.goldstack/work/<f>/report.md", "Edit 도구",
-                     "6단계의 `gs self-update`", "gs self-update --from <원격 주소>",
+                     "6단계의 `gs overnight next <f>`", "gs self-update --from <원격 주소>",
                      "`gs overnight disarm`", "`gs overnight add <f>`"):
             with self.subTest(text):
                 self.assertIn(text, section)
@@ -163,7 +163,7 @@ class OvernightSkillTest(unittest.TestCase):
         section = self.parts["대기열에 더하기"]
         self.assertTrue(overnight.NO_COORDINATOR.startswith("코디네이터: 없음"))
         self.assert_in_order(section, f"`{overnight.NO_COORDINATOR}`이 없으면 끝낸다", "`gs status`에 `실행 중(pid N)`이 없으면",
-                             "`/overnight resume`", "있으면 이 세션이 잇는다", "세션 권한 모드(pull·push·self-update 빼고)", "4단계 안내",
+                             "`/overnight resume`", "있으면 이 세션이 잇는다", "세션 권한 모드(push·`gs overnight next` 빼고)", "4단계 안내",
                              "이어받기의 `실행 중`처럼 묶고", "자도 된다")
 
     def test_go_points_to_add_instead_of_a_parallel_go(self):
@@ -174,9 +174,36 @@ class OvernightSkillTest(unittest.TestCase):
         section = self.parts["6. 잇기"]
         self.assertIn("완료 알림", section)
         between = section.partition("**사이 단계.**")[2]
-        self.assert_in_order(between, "git pull", "`gs self-update`", "환경 사실", "`gs check <다음>`", "push", "다음 `gs go`")
+        self.assert_in_order(between, "`gs overnight next <다음>`", "환경 사실", "`gs check <다음>`", "push", "다음 `gs go`")
         self.assertNotIn("uv tool install --reinstall", between)
-        self.assertIn("pyproject.toml", between)  # gs 자신을 고친 레포를 가리는 법
+
+    def test_chain_uses_next_and_leaves_judgment_to_the_model(self):
+        """묶은 명령을 따로 치지 않는다. §6 재확인과 spec 수정은 명령이 아니라 모델이 한다."""
+        between = self.parts["6. 잇기"].partition("**사이 단계.**")[2].partition("`<다음>`은 다시 읽은")[0]
+        for text in ("git pull", "`gs self-update`.", "pyproject.toml"):
+            with self.subTest(text):
+                self.assertNotIn(text, between)
+        self.assert_in_order(between, "`gs overnight next <다음>`", "모델이 한다", "환경 사실(§6)", "spec을 고치고")
+        self.assert_in_order(between, "spec을 고쳤거나", "`gs check <다음>`이 오류·경고 0")
+        self.assertIn("timeout", between)  # 재설치가 Bash 기본 제한(2분)에 잘리지 않는다
+
+    def test_chain_says_what_next_prints(self):
+        """skill이 읽는 줄이 엔진에서 바뀌면 여기서 빨개진다."""
+        between = self.parts["6. 잇기"].partition("**사이 단계.**")[2]
+        self.assertIn(f"`{overnight.STEP_FAILED}` 줄을 이유에 옮긴다", between)
+        self.assertIn(f"`{overnight.REBASE_CONFLICT}`이면 `<다음>`은 `미실행`", between)
+        self.assertIn("어느 단계든 실패하면 멈출 조건", between)
+        self.assertIn("사이 단계 명령 실패", self.parts["멈출 조건"])
+
+    def test_preflight_types_next_but_add_does_not(self):
+        """밤에 칠 모양을 사람 앞에서 쳐 본다. 도는 실행에 붙는 add는 base를 움직이므로 치지 않는다."""
+        mode = self.parts["3. 사전 점검"].partition("**세션 권한 모드**")[2]
+        self.assertIn("`gs overnight next <f>`", mode)
+        self.assertIn("`gs overnight next <f>`(셋 다 실패해도 창만 안 뜨면 된다)", mode)  # 도는 `gs go`가 재설치를 거부시킨다
+        self.assertNotIn("git pull", mode.partition("**디스크**")[0])  # 밤에는 next가 친다
+        add = self.parts["대기열에 더하기"]
+        self.assertIn("`gs overnight next` 빼고", add)
+        self.assertIn("base를 움직이지 않는다", add)
 
     def test_reinstall_uses_self_update_which_checks_running_go(self):
         """self-update가 전역 --repo와 python -m으로 뜬 gs go를 찾아 실행 중인 설치본을 바꾸지 않는다."""
@@ -185,7 +212,7 @@ class OvernightSkillTest(unittest.TestCase):
             self.assertIn(text, between)
         self.assertNotIn("pgrep", self.body)
         self.assertNotIn("running_go", self.body)
-        self.assertIn("6단계의 `gs self-update`", self.parts["3. 사전 점검"])  # 새 명령 모양도 밤 전에 쳐 본다
+        self.assertIn("6단계의 `gs overnight next <f>`", self.parts["3. 사전 점검"])  # 새 명령 모양도 밤 전에 쳐 본다
         self.assertIn("그 완료 알림 뒤 다시 친다", between)  # 거부되면 끝나기를 기다렸다 다시 친다
         self.assertTrue(callable(selfupdate.running_go))
         for command in ("gs go demo", "/venv/bin/python /venv/bin/gs --repo /tmp/other go demo",

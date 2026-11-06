@@ -48,22 +48,22 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 
 ## 3. 사전 점검
 
-밤사이 막힐 것을 사람이 있을 때 없앤다. 차례대로 하고 결과를 보인다.
+밤사이 막힐 것을 사람이 있을 때 차례대로 없애고 결과를 보인다.
 
 - **원격 앞섬**: 현재 브랜치가 `<base>`인지 본다. `git fetch <remote> <base>` 뒤 뒤처지기만 했으면 `git pull --ff-only <remote> <base>`, 갈라졌으면 사람에게 보인다.
 - **텔레그램**: 답이 지금 값과 다르면 `.goldstack/config.toml`의 `telegram`을 고쳐 그 파일만 커밋한다. 켰으면 `gs notify --check`가 통과해야 한다.
 - **`gs check` 전부**: 오류 0. 경고는 첫 feature가 0이다. 뒤 feature는 앞 feature가 gs를 고쳐야 사라지는 경고(`알 수 없는 키`)만 남기고 6단계에서 다시 본다.
 - **미커밋 grill**: feature마다(뒤 feature 것도) `/go` 2단계로 커밋하고 push한다. 다른 미커밋 변경은 건드리지 않고 사람에게 보인다.
 - **세션 권한 모드**: 모드는 읽을 수 없으니 밤에 칠 명령을 같은 모양으로 지금 친다.
-  - `git show <remote>/<base>:.goldstack/work/<f>/spec.md`, `git show gs/<f>/integration:.goldstack/work/<f>/report.md`(실패해도 창만 안 뜨면 된다)
-  - `git pull --ff-only <remote> <base>`, `git push <remote> <base>`
+  - `git show <remote>/<base>:.goldstack/work/<f>/spec.md`, `git show gs/<f>/integration:.goldstack/work/<f>/report.md`, 6단계의 `gs overnight next <f>`(셋 다 실패해도 창만 안 뜨면 된다)
+  - `git push <remote> <base>`
   - `git add -- .goldstack/work/<f> .goldstack/out-of-scope .goldstack/ideas .goldstack/profile.md`(없는 경로는 뺀다), `git commit -m "grill: <f>" --dry-run`
   - 4단계의 사이 단계 명령. Edit 도구로 2단계 파일의 제목 줄 끝에 ` (점검)`을 붙인다.
-  - 6단계의 `gs self-update`(gs 자신을 고친 레포만), `gs overnight disarm`, `gs overnight add <f>`(바뀌는 것이 없다)
+  - `gs overnight disarm`, `gs overnight add <f>`(바뀌는 것이 없다)
 
   창이 뜨면 사람이 허용 규칙을 더하거나 모드를 바꾼 뒤 다시 친다. `gs go`, 묶기 명령, `gs overnight arm`은 5단계가 사람 앞에서 처음 친다.
-- **디스크**: `df -h .`와 `du -sh .`. worktree가 티켓마다 생기므로 남은 공간이 레포 크기 × 전체 티켓 수보다 작으면 치운다.
-- **CLI 로그인**: `gh auth status`, `claude auth status`, 티켓이 쓰면 `codex login status`. 상태 명령이 없는 CLI(agy)는 짧은 호출 한 번으로 본다.
+- **디스크**: `df -h .`와 `du -sh .`. worktree가 티켓마다 생기니 남은 공간이 레포 크기 × 티켓 수보다 작으면 치운다.
+- **CLI 로그인**: `gh auth status`, `claude auth status`, 티켓이 쓰면 `codex login status`. 상태 명령이 없는 agy는 짧은 호출 한 번으로 본다.
 - **버전 경고**: `gs doctor`의 `경고:` 줄을 `gs self-update`로 없앤다. `설치 commit 모름(로컬 설치)`는 `gs self-update --from <원격 주소>`를 한 번 쳐서 없앤다.
 
 ## 4. 깨어 있기
@@ -79,9 +79,9 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 
 ## 5. 띄우기
 
-1. `gs go <f>`를 Bash 도구의 `run_in_background`로 띄운다. feature 하나씩 띄운다(`gs go a b`는 뒤 feature가 옛 gs로 돈다).
+1. `gs go <f>`를 Bash 도구의 `run_in_background`로 feature 하나씩 띄운다(`gs go a b`는 뒤 feature가 옛 gs로 돈다).
 2. `gs status <f>`에 `실행 중(pid N)`(N은 양수)이 보이면 N을 `<gs pid>`로 4단계의 묶기 명령을 `run_in_background`로 켠다. 그 전에 완료 알림이 오면 6단계로 간다.
-3. `결과`를 `실행 중`으로 고친다. 사람이 앞에 있으면 `gs overnight arm`을 치고, 성공하면 "승인 창 없이 떴다. 세션과 터미널을 열어 두면 자도 된다"고 말한다. 턴을 끝내고 `gs go` 완료 알림을 기다린다. 깨어 있기 작업의 알림은 넘긴다.
+3. `결과`를 `실행 중`으로 고친다. 사람이 앞에 있으면 `gs overnight arm`을 치고, 성공하면 "승인 창 없이 떴다. 세션과 터미널을 열어 두면 자도 된다"고 말한다. 턴을 끝내고 `gs go` 완료 알림을 기다린다. 깨어 있기 알림은 넘긴다.
 
 ## 6. 잇기
 
@@ -97,16 +97,15 @@ spec마다 전제·§2·§6을 읽고 `gs config notify.telegram`을 본 뒤, �
 | 덜 끝남 | `finish.phase`가 `verified`인데 `pending` 티켓이 있거나, 티켓이 전부 `merged`인데 종료 코드가 0이 아니거나 보고서 줄이 없고 `finish.base_report_tried`도 없다 | 다시 띄운다 |
 | 멈춤 | 그 밖: `reverted`, `not_merged`, `failed` 티켓, 사람 승인 대기(`merge_pending`, `report_pending`) | [멈출 조건](#멈출-조건) |
 
-다시 띄우기는 같은 feature로 5단계를 밟는 것이다. feature마다 두 번까지이고 `결과`에 센다. 넘으면 [멈출 조건](#멈출-조건)으로 간다.
+다시 띄우기는 같은 feature로 5단계를 밟는다. feature마다 두 번까지이고 `결과`에 센다. 넘으면 [멈출 조건](#멈출-조건)이다.
 
 **사이 단계.** verified이거나 멈출 조건이 넘겨 주면 순서대로 밟는다. 어느 단계든 실패하면 멈출 조건으로 간다. base는 여기서만 움직인다(실행 중에 움직이면 squash 병합이 멈춘다).
 
-1. `git pull --ff-only <remote> <base>`.
-2. **재설치**(gs 자신을 고친 레포, 곧 `pyproject.toml`의 `name`이 `goldstack`일 때만): `gs self-update`. 다른 `gs go`가 돌고 있어 `거부: … (PID N)`와 종료 1로 끝나면 첫 PID에 묶기 명령을 걸어 그 완료 알림 뒤 다시 친다. `--from`을 쓰라고 거부하면 `gs self-update --from <원격 주소>`로 한 번 친다.
-3. 다음 spec의 환경 사실(§6)을 병합된 코드로 문장마다 다시 확인한다. 어긋남이 `사소한 수정` 허락 안이면 고치고 `쓴 허락`에 적고, 밖이면 멈출 조건이다.
-4. `gs check <다음>`이 오류·경고 0이다.
-5. `/go` 2단계로 고친 spec을 커밋하고 push한다. "말하고 끝낸다"는 경우는 멈출 조건이다.
-6. 5단계로 다음 `gs go`를 띄운다.
+1. `gs overnight next <다음>`(Bash `timeout` 600000). base 올리기·재설치·`gs check`를 묶었다. 실패하면 `■ 실패 단계` 줄을 이유에 옮긴다. `rebase 충돌`이면 `<다음>`은 `미실행`이다. `gs self-update`의 `거부: … (PID N)`면 첫 PID에 묶기 명령을 걸어 그 완료 알림 뒤 다시 친다. `--from`을 쓰라는 거부면 `gs self-update --from <원격 주소>`를 한 번 치고 다시 친다.
+2. 여기부터는 모델이 한다. 다음 spec의 환경 사실(§6)을 병합된 코드로 문장마다 다시 확인한다. 어긋남이 `사소한 수정` 허락 안이면 spec을 고치고 `쓴 허락`에 적고, 밖이면 멈출 조건이다.
+3. spec을 고쳤거나 경고가 남았으면 `gs check <다음>`이 오류·경고 0이 되게 한다.
+4. `/go` 2단계로 고친 spec과 올린 grill 커밋을 push한다. "말하고 끝낸다"는 경우는 멈출 조건이다.
+5. 5단계로 다음 `gs go`를 띄운다.
 
 `<다음>`은 다시 읽은 `결과`의 첫 `대기` 줄이다. 없으면 7단계로 간다.
 
@@ -153,7 +152,7 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 
 ## 이어받기
 
-`/overnight resume`은 세션이 죽었거나 멈춘 밤을 잇는다. 사람이 앞에 있다.
+`/overnight resume`은 세션이 죽었거나 멈춘 밤을 사람 앞에서 잇는다.
 
 1. `.goldstack/overnight/`에서 가장 최근 `.md`를 읽는다. 없으면 말하고 끝낸다.
 2. 새 세션은 모드가 다를 수 있으니 `아침에 물을 것`이 없어도 3단계의 세션 권한 모드와 4단계 안내를 다시 한다.
@@ -166,10 +165,10 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 
 ## 대기열에 더하기
 
-`/overnight add <f>`는 도는 실행 뒤에 붙인다. pull·push·`gs self-update`로 base를 움직이지 않는다.
+`/overnight add <f>`는 도는 실행 뒤에 붙인다. push·`gs overnight next`로 base를 움직이지 않는다.
 
 1. 앞 feature와 독립인지만 묻는다.
 2. 3단계의 `gs check <f>`, 디스크, CLI 로그인을 본다.
 3. `gs overnight add <f>`. 밤샘 파일이 없거나 끝났으면 2단계로 만들고(사소한 수정 B, 텔레그램 지금 값) 다시 친다.
 4. `순서`에 답을 적는다. 출력에 `코디네이터: 없음`이 없으면 끝낸다.
-5. `gs status`에 `실행 중(pid N)`이 없으면 `/overnight resume`을 안내하고 끝낸다. 있으면 이 세션이 잇는다: 그 feature를 `결과`에 `실행 중`으로 적고, 세션 권한 모드(pull·push·self-update 빼고)와 4단계 안내 뒤 이어받기의 `실행 중`처럼 묶고 "자도 된다"고 말한다.
+5. `gs status`에 `실행 중(pid N)`이 없으면 `/overnight resume`을 안내하고 끝낸다. 있으면 이 세션이 잇는다: 그 feature를 `결과`에 `실행 중`으로 적고, 세션 권한 모드(push·`gs overnight next` 빼고)와 4단계 안내 뒤 이어받기의 `실행 중`처럼 묶고 "자도 된다"고 말한다.
