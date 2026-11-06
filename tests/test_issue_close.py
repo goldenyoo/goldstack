@@ -416,6 +416,28 @@ class RevertTest(IssueTest):
         self.assertEqual(self.comments(12)[1:], [f"demo에서 고침 ({restored})"])
         self.assertEqual(len(self.comments(12)), 2)
 
+    def test_finished_rerun_shows_failed_reopen_at_end_without_touching_report_or_base(self):
+        self.assertEqual(self.go("--only", "01")[0], 0)
+        self.revert_after_report(self.finish()["merge_sha"])
+        report_path = self.repo / ".goldstack/work/demo/report.md"
+        sh(self.repo, "git", "fetch", "-q", self.REMOTE)
+        base = sh(self.repo, "git", "rev-parse", f"{self.REMOTE}/{self.BASE}")
+        before = report_path.read_text() if report_path.exists() else None
+        self.fail_gh("reopen")
+        code, out, err = self.go("--only", "01")
+        line = "■ issue: #12 다시 열기 실패(gh). 다음 gs go가 다시 시도한다"
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(out.count(line), 1, out)
+        self.assertTrue(out.rstrip().splitlines()[-1].startswith("■ PR:") or out.index(line) > out.index("■ PR:"), out)
+        sh(self.repo, "git", "fetch", "-q", self.REMOTE)
+        self.assertEqual(sh(self.repo, "git", "rev-parse", f"{self.REMOTE}/{self.BASE}"), base)
+        self.assertEqual(report_path.read_text() if report_path.exists() else None, before)
+        (self.bin / "issue.fail").unlink()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("■ issue:", out)
+        self.assertEqual(self.issue(12)["state"], "OPEN")
+
     def test_restoring_pr_after_revert_closes_with_its_merge(self):
         merge, _ = self.land_pr("01")
         self.revert(merge, "-m", "1")
