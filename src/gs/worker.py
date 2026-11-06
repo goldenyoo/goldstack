@@ -32,6 +32,9 @@ PROFILE_REL = ".goldstack/profile.md"  # /adopt가 쓰는 레포 요약. brief�
 SEE_FAIL_RULE = (
     "- 버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다. "
     "복구한 뒤 커밋하고, 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다.")
+MACHINE_RULE = (
+    "- 다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 기다리고 끝낸다. "
+    "이름이나 패턴으로 프로세스를 찾아 죽이지 않는다(`pkill`, `killall`).")
 NETWORK_RESUME = "지난 시도가 네트워크로 끊겼다. `git status`와 `git diff`로 남은 변경을 보고 이어라."
 
 
@@ -63,22 +66,17 @@ class Job:
 
 
 def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "",
-                resumed: bool = False, narrow: bool = False) -> None:
-    """worker brief를 쓴다. `narrow`는 수정·수리 worker용이다: 전체 검증은 gs가 병합 트리에서 하므로 좁은 시험만 시킨다.
-    첫 구현 worker(`narrow=False`)의 brief는 전체 검증을 한 번 돌리라고 한다. 다만 티켓 `model`이 codex면
-    첫 worker도 좁은 시험까지만 시킨다: sandbox에서 통과할 수 없는 전체 시험에 시간을 쓰지 않게 하고, 전체 검증은
-    gs가 sandbox 밖 병합 트리에서 한다(`Codex.NOTE`와 같은 말). 재개로 부르는 호출도 같다.
+                resumed: bool = False) -> None:
+    """worker brief를 쓴다. 첫 worker, 재개한 worker, 수정·수리 worker 모두 같은 규칙을 받는다(계열 분기 없음):
+    전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌리므로 worker는 고친 곳에 닿는 좁은 시험만 돌린다.
+    같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없애려는 것이다. 티켓 `verify`가 좁아도 같다.
+    모든 brief에 `MACHINE_RULE`도 붙는다: 다른 티켓이 같은 기계에서 함께 도니 자기가 띄운 프로세스만 PID로 다룬다.
     어느 brief든 버그를 고치면 새 시험의 실패를 직접 보라는 규칙이 붙는다(`SEE_FAIL_RULE`)."""
     t = job.ticket
     verify = spec.verify_for(t)
-    narrow_rule = (
+    verify_rule = (
         f"- 검증 명령 `{verify}`: 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌린다. 너는 돌리지 않는다. "
         "고친 곳에 닿는 좁은 시험만 돌린다.")
-    verify_rule = (
-        narrow_rule
-        if narrow or t.model.strip().lower() == "codex" else
-        f"- 검증 명령 `{verify}`: 개발 중에는 관련 시험만 돌리고, 커밋 전에 이 명령을 한 번 돌린다. "
-        "통과시켜야 한다. gs가 커밋된 내용만으로 병합 트리에서 다시 돌려 확인한다.")
     spec_rel = f"{work_rel(feature)}/spec.md"
     ticket_rel = f"{work_rel(feature)}/tickets/{t.path.name}"
     # worktree는 base(integration) 위에 새로 만든 것이라, 여기 있으면 base에 커밋된 profile이다
@@ -94,6 +92,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 - push, PR 생성, 병합은 하지 않는다. gs가 한다.
 {verify_rule}
 {SEE_FAIL_RULE}
+{MACHINE_RULE}
 - sandbox에서 네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 검증 단계만 돌릴 수 없다면 실패로 보지 않는다. 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다. 돌릴 수 없던 단계와 이유를 마지막 메시지에 적고 변경을 커밋한다. gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.
 - 완료 조건이 이 티켓의 명세다. 범위 밖은 건드리지 않는다.
