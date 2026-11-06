@@ -13,17 +13,17 @@
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 리뷰·수정·재리뷰 띄우기(두 리뷰 동시), agy 호출 세기, 재개 뒤 멈춤, 요약 출력, 알림 |
 | `worker.py`, `herdr.py`, `adapters.py`, `streamfmt.py` | worker 띄우기(brief, 실행 스크립트, push 차단), herdr pane, 모델별 명령·판정, pane 출력 정리 |
 | `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰(2차 재리뷰의 재확인) |
-| `remote.py` | `gs remote check·go·status`: herdr `--machine`으로 원격 준비 검사(pane에서 python 프로브를 돌려 참/거짓만 받는다), 버전·grill 커밋 관문, 원격 pane에 claude를 띄워 `/go <feature>` 전송, 원격 `gs status` 조회 |
+| `remote.py` | `gs remote check·go·status`: herdr `--machine`으로 원격 준비 검사(`_script_in_pane`과 `launch`는 먼저 `_shell_ready`로 표시 줄을 `SHELL_READY_MS` 안에서 최대 `SHELL_READY_TRIES`번 다시 보내 셸이 입력을 받는지 확인하고, 끝내 안 되면 `shell_start` 표시가 붙은 timeout 오류로 셸 시작 질문을 짚는 안내를 낸다; pane에서 python 프로브를 돌려 참/거짓만 받는다), 버전·grill 커밋 관문, 원격 pane에 claude를 띄워 `/go <feature>` 전송, 원격 `gs status` 조회 |
 | `retrolog.py` | `gs retro-log`: `/retro`용 로그 파일 하나(`run/retro-log.md`)를 크기 상한 안에 모은다 |
 | `findings.py` | 보고만 high·medium 지적을 `.goldstack/ideas/` 파일로 넘긴다 |
 | `transient.py` | 일시 오류 판별, 대기 일정(`Backoff`), 중단 예외(`NetworkAbort`), codex `Reconnecting` 감시 |
 | `verify.py`, `setup.py`, `failure.py` | verify 명령(시간 제한, 프로세스 그룹, 재시도), worktree 준비 명령, 실패 증거와 요약 |
-| `finish.py`, `report.py` | 보고서, PR, CI 대기, 병합 확인(merge·squash), base 재검증, revert, 보호된 base의 PR |
+| `finish.py`, `report.py` | 보고서(`remaining_line`: `남은 high N(상태 n · …) · 건너뛴 리뷰: 티켓`을 `go._summary`의 `■` 줄과 마무리 줄 뒤에 보이기만 한다. 판정·종료 코드는 그대로), PR, CI 대기, 병합 확인(merge·squash), base 재검증, revert, 보호된 base의 PR |
 | `revert_decision.py` | `finish._postmerge`의 되돌리기 판단. 이미 읽은 사실(`Facts`)을 받아 다음 단계 이름을 돌려주는 순수 함수(git·gh·파일·시각을 부르지 않는다). 사실 읽기와 단계 실행은 `_postmerge`가 한다. 승인 대기 중 base 이동의 재검증·PR 닫기 분기가 여기 있다 |
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
-| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 초안에 기록된 발생 버전이 새로우면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
+| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(지문은 버전·줄 번호를 포함하므로 못 찾으면 본문의 `- 재발 키:`(단계 + 오류 종류 + `파일:함수`의 해시, `_recurrence_key`)로 `--state all` 검색해 같은 키의 열린 issue에 횟수 댓글을 달고, 수동 피드백 본문에는 키 줄이 없고 사람이 쓴 글의 키 줄은 재발로 읽지 않으며, 키 줄이 없는 옛 issue는 찾지 않는다. 닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 초안에 기록된 발생 버전이 새로우면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
 | `notify.py` | 텔레그램 전송, `gs notify` 명령 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
@@ -70,7 +70,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 
 **`touches` 겹침 검사**(`check.touches_problems`) — 범위 안에서 `touches`가 있는 티켓 쌍마다 본다. 경로를 `/`로 나눠 부분끼리 맞춘다: `*`·`?`·`[…]`는 한 부분, `**`는 0개 이상의 부분. 두 패턴이 함께 맞는 경로가 하나라도 있으면 겹침이다(같은 경로 포함). 순서는 전체 그래프(`--only` 범위 밖 포함)에서 `blocked_by`를 따라간 조상 집합으로 본다: 한쪽이 다른 쪽의 조상이면 순서가 있다. 겹치는데 순서가 없으면 쌍마다 겹친 경로 하나로 경고 `<a>·<b>가 <경로>를 함께 건드리는데 순서가 없다`. 경고라 `gs go`를 막지 않는다.
 
-**`gs check`의 환경 검사** — `git`, `gh`, `claude`(판단 모델은 티켓 모델과 무관하게 늘 claude다)와 범위 안 티켓의 `model`·`reviewer`·`second_reviewer` CLI가 PATH에 없으면 오류. 범위 안 agy 배정(`model`·`reviewer`·`second_reviewer` 중 agy인 것, 티켓마다 첫 호출만)이 `agy.max_calls_per_run`을 넘으면 경고 `범위 안 agy 배정 <n>회가 상한 agy.max_calls_per_run=<m>회를 넘는다`. 범위 안 티켓 `model`의 계열에 등급표가 없으면 경고 ``` `tiers.<계열>` 표가 없다. 모델·effort가 사용자 설정을 따른다```(reviewer 계열만 쓰는 표는 보지 않는다). `git.remote`의 URL에서 GitHub owner/repo를 풀지 못하면 오류(``원격 `origin`의 URL `…`은 GitHub 저장소 형식이 아니다``). `https://github.com/o/r`, `git@github.com:o/r`, `ssh://git@github.com/o/r` 꼴을 받고 `.git` 접미사는 대소문자 없이 뗀다. `git remote get-url`(insteadOf 적용)이 GitHub가 아니면 원격에 직접 설정된 `remote.<이름>.url`을 다시 본다(시험·미러용 insteadOf). 아이디어 파일은 보지 않는다. `notify.telegram`이 켜졌는데 `local.env`에 `TG_TOKEN`·`TG_CHAT_ID`가 없으면 경고. 범위에 agy 구현 티켓이 있으면 버리는 디렉터리에서 agy 차단 장치를 확인해 안 되면 경고(아래 "모델 어댑터"). `gs go`는 같은 검사를 먼저 하고 오류가 있으면 아무것도 띄우지 않는다.
+**`gs check`의 환경 검사** — `git`, `gh`, `claude`(판단 모델은 티켓 모델과 무관하게 늘 claude다)와 범위 안 티켓의 `model`·`reviewer`·`second_reviewer` CLI가 PATH에 없으면 오류. 범위 안 agy 배정(`model`·`reviewer`·`second_reviewer` 중 agy인 자리)마다 최악 3회(`AGY_WORST_CASE_PER_SLOT`: 리뷰 1 + 재리뷰 2, worker 1 + 수정 2. 재시도는 세지 않는다)로 세어 그 합이 `agy.max_calls_per_run`을 넘으면 경고 `범위 안 agy 최대 <n>회(배정 <a> × 3)가 상한 agy.max_calls_per_run=<m>회를 넘는다`. 범위 안 티켓 `model`의 계열에 등급표가 없으면 경고 ``` `tiers.<계열>` 표가 없다. 모델·effort가 사용자 설정을 따른다```(reviewer 계열만 쓰는 표는 보지 않는다). `git.remote`의 URL에서 GitHub owner/repo를 풀지 못하면 오류(``원격 `origin`의 URL `…`은 GitHub 저장소 형식이 아니다``). `https://github.com/o/r`, `git@github.com:o/r`, `ssh://git@github.com/o/r` 꼴을 받고 `.git` 접미사는 대소문자 없이 뗀다. `git remote get-url`(insteadOf 적용)이 GitHub가 아니면 원격에 직접 설정된 `remote.<이름>.url`을 다시 본다(시험·미러용 insteadOf). 아이디어 파일은 보지 않는다. `notify.telegram`이 켜졌는데 `local.env`에 `TG_TOKEN`·`TG_CHAT_ID`가 없으면 경고. 범위에 agy 구현 티켓이 있으면 버리는 디렉터리에서 agy 차단 장치를 확인해 안 되면 경고(아래 "모델 어댑터"). `gs go`는 같은 검사를 먼저 하고 오류가 있으면 아무것도 띄우지 않는다.
 
 **`gs doctor [--write]`**(`doctor.py`) — config를 읽고(없으면 종료 1), `git.remote`의 URL에서 푼 저장소를 `gh api`로 읽는다(`GS_GH`, 한 호출 20초). 못 읽은 항목은 `모름(<이유>)`이고 제안이 없으며 종료 코드는 0이다. `gs init` 끝에 `--write` 없이 한 번 돈다.
 - **병합 방식**: `repos/<o>/<r>`의 `allow_merge_commit`, `allow_squash_merge`. merge가 켜져 있으면 `merge`, 아니면 squash가 켜져 있으면 `squash`, 둘 다 꺼져 있으면 경고(제안 없음).
