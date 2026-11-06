@@ -64,7 +64,7 @@ class OvernightSkillTest(unittest.TestCase):
 
     def test_file_is_only_ground(self):
         self.assert_all_in("2. 파일", ".goldstack/overnight/<날짜>.md", "## 받은 허락", "## 쓴 허락",
-                           "## 아침에 물을 것", "## 결과", "이 파일만 근거", "파일에 없는 허락은 없는 것",
+                           "## 아침에 물을 것", "## 결과", "이 파일만 근거", "파일에 없는 허락은 없다",
                            "Edit 도구로 고친다")
         self.assertIn(".goldstack/overnight/", config.IGNORE_LINES)  # gs init이 넣는 gitignore 줄
 
@@ -240,7 +240,9 @@ class OvernightSkillTest(unittest.TestCase):
         """`[overnight] autonomy`의 두 값을 설명한다. 값 이름은 config가 받는 값과 같아야 한다."""
         section = self.parts["밤사이 판단"]
         self.assertEqual(config.OVERNIGHT_AUTONOMY, ("stop", "record"))
-        self.assertIn("`gs config overnight.autonomy`를 1단계에서 읽어 `받은 허락`에 적는다", section)
+        self.assertIn("`받은 허락`의 `자율`을 따른다. 줄이 없으면 `stop`이다", section)
+        # 파일을 만드는 자리(add 경로 포함)에서 config 값을 받아 적는다
+        self.assertIn("`자율`은 `gs config overnight.autonomy` 값이다(`add`도)", self.parts["2. 파일"])
         stop, record = (next(line for line in section.splitlines() if line.startswith(f"- `{value}`:"))
                         for value in config.OVERNIGHT_AUTONOMY)
         self.assertIn("[멈출 조건](#멈출-조건)대로 멈춘다", stop)
