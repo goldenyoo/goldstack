@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "medium"
 source: "/retro goldstack-v12, v13, v14, v15"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v18"
 ---
 고친 코드를 되돌려도 통과하는 시험이 반복된다. worker가 새 시험의 실패를 직접 보게 한다.
 

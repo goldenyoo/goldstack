@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v15 리뷰 06"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v18"
 ---
 새 시험 `test_push_settings_change_during_remote_delete_is_not_warned`는 이름과 달리 clean.py:61-62의 수정을 검증하지 못한다. 그 수정을 지워도 통과한다. 이 시험은 `gs clean` CLI를 부르는데, 이 경로는 `removed.errors`가 있으면 어차피 종료 코드 1을 낸다. 예외 메시지도 경고 문구에 들어 있어 stderr 검사를 통과한다. 지적 2가 문제 삼은 `gs go`가 0으로 끝나는 증상은 이 시험이 보지 못한다.
 

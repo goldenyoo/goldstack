@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "medium"
 source: "/retro goldstack-v12, v13, v14, v15"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v18"
 ---
 codex 첫 worker가 sandbox에서 통과할 수 없는 전체 시험에 9–19분을 쓴다. 좁은 시험까지만 돌리게 한다.
 

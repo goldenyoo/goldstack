@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "medium"
 source: "2026-11-06 대화(높은 한도 계정으로 바꿔 Gemini도 좋은 모델·높은 effort로 돌려도 된다)"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v18"
 ---
 agy 계정 한도가 높아졌으니 이 레포에서 재리뷰도 Argon High로 올리고, 호출 상한을 올리고, 두 번째 리뷰어를 코드 티켓까지 넓힌다. 첫 리뷰는 이미 최고 단계라 모델을 올려서 얻을 것은 적고, 실제로 막던 것은 호출 상한과 붙이는 기준이다.
 

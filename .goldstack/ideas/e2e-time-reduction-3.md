@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v12–v15 실측과 일정 재생(2026-11-06 대화)"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v18"
 ---
 e2e를 줄이려면 머신이나 worker 자리를 늘리기보다, 첫 worker의 전체 시험과 같은 파일 순서를 먼저 줄인다.
 
