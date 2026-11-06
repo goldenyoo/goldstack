@@ -19,7 +19,7 @@ class SandboxBriefTest(unittest.TestCase):
             worker.write_brief(job, spec, "demo", "gs/demo/01")
             text = job.brief.read_text(encoding="utf-8")
 
-        for phrase in ("네트워크, localhost, 홈 디렉터리 쓰기가 필요한 검증 단계만",
+        for phrase in ("네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 검증 단계만",
                        "그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다",
                        "돌릴 수 없던 단계와 이유를 마지막 메시지에 적고 변경을 커밋한다",
                        "커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증"):
@@ -36,7 +36,7 @@ class SandboxBriefTest(unittest.TestCase):
         }
         for name, text in prompts.items():
             with self.subTest(message=name):
-                for term in ("네트워크", "localhost", "홈 디렉터리 쓰기"):
+                for term in ("네트워크", "localhost", "홈 디렉터리 쓰기", "ps 실행"):
                     self.assertIn(term, text)
         for name in ("Codex NOTE", "worker brief"):
             with self.subTest(message=name):
