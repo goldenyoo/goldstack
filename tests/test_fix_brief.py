@@ -11,15 +11,16 @@ FIRST_RULE = ("- 검증 명령 `{v}`: 개발 중에는 관련 시험만 돌리�
 NARROW_RULE = ("- 검증 명령 `{v}`: 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌린다. 너는 돌리지 않는다. "
                "고친 곳에 닿는 좁은 시험만 돌린다.")
 RUN_ONCE = "커밋 전에 이 명령을 한 번 돌린다"
+SEE_FAIL = "그 시험이 실패하는 것을 직접 본다"
 FINDING = {"id": "1", "severity": "high", "location": "a.py:1", "claim": "틀렸다", "evidence": "e"}
 
 
 class FixBriefTest(unittest.TestCase):
-    def briefs(self, spec_verify="full", ticket_verify=None) -> dict[str, str]:
+    def briefs(self, spec_verify="full", ticket_verify=None, model="claude") -> dict[str, str]:
         """첫 worker, 1차·2차 수정 worker, 수리 worker가 실제로 받는 brief(go.py가 붙이는 순서 그대로)."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            ticket = Ticket(id="01", title="t", blocked_by=[], model="claude", reviewer="codex",
+            ticket = Ticket(id="01", title="t", blocked_by=[], model=model, reviewer="codex" if model != "codex" else "claude",
                             path=root / "01-t.md", body="## 목표\n하나", verify=ticket_verify)
             spec = Spec(feature="demo", verify=spec_verify, max_workers=1, idle_minutes=20,
                         verify_minutes=20, path=root / "spec.md")
@@ -81,6 +82,60 @@ class FixBriefTest(unittest.TestCase):
         diff = [(a, b) for a, b in zip(first, fix) if a != b]
         self.assertEqual(len(diff), 1)
         self.assertTrue(diff[0][0].startswith("- 검증 명령 "))
+
+    def test_every_worker_brief_asks_to_see_the_new_test_fail(self):
+        for model in ("claude", "codex", "agy"):
+            briefs = self.briefs(model=model)
+            for name, text in briefs.items():
+                with self.subTest(model=model, brief=name):
+                    self.assertIn(SEE_FAIL, text)
+                    self.assertIn(worker.SEE_FAIL_RULE, text)
+                    self.assertIn("본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다", text)
+                    self.assertIn("복구한 뒤 커밋", text)
+                    self.assertIn("문서 티켓에는 해당하지 않는다", text)
+
+    def test_codex_first_worker_runs_narrow_tests_only(self):
+        briefs = self.briefs(model="codex")
+        for name in ("first", "fix1", "fix2", "repair"):
+            with self.subTest(brief=name):
+                self.assertNotIn(RUN_ONCE, briefs[name])
+                self.assertNotIn(FIRST_RULE.format(v="full"), briefs[name])
+                self.assertIn(NARROW_RULE.format(v="full"), briefs[name])
+
+    def test_non_codex_first_worker_keeps_full_verify(self):
+        for model in ("claude", "agy"):
+            with self.subTest(model=model):
+                first = self.briefs(model=model)["first"]
+                self.assertIn(FIRST_RULE.format(v="full"), first)
+                self.assertNotIn(NARROW_RULE.format(v="full"), first)
+
+    def test_codex_first_brief_does_not_clash_with_codex_note(self):
+        from gs import adapters
+        first = self.briefs(model="codex")["first"]
+        self.assertNotIn("이 명령을 한 번 돌린다", first)
+        self.assertNotIn("통과시켜야 한다", first)
+        self.assertIn("좁은 시험", adapters.Codex.NOTE)
+
+    def test_resumed_brief_follows_the_same_rule(self):
+        for model, rule in (("codex", NARROW_RULE), ("claude", FIRST_RULE)):
+            with self.subTest(model=model), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                ticket = Ticket(id="01", title="t", blocked_by=[], model=model, reviewer="x",
+                                path=root / "01-t.md", body="목표")
+                spec = Spec(feature="demo", verify="full", max_workers=1, idle_minutes=20,
+                            verify_minutes=20, path=root / "spec.md")
+                job = worker.Job(ticket=ticket, worktree=root, rundir=root)
+                worker.write_brief(job, spec, "demo", "gs/demo/01", resumed=True)
+                text = job.brief.read_text(encoding="utf-8")
+                self.assertIn(rule.format(v="full"), text)
+                self.assertIn(worker.NETWORK_RESUME, text)
+                self.assertIn(SEE_FAIL, text)
+
+    def test_rereview_prompt_does_not_get_the_rule(self):
+        p = Path("x")
+        for text in (review.review_prompt(p, p, p, p), review.rereview_prompt(p, p, p, p, p)):
+            self.assertNotIn(SEE_FAIL, text)
+            self.assertNotIn("고친 코드만 잠깐 되돌려", text)
 
 
 if __name__ == "__main__":
