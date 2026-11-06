@@ -88,11 +88,13 @@ def backlog(repo: Path, show_all: bool, out, err) -> int:
         match = re.search(r"\*\*다시 볼 조건\*\*:[ \t]*([^\r\n]*)", body)
         condition = match.group(1).strip() if match else ""
         print(f"{path.stem}  {condition or '(조건 없음)'}", file=out)
-    _field_reports(repo, out, err, {n for idea in ideas for n in idea.issues})
+    _field_reports(repo, out, err,
+                   {n for idea in ideas if idea.status != "dropped" for n in idea.issues},
+                   {n: idea.slug for idea in ideas if idea.status == "dropped" for n in idea.issues})
     return 0
 
 
-def _field_reports(repo: Path, out, err, linked: set[int]) -> None:
+def _field_reports(repo: Path, out, err, linked: set[int], dropped: dict[int, str] | None = None) -> None:
     """받는 저장소에서만 열린 보고서와 소유자의 무라벨 issue를 읽는다. 본문·댓글은 자료로만 파싱한다."""
     cfg, _ = config.load(repo)
     if cfg is None:
@@ -113,19 +115,30 @@ def _field_reports(repo: Path, out, err, linked: set[int]) -> None:
                                         "--json", "number,title,body,comments"))
         rows = []
         seen = set(linked)
+        dropped = dropped or {}
         candidates = [(issue, False) for issue in issues]
         candidates.extend((issue, True) for issue in unclassified
                           if issue.get("labels") == []
                           and (issue.get("author") or {}).get("login", "").casefold() == owner.casefold())
+        for number in dropped:
+            try:
+                issue = json.loads(feedback._gh(repo, target, "issue", "view", str(number),
+                                               "--json", "number,title,body,comments,state"))
+            except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, AttributeError):
+                continue
+            candidates.append((issue, False))
         for issue, is_unclassified in candidates:
             number = int(issue["number"])
+            if issue.get("state", "open").casefold() != "open":
+                continue
             if number in seen:
                 continue
             seen.add(number)
             counts = [int(n) for body in [issue["body"], *(c["body"] for c in issue.get("comments", []))]
                       for n in re.findall(r"^- 횟수: ([0-9]+)$", body, re.MULTILINE)]
             title = " ".join(issue["title"].splitlines())
-            mark = "  미분류" if is_unclassified else ""
+            mark = f"  (dropped: {dropped[number]})" if number in dropped else (
+                "  미분류" if is_unclassified else "")
             rows.append(f"#{number}  {title}  횟수 {max(counts, default=1)}{mark}")
     except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError, AttributeError):
         print("경고: field-report issue 조회 실패(gh)", file=err)

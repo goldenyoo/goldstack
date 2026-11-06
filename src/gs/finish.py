@@ -85,6 +85,7 @@ def _note_failure(r, e: Exception) -> None:
     `finish_errors`에도 적는다. 새 마무리가 finish를 비워도 결함 수집이 같은 오류를 알아본다.
     """
     text = str(e)
+    e.gs_noted = True  # 이번 실행이 처리한 예외다. `_noted`가 원인 사슬에서 이 표시를 찾는다
     if text not in r.st.finish_errors:
         r.st.finish_errors = [*r.st.finish_errors, text][-MAX_FINISH_ERRORS:]
     fields = {} if r.st.finish.get("phase") in BASE_REPORT_PHASES else {"outcome": f"{feedback.FINISH_FAILED}: {e}"}
@@ -92,9 +93,12 @@ def _note_failure(r, e: Exception) -> None:
 
 
 def _noted(r, e: BaseException | None) -> bool:
-    """e가 이미 남긴 오류이거나 그것을 처리하다 난 오류인가. 뒤따른 보고서 갱신 실패로 원인을 덮지 않는다."""
+    """e가 이번 실행에서 `_note_failure`가 처리한 오류이거나 그것을 처리하다 난 오류인가. 뒤따른 보고서 갱신 실패로 원인을 덮지 않는다.
+
+    글자가 아니라 예외 객체로 본다. 재개 때 `finish.error`에 같은 글자가 남아 있어도 이번 실행이 처리하지 않았으면 다시 남긴다.
+    """
     while e is not None:
-        if str(e) == r.st.finish.get("error"):
+        if getattr(e, "gs_noted", False):
             return True
         e = e.__context__
     return False
