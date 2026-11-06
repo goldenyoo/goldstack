@@ -23,11 +23,11 @@
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
-| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(지문은 버전·줄 번호를 포함하므로 못 찾으면 본문의 `- 재발 키:`(단계 + 오류 종류 + `파일:함수`의 해시, `_recurrence_key`)로 `--state all` 검색해 같은 키의 열린 issue에 횟수 댓글을 달고, 수동 피드백 본문에는 키 줄이 없고 사람이 쓴 글의 키 줄은 재발로 읽지 않으며, 키 줄이 없는 옛 issue는 찾지 않는다. 닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 초안에 기록된 발생 버전이 새로우면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
+| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(`finish-error`의 지문은 정규화한 오류 문구(`_error_key`: 경로·URL·해시·비밀 모양을 접음)를 더해 같은 오류는 초안 하나에 횟수만 올리고, 지문은 버전·줄 번호를 포함하므로 못 찾으면 본문의 `- 재발 키:`(단계 + 오류 종류 + `파일:함수`의 해시, `_recurrence_key`)로 `--state all` 검색해 같은 키의 열린 issue에 횟수 댓글을 달고, 수동 피드백 본문에는 키 줄이 없고 사람이 쓴 글의 키 줄은 재발로 읽지 않으며, 키 줄이 없는 옛 issue는 찾지 않는다. 닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 초안에 기록된 발생 버전이 새로우면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
 | `notify.py` | 텔레그램 전송, `gs notify` 명령 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
-| `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건 |
+| `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건. `_field_reports`는 `dropped`가 아닌 아이디어에 연결된 issue 번호만 숨기고, `dropped`에 연결된 열린 issue는 `issue view`로 읽어 후보에 다시 보인다(읽기 실패·닫힌 것은 건너뜀) |
 | `git.py` | git 호출, 원격 URL에서 GitHub owner/repo 풀기(`github_repo`), push 전 설정 대조(`push_settings`, `check_push`, `push`) |
 
 `gs go`(`cli.cmd_go`)·`gs doctor`는 시작할 때 설치 배포판의 `direct_url.json`에서 git URL·commit을 읽는다. 로컬 디렉터리 설치(`dir_info`)는 출처가 없어 `경고: 설치 commit 모름(로컬 설치): 뒤처짐을 비교할 수 없다` 한 줄만 낸다(실행을 막지 않는다. 설치 기록이 없을 때와 git 설치의 동작은 그대로다). `git ls-remote <설치 URL> main`(5초 제한)의 main commit이 다르면 `gs self-update` 경고만 내고, 조회 실패·출처 없음은 건너뛴다. `claude plugin list --json`(`GS_CLAUDE`)에서 goldstack 플러그인 버전이 gs 버전과 달라도 경고하며, 목록을 못 읽으면 건너뛴다. 대상 레포의 원격 주소는 설치 출처로 쓰지 않는다.
@@ -576,3 +576,10 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
 | `GS_VERIFY_TIMEOUT` | verify 시간 제한(초). spec `verify_minutes`를 덮는다 |
 | `GS_NETWORK_MINUTE` | 네트워크 대기·회복 판단의 1분(초). 틀린 값이면 60 |
 | `GS_TELEGRAM_API` | 텔레그램 Bot API 주소(기본 `https://api.telegram.org`). 시험은 localhost 가짜 서버 |
+
+## v19 상태 변화 요약
+
+- `Active.reviewed_again`(`state.py`): 병합 전 대조의 한 번 더를 썼는가. `_mark_resume`이 `network_resume.reviewed_again`으로 저장하고 `_late_commit`·`_resume`·`_finish`가 읽는다. 옛 state에는 없고 False다. 도는 중에 멈춘 대조는 `_finish`가 `_review_again`으로 합쳐 한 번만 잇는다. 수리를 거친 티켓이 늦은 커밋을 보러 돌아가면 표시를 `REPAIR_REVIEW`로 되돌린다.
+- `kept_round`(리뷰 기록): catch-up 뒤 `a.base..head`가 비어 `_empty_rereview`가 앞 `resolved` 판정을 유지한 재리뷰 회차. 지적에 결과를 새로 적으면(한도·오류의 unchecked 포함) 지운다. 없으면 유지한 적 없다.
+- `finish._noted`: 원인 사슬에서 `e.gs_noted`(이번 실행의 `_note_failure`가 단 표시)를 찾는다. 전에는 `str(e) == finish["error"]`로 비교했다.
+- `go._issue_failures`: '이미 끝남' 경로에서 `sync_issues`가 못 끝낸 issue 일을 끝 출력 줄로만 보인다(보고서·종료 코드·base 불변).
