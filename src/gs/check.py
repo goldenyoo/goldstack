@@ -195,16 +195,22 @@ def environment_problems(repo: Path, cfg: config.Config, feat: featmod.Feature,
     return problems
 
 
+AGY_WORST_CASE_PER_SLOT = 3
+
+
 def agy_problems(cfg: config.Config, feat: featmod.Feature,
                  scope: Iterable[str]) -> list[featmod.Problem]:
-    """각 역할의 첫 호출만 센다. 실행 중 재시도·수정 호출은 미리 세지 않는다."""
-    calls = sum(family == "agy" for tid in scope
-                for family in (feat.tickets[tid].model, feat.tickets[tid].reviewer,
-                               feat.tickets[tid].second_reviewer))
+    """범위 안 티켓의 model·reviewer·second_reviewer 중 agy인 자리마다 최악 3회로 센다
+    (첫 호출 + 재리뷰 등 실행 중 되풀이). 재시도(실패 후 다시 부르기)는 세지 않는다."""
+    assigned = sum(family == "agy" for tid in scope
+                   for family in (feat.tickets[tid].model, feat.tickets[tid].reviewer,
+                                  feat.tickets[tid].second_reviewer))
+    calls = assigned * AGY_WORST_CASE_PER_SLOT
     limit = cfg.agy.max_calls_per_run
     if calls > limit:
         return [featmod.Problem("경고", "",
-                f"범위 안 agy 배정 {calls}회가 상한 agy.max_calls_per_run={limit}회를 넘는다")]
+                f"범위 안 agy 최대 {calls}회(배정 {assigned} × {AGY_WORST_CASE_PER_SLOT})가 "
+                f"상한 agy.max_calls_per_run={limit}회를 넘는다")]
     return []
 
 
