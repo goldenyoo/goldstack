@@ -1,6 +1,6 @@
 {
   "name": "goldstack",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "grill → go 한 번 → 자율 실행 → main 병합까지 가는 개인 운영 kit: skill grill, go, overnight, feedback, idea, retro, adopt, handoff, wait-what, writing-for-agents, diagnosing-bugs와 worker 차단 hook(GS_ROLE=worker), 진행 바 mod를 제공한다. `gs` CLI가 PATH에 있어야 한다.",
   "author": {
     "name": "Seungjae Yoo"

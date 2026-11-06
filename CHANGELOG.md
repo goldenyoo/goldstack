@@ -2,6 +2,17 @@
 
 ## 미출시
 
+## 0.2.2 — 2026-11-06
+
+### goldstack-v18
+
+- 티켓 `model`이 codex인 첫 worker(재개 포함)의 brief는 전체 검증 대신 좁은 시험까지만 시킨다. sandbox에서 통과할 수 없는 전체 시험에 시간을 쓰지 않고, 전체 검증은 gs가 병합 트리에서 한다. claude·agy는 그대로다.
+- 첫·수정·수리 worker의 brief에 "새 시험의 실패 직접 보기"를 더했다: 고친 코드만 잠깐 되돌려 새 시험이 실패하는 것을 보고, 복구·커밋한 뒤 본 실패를 마지막 메시지에 적는다. 재리뷰 지시에는 넣지 않았다.
+- push 설정 변경(`PushSettingsChanged`)을 `clean.integration`을 직접 불러 확인하는 시험으로 보강했다.
+- `tests/test_skills.py`를 skill별 파일(`tests/test_skill_<이름>.py`)로 나눴다. 공통 시험과 `WORD_LIMITS`는 `test_skills.py`에 남는다.
+- 이 레포의 `agy.max_calls_per_run`을 24로 올렸다(agy 재리뷰 High, v19부터 적용).
+- 버전을 `0.2.2`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.1 — 2026-11-06
 
 ### goldstack-v17

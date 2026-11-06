@@ -19,7 +19,7 @@ class VersionTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         project = tomllib.loads((root / "pyproject.toml").read_text())
         plugin = json.loads((root / ".claude-plugin/plugin.json").read_text())
-        self.assertEqual(project["project"]["version"], "0.2.1")
+        self.assertEqual(project["project"]["version"], "0.2.2")
         self.assertEqual(plugin["version"], project["project"]["version"])
         self.assertEqual(metadata.version("goldstack"), project["project"]["version"])
 
