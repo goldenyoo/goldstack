@@ -46,3 +46,16 @@ codex sandbox에서 항상 막히는 `ps`를 면제 목록에 더해 리뷰 잡�
 4. 티켓 표 1장과 범위 밖 `alive-without-ps` → 확정
 
 ### 원격 첫 실행 기록
+2026-11-06 맥미니(Command Line Tools만, Xcode 없음). 결과 verified, PR #31.
+
+끝까지 간 단계(사람 개입 없음): `gs remote go`의 검사와 세션 띄우기, 원격 Claude의 `/go`, Claude worker, Codex 리뷰, 수리 worker, 검증, 멈춘 뒤 재개, integration·main 검증, PR 병합, 보고서 push. 승인 창은 뜨지 않았다(맥미니 Claude는 auto 모드, 허용 규칙 33개 복사).
+
+사람이 개입한 단계:
+- 준비: `gs` 설치, 로그인 세 개, 클론, 폴더 신뢰, `GS_REMOTE_REPO_mac_mini`, 빈 `local.env`. ssh에서 키체인이 잠겨 Claude 로그인이 파일로 저장되고 `loggedIn: false`가 나와, 키체인을 풀고 다시 로그인했다.
+- 09:39 Claude(이 grill 세션)가 사람의 결정으로 `gs go`를 SIGTERM으로 멈췄다. 첫 검증이 Xcode 없는 Mac의 git 링크 버그로 실패했고 재시도도 같은 이유로 실패할 것이어서다. 시험 수정 `b5aff84`를 main에 올리고 양쪽을 `gs self-update`한 뒤 다시 띄웠다. 그래서 실행 시작이 설치 commit 둘로 찍혔다.
+- 09:40 멈춘 실행을 본 원격 Claude가 스스로 원인 조사와 회고를 시작해 workspace를 닫았다. 재개는 검증부터 이어졌고 구현은 다시 하지 않았다.
+- `gs remote go`가 oh-my-zsh 업데이트 질문에 첫 글자를 먹혀 `조회 실패`로 막혔다. 사람이 맥미니에서 `omz update`를 쳐 풀었다.
+
+이 실행이 찾은 버그: 끊긴 다른 머신 때문에 `gs remote check` 시간 초과(`fc62c21`로 고침), Xcode 없는 Mac에서 시험의 git 링크가 `hooks` 없는 저장소를 만듦(`b5aff84`로 고침, 맥미니에서 깨졌던 시험 전부 통과 확인), 셸 시작 질문이 첫 글자를 먹음(`remote-shell-ready-race`, 미수정).
+
+확인 못 한 것: 맥북을 덮어도 계속 도는지, 맥미니 재부팅·잠자기 뒤 Claude 로그인, `ps` 면제가 실제 codex 실행에서 잡음을 줄이는지.
