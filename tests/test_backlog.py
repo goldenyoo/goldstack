@@ -168,6 +168,28 @@ class BacklogTest(unittest.TestCase):
                 self.assertEqual(err, '경고: field-report issue 조회 실패(gh)\n')
                 self.assertNotIn('issue 후보', out)
 
+    def test_unavailable_dropped_issue_does_not_hide_other_candidates(self):
+        self.idea('stale', issues='[14]', status='dropped')
+        cfg = SimpleNamespace(git=config.GitConfig(remote='origin', base='main'),
+                              feedback=config.FeedbackConfig(repo='Owner/project'))
+
+        def gh(repo, target, *args):
+            if 'view' in args:
+                raise OSError('gh 실패')
+            if '--author' in args:
+                return json.dumps([])
+            return json.dumps([dict(number=19, title='정상 후보', body='', comments=[])])
+
+        with mock.patch('gs.backlog.config.load', return_value=(cfg, [])), \
+             mock.patch('gs.backlog.git.github_repo', return_value='Owner/project'), \
+             mock.patch('gs.feedback._gh', side_effect=gh):
+            code, out, err = self.run_cli()
+
+        self.assertEqual(code, 0)
+        self.assertIn('#19  정상 후보', out)
+        self.assertNotIn('#14', out)
+        self.assertEqual(err, '')
+
     def test_out_of_scope_conditions_and_missing_ideas(self):
         self.ideas.rmdir()
         directory = self.repo / '.goldstack/out-of-scope'
