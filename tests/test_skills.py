@@ -255,6 +255,11 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertIn("`■ integration 준비 실패`가 있으면", step4)  # 준비 실패는 보고서를 커밋하지 않아 integration 판이 옛 판이다
         self.assertEqual(sorted(steps(go)), [1, 2, 3, 4, 5])
 
+    def test_go_summary_shows_remaining_high_line(self):
+        step4 = steps(self.read("go"))[4]
+        self.assertIn("`■ 남은 high …`", step4)
+        self.assertIn("종료 코드는 그대로", step4)
+
     def test_adopt_asks_feedback_once(self):
         body = self.read("adopt")
         for text in ("[feedback]", "`mode`", "`detail`", "`auto`", "`draft`", "`off`", "`errors`", "`minimal`",

@@ -484,6 +484,28 @@ class FingerprintTest(unittest.TestCase):
                       self.fingerprint(frames=[gs_frame(function="out")]), self.fingerprint(frames=[])):
             self.assertNotEqual(other, base)
 
+    def key(self, **kw):
+        issue = feedback.compose(
+            phase=kw.get("phase", "finish"), kind=kw.get("kind", "GitError"),
+            frames=[gs_frame()] if kw.get("frames") is None else kw["frames"], error_lines=[], cfg=cfg(),
+            redactor=feedback.Redactor(), env=dataclasses.replace(ENV, gs_version=kw.get("version", "9.9.9")))
+        lines = [line for line in issue.body.splitlines() if line.startswith("- 재발 키: ")]
+        self.assertEqual(len(lines), 1)
+        self.assertRegex(lines[0], r"^- 재발 키: [0-9a-f]{16}$")
+        return lines[0]
+
+    def test_recurrence_key_ignores_version_and_line_only(self):
+        base = self.key()
+        self.assertEqual(self.key(), base)
+        self.assertEqual(self.key(version="0.2.1"), base)
+        self.assertEqual(self.key(frames=[gs_frame(line=99)]), base)
+        for other in (self.key(phase="worker"), self.key(kind="KeyError"), self.key(frames=[gs_frame("finish.py")]),
+                      self.key(frames=[gs_frame(function="out")]), self.key(frames=[])):
+            self.assertNotEqual(other, base)
+
+    def test_recurrence_key_is_not_the_fingerprint(self):
+        self.assertNotIn(self.fingerprint(), self.key())
+
     def test_install_location_does_not_change_the_fingerprint(self):
         base = self.fingerprint()
         with tempfile.TemporaryDirectory() as tmp:
