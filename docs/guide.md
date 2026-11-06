@@ -274,7 +274,7 @@ verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest dis
 - **프로세스로 나눈다.** 시험이 `os.environ`·현재 디렉터리를 바꾸면 스레드로는 나눌 수 없다.
 - **파일끼리 겹치는 자원이 없어야 한다.** 고정 포트, 같은 임시 경로, 공유 DB를 쓰는 시험은 먼저 분리한다. 나눠 돌린 결과를 여러 번 재 보고 쓴다.
 - **가장 느린 파일이 하한이다.** 프로세스를 늘려도 그 밑으로 안 내려간다. 한 파일이 크게 차지하면 그 파일을 쪼갠다.
-- **동시 worker만큼 곱해진다.** `max_workers: 3`이면 worker들의 커밋 전 검증이 겹쳐 최대 18프로세스(`-P 6` × 3)다. `-P`는 코어 수와 `max_workers`를 보고 정한다.
+- **전체 시험은 gs가 돈다.** 모든 첫 worker는 고친 곳에 닿는 좁은 시험만 돌리고 전체 `verify`는 병합 트리에서 gs가 한 번 돈다. 그래서 worker 수만큼 곱해지지 않는다. 다만 `verify_ticket`을 따로 두는 레포나 gs의 병합 검증이 겹치면 `-P`가 곱해질 수 있으니 `-P`는 코어 수를 보고 정한다.
 - 다른 도구는 같은 일을 하는 옵션을 쓴다: `pytest -n 6`(pytest-xdist), `jest --maxWorkers=6`, `go test -p 6 ./...`.
 
 ### config 키
@@ -928,9 +928,9 @@ detail = "errors" # errors | minimal
 도는 동안 다음 feature를 grill해 두면 대기열에 붙여 이어 돌 수 있다:
 ```
 /overnight add csv-import            # 사람이 앞에 있다: 독립 여부만 묻는다
-gs overnight add csv-import          # 같은 일의 명령. 결과 표에 `대기` 줄을 더한다
+gs overnight add csv-import          # CLI: 이미 있는 밤샘 파일의 결과 표에 `대기` 줄만 더한다
 ```
-대기열은 가장 최근 밤샘 파일(`.goldstack/overnight/<날짜>.md`)의 `결과` 표다. `/overnight`이 feature가 끝날 때마다 이 표를 다시 읽어 `대기` 줄을 잇는다. 밤샘 파일이 없거나 끝났으면 새로 만든다. `gs overnight add`는 이을 코디네이터가 있는지 알리고(`코디네이터: 없음`이면 이을 세션이 없다), `/go`로만 돌고 있으면 친 세션이 그 pid에 묶여 코디네이터가 된다. 코디네이터가 없으면 `/overnight resume`으로 잇는다.
+대기열은 가장 최근 밤샘 파일(`.goldstack/overnight/<날짜>.md`)의 `결과` 표다. `/overnight`이 feature가 끝날 때마다 이 표를 다시 읽어 `대기` 줄을 잇는다. 파일 만들기와 실행 중 pid에 묶기는 `/overnight add`(skill)만 한다. `gs overnight add`는 파일을 만들지 않는다. 밤샘 파일이 없으면 `줄을 더할 밤샘 파일이 없다`를 출력하고 1로 끝난다. 있으면 줄을 더하고 이을 코디네이터가 있는지 알리고(`코디네이터: 없음`이면 이을 세션이 없다), `/go`로만 돌고 있으면 `/overnight add`를 친 세션이 그 pid에 묶여 코디네이터가 된다(CLI만 치면 묶이지 않는다). 코디네이터가 없으면 `/overnight resume`으로 잇는다.
 
 ### 사람 없는 세션: 승인 창 거부
 
@@ -957,7 +957,7 @@ autonomy = "record"   # 기본 stop
 `PermissionRequest` hook의 거부는 `--settings`로 건 hook으로만 쟀고 플러그인 경로는 재지 않았다. 병합과 `gs self-update` 뒤 사람이 한 번 확인한다:
 1. 새 Claude Code 세션 두 개를 같은 레포에서 연다(A, B).
 2. A에서 `gs overnight arm`을 친다.
-3. A에서 허용 규칙에 없는 명령(예: `ls /tmp`)을 시키면 창 없이 거부되고 세션이 이어져야 한다. B에서 같은 명령을 시키면 창이 그대로 떠야 한다.
+3. A에서 허용 규칙에 없는 명령(예: `ls /tmp`)을 시키면 사람 입력 없이 거부되고(창이 잠깐 떴다가 hook이 닫는 것은 정상) 명령이 돌지 않은 채 세션이 이어져야 한다. B에서 같은 명령을 시키면 창이 그대로 떠야 한다.
 4. A에서 `gs overnight disarm`을 치고 같은 명령에 창이 다시 뜨는지 본다.
 5. 결과를 spec의 §6에 적는다.
 
