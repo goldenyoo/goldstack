@@ -157,6 +157,7 @@ _SECRET = re.compile("|".join((
     r"\b\d{6,}:[A-Za-z0-9_-]{20,}",  # 텔레그램 봇 토큰
 )))
 _OPAQUE = re.compile(r"\b[A-Fa-f0-9]{32,}\b|[A-Za-z0-9+/_-]{40,}={0,2}")  # 경로를 가린 뒤에 본다(긴 경로와 헷갈리지 않게)
+_ERROR_HASH = re.compile(r"\b[A-Fa-f0-9]{7,40}\b")
 _URL = re.compile(r"""\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'"]*|(?<![\w.-])[\w.-]+@[\w.-]+:[^\s'"]+""")  # scheme URL, scp 꼴(git@host:o/r)
 _EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _TILDE_PATH = re.compile(r"""(?<![\w<>/.-])~[/\\][^\s'"]*""")
@@ -446,8 +447,10 @@ def _clean_version(version: str) -> str:
     return version if _VERSION_TEXT.fullmatch(str(version)) else "모름"
 
 
-def _fingerprint(version: str, phase: str, kind: str, frames: list[str]) -> str:
-    return hashlib.sha256("\0".join((version, phase, kind, *frames)).encode()).hexdigest()[:16]
+def _fingerprint(version: str, phase: str, kind: str, frames: list[str], error_lines: Iterable[str] = ()) -> str:
+    # 재개 마무리 오류는 프레임이 없으므로 정규화한 오류로 초안을 나눈다. 재발 키는 그대로다.
+    errors = [_error_key("\n".join(error_lines))] if phase == "finish" and kind == "finish-error" else []
+    return hashlib.sha256("\0".join((version, phase, kind, *frames, *errors)).encode()).hexdigest()[:16]
 
 
 def _recurrence_key(phase: str, kind: str, frames: list[str]) -> str:
@@ -473,8 +476,9 @@ def compose(*, phase: str, kind: str, frames: Iterable[Frame], error_lines: Iter
     version = _clean_version(env.gs_version)
     phase, kind = _clean_phase(phase), _clean_kind(kind)
     shown = _clean_frames(frames)
-    lines = redactor.lines(error_lines)
-    fingerprint = _fingerprint(version, phase, kind, shown)
+    raw = _raw_lines(error_lines)
+    lines = redactor.lines(raw)
+    fingerprint = _fingerprint(version, phase, kind, shown, raw)
     key = _recurrence_key(phase, kind, shown)
     clis = ", ".join(f"{name} {_clean_version(value) if value != '없음' else value}"
                      for name, value in env.clis if name in _CLIS)
@@ -577,7 +581,7 @@ def record(repo: Path, cfg: config.Config, *, phase: str, kind: str, frames: Ite
         return None
     frames, raw = list(frames), _raw_lines(error_lines)
     fingerprint = _fingerprint(_clean_version(metadata.version("goldstack")), _clean_phase(phase),
-                               _clean_kind(kind), _clean_frames(frames))
+                               _clean_kind(kind), _clean_frames(frames), raw)
     path = draft_path(repo, fingerprint)
     _prepare_dir(repo)
     try:
@@ -1023,15 +1027,27 @@ def _finish_runs(st) -> int:
 
 
 def _error_key(error: str) -> str:
-    """같은 오류인가를 볼 값. 임시 디렉터리·커밋 해시처럼 실행마다 달라지는 것은 가림이 지운다. 아무것도 남지 않으면 글 그대로다."""
-    return "\n".join(Redactor().lines(error.splitlines())) or error
+    """비교·해시용 값. 경로·커밋 해시 등은 접되 허용 낱말 밖의 오류 문구도 남긴다.
+
+    본문 가림은 Redactor가 따로 한다. 이 값 자체는 초안에 싣지 않는다.
+    """
+    lines = []
+    for raw in _raw_lines(error.splitlines()):
+        text = _normalize(raw)
+        for pattern, replacement in ((_SECRET, "<secret>"), (_URL, "<url>"), (_EMAIL, "<email>"),
+                                     (_TILDE_PATH, "<path>"), (_WINDOWS_PATH, "<path>"),
+                                     (_ABSOLUTE_PATH, "<path>"), (_OPAQUE, "<secret>"), (_ERROR_HASH, "<hash>")):
+            text = pattern.sub(replacement, text)
+        lines.append(" ".join(text.split()))
+    return "\n".join(lines)
 
 
 def finish_anomaly(before: Mapping, after: Mapping, seen: Iterable[str] = ()) -> tuple[str, list[str]] | None:
     """마무리를 실제로 돈 실행의 전후 `finish`로 이상 하나를 고른다: (오류 종류, 오류 줄). 없으면 None.
 
     seen은 이 실행 전까지 마무리를 멈춘 오류들(`state.finish_errors`)이다. 옛 state에는 없어 지난 `error`도 함께 본다.
-    - preparing-error·finish-error: 마무리를 멈춘 새 오류다. 같은 원인을 갇힘으로 또 올리지 않게 먼저 본다. 멈춘 오류는 `마무리 실패` outcome으로 알고,
+    - preparing-error·finish-error: 마무리를 멈춘 오류다. 재개에서 같은 오류가 나면 같은 초안의 횟수를 올린다.
+      preparing의 이미 본 오류는 건너뛴다. 같은 원인을 갇힘으로 또 올리지 않게 먼저 본다. 멈춘 오류는 `마무리 실패` outcome으로 알고,
       결과가 정해진 verified·reverted에서는 error만 남으므로 그것으로 안다(거부·PR 확인 실패의 error는 이 phase에 남지 않는다).
       preparing은 지문이 따로다: 처음 PR까지 가는 길의 오류가 앞선 재개 오류의 초안에 횟수로만 묻히지 않게.
     - unexpected-revert: 이번 실행에서 reverted가 됐는데 "integration 통과, base 검증 실패"라는 기록이 없다.
@@ -1046,7 +1062,7 @@ def finish_anomaly(before: Mapping, after: Mapping, seen: Iterable[str] = ()) ->
     stopped = str(after.get("outcome") or "").startswith(FINISH_FAILED) or phase in state.FINISHED_PHASES
     if error and not environmental and stopped:
         known = {_error_key(str(text)) for text in (*seen, before.get("error")) if text}
-        if _error_key(error) not in known:
+        if phase != "preparing" or _error_key(error) not in known:
             return "preparing-error" if phase == "preparing" else "finish-error", error.splitlines()
     if phase == "reverted" and was != "reverted" and not (
             after.get("integration_ok") is True and after.get("main_ok") is False):
