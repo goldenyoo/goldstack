@@ -120,6 +120,10 @@ def _field_reports(repo: Path, out, err, linked: set[int], dropped: dict[int, st
         candidates.extend((issue, True) for issue in unclassified
                           if issue.get("labels") == []
                           and (issue.get("author") or {}).get("login", "").casefold() == owner.casefold())
+        for number in dropped:
+            issue = json.loads(feedback._gh(repo, target, "issue", "view", str(number),
+                                           "--json", "number,title,body,comments,state"))
+            candidates.append((issue, False))
         for issue, is_unclassified in candidates:
             number = int(issue["number"])
             if issue.get("state", "open").casefold() != "open":
