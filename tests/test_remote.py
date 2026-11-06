@@ -354,6 +354,34 @@ class RemoteTest(RemoteFixture):
         self.assertEqual(len(waits), remote.SHELL_READY_TRIES)
         self.assertLessEqual(sum(waits), remote.SHELL_READY_MS)
 
+    def test_shell_ready_total_wait_counts_slow_send(self):
+        """전송이 느려 잔여가 줄어도 wait-output은 잔여 안에서만 기다리고 상한을 넘겨 성공하지 않는다."""
+        for out_ok in (False, True):
+            now = [0.0]
+            seen = []
+
+            def run(machine, args, timeout=10):
+                if args[:2] == ['pane', 'run']:
+                    now[0] += 29
+                    return ''
+                seen.append((int(args[args.index('--timeout') + 1]), timeout))
+                now[0] += 6
+                if not out_ok:
+                    raise remote.herdr.HerdrError('timeout', 'x')
+                return ''
+
+            with mock.patch('gs.remote.time.monotonic', side_effect=lambda: now[0]), \
+                    mock.patch('gs.remote.herdr.machine_run', side_effect=run):
+                try:
+                    remote._shell_ready('m', 'p', 30)
+                    failed = False
+                except remote.herdr.HerdrError as e:
+                    failed = e.code == 'timeout'
+            self.assertEqual(len(seen), 1)
+            self.assertLessEqual(seen[0][0], 1000)  # 잔여 1초
+            self.assertLessEqual(seen[0][1], 1)  # 프로세스 제한도 잔여 안
+            self.assertEqual(failed, not out_ok)
+
     def test_incomplete_output_fails_and_closes_pane(self):
         with mock.patch.dict(os.environ, BAD_OUTPUT='1'):
             code, output = self.check()

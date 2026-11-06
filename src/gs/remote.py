@@ -203,12 +203,16 @@ def _shell_ready(machine: str, pane: str, budget: float = SHELL_READY_MS / 1000)
         if left <= 0:
             break
         marker = f"GS_REMOTE_READY_{uuid.uuid4().hex}"
-        wait = min(attempt, left)
         try:
             herdr.machine_run(machine, ["pane", "run", pane, f"printf '\\n%s\\n' {marker}"], min(left, CREATE_TIMEOUT))
+            # 전송에 걸린 시간을 뺀 잔여로 다시 잰다. 전체 대기가 budget을 넘지 않게 프로세스 제한도 잔여로 막는다.
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            wait = min(attempt, left)
             herdr.machine_run(machine, ["pane", "wait-output", pane, "--regex", f"(?m)^{marker}\\r?$",
                                         "--timeout", str(max(1, int(wait * 1000))), "--source", "recent-unwrapped"],
-                              wait + 5)
+                              min(wait + 5, left))
             return
         except herdr.HerdrError as e:
             if e.code != "timeout":
