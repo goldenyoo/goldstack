@@ -2525,6 +2525,8 @@ def _summary(r: Run, url: str | None) -> None:
     say(f"■ 마무리: {_outcome(r)}")
     left = _left(r)
     say(f"■ 보고서: {work_rel(r.name)}/report.md · 남은 리뷰 지적 {left}")
+    if remaining := report.remaining_line(r):  # 보이기만 한다: 종료 코드·finish.phase는 그대로(spec 2-2)
+        say(f"■ {remaining}")
     say(f"■ PR: {url or '없음'}")
 
 

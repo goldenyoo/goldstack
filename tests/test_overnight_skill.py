@@ -159,6 +159,10 @@ class OvernightSkillTest(unittest.TestCase):
         self.assert_all_in("7. 아침 보고", "verified", "멈춤", "PR", "고친 사소한 것", "남은 질문", "피드백",
                            "텔레그램", "요약 한 통", "gs notify")
 
+    def test_morning_table_shows_remaining_high_and_skipped_reviews(self):
+        self.assert_all_in("7. 아침 보고", "| feature | 결과 | PR | 남은 high·건너뛴 리뷰 | 이유·재개 명령 |",
+                           "남은 high 2(보고만 1 · 확인 못 함 1) · 건너뛴 리뷰: 05", "`verified`는 바꾸지 않는다")
+
     def test_resume(self):
         self.assert_all_in("이어받기", "/overnight resume", ".goldstack/overnight/", "state.json", "`gs status <f>`",
                            "세션 권한 모드", "다시 띄우지 않는다")

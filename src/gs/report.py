@@ -24,6 +24,7 @@ LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경�
 MAX_BODY = 60000  # GitHub PR 본문 상한(65,536자)보다 넉넉히 작게
 FAILURE_LINE_LIMIT = 1000  # 긴 실패 줄도 후보·티켓 결과·되돌리는 법을 밀어내지 않게 표시만 줄인다
 FINDING_STATUSES = ("수정됨", "미해결", "보고만", "수정 못 함", "확인 못 함")
+REMAINING_STATUSES = ("보고만", "미해결", "수정 못 함", "확인 못 함")  # high 지적이 이 상태면 남은 high다(수정됨만 뺀다)
 
 
 def block(text: str) -> str:
@@ -81,6 +82,29 @@ def finding_counts(r) -> str:
     return "리뷰 지적: " + " · ".join(parts) if parts else ""
 
 
+def remaining_line(r) -> str:
+    """끝 출력·보고서 마무리 줄의 `남은 high N(상태 n · …) · 건너뛴 리뷰: 티켓`. 둘 다 없으면 빈 문자열.
+
+    판정·종료 코드는 바꾸지 않고 보이기만 한다(spec 2-2). 건너뛴 리뷰는 note가 `건너뜀(한도)`로 시작하는 리뷰 기록이다.
+    옛 state에 심각도·상태·note가 없어도 오류 없이 센다(없는 심각도는 high가 아니다).
+    """
+    counts, skipped = Counter(), []
+    for tid in r.order:
+        for rec in state.reviews(r.st.tickets[tid]):
+            if str(rec.get("note") or "").startswith(review.LIMIT) and tid not in skipped:
+                skipped.append(tid)
+            for f in rec.get("findings") or []:
+                if isinstance(f, dict) and f.get("severity") == "high":
+                    counts[finding_status(f).partition("(")[0]] += 1
+    parts = []
+    if total := sum(counts[label] for label in REMAINING_STATUSES):
+        detail = " · ".join(f"{label} {counts[label]}" for label in REMAINING_STATUSES if counts[label])
+        parts.append(f"남은 high {total}({detail})")
+    if skipped:
+        parts.append("건너뛴 리뷰: " + " ".join(skipped))
+    return " · ".join(parts)
+
+
 def evidence(r, tail: int = LOG_TAIL) -> str:
     """티켓·integration의 최신 준비 로그와 verify·base 준비 로그의 끝부분 tail자씩 붙인다."""
     rows, notes, timings = [], [], []
@@ -116,7 +140,7 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
                     notes.append(f"- {label} checked(믿을 수 없는 자료):\n\n"
                                  + block(json.dumps(item["checked"], ensure_ascii=False, indent=2)))
             for finding in rec.get("findings", []):
-                notes.append(f"- {who} [{finding['severity']}] {finding['location']}: {finding['claim']}"
+                notes.append(f"- {who} [{finding.get('severity', '?')}] {finding['location']}: {finding['claim']}"
                              f" — 상태: {finding_status(finding)}\n"
                              f"  근거: {finding['evidence'] or '없음'}; 판단: {finding.get('why', '')}")
                 if finding.get("rereview_evidence"):
@@ -480,6 +504,8 @@ def _render(r, summary: str, tail: int) -> str:
     merge = f.get("merge_sha", "<PR의 mergeCommit.oid>")
     summary = strip_heading(summary)  # 옛 summary.md나 다른 경로의 답도 제목을 한 번만 낸다
     summary_status = status_line(r)
+    if remaining := remaining_line(r):
+        summary_status += f" · {remaining}"
     if counts := finding_counts(r):
         summary_status += f"\n{counts}"
     missing_docs = docs_missing(r)
