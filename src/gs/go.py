@@ -174,6 +174,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     aborted = False
     try:
         url, finished = None, False
+        issue_lines: list[str] = []
         try:
             git.run(repo, "fetch", "-q", r.remote, r.base)
             _require_committed(r)
@@ -182,6 +183,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 url, finished = r.st.finish.get("url"), r.st.finish["phase"] == "verified"
                 say(f"■ 이미 끝남: {r.name} ({r.st.finish['phase']})")
                 finish.sync_issues(r)  # 지난 gh 실패를 다시 시도하고, 끝난 뒤 base에서 되돌린 티켓의 issue를 다시 연다
+                issue_lines = _issue_failures(r)  # 보고서는 다시 쓰지 않는다. 끝 출력에만 보인다
                 clean.integration(r)  # 지난 자동 정리가 원격 삭제에서만 실패했을 수 있다
             else:
                 r.no_merge = _only_stops(r)  # 준비 전에 정한다. 준비에서 끝나도 지난 마무리를 이번 결과로 보이지 않는다
@@ -228,11 +230,24 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         say(NETWORK_ABORT_LINE)
     if r.st is not None:
         _summary(r, url)
+        for line in issue_lines:
+            say(line)
         if cfg.notify.telegram:
             _notify(r, url, ok)
     if aborted:
         return EXIT_NETWORK
     return 0 if ok else 1
+
+
+def _issue_failures(r: Run) -> list[str]:
+    """'이미 끝남' 경로에서 sync_issues가 이번에 못 끝낸 일의 끝 출력 줄. 없으면 빈 목록. 종료 코드·report.md·base는 바꾸지 않는다."""
+    f = r.st.finish
+    lines = [f"■ issue: #{number} {'닫기' if done.get('action') == 'close' else '다시 열기'} 실패(gh). 다음 gs go가 다시 시도한다"
+             for number, done in sorted(f.get("issues", {}).items(), key=lambda kv: int(kv[0]))
+             if not done.get("ok", True)]
+    if f.get("issues_error"):
+        lines.append("■ issue: 상태를 확인하지 못했다. 다음 gs go가 다시 시도한다")
+    return lines
 
 
 def _resuming(r: Run) -> bool:
