@@ -17,7 +17,7 @@
 - `[미확인]` **모델이 따르는 지시:** `/go <f> -- <안내>` 구분이나 밤사이 판단 규칙은 skill 글에 달려 있다. 리뷰와 시험은 문구와 전송 문자열을 확인했고, 05 재리뷰는 모델의 실제 skill 수행을 돌리지 않았다고 적었다. 재부팅·잠자기 뒤 Claude 로그인도 재지 않았다.
 - `[읽음]` **첫 worker 전체 시험 제거:** 이번 실행은 설치된 gs 0.2.3으로 돌았으므로 새 지시문의 효과를 보여 주지 않는다. 뒤 실행에서 첫 검증 실패로 늘어난 수리 시간이 줄어든 시간을 넘으면 되돌린다(결정 4-2).
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/41 병합 · main 검증 통과
 리뷰 지적: 수정됨 13 · 보고만 2
 
 ## Evidence
@@ -131,15 +131,22 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 8 | ticket-04 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | e031f6d8560426597ac3d7995dfc864caf524bff | d6c3fa1e90305f2d954dd7d5ce9a0dac4b772072 | 471.615859 | passed |
 | 9 | ticket-06 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 7754b59f367ca2fa786a0d65e80660fd3ead4d04 | 749883b23c88fdf9a687a73aad68b20dd18f4376 | 442.879194 | passed |
 | 10 | integration | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 867bd4ba4c301f89a96d37c2e2e742b19b7fc55b | - | 450.207335 | passed |
+| 11 | main | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | c2d2920d2fc8d69271e7bc1b79f54f29224fba4d | - | 438.733149 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 487.0 |
-| verify | 450.26 |
+| total | 939.0 |
+| verify | 889.045 |
 | summary | 36.638 |
-| report | 0 |
+| report | 0.083 |
+| push | 2.428 |
+| publish | 3.413 |
+| merge-pr | 4.009 |
+| confirm-merge | 0.01 |
+| postmerge | 440.022 |
+| restore-reverts | 0.014 |
 
 ### 티켓별 결과
 
@@ -651,9 +658,55 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 0.50ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v20/run/gs-main-r61motil/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v20/run/gs-main-r61motil/base
+Prepared 1 package in 195ms
+Installed 1 package in 1ms
+ + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v20/run/gs-main-r61motil/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 14215자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v20/run/finish/integration-verify.log`
+
+```text
+cepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+No digest: .venv/bin/python3 is not a regular file
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
+#### finish/main-verify.log
+
+앞 14243자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v20/run/finish/main-verify.log`
 
 ```text
 cepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
@@ -679,13 +732,15 @@ agy 사용: 5/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/41
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `c2d2920d2fc8d69271e7bc1b79f54f29224fba4d`
 
 ### 되돌리는 법
 
@@ -695,7 +750,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 c2d2920d2fc8d69271e7bc1b79f54f29224fba4d
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v20/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
