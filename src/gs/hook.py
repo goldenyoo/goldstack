@@ -209,7 +209,7 @@ def bash_command_names(command: str) -> list[str]:
     reader = _CommandNames(command)
     try:
         reader.commands()
-    except _Unreadable:
+    except ShellParseError:
         return []
     names = [name for _, name in sorted(reader.found, key=lambda found: found[0])]
     return list(dict.fromkeys(name for name in names if COMMAND_NAME.fullmatch(name)))
@@ -246,7 +246,7 @@ def _command_of(words: list[str]) -> str | None:
     return name
 
 
-class _Unreadable(Exception):
+class ShellParseError(Exception):
     """어디까지가 명령인지 보장하지 못한다."""
 
 
@@ -254,7 +254,7 @@ class _CommandNames:
     """셸 글을 한 번 훑어 명령 자리의 단어를 모은다. 따옴표 밖의 제어 연산자만 명령을 나눈다.
 
     단어는 원문 조각 그대로 판정한다. 따옴표·escape·치환이 낀 단어(`'if'`, `\\time`, `$CMD`)는 예약어도 이름도 아니게 된다.
-    명령과 인자를 가르지 못하는 모양(`case` 패턴, 함수 정의, 배열, extglob, 짝이 안 맞는 괄호)은 `_Unreadable`로 포기한다.
+    명령과 인자를 가르지 못하는 모양(`case` 패턴, 함수 정의, 배열, extglob, 짝이 안 맞는 괄호)은 `ShellParseError`로 포기한다.
     이름이 모자란 기록은 괜찮지만 비밀이 든 기록은 괜찮지 않다.
     """
 
@@ -272,7 +272,7 @@ class _CommandNames:
             self.blanks()
             if self.i >= len(self.text):
                 if closer:
-                    raise _Unreadable
+                    raise ShellParseError
                 self.flush(words)
                 return
             c = self.text[self.i]
@@ -297,13 +297,13 @@ class _CommandNames:
                 self.flush(words)
             elif c == ")":
                 if closer != ")" or self.heredocs:
-                    raise _Unreadable
+                    raise ShellParseError
                 self.i += 1
                 self.flush(words)
                 return
             elif c == "(":
                 if not at_command:
-                    raise _Unreadable
+                    raise ShellParseError
                 self.i += 1
                 if self.text.startswith("(", self.i):
                     self.i += 1
@@ -314,7 +314,7 @@ class _CommandNames:
             else:
                 word = self.word()
                 if at_command and word == "case":
-                    raise _Unreadable
+                    raise ShellParseError
                 if at_command and word == "[[":
                     self.test_expression()
                 words.append(word)
@@ -327,7 +327,7 @@ class _CommandNames:
 
     def peek(self) -> str:
         if self.i >= len(self.text):
-            raise _Unreadable
+            raise ShellParseError
         return self.text[self.i]
 
     def blanks(self) -> None:
@@ -353,7 +353,7 @@ class _CommandNames:
         elif c == "'" and not quoted:
             end = self.text.find("'", self.i + 1)
             if end < 0:
-                raise _Unreadable
+                raise ShellParseError
             self.i = end + 1
         elif c == '"' and not quoted:
             self.i += 1
@@ -374,13 +374,13 @@ class _CommandNames:
             self.i += 2
             while self.peek() != "}":
                 if quoted and self.peek() == "'":  # 연산자마다 글자이거나 따옴표다. 어디서 닫히는지 모른다
-                    raise _Unreadable
+                    raise ShellParseError
                 self.part()
             self.i += 1
         elif self.text.startswith("$'", self.i) and not quoted:
             m = SHELL_ANSI_QUOTED.match(self.text, self.i)
             if not m:
-                raise _Unreadable
+                raise ShellParseError
             self.i = m.end()
         else:
             self.i += 1
@@ -393,7 +393,7 @@ class _CommandNames:
     def backtick(self) -> None:
         m = SHELL_BACKTICK.match(self.text, self.i)
         if not m:
-            raise _Unreadable
+            raise ShellParseError
         self.i = m.end()
         _CommandNames(re.sub(r"\\([`$\\])", r"\1", m.group(1)), self.depth + 1, self.found).commands()
 
@@ -403,7 +403,7 @@ class _CommandNames:
         while depth:
             c = self.peek()
             if c in "'\"\\`":  # 괄호를 세지 못한다
-                raise _Unreadable
+                raise ShellParseError
             depth += (c == "(") - (c == ")")
             self.i += 1
 
@@ -421,7 +421,7 @@ class _CommandNames:
         self.blanks()
         target = self.word()
         if not target:
-            raise _Unreadable
+            raise ShellParseError
         if op in ("<<", "<<-"):
             self.heredocs.append(("".join(shlex.split(target)), op == "<<-"))
 
