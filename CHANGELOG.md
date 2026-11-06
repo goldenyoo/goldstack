@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.2.4 — 2026-11-06
+
+### goldstack-v20
+
+- `gs overnight arm`·`disarm`: 플러그인 `PermissionRequest` hook이 `arm`을 친 세션에서만 승인 창을 거부로 바꾼다. 거부는 `.goldstack/overnight/denied.log`에 남아 아침 보고로 간다. 다른 세션의 창은 그대로다.
+- `gs overnight add`와 `/overnight add`: 도는 밤의 `결과` 표에 `대기` 줄을 더한다. 코디네이터가 없으면 친 세션이 pid에 묶여 이을 세션이 된다. `disarm`은 `대기` 줄이 남으면 끄지 않는다.
+- `gs overnight next <다음>`: 사이 단계(base 위로 올리기, goldstack 레포면 재설치, 새 프로세스로 `gs check`)를 묶는다. push 안 된 grill 커밋만 `git pull --rebase`로 올리고 충돌하면 그 feature는 `미실행`이다. push는 하지 않는다.
+- `[overnight] autonomy`(`stop`|`record`): 밤사이 판단 기본값. `gs init` 기본은 `stop`이고 이 레포만 `record`다.
+- 사람 없는 원격 세션(`gs remote go`)은 멈춘 실행을 읽어 원인 후보만 적고 멈춘다. `gs remote check` 끝에 재부팅 뒤 Claude 재로그인 `안내:` 줄이 붙는다.
+- worker hook이 `pkill`·`killall`을 막는다(`sudo`·`xargs`·`bash -c` 뒤 포함). `kill <PID>`·`pgrep`은 통과한다. 모든 brief에 자기가 띄운 프로세스만 PID로 다루라는 규칙이 붙는다.
+- 모든 첫 worker(재개 포함)의 brief가 계열과 상관없이 좁은 시험까지만 시킨다. 전체 검증은 gs가 병합 트리에서 한다. 뒤 실행에서 첫 검증 실패가 늘어 수리 시간이 줄어든 시간을 넘으면 되돌린다.
+- 병합 뒤 사람이 플러그인 경로의 거부를 한 번 확인하는 절차를 `docs/guide.md`에 적었다.
+- 버전을 `0.2.4`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.3 — 2026-11-06
 
 ### goldstack-v19

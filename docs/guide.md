@@ -241,7 +241,7 @@ verify_retries: 1
 idle_minutes: 30
 ---
 ```
-- `verify_ticket`: 티켓마다 worker가 커밋 전에 돌리고(brief에 이 명령이 들어간다. 개발 중에는 관련 시험만 돌리라고 함께 적혀 있다), gs가 그 티켓을 integration에 합친 **병합 트리**에서 다시 돌린다. worktree의 커밋 안 된 파일로는 통과할 수 없다. 검증이 트리를 바꾸면(gitignore 밖에 쓰면) `검증 중 worktree가 바뀌었다`로 실패하니 출력은 gitignore 안이나 레포 밖으로 보낸다(`uv build -o "$(mktemp -d)"`).
+- `verify_ticket`: brief에 이 명령이 들어가지만 worker는 고친 곳에 닿는 좁은 시험만 돌리고, gs가 그 티켓을 integration에 합친 **병합 트리**에서 돌린다. worktree의 커밋 안 된 파일로는 통과할 수 없다. 검증이 트리를 바꾸면(gitignore 밖에 쓰면) `검증 중 worktree가 바뀌었다`로 실패하니 출력은 gitignore 안이나 레포 밖으로 보낸다(`uv build -o "$(mktemp -d)"`).
 - 티켓 하나만 다르게 돌리려면 [티켓 `verify`](#verify--이-티켓만의-검증-명령)를 쓴다.
 - `verify`: integration, 보고서 커밋 뒤 integration-final, 병합 뒤 main에서 돌린다. 바뀐 것이 `report.md`뿐이면 integration-final은 건너뛴다.
 - `verify_retries`: 실패하면(시간 초과 포함) 그만큼 다시 돌린다. 한 번의 상한은 `verify_minutes`라 최악은 (1 + `verify_retries`) × `verify_minutes`다. 모든 검증 지점에 같이 적용된다.
@@ -274,7 +274,7 @@ verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest dis
 - **프로세스로 나눈다.** 시험이 `os.environ`·현재 디렉터리를 바꾸면 스레드로는 나눌 수 없다.
 - **파일끼리 겹치는 자원이 없어야 한다.** 고정 포트, 같은 임시 경로, 공유 DB를 쓰는 시험은 먼저 분리한다. 나눠 돌린 결과를 여러 번 재 보고 쓴다.
 - **가장 느린 파일이 하한이다.** 프로세스를 늘려도 그 밑으로 안 내려간다. 한 파일이 크게 차지하면 그 파일을 쪼갠다.
-- **동시 worker만큼 곱해진다.** `max_workers: 3`이면 worker들의 커밋 전 검증이 겹쳐 최대 18프로세스(`-P 6` × 3)다. `-P`는 코어 수와 `max_workers`를 보고 정한다.
+- **전체 시험은 gs가 돈다.** 모든 첫 worker는 고친 곳에 닿는 좁은 시험만 돌리고 전체 `verify`는 병합 트리에서 gs가 한 번 돈다. 그래서 worker 수만큼 곱해지지 않는다. 병합과 검증은 한 루프에서 하나씩(직렬) 돌므로 `-P`는 그 한 번의 검증 안에서만 쓰인다. `-P`는 코어 수를 보고 정한다.
 - 다른 도구는 같은 일을 하는 옵션을 쓴다: `pytest -n 6`(pytest-xdist), `jest --maxWorkers=6`, `go test -p 6 ./...`.
 
 ### config 키
@@ -311,6 +311,7 @@ verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest dis
 | `feedback.mode` | 절이 없으면 `off`, `gs init`이 만든 config는 `draft` | `off` 아무것도 안 쓴다 · `draft` 로컬 초안만 쌓는다 · `auto` GitHub issue로 보낸다. [피드백](#피드백-gs-결함을-goldstack에-알리기) |
 | `feedback.detail` | `errors` | `errors`는 가린 오류 줄 최대 20줄을 보낸다. `minimal`은 오류 줄 없이 항목만 |
 | `feedback.repo` | `gs init`이 `goldenyoo/goldstack`을 적는다 | issue를 올릴 저장소 |
+| `overnight.autonomy` | `stop`(절이 없거나 `gs init`이 쓴 config도 같다) | `stop` 허락 밖의 일은 멈춘다 · `record` 되돌릴 수 있으면 추천대로 진행하고 `쓴 허락`에 적는다. [밤사이 판단](#밤사이-판단overnight-autonomy) |
 | `feedback.max_per_day` | `5` | 하루에 새로 올리는 issue 최대 수 |
 
 검사: 형이 틀린 값, 0 이하인 `timeouts.*`(`checks_grace_seconds`만 `0`을 허용하고 음수는 오류), 음수인 `agy.max_calls_per_run`, 빈 모델 이름(`models.codex`만 빈 값 허용), `merge`·`squash` 밖의 `git.merge_method`, 등급표의 빠진 칸·틀린 형식(공백, 슬래시 둘 이상, 없는 effort), `small`·`medium`·`large` 밖의 `tiers.review`·`rereview`는 오류, 모르는 키는 경고다. effort는 `low`·`medium`·`high`·`xhigh`·`max`이고 codex는 `none`·`minimal`도 받는다. 빠진 키도 오류지만 옛 config를 위해 `git.merge_method`·`direct_push`·`wait_checks`, `models.failure_summary`, `timeouts.checks_minutes`·`setup_minutes`·`rereview_minutes`·`checks_grace_seconds`·`network_wait_minutes`, `[worktree]`, `[agy]`, `[tiers]`는 없으면 기본값으로 읽는다.
@@ -615,7 +616,7 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 - 커밋을 남기면 구현과 다른 계열 리뷰어가 `tiers.rereview` 등급으로 수리 커밋의 diff만 본다. 지적은 보고서에만 남고 고치지 않는다. 그 뒤 gs가 다시 병합·검증한다.
 - 커밋이 없으면(불안정한 시험이라 고칠 것이 없다고 본 경우), worker가 실패했으면, 띄우지 못했으면 재리뷰 없이 바로 다시 검증한다.
 - 다시 검증이 통과하면 병합한다. 또 실패하면 그 시도가 실패로 끝나고, 이 시도는 지금처럼 다음 등급의 새 worktree에서 처음부터 다시 한다(수리는 새 시도에서 한 번 더 돈다).
-- 수리 worker와 [수정 worker](#리뷰와-재리뷰)의 brief는 전체 검증 대신 고친 곳에 닿는 좁은 시험만 시킨다. 전체 검증은 gs가 병합 트리에서 하기 때문이다. 첫 구현 worker도 티켓 `model`이 codex면 좁은 시험까지만 시킨다(sandbox에서 통과할 수 없는 전체 시험에 시간을 쓰지 않게 하고, 전체 검증은 gs가 sandbox 밖 병합 트리에서 한다). claude·agy 첫 worker는 그대로 전체 검증을 한 번 돌린다.
+- 모든 worker의 brief는 전체 검증 대신 고친 곳에 닿는 좁은 시험만 시킨다. 첫 구현 worker(claude·codex·agy 계열 무관, 재개한 worker 포함)도 수리 worker와 [수정 worker](#리뷰와-재리뷰)와 같다. 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 하므로, 같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없앴다. 티켓 `verify`가 좁아도 같다. 뒤 실행에서 첫 검증 실패가 늘어 수리 시간이 줄어든 시간을 넘으면 되돌린다(goldstack-v20 결정 4-2). 모든 brief에는 "다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 다루고 `pkill`·`killall`로 찾아 죽이지 않는다"가 붙는다.
 - 첫·수정·수리 worker의 brief에는 "버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다"가 붙는다. worker는 복구한 뒤 커밋하고 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다. 재리뷰 지시에는 넣지 않는다.
 - 보고서 티켓별 결과의 이유 칸에 `수리: 시도 1 커밋 1개 → 다시 검증 통과` 같은 줄이 붙는다. gs가 죽거나 끊겨도 다음 `gs go`가 수리를 같은 worktree에서 잇는다.
 
@@ -916,11 +917,51 @@ detail = "errors" # errors | minimal
 /overnight csv-export csv-import     # 시작
 /overnight resume                    # 세션이 죽었거나 멈춘 밤을 잇는다
 ```
-1. **시작 라운드**(사람이 앞에 있다): 순서와 feature끼리의 독립 여부, 사소한 수정 허락 범위, 텔레그램 켤지를 한 번에 묻는다. 답은 `.goldstack/overnight/<날짜>.md`에 적힌다(gitignore).
+1. **시작 라운드**(사람이 앞에 있다): 순서와 feature끼리의 독립 여부, 사소한 수정 허락 범위, 텔레그램 켤지를 한 번에 묻는다. `[overnight] autonomy` 값도 파일에 `자율`로 적힌다. 답은 `.goldstack/overnight/<날짜>.md`에 적힌다(gitignore).
 2. **사전 점검**: 원격 앞섬, `gs check`, 미커밋 grill, 세션 권한 모드(승인 창이 안 뜨는지), 디스크, CLI 로그인을 사람이 있을 때 확인한다. "자도 된다"가 나오면 그때부터 묻지 않는다.
-3. **밤사이**: 그 파일에 적힌 허락만으로 feature를 차례로 잇는다. gs를 고친 feature 뒤에는 `git pull`과 `gs self-update`를 하고 다음을 돌린다. 앞 feature가 실패하면 시작 라운드의 독립 답대로 계속하거나 멈춘다. 허락 밖의 일을 만나면 멈추고 `아침에 물을 것`에 적는다.
+3. **밤사이**: 그 파일에 적힌 허락만으로 feature를 차례로 잇는다. feature 사이에는 `gs overnight next <다음>`이 base 위로 올리기(push 안 된 grill 커밋만 `git pull --rebase`), goldstack 레포면 재설치, 새 프로세스로 `gs check`를 묶어 한 번에 한다. 충돌하면 그 feature는 `미실행`이다. 앞 feature가 실패하면 시작 라운드의 독립 답대로 계속하거나 멈춘다. 허락 밖의 일을 만나면 멈추고 `아침에 물을 것`에 적는다.
 4. **깨어 있기**: 맥은 `caffeinate`, 리눅스는 `systemd-inhibit`(없으면 건너뜀). 맥북은 전원을 연결하고 덮개를 연다.
 5. **아침**: 같은 파일의 `결과` 표(feature, 상태, 다시 띄움 횟수, PR, 이유와 재개 명령)를 읽는다. 텔레그램이 켜져 있으면 요약 한 통이 온다.
+
+### 도는 밤에 feature 더하기(`/overnight add`)
+
+도는 동안 다음 feature를 grill해 두면 대기열에 붙여 이어 돌 수 있다:
+```
+/overnight add csv-import            # 사람이 앞에 있다: 독립 여부만 묻는다
+gs overnight add csv-import          # CLI: 이미 있는 밤샘 파일의 결과 표에 `대기` 줄만 더한다
+```
+대기열은 가장 최근 밤샘 파일(`.goldstack/overnight/<날짜>.md`)의 `결과` 표다. `/overnight`이 feature가 끝날 때마다 이 표를 다시 읽어 `대기` 줄을 잇는다. 파일 만들기와 실행 중 pid에 묶기는 `/overnight add`(skill)만 한다. `gs overnight add`는 파일을 만들지 않는다. 밤샘 파일이 없으면 `줄을 더할 밤샘 파일이 없다`를 출력하고 1로 끝난다. 있으면 줄을 더하고 이을 코디네이터가 있는지 알리고(`코디네이터: 없음`이면 이을 세션이 없다), `/go`로만 돌고 있으면 `/overnight add`를 친 세션이 그 pid에 묶여 코디네이터가 된다(CLI만 치면 묶이지 않는다). 코디네이터가 없으면 `/overnight resume`으로 잇는다.
+
+### 사람 없는 세션: 승인 창 거부
+
+승인 창은 사람이 없으면 닫히지 않아 아침까지 선다. 이를 거부로 바꾸는 명령이 둘이다:
+- `gs overnight arm`: 이 Claude 세션에서 뜰 승인 창을 거부로 바꾼다. 플러그인의 `PermissionRequest` hook이 `arm`을 친 그 세션(가장 가까운 조상 Claude 프로세스)에서만 거부하므로 다른 세션은 창이 그대로 뜬다. `/overnight`이 첫 `gs go`를 띄울 때 사람 앞에서 친다.
+- `gs overnight disarm`: 끈다. 아침 보고를 쓴 뒤 `/overnight`이 친다. `대기` 줄이 남아 있으면 끄지 않고 거부한다.
+
+거부는 어떤 호출도 허용하지 않으므로 모델이 꺼도 권한이 넓어지지 않는다. 거부된 호출은 `.goldstack/overnight/denied.log`에 남고 아침 보고의 `쓴 허락`/`거부된 호출`에 옮겨진다. 판정이 실패하면 창으로 돌아간다.
+
+**필요한 허용 규칙** — 거부되면 밤이 멈추므로 `/overnight`이 사전 점검에서 밤에 칠 명령을 지금 같은 모양으로 쳐 본다(창이 뜨면 규칙을 더한다): `git show <remote>/<base>:…`와 `git show gs/<f>/integration:…`, `git push <remote> <base>`, `git add -- .goldstack/work/<f> …`와 `git commit`, `gs go *`, `gs overnight next *`·`add *`·`arm`·`disarm`, `gs self-update`, `gs check *`, `gs status *`. `gs overnight next`가 pull·재설치·`gs check`를 묶어 규칙이 줄었다.
+
+### 밤사이 판단(`[overnight] autonomy`)
+
+`.goldstack/config.toml`의 값이 밤샘 파일 `받은 허락`의 `자율`이 된다:
+```toml
+[overnight]
+autonomy = "record"   # 기본 stop
+```
+- `stop`(기본, `gs init`도 이 값. 절이 없어도 같다): 허락 밖의 일을 만나면 멈추고 `아침에 물을 것`에 적는다.
+- `record`: 되돌릴 수 있으면 추천대로 진행하고 이유와 되돌리는 법을 `쓴 허락`에 적는다. force push, 태그·릴리스, 비밀, 다른 레포·외부 쓰기는 멈춘다. grill 결정을 뒤집어야 하면 그 feature만 `미실행`이다.
+
+### 병합 뒤 사람이 한 번 확인(플러그인 경로)
+
+`PermissionRequest` hook의 거부는 `--settings`로 건 hook으로만 쟀고 플러그인 경로는 재지 않았다. 병합과 `gs self-update` 뒤 사람이 한 번 확인한다:
+1. 새 Claude Code 세션 두 개를 같은 레포에서 연다(A, B).
+2. A에서 `gs overnight arm`을 친다.
+3. A에서 허용 규칙에 없는 명령(예: `ls /tmp`)을 시키면 사람 입력 없이 거부되고(창이 잠깐 떴다가 hook이 닫는 것은 정상) 명령이 돌지 않은 채 세션이 이어져야 한다. B에서 같은 명령을 시키면 창이 그대로 떠야 한다.
+4. A에서 `gs overnight disarm`을 치고 같은 명령에 창이 다시 뜨는지 본다.
+5. 결과를 spec의 §6에 적는다.
+
+원격에서 돌릴 때의 재량과 재부팅 뒤 로그인은 [원격 머신에서 돌리기](#원격-머신에서-돌리기gs-remote)에 있다. 사람이 없는 원격 세션은 멈춘 실행을 읽어 원인 후보만 적고 멈추며 회고·수정·재실행은 하지 않는다. 재부팅이나 잠자기 뒤에는 Claude 로그인이 풀릴 수 있으니 `gs remote check`의 `안내:`대로 원격 pane에서 로그인 화면을 직접 본다.
 
 시험은 skill 지침이 있는지만 확인한다. 실제 동작은 첫 사용에서 확인한다.
 

@@ -4,7 +4,7 @@
 
 | 파일 | 하는 일 |
 |---|---|
-| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `retro-log`, `feedback`, `hook` |
+| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `retro-log`, `feedback`, `overnight`, `hook` |
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
 | `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
@@ -14,6 +14,7 @@
 | `worker.py`, `herdr.py`, `adapters.py`, `streamfmt.py` | worker 띄우기(brief, 실행 스크립트, push 차단), herdr pane, 모델별 명령·판정, pane 출력 정리 |
 | `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰(2차 재리뷰의 재확인) |
 | `remote.py` | `gs remote check·go·status`: herdr `--machine`으로 원격 준비 검사(`_script_in_pane`과 `launch`는 먼저 `_shell_ready`로 표시 줄을 `SHELL_READY_MS` 안에서 최대 `SHELL_READY_TRIES`번 다시 보내 셸이 입력을 받는지 확인하고, 끝내 안 되면 `shell_start` 표시가 붙은 timeout 오류로 셸 시작 질문을 짚는 안내를 낸다; pane에서 python 프로브를 돌려 참/거짓만 받는다), 버전·grill 커밋 관문, 원격 pane에 claude를 띄워 `/go <feature> -- <UNATTENDED>` 전송(무인 세션 문장: 멈추면 원인 후보만 적고 멈춘다), `check` 끝의 재로그인 `안내:` 줄, 원격 `gs status` 조회 |
+| `overnight.py` | `gs overnight arm·disarm·add·next`: 조상 Claude 프로세스의 (pid, 시작 시각)으로 세션을 가르는 표시(`.goldstack/overnight/armed/`)와 거부 기록(`denied.log`), 밤샘 파일 `결과` 표의 대기열(잠금 안에서 줄 더하기, `disarm`은 `대기` 줄이 있으면 거부), 사이 단계 묶기(push 안 된 grill 커밋만 `git pull --rebase`, goldstack 레포면 재설치, 새 프로세스로 `gs check`. push 안 함). 모듈 docstring에 근거와 한계 |
 | `retrolog.py` | `gs retro-log`: `/retro`용 로그 파일 하나(`run/retro-log.md`)를 크기 상한 안에 모은다 |
 | `findings.py` | 보고만 high·medium 지적을 `.goldstack/ideas/` 파일로 넘긴다 |
 | `transient.py` | 일시 오류 판별, 대기 일정(`Backoff`), 중단 예외(`NetworkAbort`), codex `Reconnecting` 감시 |
@@ -371,7 +372,7 @@ gs는 base에 아무것도 push하지 않는다. base로 갈 gs 커밋(revert, �
 
 ### 검증 명령 고르기와 재시도
 
-spec `verify_ticket`, `verify_retries`. 티켓 검증 명령은 티켓 `verify` → spec `verify_ticket` → spec `verify` 순서로 고르고(`Spec.verify_for`), worker·수정 worker brief의 검증 명령도 그것이다(`worker.write_brief`: `narrow=True`인 수정·수리 worker와 티켓 `model`이 codex인 첫 worker·재개 worker는 "전체 검증은 gs가 돌린다, 너는 좁은 시험만"으로 바뀐다. claude·agy 첫 worker는 전체 검증을 한 번 돌린다. 어느 brief든 `worker.SEE_FAIL_RULE`이 붙어, 버그를 고치면 새 시험을 쓴 뒤 고친 코드만 잠깐 되돌려 그 시험이 실패하는 것을 직접 보고 본 실패를 마지막 메시지에 적게 한다. 재리뷰 지시에는 없다). 어느 명령이든 integration의 미완 병합 트리에서 돈다. 그래서 티켓 worktree의 커밋 안 된 파일은 검증을 통과시키지 못한다. 로그 앞에 `$ <명령>`과 `cwd:`를 쓴다. 검증 뒤 HEAD·브랜치·MERGE_HEAD·index가 달라졌거나 `setup.is_clean(staged_ok=True)`가 거짓이면(index와 다른 파일, 준비 산출물이 아닌 untracked) 로그에 `검증 중 worktree가 바뀌었다`를 남기고 실패다. 이어서 근거를 같은 로그에 적는다(`go._log_changes`): 병합 상태가 달라졌으면 `병합 상태가 달라졌다(전 -> 후):` 아래 바뀐 항목(HEAD, 브랜치, MERGE_HEAD, index 트리)의 전후 값, 그리고 `git status --porcelain --untracked-files=all` 출력이다. 이것을 읽지 못하면 `바뀐 파일 목록을 읽지 못했다: …`를 적을 뿐 판정과 재시도는 그대로다. 실패 요약(`failure.summarize`)의 지시문은 이 목록을 근거로 쓰게 하고, 근거 없는 원인은 추측하지 않고 모른다고 적게 하며, 티켓 검증이 티켓 worktree가 아니라 integration의 병합 트리에서 도는 것이 정상이라고 알린다(그 위치를 원인으로 지목하지 않는다). 다른 곳에서 index·HEAD가 바뀐 것과 구분하지 못하므로 그 경우 이유는 `검증하는 동안 integration이 바뀌었다`다. `integration`, `integration-final`, `integration-recheck`, `main`, `main-recheck`은 늘 `verify`다. `verify_retries`는 어느 지점이든 실패한 명령(시간 초과, 시작 실패 포함)을 그 횟수만큼 다시 돌린다(`verify.run`). 재시도마다 로그에 `검증 재시도 <n>`, 시간 제한은 같고, 통과하면 끝에 `flaky: <지점> 재시도 <n>번 만에 통과`(`verify.flaky`, 지점은 `ticket-<NN>`이나 위 이름)를 적는다. 보고서는 로그를 줄여도 이 줄을 Evidence에 남긴다. 검증이 worktree를 바꾸면 재시도 통과여도 실패다.
+spec `verify_ticket`, `verify_retries`. 티켓 검증 명령은 티켓 `verify` → spec `verify_ticket` → spec `verify` 순서로 고르고(`Spec.verify_for`), worker·수정 worker brief의 검증 명령도 그것이다(`worker.write_brief`: 첫·재개·수정·수리 worker 모두 계열과 상관없이 "전체 검증은 gs가 돌린다, 너는 좁은 시험만"을 받는다. `narrow` 인자는 없다. 어느 brief든 `worker.MACHINE_RULE`(자기가 띄운 프로세스만 PID로 다루고 `pkill`·`killall`로 찾아 죽이지 않는다)과 `worker.SEE_FAIL_RULE`이 붙어, 버그를 고치면 새 시험을 쓴 뒤 고친 코드만 잠깐 되돌려 그 시험이 실패하는 것을 직접 보고 본 실패를 마지막 메시지에 적게 한다. 재리뷰 지시에는 없다). 어느 명령이든 integration의 미완 병합 트리에서 돈다. 그래서 티켓 worktree의 커밋 안 된 파일은 검증을 통과시키지 못한다. 로그 앞에 `$ <명령>`과 `cwd:`를 쓴다. 검증 뒤 HEAD·브랜치·MERGE_HEAD·index가 달라졌거나 `setup.is_clean(staged_ok=True)`가 거짓이면(index와 다른 파일, 준비 산출물이 아닌 untracked) 로그에 `검증 중 worktree가 바뀌었다`를 남기고 실패다. 이어서 근거를 같은 로그에 적는다(`go._log_changes`): 병합 상태가 달라졌으면 `병합 상태가 달라졌다(전 -> 후):` 아래 바뀐 항목(HEAD, 브랜치, MERGE_HEAD, index 트리)의 전후 값, 그리고 `git status --porcelain --untracked-files=all` 출력이다. 이것을 읽지 못하면 `바뀐 파일 목록을 읽지 못했다: …`를 적을 뿐 판정과 재시도는 그대로다. 실패 요약(`failure.summarize`)의 지시문은 이 목록을 근거로 쓰게 하고, 근거 없는 원인은 추측하지 않고 모른다고 적게 하며, 티켓 검증이 티켓 worktree가 아니라 integration의 병합 트리에서 도는 것이 정상이라고 알린다(그 위치를 원인으로 지목하지 않는다). 다른 곳에서 index·HEAD가 바뀐 것과 구분하지 못하므로 그 경우 이유는 `검증하는 동안 integration이 바뀌었다`다. `integration`, `integration-final`, `integration-recheck`, `main`, `main-recheck`은 늘 `verify`다. `verify_retries`는 어느 지점이든 실패한 명령(시간 초과, 시작 실패 포함)을 그 횟수만큼 다시 돌린다(`verify.run`). 재시도마다 로그에 `검증 재시도 <n>`, 시간 제한은 같고, 통과하면 끝에 `flaky: <지점> 재시도 <n>번 만에 통과`(`verify.flaky`, 지점은 `ticket-<NN>`이나 위 이름)를 적는다. 보고서는 로그를 줄여도 이 줄을 Evidence에 남긴다. 검증이 worktree를 바꾸면 재시도 통과여도 실패다.
 
 ## `gs clean`
 
@@ -513,13 +514,14 @@ worker의 모델·effort는 `.goldstack/config.toml`의 `[tiers.claude]`, `[tier
 
 이 레포가 곧 plugin이자 로컬 marketplace다(`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `hooks/hooks.json`, `skills/`). 설치는 [README](../README.md#설치). plugin 검사는 `claude plugin validate .`(spec verify에 들어 있다).
 
-`hooks/hooks.json`에는 둘이 있다: PreToolUse command hook(matcher `Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob`)과 진행 바 mod(`"modules": ["./register.tsx"]`).
+`hooks/hooks.json`에는 셋이 있다: PreToolUse command hook(matcher `Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob`), PermissionRequest hook(`gs hook permissionrequest`. 역할과 상관없이 불리고 `gs overnight arm`을 친 세션이면 창 대신 거부를 낸다. `gs`가 없거나 판정이 실패하면 창으로 돌아간다), 진행 바 mod(`"modules": ["./register.tsx"]`).
 
 PreToolUse hook 명령은 `GS_ROLE`이 `worker`가 아니면 바로 `exit 0`이다(입력도 읽지 않고 `gs`도 부르지 않는다. 일반 세션에 영향 없고 `gs`가 없어도 조용하다). worker면 `exec gs hook pretooluse`, PATH에 `gs`가 없으면 막는다(종료 2). `gs go`는 worker 실행 스크립트에 `GS_ROLE=worker`, `GS_WORKTREE`를 넣는다. worker일 때 막는 것은 되돌릴 수 없는 일뿐이다:
 - `git push`(모든 형태: `-C`, `cd .. &&`, `bash -c`, `$(…)` 안), force 계열(`--force`, `--force-with-lease`, `--force-if-includes`, `push -f`, `+refspec`)
 - `gh` 쓰기 명령(`pr create`·`merge`·`close`, `release …`, `repo …`, 쓰기 `gh api` 등). 읽기(`pr view`, `run view` …)는 통과
 - worktree 밖 쓰기(Write·Edit 도구, 셸 리다이렉션·`rm`·`mv`·`cp`·`tee`, 밖에서 하는 `git commit` 등). 임시 디렉터리(`/tmp`, `/var/folders`, `$TMPDIR`)와 `/dev`는 통과
 - 비밀 파일 읽기: `~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`·`.env.*`(`.env.example`·`.sample`·`.template`·`.dist` 제외), `.netrc`, `.git-credentials`, `.pypirc`, 개인 키(`id_rsa` 등), `.goldstack/local.env`, gh `hosts.yml`, `.kube/config`, `.docker/config.json`, `gh auth token`
+- 이름으로 프로세스를 끄는 `pkill`·`killall`(기계 전체의 같은 이름 프로세스를 끄니 다른 티켓의 검증도 죽는다. `sudo`·`xargs`·`bash -c` 뒤에서도 막는다). `kill <PID>`와 `pgrep`은 통과
 - 공용 git 설정 쓰기: `git remote` 변경(`set-url`, `add`, `remove`, `rename` 등. `show`, `get-url`, `update`, `prune`, 목록은 통과), `git config` 쓰기(`--global` 포함). 읽기(`--get*`, `--list`, 이름 하나, `git config get`·`list`)는 통과하고, 모르는 옵션과 줄임말은 쓰기로 본다. `git -c 키=값 <명령>`은 그 명령에서만 들어 통과
 - 자기 브랜치 밖의 ref를 옮기는 일: `git update-ref`(`--stdin`은 볼 수 없어 막음), `git branch -f`·`-d`·`-D`·`-m`·`-M`·`-c`·`-C`, `git symbolic-ref` 쓰기. 자기 브랜치는 worktree의 `HEAD`가 가리키는 ref이고, `HEAD` 자체의 `update-ref`는 통과. 이 예외는 git이 이 worktree를 볼 때만이다. `-C`·`cd`로 밖을 가리키거나, 모르는 곳으로 `cd`하거나, `--git-dir`·`--work-tree`·`GIT_DIR=` 등으로 위치를 따로 주면(`export`, `bash -c` 앞의 대입 포함) `HEAD`도 자기 것으로 보지 않는다. `xargs`의 치환 문자열(`-I`, `-J`, `-i`, `--replace`)이 든 단어는 입력으로 바뀌므로 모르는 값으로 본다. `sh -c` 안까지 듣는다(`xargs -I HEAD git update-ref HEAD HEAD~1`의 `HEAD`는 자기 것이 아니다). 치환 문자열이 명령 이름에 들면 무엇을 돌리는지 볼 수 없어 막는다. 분리 HEAD면 자기 브랜치가 없다. 새 브랜치 만들기와 `git reset`은 통과
 
