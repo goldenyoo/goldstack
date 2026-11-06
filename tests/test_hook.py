@@ -128,6 +128,31 @@ class HookTest(unittest.TestCase):
             self.assertBlocked(cmd)
         self.assertAllowed("gh api -X GET search/issues -f q=x")
 
+    # ---- 이름으로 프로세스 끄기
+    def test_kill_by_name_blocked_for_worker(self):
+        for cmd in ['pkill -f "unittest discover"', "pkill python", "killall python3", "killall -9 node",
+                    "bash -c 'pkill -f unittest'", "sh -lc 'killall python'", "echo x | xargs pkill",
+                    "pgrep -f unittest | xargs killall", "sudo pkill -f x", "/usr/bin/pkill -f x",
+                    "/usr/bin/killall node", "env FOO=1 pkill x", "cd src && pkill x", "git status; pkill x",
+                    "eval 'pkill x'", "timeout 5 killall x",
+                    "sudo -u root pkill -f unittest", "sudo -u root /usr/bin/killall python3", "sudo -uroot pkill x",
+                    "sudo -Eu root pkill x", "sudo --user root pkill x", "sudo --user=root pkill x",
+                    "sudo -g wheel -u root killall x", "sudo -n -- pkill x"]:
+            self.assertBlocked(cmd)
+        reason = self.bash('pkill -f "unittest discover"')
+        self.assertIn("PID", reason)
+        self.assertIn("kill <PID>", reason)
+
+    def test_kill_by_pid_and_pgrep_allowed(self):
+        for cmd in ["kill 123", "kill -9 123", "kill $!", "pgrep -f unittest", "bash -c 'kill 123'",
+                    "/usr/bin/pgrep python", "sudo -u root kill 123", "echo pkill", "grep -rn pkill src", "git commit -m 'no pkill'"]:
+            self.assertAllowed(cmd)
+
+    def test_kill_by_name_passes_without_worker_role(self):
+        for env in [{}, {"GS_ROLE": ""}, {"GS_ROLE": "reviewer"}]:
+            for cmd in ['pkill -f "unittest discover"', "killall python", "/usr/bin/pkill x"]:
+                self.assertIsNone(self.bash(cmd, env), (env, cmd))
+
     # ---- worktree 밖 쓰기
     def test_write_outside_worktree_bash(self):
         for cmd in ["echo x > ../integration/evil", "cd .. && echo x > evil", "rm -rf ..", "rm -rf ~",
@@ -271,6 +296,58 @@ class PluginTest(unittest.TestCase):
         cmds = [h["command"] for m in hooks["hooks"]["PreToolUse"] for h in m["hooks"]]
         self.assertEqual(len(cmds), 1)
         self.assertIn("exec gs hook pretooluse", cmds[0])
+        cmds = [h["command"] for m in hooks["hooks"]["PermissionRequest"] for h in m["hooks"]]
+        self.assertEqual(len(cmds), 1)
+        self.assertIn("gs hook permissionrequest", cmds[0])
+
+    # ---- PermissionRequest: 역할과 상관없이 불린다. gs가 답을 내지 않으면 창이 그대로 뜬다
+    def permission_command(self):
+        hooks = json.loads((REPO / "hooks/hooks.json").read_text())
+        return hooks["hooks"]["PermissionRequest"][0]["hooks"][0]["command"]
+
+    def run_permission(self, script=None, role=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            if script is not None:
+                path = Path(tmp) / "gs"
+                path.write_text(script)
+                path.chmod(0o755)
+            env = {"PATH": f"{tmp}:/usr/bin:/bin"} if script is not None else {"PATH": tmp}
+            if role is not None:
+                env["GS_ROLE"] = role
+            cp = subprocess.run(["/bin/sh", "-c", self.permission_command()], env=env, input="test payload\n",
+                                text=True, capture_output=True)
+            return cp.returncode, cp.stdout, cp.stderr
+
+    def test_permission_hook_is_quiet_without_gs(self):
+        for role in (None, "", "reviewer", "worker"):
+            with self.subTest(role=role):
+                self.assertEqual(self.run_permission(role=role), (0, "", ""))
+
+    def test_permission_hook_passes_arguments_stdin_and_answer(self):
+        script = ('#!/bin/sh\n[ "$1 $2" = "hook permissionrequest" ] || exit 9\n'
+                  'read -r payload\n[ "$payload" = "test payload" ] || exit 8\nprintf \'%s\' \'{"answer": 1}\'\n')
+        self.assertEqual(self.run_permission(script), (0, '{"answer": 1}', ""))
+
+    def test_permission_hook_is_quiet_when_gs_says_nothing(self):
+        self.assertEqual(self.run_permission("#!/bin/sh\nexit 0\n"), (0, "", ""))
+
+    def test_permission_hook_is_quiet_when_gs_fails(self):
+        """플러그인만 먼저 갱신된 옛 gs는 이 event를 모른다. 이름이 같은 다른 도구(Ghostscript)도 있다. 창이 그대로 떠야 한다."""
+        old_gs = "#!/bin/sh\necho 'gs hook: invalid choice' >&2\nexit 2\n"
+        ghostscript = "#!/bin/sh\necho 'GPL Ghostscript: Error: /undefinedfilename in (hook)'\nexit 1\n"
+        for script in (old_gs, ghostscript):
+            with self.subTest(script=script):
+                self.assertEqual(self.run_permission(script), (0, "", ""))
+
+    def test_permission_request_does_not_change_worker_block(self):
+        """worker 차단은 `pretooluse`다. 새 event가 그 판정이나 역할 조건을 건드리지 않는다."""
+        env = {"GS_ROLE": "worker", "GS_WORKTREE": "/w"}
+        payload = json.dumps({"tool_name": "Bash", "cwd": "/w", "tool_input": {"command": "git push"}})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(hook.main(["pretooluse"], stdin=io.StringIO(payload), env=env), 2)
+        self.assertIn("git push", err.getvalue())
+        self.assertIn("if [ \"${GS_ROLE:-}\" != worker ]; then exit 0; fi", self.hook_command())
 
     def test_worker_keeps_tool_block_as_second_guard(self):
         self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)"', adapters.Claude.BASE)

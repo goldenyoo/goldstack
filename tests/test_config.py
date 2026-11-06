@@ -135,6 +135,33 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("timeouts.review_minutes", err)
 
+    def test_overnight_autonomy_defaults_to_stop_and_accepts_record(self):
+        """절이 없거나 gs init이 쓴 config는 stop이다. 값은 stop|record만 받고 `gs config`가 값을 낸다."""
+        self.assertEqual(config.load(self.repo)[0].overnight, config.OvernightConfig("stop"))
+        self.assertEqual(self.cli("config", "overnight.autonomy"), (0, "stop\n", ""))
+        self.path.write_text(CONFIG + '[overnight]\nautonomy = "record"\n')
+        cfg, problems = config.load(self.repo)
+        self.assertEqual((problems, cfg.overnight.autonomy), ([], "record"))
+        self.assertEqual(self.cli("config", "overnight.autonomy"), (0, "record\n", ""))
+        for bad in ('autonomy = "go"', 'autonomy = ""', "autonomy = true", "autonomy = 1"):
+            with self.subTest(bad):
+                self.path.write_text(CONFIG + "[overnight]\n" + bad + "\n")
+                cfg, problems = config.load(self.repo)
+                self.assertIsNone(cfg)
+                self.assertEqual([(p.level, "overnight.autonomy" in p.message) for p in problems], [("오류", True)])
+        self.path.write_text(CONFIG + '[overnight]\nautonomy = "stop"\nextra = 1\n')
+        cfg, problems = config.load(self.repo)
+        self.assertEqual((cfg.overnight.autonomy, [p.level for p in problems]), ("stop", ["경고"]))
+
+    def test_init_config_is_stop_and_this_repo_is_record(self):
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(out):
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            cli.main(["--repo", tmp, "init"])
+            self.assertEqual(config.load(Path(tmp))[0].overnight.autonomy, "stop")
+        this_repo, problems = config.load(Path(__file__).resolve().parents[1])
+        self.assertEqual((problems, this_repo.overnight.autonomy), ([], "record"))
+
     def test_missing_config_stops_check_and_go_before_any_work(self):
         self.path.unlink()
         expected = "오류: .goldstack/config.toml이 없다. gs init을 먼저 실행하라"

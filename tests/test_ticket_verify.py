@@ -12,7 +12,7 @@ from gs import feature, report, setup, state
 from gs.feature import Spec, Ticket
 from support import sh
 
-SUFFIX = "개발 중에는 관련 시험만 돌리고, 커밋 전에 이 명령을 한 번 돌린다"
+SUFFIX = "전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌린다. 너는 돌리지 않는다"
 CHANGED = "검증 중 worktree가 바뀌었다"
 
 
@@ -285,7 +285,7 @@ class TicketVerifyRunTest(support.GoTest):
         fix = (self.rundir / "01/1/fix/brief.md").read_text()
         self.assertIn("## 리뷰 지적(고칠 것)", fix)
         self.assertIn(f"검증 명령 `{own}`: {SUFFIX}", self.brief("01"))
-        self.assertIn(f"검증 명령 `{own}`: 전체 검증은 gs가", fix)  # 수정 worker는 좁은 시험만(tests/test_fix_brief.py)
+        self.assertIn(f"검증 명령 `{own}`: {SUFFIX}", fix)  # 첫 worker도 수정 worker도 좁은 시험만(tests/test_fix_brief.py)
         for brief in (self.brief("01"), fix):
             self.assertNotIn("검증 명령 `true`", brief)
 

@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 중간에 사람에게 묻지 않는다. 여기서 중간은 실행 중(1~4단계)이다. 5단계 회고는 실행이 끝난 뒤라 묻는다. 판단과 재시도는 `gs`가 한다. 이 세션은 띄우고, 기다리고, 결과를 보인다. 레포 루트(`git rev-parse --show-toplevel`)에서 돈다.
 
-입력 `$ARGUMENTS`를 공백으로 나눈 feature 목록을 순서대로 보관한다(`/go a b …`). 아래 `<f>`는 그 목록의 feature다. 1단계를 전부 마친 뒤 2단계를 feature마다 한다.
+입력 `$ARGUMENTS`에서 첫 ` -- ` 앞을 공백으로 나눈 feature 목록을 순서대로 보관한다(`/go a b …`). ` -- ` 뒤는 feature가 아니라 실행 지침(`gs remote go`가 붙이는 "사람이 없다…")이다. 목록에 넣지 않고 따른다. 아래 `<f>`는 그 목록의 feature다. 1단계를 전부 마친 뒤 2단계를 feature마다 한다.
 
 1. feature마다 `gs check <f>`. 하나라도 오류가 있으면 출력을 보이고 해당 feature를 "`/grill <f>`로 고친다"고 말하고 끝낸다. 아무것도 띄우지 않고 티켓·spec은 고치지 않는다.
 2. **기준을 맞춘다(feature마다).** `base=$(gs config git.base)`, `remote=$(gs config git.remote)`로 값을 읽는다(실패하면 출력을 보이고 "`gs init`을 먼저"라고 말하고 끝낸다). 아래 `<base>`·`<remote>`는 그 값이다. worker는 `<remote>/<base>` 위에서 일하므로 grill 결과가 거기 있어야 한다(없으면 `gs go`가 시작 전에 거부한다).
@@ -22,4 +22,4 @@ disable-model-invocation: true
    - 이 세션은 후보를 feature별로 번호 붙여 보이고 사람이 고른 것만 `retro/SKILL.md` 4단계대로 아이디어 파일로 쓴다. 고르지 않으면 아무것도 쓰지 않는다.
    - subagent가 실패하면 다시 부르지 않고 "회고 실패, `/retro <feature>`로 돌린다"를 한 줄로 말한다. 위 결과와 종료는 그대로다.
 
-한계: 실행 중 gs를 다시 설치하지 않으므로 앞 feature가 gs 자체를 고치면 다음 feature는 옛 gs로 돈다.
+한계: 실행 중 gs를 다시 설치하지 않으므로 앞 feature가 gs 자체를 고치면 다음 feature는 옛 gs로 돈다. 실행 중에 뒤를 붙이려면 `/overnight add <f>`를 친다.

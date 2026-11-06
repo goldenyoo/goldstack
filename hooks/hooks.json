@@ -1,5 +1,5 @@
 {
-  "description": "goldstack worker 차단(GS_ROLE=worker일 때만) + 진행 바 mod(`gs go` 실행 중 프롬프트 위에 progress.line)",
+  "description": "goldstack worker 차단(GS_ROLE=worker일 때만) + 무인 세션의 승인 창 거부(`gs overnight arm`을 친 세션에서만) + 진행 바 mod(`gs go` 실행 중 프롬프트 위에 progress.line)",
   "modules": [
     "./register.tsx"
   ],
@@ -11,6 +11,17 @@
           {
             "type": "command",
             "command": "if [ \"${GS_ROLE:-}\" != worker ]; then exit 0; fi; if command -v gs >/dev/null 2>&1; then exec gs hook pretooluse; else echo 'gs가 없어 worker 도구 호출을 막는다' >&2; exit 2; fi"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if command -v gs >/dev/null 2>&1; then out=$(gs hook permissionrequest 2>/dev/null) || exit 0; printf '%s' \"$out\"; fi"
           }
         ]
       }
