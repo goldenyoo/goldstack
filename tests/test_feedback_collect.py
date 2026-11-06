@@ -338,9 +338,26 @@ class FinishAnomalyTest(CollectTest):
         self.run_finish({"phase": "merged"}, failed)
         draft, = self.drafts()  # 같은 원인을 갇힘으로 또 올리지 않는다
         self.assertEqual(draft.title.split()[:3], ["[field]", "finish:", "finish-error"])
-        self.clear_drafts()
         self.run_finish({"phase": "merged", "error": failed["error"]}, failed)
-        self.assertEqual(self.kinds(), ["stuck-phase"])  # 같은 오류가 남은 채 다시 멈췄다
+        self.assertEqual(self.kinds(), ["finish-error"])
+        self.assertEqual(self.drafts()[0].count, 2)
+
+    def test_different_resume_errors_have_separate_drafts(self):
+        for detail in ("bad object", "unexpected failure", "bad object"):
+            error = f"git rev-parse: {detail}"
+            self.run_finish({"phase": "merged"},
+                            {"phase": "merged", "outcome": f"마무리 실패: {error}", "error": error})
+        self.assertEqual(self.kinds(), ["finish-error", "finish-error"])
+        self.assertEqual(sorted(draft.count for draft in self.drafts()), [1, 2])
+
+    def test_same_resume_error_with_other_paths_and_hashes_counts_again(self):
+        for path, sha in (("gs-report-aaa", "1a2b3c4d"), ("gs-report-bbb", "5e6f7a8b")):
+            error = f"git worktree add --detach /tmp/{path}/base origin/main: fatal: bad object {sha}"
+            self.run_finish({"phase": "merged", "error": error},
+                            {"phase": "merged", "outcome": f"마무리 실패: {error}", "error": error}, seen=[error])
+        draft, = self.drafts()
+        self.assertEqual(self.kinds(), ["finish-error"])
+        self.assertEqual(draft.count, 2)
 
     def test_environment_and_transient_errors_are_neither_finish_error_nor_stuck(self):
         for error in ("gh pr merge: HTTP 403 forbidden", "gh: authentication failed", "protected branch update failed",
@@ -884,8 +901,14 @@ class RealFinishTest(RealGoTest):
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "merged")
-        self.assertEqual(self.titles(), ["finish-error", "stuck-phase"])
-        self.assertIn("■ goldstack 피드백: 보냄 0 · 대기 2\n", out)
+        self.assertEqual(self.titles(), ["finish-error"])
+        draft, = self.drafts()
+        self.assertEqual(draft.count, 2)
+        self.assertIn("■ goldstack 피드백: 보냄 0 · 대기 1\n", out)
+        listing = io.StringIO()
+        self.assertEqual(feedback.command(self.repo, ["list"], listing, io.StringIO()), 0)
+        self.assertEqual(len(listing.getvalue().splitlines()), 1)
+        self.assertIn("0/2 [field] finish: finish-error", listing.getvalue())
 
     def test_designed_revert_is_not_reported(self):
         spec = self.repo / ".goldstack/work/demo/spec.md"

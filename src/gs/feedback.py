@@ -446,8 +446,10 @@ def _clean_version(version: str) -> str:
     return version if _VERSION_TEXT.fullmatch(str(version)) else "모름"
 
 
-def _fingerprint(version: str, phase: str, kind: str, frames: list[str]) -> str:
-    return hashlib.sha256("\0".join((version, phase, kind, *frames)).encode()).hexdigest()[:16]
+def _fingerprint(version: str, phase: str, kind: str, frames: list[str], error_lines: Iterable[str] = ()) -> str:
+    # 재개 마무리 오류는 프레임이 없으므로 가린 오류로 초안을 나눈다. 재발 키는 그대로다.
+    errors = [_error_key("\n".join(error_lines))] if phase == "finish" and kind == "finish-error" else []
+    return hashlib.sha256("\0".join((version, phase, kind, *frames, *errors)).encode()).hexdigest()[:16]
 
 
 def _recurrence_key(phase: str, kind: str, frames: list[str]) -> str:
@@ -473,8 +475,9 @@ def compose(*, phase: str, kind: str, frames: Iterable[Frame], error_lines: Iter
     version = _clean_version(env.gs_version)
     phase, kind = _clean_phase(phase), _clean_kind(kind)
     shown = _clean_frames(frames)
-    lines = redactor.lines(error_lines)
-    fingerprint = _fingerprint(version, phase, kind, shown)
+    raw = _raw_lines(error_lines)
+    lines = redactor.lines(raw)
+    fingerprint = _fingerprint(version, phase, kind, shown, raw)
     key = _recurrence_key(phase, kind, shown)
     clis = ", ".join(f"{name} {_clean_version(value) if value != '없음' else value}"
                      for name, value in env.clis if name in _CLIS)
@@ -577,7 +580,7 @@ def record(repo: Path, cfg: config.Config, *, phase: str, kind: str, frames: Ite
         return None
     frames, raw = list(frames), _raw_lines(error_lines)
     fingerprint = _fingerprint(_clean_version(metadata.version("goldstack")), _clean_phase(phase),
-                               _clean_kind(kind), _clean_frames(frames))
+                               _clean_kind(kind), _clean_frames(frames), raw)
     path = draft_path(repo, fingerprint)
     _prepare_dir(repo)
     try:
@@ -1031,7 +1034,8 @@ def finish_anomaly(before: Mapping, after: Mapping, seen: Iterable[str] = ()) ->
     """마무리를 실제로 돈 실행의 전후 `finish`로 이상 하나를 고른다: (오류 종류, 오류 줄). 없으면 None.
 
     seen은 이 실행 전까지 마무리를 멈춘 오류들(`state.finish_errors`)이다. 옛 state에는 없어 지난 `error`도 함께 본다.
-    - preparing-error·finish-error: 마무리를 멈춘 새 오류다. 같은 원인을 갇힘으로 또 올리지 않게 먼저 본다. 멈춘 오류는 `마무리 실패` outcome으로 알고,
+    - preparing-error·finish-error: 마무리를 멈춘 오류다. 재개에서 같은 오류가 나면 같은 초안의 횟수를 올린다.
+      preparing의 이미 본 오류는 건너뛴다. 같은 원인을 갇힘으로 또 올리지 않게 먼저 본다. 멈춘 오류는 `마무리 실패` outcome으로 알고,
       결과가 정해진 verified·reverted에서는 error만 남으므로 그것으로 안다(거부·PR 확인 실패의 error는 이 phase에 남지 않는다).
       preparing은 지문이 따로다: 처음 PR까지 가는 길의 오류가 앞선 재개 오류의 초안에 횟수로만 묻히지 않게.
     - unexpected-revert: 이번 실행에서 reverted가 됐는데 "integration 통과, base 검증 실패"라는 기록이 없다.
@@ -1046,7 +1050,7 @@ def finish_anomaly(before: Mapping, after: Mapping, seen: Iterable[str] = ()) ->
     stopped = str(after.get("outcome") or "").startswith(FINISH_FAILED) or phase in state.FINISHED_PHASES
     if error and not environmental and stopped:
         known = {_error_key(str(text)) for text in (*seen, before.get("error")) if text}
-        if _error_key(error) not in known:
+        if phase != "preparing" or _error_key(error) not in known:
             return "preparing-error" if phase == "preparing" else "finish-error", error.splitlines()
     if phase == "reverted" and was != "reverted" and not (
             after.get("integration_ok") is True and after.get("main_ok") is False):
