@@ -306,6 +306,46 @@ class RevertTest(IssueTest):
         self.assertEqual(self.finish()["issues"]["12"], {"action": "reopen", "commit": reverted, "ok": True})
         self.assertIn(f"#12 다시 엶: `{reverted}`", self.final_report())
 
+    def test_reverted_ticket_issue_stays_open_through_next_pr_and_matches_report(self):
+        """병합 → PR이 issue를 닫음 → 티켓만 base에서 되돌림 → gs가 다시 엶 → 다음 PR 병합. 끝에 issue가 열려 있고 보고서와 같다.
+        같은 PR의 04도 12를 `closes`한다(공유 issue). 04는 되돌리지 않았지만 01이 되돌린 채이니 12는 열려 있어야 한다."""
+        self.also_closes("04", 12)
+        self.add_ticket("21")
+        self.also_closes("21", 99)  # 다음 PR이 들이는 티켓: 그 키워드는 그대로 닫는다
+        code, out, err = self.go("--only", "01,04")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("Closes #12", (self.bin / "pr-body.md").read_text())
+        self.assertEqual(self.issue(12)["state"], "CLOSED")  # PR 병합이 닫았다
+        self.assertEqual(self.finish()["issues"]["12"]["action"], "close")
+        closed_comments = self.comments(12)
+        self.assertEqual(len(closed_comments), 1)
+        # 티켓 하나만 base에서 되돌린다. 04는 그대로 남는다.
+        reverted = self.revert(sh(self.repo, "git", "rev-parse", f"{self.REMOTE}/{self.BASE}^{{/gs-ticket: demo/01}}"), "-m", "1")
+        tickets = finish._base_tickets(self.fixture())
+        self.assertFalse(tickets["01"][0])
+        self.assertTrue(tickets["04"][0])
+        # gs가 다시 연다(다음 PR 전)
+        code, out, err = self.go("--only", "01,04")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.issue(12)["state"], "OPEN")
+        self.assertEqual(self.finish()["issues"]["12"], {"action": "reopen", "commit": reverted, "ok": True})
+        self.assertEqual(len(self.logged("reopen", 12)), 1)
+        # 다음 PR 병합
+        code, out, err = self.go("--only", "21")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.finish()["phase"], "verified")
+        body = (self.bin / "pr-body.md").read_text()
+        self.assertNotIn("Closes #12", body)
+        self.assertIn("Closes #99", body)
+        self.assertEqual(self.issue(99)["state"], "CLOSED")
+        # 끝: issue는 열려 있고 보고서 기록과 같다
+        self.assertEqual(self.issue(12)["state"], "OPEN")
+        self.assertEqual(self.logged("close", 12), [])
+        self.assertEqual(self.comments(12), closed_comments)  # 처음 닫을 때 단 댓글뿐이다
+        self.assertEqual(self.finish()["issues"]["12"], {"action": "reopen", "commit": reverted, "ok": True})
+        self.assertIn(f"#12 다시 엶: `{reverted}`", self.final_report())
+        self.assertNotIn("#12 닫음", self.final_report())
+
     def test_next_pr_does_not_close_issue_shared_with_reverted_ticket(self):
         self.also_closes("04", 12)
         self.land_pr("01", "02")
