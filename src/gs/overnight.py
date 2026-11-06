@@ -1,4 +1,4 @@
-"""`gs overnight`: 무인으로 켠 세션의 승인 창을 거부로 바꾸는 표시와 그 판정, 도는 밤에 feature를 더하는 대기열.
+"""`gs overnight`: 무인으로 켠 세션의 승인 창을 거부로 바꾸는 표시와 그 판정, 도는 밤에 feature를 더하는 대기열, 사이 단계 묶기.
 
 `gs overnight arm`이 `.goldstack/overnight/armed/<pid>.json`에 표시를 남기고, `gs hook permissionrequest`(`hook.py`)가
 이 표시를 보고 창 대신 거부를 낸다. 창은 사람이 없으면 닫히지 않아 아침까지 선다. 거부는 세션이 받아 다음 일로 넘어간다.
@@ -26,6 +26,12 @@ skill이 Edit을 쓰라고 적는다. 살아 있는 표시가 곧 코디네이�
 대기열을 닫는 것은 `disarm`이다. 아침 보고를 쓴 밤은 표시가 있을 때만 줄을 받으므로, `disarm`이 `add`와 같은 잠금 안에서 표를 보고
 `대기` 줄이 남았으면 끄지 않는다. 표시를 본 `add`가 더한 줄은 끄기 전에 드러나고, 끈 뒤의 `add`는 끝난 밤으로 거부된다.
 끈 다음에 다시 읽고 다시 켜지 않는다. 그 틈의 `add`가 새 파일로 가고, 사람이 없는 밤에 `arm`이 창을 띄울 수 있다.
+
+`gs overnight next <다음>`은 사이 단계의 기계적인 일(base 위로 올리기, goldstack 레포면 재설치, `gs check`)을 묶어 허용 규칙을 줄인다.
+§6 재확인과 spec 수정은 판단이라 모델이 한다. push는 하지 않는다. `/go` 2단계가 fast-forward로만 올린다.
+실행 중에 끝낸 grill은 로컬 커밋으로 남아 base와 갈라진다. 올려도 되는 것은 grill 경로의 커밋뿐이다. 다른 경로는 `/go` 2단계의 push로 검증 없이 base에
+들어가므로, base가 앞서지 않았어도 거부한다. 다시 쳐도 된다. 이미 올린 base는 그대로고 재설치가 거부되면 끝난 뒤 다시 치면 잇는다.
+재설치는 이 프로세스가 읽을 파일을 바꾼다. 그래서 필요한 모듈을 먼저 다 읽고, `gs check`는 PATH의 `gs`를 새 프로세스로 부른다. 다음 `gs go`가 쓸 그 `gs`다.
 """
 from __future__ import annotations
 
@@ -38,12 +44,14 @@ import shutil
 import subprocess
 import tempfile
 import time
+import tomllib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TextIO
 
 from . import feature as featmod
+from . import git
 
 OVERNIGHT_DIR = ".goldstack/overnight"
 ARMED_DIR = f"{OVERNIGHT_DIR}/armed"
@@ -65,6 +73,15 @@ WAITING = "대기"
 ROWS_LEFT = f"`{WAITING}` 줄이 남아"
 NO_COORDINATOR = "코디네이터: 없음"
 MAKE_NIGHT = "`/overnight <feature>`로 시작하거나 `/overnight add <feature>`로 새 밤샘 파일을 만든다"
+
+STEP_BASE = "base 위로 올리기"
+STEP_UPDATE = "gs self-update"
+STEP_CHECK = "gs check"
+STEP_FAILED = "■ 실패 단계"
+REBASE_CONFLICT = "rebase 충돌"
+CHECK_TIMEOUT = 300  # 초. 넘기면 그 단계의 실패다
+GRILL_DIRS = (".goldstack/work/", ".goldstack/out-of-scope/", ".goldstack/ideas/")  # `/go` 2단계가 커밋하는 경로
+GRILL_FILE = ".goldstack/profile.md"
 
 
 @dataclass(frozen=True)
@@ -422,4 +439,118 @@ def add(repo: Path, name: str, out: TextIO, err: TextIO) -> int:
         return 1
     print(f"더함: {where}의 결과 표에 {name}({WAITING})" if state is None else f"이미 있다: {where}의 {name}({state})", file=out)
     print(_coordinator(root), file=out)
+    return 0
+
+
+# ---------------------------------------------------------------- 사이 단계
+
+class NextError(Exception):
+    """`gs overnight next`의 한 단계가 실패한 이유. 이름은 `feedback._KIND_WORDS`의 낱말로 짓는다."""
+
+
+def _outside_grill(repo: Path, commits: str) -> list[str]:
+    """`commits` 범위가 건드린 경로 중 grill 경로 밖. 합친 diff가 아니라 커밋마다 본다. 고쳤다 되돌린 변경도 그 커밋의 일이다.
+
+    `--no-renames`가 없으면 grill 경로로 옮긴 커밋의 옛 경로가 안 보이고, `--diff-merges=separate`가 없으면 병합 커밋의 경로가 안 보인다.
+    """
+    names = git.run(repo, "log", "--no-renames", "--diff-merges=separate", "--name-only", "-z", "--format=", commits).stdout
+    return sorted({path for path in names.split("\0") if path and not path.startswith(GRILL_DIRS) and path != GRILL_FILE})
+
+
+def _rebasing(repo: Path) -> bool:
+    """`git rev-parse --git-path`는 worktree마다 맞는 자리를 낸다."""
+    return any((repo / git.out(repo, "rev-parse", "--git-path", name)).exists() for name in ("rebase-merge", "rebase-apply"))
+
+
+def _pull_rebase(repo: Path, remote: str, base: str, env: dict[str, str]) -> None:
+    """실패하면 시작 전 상태로 돌린다. `--no-autostash`: 설정이 있어도 커밋 안 된 변경을 치우지 않는다. 있으면 git이 시작을 거부한다."""
+    before = git.sha(repo, "HEAD")
+    cp = git.run(repo, "pull", "--rebase", "--no-autostash", remote, base, check=False, env=env)
+    if cp.returncode == 0:
+        return
+    detail = (cp.stderr or cp.stdout).strip()
+    if not _rebasing(repo):
+        raise NextError(f"git pull --rebase가 시작하지 못했다: {detail}")
+    paths = [path for path in git.run(repo, "diff", "--name-only", "--diff-filter=U", "-z", check=False).stdout.split("\0") if path]
+    abort = git.run(repo, "rebase", "--abort", check=False)
+    if abort.returncode or _rebasing(repo) or git.sha(repo, "HEAD") != before:
+        raise NextError(f"{REBASE_CONFLICT}을 되돌리지 못했다. 사람이 `git status`로 본다(시작 전 HEAD {before}): {abort.stderr.strip()}")
+    raise NextError(f"{REBASE_CONFLICT}: 시작 전 상태로 되돌렸다. 충돌 파일: {', '.join(paths) or detail}")
+
+
+def _onto_base(repo: Path, remote: str, base: str) -> str:
+    """`<remote>/<base>` 위로 올리고 한 일을 돌려준다. 받기만 하고 push하지 않는다."""
+    branch = git.run(repo, "symbolic-ref", "--quiet", "--short", "HEAD", check=False).stdout.strip()
+    if branch != base:
+        raise NextError(f"현재 브랜치가 {base}가 아니다({branch or 'detached HEAD'})")
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")  # 사람이 없는 밤에 비밀번호를 기다리지 않는다
+    try:
+        git.run(repo, "fetch", remote, base, env=env)
+        tip = git.sha(repo, "FETCH_HEAD")  # `<remote>/<base>`는 fetch refspec을 좁힌 레포에서 안 움직인다
+        outside = _outside_grill(repo, f"{tip}..HEAD")
+        if outside:
+            raise NextError(f"push 안 된 커밋에 grill 경로 밖 파일이 있어 올리지 않았다: {', '.join(outside)}")
+        ahead, behind = git.count(repo, f"{tip}..HEAD"), git.count(repo, f"HEAD..{tip}")
+        if not behind:
+            return f"이미 {remote}/{base} 위다(push 안 된 grill 커밋 {ahead}개)"
+        if not ahead:
+            git.run(repo, "pull", "--ff-only", remote, base, env=env)
+            return f"{behind}커밋 fast-forward"
+        merges = git.out(repo, "rev-list", "--merges", f"{tip}..HEAD").split()
+        if merges:  # 경로로는 못 가린다. `--rebase-merges`도 병합 때 직접 고친 내용은 옮기지 않는다
+            raise NextError(f"push 안 된 병합 커밋이 있어 rebase하지 않았다. rebase가 병합 커밋을 버려 그 안의 수정을 잃는다. 사람이 일렬로 다시 쌓는다: {', '.join(merges)}")
+        _pull_rebase(repo, remote, base, env)
+        return f"grill 커밋 {ahead}개를 {remote}/{base} 위로 rebase"
+    except git.GitError as e:
+        raise NextError(str(e)) from e
+
+
+def _is_goldstack(repo: Path) -> bool:
+    """gs 자신을 고치는 레포인가. 읽지 못하는 `pyproject.toml`은 아니라고 본다."""
+    try:
+        with (repo / "pyproject.toml").open("rb") as f:
+            project = tomllib.load(f).get("project")
+    except (OSError, ValueError):
+        return False
+    return isinstance(project, dict) and project.get("name") == "goldstack"
+
+
+def advance(repo: Path, name: str, out: TextIO, err: TextIO) -> int:
+    """`gs overnight next`. base 위로 올리기, goldstack 레포면 `gs self-update`, 새 프로세스로 `gs check`. 첫 실패에서 그 단계를 알리고 1로 끝난다."""
+    from . import config, selfupdate  # 재설치 전에 읽는다. 창마다 도는 hook은 쓰지 않는 모듈이다
+
+    def failed(step: str, reason: str) -> int:
+        out.flush()  # 앞선 단계의 줄이 실패 줄보다 먼저 보이게
+        print(f"{STEP_FAILED}: {step}: {reason}", file=err)
+        return 1
+
+    if not FEATURE_NAME.fullmatch(name):
+        print(f"오류: feature 이름으로 쓸 수 없다: {name!r}", file=err)
+        return 1
+    cfg, problems = config.load(repo)
+    if cfg is None:
+        return failed(STEP_BASE, "; ".join(str(p) for p in problems))
+    try:
+        done = _onto_base(repo, cfg.git.remote, cfg.git.base)
+    except NextError as e:
+        return failed(STEP_BASE, str(e))
+    print(f"■ {STEP_BASE}: {done}", file=out, flush=True)
+
+    if not _is_goldstack(repo):
+        print(f"■ {STEP_UPDATE}: 건너뜀(goldstack 레포가 아니다)", file=out, flush=True)
+    elif selfupdate.self_update(repo, None, "main", out, err) != 0:
+        return failed(STEP_UPDATE, "이유는 위 줄이다")
+    else:
+        print(f"■ {STEP_UPDATE}: 끝", file=out, flush=True)
+
+    try:
+        cp = subprocess.run(["gs", "check", "--", name], cwd=repo, capture_output=True, text=True, encoding="utf-8",
+                            errors="replace", stdin=subprocess.DEVNULL, timeout=CHECK_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as e:
+        return failed(STEP_CHECK, f"돌리지 못했다: {e}")
+    out.write(cp.stdout)
+    err.write(cp.stderr)
+    if cp.returncode:
+        return failed(STEP_CHECK, f"`gs check {name}` 종료 코드 {cp.returncode}")
+    print(f"■ 명령 통과: `gs check {name}`의 경고와 §6 재확인은 모델이 본다", file=out)
     return 0
