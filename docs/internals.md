@@ -23,11 +23,11 @@
 | `state.py`, `status.py` | `state.json`, 잠금, 단계 시각, 진행 계산(ETA 이력 포함), `gs status` |
 | `metrics.py` | 판정과 분리한 실행·검증·리뷰·마무리 측정, 설치본 메타데이터 |
 | `clean.py` | `gs clean`, verified 뒤 integration 자동 정리 |
-| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(지문은 버전·줄 번호를 포함하므로 못 찾으면 본문의 `- 재발 키:`(단계 + 오류 종류 + `파일:함수`의 해시, `_recurrence_key`)로 `--state all` 검색해 같은 키의 열린 issue에 횟수 댓글을 달고, 수동 피드백 본문에는 키 줄이 없고 사람이 쓴 글의 키 줄은 재발로 읽지 않으며, 키 줄이 없는 옛 issue는 찾지 않는다. 닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 초안에 기록된 발생 버전이 새로우면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
+| `feedback.py` | 가린 초안 저장·전송, gh 실패 재시도, 하루 한도·지문 중복 댓글(`finish-error`의 지문은 정규화한 오류 문구(`_error_key`: 경로·URL·해시·비밀 모양을 접음)를 더해 같은 오류는 초안 하나에 횟수만 올리고, 지문은 버전·줄 번호를 포함하므로 못 찾으면 본문의 `- 재발 키:`(단계 + 오류 종류 + `파일:함수`의 해시, `_recurrence_key`)로 `--state all` 검색해 같은 키의 열린 issue에 횟수 댓글을 달고, 수동 피드백 본문에는 키 줄이 없고 사람이 쓴 글의 키 줄은 재발로 읽지 않으며, 키 줄이 없는 옛 issue는 찾지 않는다. 닫힌 issue는 마지막 `<버전>에서 고침 (<커밋>)` 댓글보다 초안에 기록된 발생 버전이 새로우면 다시 열고 횟수 댓글, 같거나 옛 gs면 `gs self-update` 안내, 버전 모르면 새 issue), `gs feedback`, 규칙 수집(`Session`, 어댑터 패턴 표) |
 | `notify.py` | 텔레그램 전송, `gs notify` 명령 |
 | `hook.py`, `hook_agy.py` | worker 차단 판정(Claude Code, agy) |
 | `migrate.py` | `gs migrate` |
-| `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건 |
+| `backlog.py` | `gs backlog`: 아이디어 파일 읽기·검사, 범위 밖 다시 볼 조건. `_field_reports`는 `dropped`가 아닌 아이디어에 연결된 issue 번호만 숨기고, `dropped`에 연결된 열린 issue는 `issue view`로 읽어 후보에 다시 보인다(읽기 실패·닫힌 것은 건너뜀) |
 | `git.py` | git 호출, 원격 URL에서 GitHub owner/repo 풀기(`github_repo`), push 전 설정 대조(`push_settings`, `check_push`, `push`) |
 
 `gs go`(`cli.cmd_go`)·`gs doctor`는 시작할 때 설치 배포판의 `direct_url.json`에서 git URL·commit을 읽는다. 로컬 디렉터리 설치(`dir_info`)는 출처가 없어 `경고: 설치 commit 모름(로컬 설치): 뒤처짐을 비교할 수 없다` 한 줄만 낸다(실행을 막지 않는다. 설치 기록이 없을 때와 git 설치의 동작은 그대로다). `git ls-remote <설치 URL> main`(5초 제한)의 main commit이 다르면 `gs self-update` 경고만 내고, 조회 실패·출처 없음은 건너뛴다. `claude plugin list --json`(`GS_CLAUDE`)에서 goldstack 플러그인 버전이 gs 버전과 달라도 경고하며, 목록을 못 읽으면 건너뛴다. 대상 레포의 원격 주소는 설치 출처로 쓰지 않는다.
@@ -453,7 +453,7 @@ same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이
 gs 결함만 규칙으로 골라 초안(`record`)으로 넘긴다. 판단 모델은 없다. 대상 프로젝트의 실패(티켓 구현 실패, 패턴에 안 걸린 "커밋 없음", 시험 실패, 리뷰 지적, `transient.py`가 가리는 일시 오류)는 올리지 않는다. `mode = "off"`이거나 `GS_ROLE=worker`면 아무것도 하지 않는다.
 
 - **내부 예외**: `cli.main`이 처리되지 않은 `Exception`을 `collect_exception`으로 넘긴 뒤 그대로 다시 던진다. 단계는 명령 이름이다. `gs go`의 예외는 `cmd_go`가 요약 전에 먼저 수집한다. 끊긴 파이프, 네트워크 중단, 메시지가 일시·환경 오류인 외부 오류(`OSError`, `GitError` 등)는 만들지 않는다.
-- **마무리 이상**(단계 `finish`): `cmd_go`가 `go()` 전후로 state를 읽는다. `finish.run`이 이번에 돌았을 때(`metrics`의 `total` 단계가 늘었을 때)만 본다. 그래서 검사 오류·잠금 실패·준비 실패로 보존된 재개 phase는 갇힘이 아니다. 마무리를 멈춘 git 오류는 어느 단계에서 났든 `finish.run`이 `finish.error`에 남긴다(`_publish` 등 준비 단계, 보고서 커밋·push 포함). 결과가 정해진 `verified`·`reverted`는 outcome을 그대로 두고 그 밖의 phase는 outcome을 `마무리 실패: …`로 바꾼다. `preparing-error`(준비 단계에서 멈춘 새 오류), `finish-error`(그 밖의 단계에서 멈춘 새 오류), `unexpected-revert`(reverted인데 integration 통과·base 실패 기록이 없다), `stuck-phase`(`merge_requested`·`merged`·`main_failed`로 들어가 그대로 나왔다) 중 하나를 올린다. 새 오류인지는 `state.finish_errors`와 지난 `finish.error`(옛 state에는 이것뿐이다)에 대조한다. 새 마무리가 `finish`를 비워도 `finish_errors`는 남아, 중간에 끊기거나 다른 오류를 거쳐 재실행해도 같은 오류를 다시 올리지 않는다. 비교는 가림을 지난 글로 해서 임시 디렉터리·커밋 해시가 달라도 같은 오류다. base 검증이 실패해 되돌린 것은 설계된 동작이자 시험 실패라 올리지 않는다. `finish.run`이 예외로 끝난 실행, 네트워크 중단, 일시·환경 오류, base와의 충돌, 보고서 커밋을 막은 hook·서명·신원 설정, 디스크·파일 권한, 사람·CI를 기다리는 phase도 보지 않는다.
+- **마무리 이상**(단계 `finish`): `cmd_go`가 `go()` 전후로 state를 읽는다. `finish.run`이 이번에 돌았을 때(`metrics`의 `total` 단계가 늘었을 때)만 본다. 그래서 검사 오류·잠금 실패·준비 실패로 보존된 재개 phase는 갇힘이 아니다. 마무리를 멈춘 git 오류는 어느 단계에서 났든 `finish.run`이 `finish.error`에 남긴다(`_publish` 등 준비 단계, 보고서 커밋·push 포함). 결과가 정해진 `verified`·`reverted`는 outcome을 그대로 두고 그 밖의 phase는 outcome을 `마무리 실패: …`로 바꾼다. `preparing-error`(준비 단계에서 멈춘 오류), `finish-error`(그 밖의 단계에서 멈춘 오류. 재발할 때마다 올려 같은 초안의 횟수를 올린다), `unexpected-revert`(reverted인데 integration 통과·base 실패 기록이 없다), `stuck-phase`(`merge_requested`·`merged`·`main_failed`로 들어가 그대로 나왔다) 중 하나를 올린다. `preparing-error`만 이미 본 오류인지 `state.finish_errors`와 지난 `finish.error`(옛 state에는 이것뿐이다)에 대조해, 이미 본 오류면 건너뛴다(같은 원인을 갇힘으로 또 올리지 않게). 새 마무리가 `finish`를 비워도 `finish_errors`는 남아 중간에 끊기거나 다른 오류를 거쳐도 이 대조는 유지된다. `finish-error`는 대조하지 않고 재발마다 올려 같은 초안의 횟수만 올린다. 비교는 가림을 지난 글로 해서 임시 디렉터리·커밋 해시가 달라도 같은 오류다. base 검증이 실패해 되돌린 것은 설계된 동작이자 시험 실패라 올리지 않는다. `finish.run`이 예외로 끝난 실행, 네트워크 중단, 일시·환경 오류, base와의 충돌, 보고서 커밋을 막은 hook·서명·신원 설정, 디스크·파일 권한, 사람·CI를 기다리는 phase도 보지 않는다.
 - **어댑터 실패**(단계 `worker`): `go()` 전후로 새로 쓰인 실패 기록만 본다. 구현 worker는 `_fail`이 쓰는 `run/<티켓>/<시도>/failure.log`다. 수정·수리 worker는 티켓 실패가 아니라 `_fail`을 지나지 않으므로 `run/<티켓>/<시도>/<단계>/worker-failure.log`에 이유를 따로 쓴다(수리 뒤 다시 검증이 실패하면 `_fail`이 그 디렉터리의 `failure.log`를 덮는다). 띄우지 못한 경우와, 실패로 세지 않는 수리의 "커밋 없음"(ref 잠금으로 커밋하지 못한 worker도 이렇게 끝난다)도 쓴다. 쓰지 못해도 티켓 처리는 그대로다. `worker.log` 끝의 CLI 오류 이벤트와 마지막 이벤트 뒤 stderr(`warning:` 제외)가 일시·환경 오류(인증, 사용량 한도, 권한, 없는 모델)를 말하면 패턴과 상관없이 올리지 않는다. 도구 출력과 모델 응답은 보지 않는다. 그다음 이유와 `worker.log` 끝으로 `ADAPTER_PATTERNS`를 앞에서부터 맞춘다: `codex-cannot-lock-ref`, `agy-no-result`, `worker-runner-lost`. 표에 없어도 어댑터가 낸 오류 모양이면 `unknown`이다. 다만 이유가 환경 오류이거나 운영체제의 거부(`Operation not permitted`, 읽기 전용 파일 시스템, 디스크 부족)면 올리지 않는다. 이 거부는 이유에서만 본다: `worker.log`에 있으면 sandbox가 worker를 막은 어댑터 실패일 수 있다. 오류 줄은 `detail`을 따른다.
 - **전송과 요약**: `cmd_go`가 시작에 `send`로 쌓인 초안을 다시 보내고, 끝에 새 초안을 보낸 뒤 `■ goldstack 피드백: 보냄 N · 대기 M`을 낸다. 둘 다 0이거나 `off`면 줄이 없다. `draft`는 쌓기만 한다.
 - **격리**: 수집의 오류는 `cli._quiet`에서 경고 한 줄이 되고 종료 코드·결과는 그대로다. 초안에 넣는 CLI 버전 확인은 빈 임시 디렉터리에서 돌아 레포와 검증 중인 worktree에 닿지 않는다.
@@ -576,3 +576,10 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
 | `GS_VERIFY_TIMEOUT` | verify 시간 제한(초). spec `verify_minutes`를 덮는다 |
 | `GS_NETWORK_MINUTE` | 네트워크 대기·회복 판단의 1분(초). 틀린 값이면 60 |
 | `GS_TELEGRAM_API` | 텔레그램 Bot API 주소(기본 `https://api.telegram.org`). 시험은 localhost 가짜 서버 |
+
+## v19 상태 변화 요약
+
+- `Active.reviewed_again`(`state.py`): 병합 전 대조의 한 번 더를 썼는가. `_mark_resume`이 `network_resume.reviewed_again`으로 저장하고 `_late_commit`·`_resume`·`_finish`가 읽는다. 옛 state에는 없고 False다. 도는 중에 멈춘 대조는 `_finish`가 `_review_again`으로 합쳐 한 번만 잇는다. 수리를 거친 티켓이 늦은 커밋을 보러 돌아가면 표시를 `REPAIR_REVIEW`로 되돌린다.
+- `kept_round`(리뷰 기록): catch-up 뒤 `a.base..head`가 비어 `_empty_rereview`가 앞 `resolved` 판정을 유지한 재리뷰 회차. 지적에 결과를 새로 적으면(한도·오류의 unchecked 포함) 지운다. 없으면 유지한 적 없다.
+- `finish._noted`: 원인 사슬에서 `e.gs_noted`(이번 실행의 `_note_failure`가 단 표시)를 찾는다. 전에는 `str(e) == finish["error"]`로 비교했다.
+- `go._issue_failures`: '이미 끝남' 경로에서 `sync_issues`가 못 끝낸 issue 일을 끝 출력 줄로만 보인다(보고서·종료 코드·base 불변).

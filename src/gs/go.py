@@ -23,6 +23,8 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 2차 재리뷰가 그러고도 브랜치 끝을 못 보면 resolved 판정을 unchecked로 내린다.
 병합은 브랜치 이름이 아니라 리뷰 단계가 마지막으로 대상으로 삼은 SHA(Active.target)로 한다(_merge_stage). 병합 직전이나 검증 중에 브랜치가 움직였으면 병합하지 않고 재리뷰로 돌아간다(_late_commit).
 여기서도 다시 보는 것은 합쳐 한 번이다: 이미 더 봤으면 늦은 커밋을 뺀 SHA를 병합하고 브랜치는 남긴다. catch-up이 합친 커밋은 부모로 가려내(_is_catch_up) 늦은 커밋으로 세지 않는다.
+재개해도 합쳐 한 번이다: 쓴 것을 표시(network_resume의 reviewed_again)에 남기고, 도는 중에 멈춘 대조는 다음 gs go가 그 한 번으로 잇는다(_finish). 옛 state에는 이 값이 없고 아직 쓰지 않은 것으로 읽는다.
+catch-up이 기준을 판정한 head 위로 옮긴 뒤 diff가 비면 앞 판정을 그대로 두고 수정 worker를 띄우지 않는다(_empty_rereview).
 gs가 띄우는 agy 호출(worker·리뷰·수정·수리·재리뷰·재시도)을 state에 세고 config `[agy] max_calls_per_run`에 닿으면 더 띄우지 않는다.
 상한 검사와 세기는 호출을 보내기 전에 루프 스레드에서 한 번에 하므로 리뷰가 함께 돌아도 상한을 넘겨 띄우지 않는다.
 끊겨서 다시 부르는 agy 호출은 상한을 보지 않지만 루프가 센 뒤에 나간다(review.CallWait): 상한 판단은 이미 나간 호출을 모두 본다.
@@ -78,7 +80,7 @@ REVIEW_WAIT, FIX_WAIT, REPAIR_WAIT = "review_wait", "fix_wait", "repair_wait"  #
 # 수리의 진행(Active.repair, network_resume의 repair). 비어 있으면 이 시도는 아직 수리하지 않았다
 REPAIR_SEAT = "seat"  # 검증이 실패했고 수리 worker 자리를 기다린다
 REPAIR_RUN = "run"  # 수리 worker를 띄웠다
-REPAIR_REVIEW = "review"  # 수리 worker가 커밋을 남겼고 재리뷰 중이다
+REPAIR_REVIEW = "review"  # 수리 worker가 커밋을 남겼고 재리뷰 중이다. 늦은 커밋을 보러 돌아갈 때도 이 값이다(_late_commit)
 REPAIR_VERIFY = "verify"  # 재리뷰가 끝났거나 할 것이 없다. 다시 병합·검증한다
 # 리뷰 단계: 루프 스레드에서 돌다가 루프 밖에서 부를 호출을 내고 멈춘다. 호출의 결과를 받아 잇고, 끝에 고칠 지적을 돌려준다.
 ReviewFlow = Generator[Callable[[], list], list, list[dict]]
@@ -172,6 +174,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     aborted = False
     try:
         url, finished = None, False
+        issue_lines: list[str] = []
         try:
             git.run(repo, "fetch", "-q", r.remote, r.base)
             _require_committed(r)
@@ -180,6 +183,7 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
                 url, finished = r.st.finish.get("url"), r.st.finish["phase"] == "verified"
                 say(f"■ 이미 끝남: {r.name} ({r.st.finish['phase']})")
                 finish.sync_issues(r)  # 지난 gh 실패를 다시 시도하고, 끝난 뒤 base에서 되돌린 티켓의 issue를 다시 연다
+                issue_lines = _issue_failures(r)  # 보고서는 다시 쓰지 않는다. 끝 출력에만 보인다
                 clean.integration(r)  # 지난 자동 정리가 원격 삭제에서만 실패했을 수 있다
             else:
                 r.no_merge = _only_stops(r)  # 준비 전에 정한다. 준비에서 끝나도 지난 마무리를 이번 결과로 보이지 않는다
@@ -226,11 +230,24 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         say(NETWORK_ABORT_LINE)
     if r.st is not None:
         _summary(r, url)
+        for line in issue_lines:
+            say(line)
         if cfg.notify.telegram:
             _notify(r, url, ok)
     if aborted:
         return EXIT_NETWORK
     return 0 if ok else 1
+
+
+def _issue_failures(r: Run) -> list[str]:
+    """'이미 끝남' 경로에서 sync_issues가 이번에 못 끝낸 일의 끝 출력 줄. 없으면 빈 목록. 종료 코드·report.md·base는 바꾸지 않는다."""
+    f = r.st.finish
+    lines = [f"■ issue: #{number} {'닫기' if done.get('action') == 'close' else '다시 열기'} 실패(gh). 다음 gs go가 다시 시도한다"
+             for number, done in sorted(f.get("issues", {}).items(), key=lambda kv: int(kv[0]))
+             if not done.get("ok", True)]
+    if f.get("issues_error"):
+        lines.append("■ issue: 상태를 확인하지 못했다. 다음 gs go가 다시 시도한다")
+    return lines
 
 
 def _resuming(r: Run) -> bool:
@@ -662,7 +679,8 @@ class Active:
     started: float = field(default_factory=time.monotonic)
     held_at: float = 0.0  # 네트워크 대기에 들어간 시각
     parked: bool = False  # 끝났지만 끊김 때문에 리뷰를 미뤘다. 돌아오면 끝 줄을 다시 찍지 않는다
-    reviewed_again: bool = False  # 이 worker의 리뷰 단계가 병합 전 대조로 한 번 더 봤다. 더 부르지 않는다(_review_again)
+    # 이 worker의 리뷰 단계가 병합 전 대조로 한 번 더 봤거나 보러 간다. 더 부르지 않는다(_review_again). 재개 표시에 남는다(network_resume의 reviewed_again). 옛 state에는 없고 False로 읽는다
+    reviewed_again: bool = False
     review_done: bool = False  # 지난 실행에서 리뷰까지 끝나고 수정 worker 자리나 끊김을 기다리다 멈췄다. 리뷰를 다시 하지 않는다(_finish)
     repair: str = ""  # 이 시도의 수리가 어디까지 왔나(REPAIR_*). 비어 있으면 아직 수리하지 않았다. 수리 worker의 자리는 fix가 0이다
     # 병합할 SHA: 리뷰 단계가 마지막으로 대상으로 삼은 head. 리뷰어를 부르지 못했어도(한도, 트리 실패) 옮긴다. 실패는 기록의 note가 말한다(그때는 verify만으로 병합한다).
@@ -736,7 +754,7 @@ class Reviewing:
 
     차례: 리뷰 자리를 기다린다(flow 없음) → flow가 돌면서 호출을 낸다(call: 아직 보내지 않음, future: 루프 밖에서 돈다) → 끝났다(finished, todo).
     끝난 뒤 수정 worker 자리나 끊김이 끝나기를 기다리는 동안에도 여기 있다. 그 사이 head가 움직였으면 리뷰로 되돌아간다(_moved_while_waiting).
-    병합 단계에서 브랜치가 움직인 것을 본 티켓도 여기로 돌아온다(moved, _late_commit).
+    병합 단계에서 브랜치가 움직인 것을 본 티켓도 여기로 돌아온다(moved, _late_commit). 그 대조를 재개한 티켓도 같다(_finish).
     검증이 실패해 수리 worker 자리를 기다리는 티켓도 여기 있다(repair, _verify_failed). 리뷰는 끝난 것으로 치고 head를 대조하지 않는다: 수리 전 head는 catch-up까지 합친 커밋이다.
     """
     a: Active
@@ -1062,10 +1080,11 @@ def _stop_reviews(r: Run) -> None:
 
 
 def _mark_resume(r: Run, a: Active, *, done: bool = False) -> None:
-    """이 worker를 다음에 같은 worktree에서 잇도록 state에 남긴다. done이면 worker는 끝났고 리뷰부터 하면 된다. 수리 중이면 어디까지 왔는지(repair)도, 리뷰 대상이 있으면 그 SHA(target)도 남긴다."""
+    """이 worker를 다음에 같은 worktree에서 잇도록 state에 남긴다. done이면 worker는 끝났고 리뷰부터 하면 된다. 수리 중이면 어디까지 왔는지(repair)도, 리뷰 대상이 있으면 그 SHA(target)도, 대조의 한 번 더를 썼으면 그것(reviewed_again)도 남긴다."""
     r.st.ticket(a.t.id).network_resume = {
         "branch": a.branch, "worktree": str(a.wt.resolve()), "base": a.base, "fix": a.fix, "done": done,
-        "rundir": str(a.proc.job.rundir), **({"repair": a.repair} if a.repair else {}), **({"target": a.target} if a.target else {})}
+        "rundir": str(a.proc.job.rundir), **({"repair": a.repair} if a.repair else {}), **({"target": a.target} if a.target else {}),
+        **({"reviewed_again": True} if a.reviewed_again else {})}
     r.save()
 
 
@@ -1277,17 +1296,20 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정으로 처리한다(수정 전 구현을 병합·검증한다).
     수리(repair)도 수정과 같다: 도중이면 같은 worktree에 다시 띄우고, 띄우지 못하면 실패한 수리로 처리한다(수리 전 브랜치를 다시 검증한다). 시도 수를 올리지 않는다.
     수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish).
+    대조의 한 번 더를 썼으면(reviewed_again) 그대로 잇는다: 옛 state의 표시에는 없고 False다. 끝나지 않은 대조는 _finish가 잇는다.
     다시 띄우지 못한 수정·수리의 자리는 새 실행 디렉터리를 쓴다: 결함 수집은 실패 이유를 옆의 worker.log와 함께 읽는데, 지난 디렉터리의 로그는 이 대기를 일으킨 일시 오류라 이유까지 걸러 낸다.
     """
     ts = r.st.ticket(t.id)
     wt, branch, base, nth = Path(mark["worktree"]), mark["branch"], mark["base"], mark.get("fix", 0)
     repair, target = mark.get("repair", ""), mark.get("target", "")  # 옛 state의 표시에는 target이 없다
+    again = mark.get("reviewed_again", False)  # 이것도 옛 state의 표시에는 없다
     last = Path(mark["rundir"])
 
     def stand_in(code: int, note: str = "", rundir: Path = last) -> Active:
         _set(r, t.id, status=state.RUNNING, branch=branch, worktree=str(wt), pane="", reason="", ended_at="",
              started_at=state.now(), log=str(rundir / "worker.log"))
-        return Active(t, worker.Finished(worker.Job(t, wt, rundir), code, note), branch, wt, base, fix=nth, repair=repair, target=target)
+        return Active(t, worker.Finished(worker.Job(t, wt, rundir), code, note), branch, wt, base, fix=nth, repair=repair, target=target,
+                      reviewed_again=again)
 
     def give_up(why: str, *, retry: bool = True, rundir: Path = last) -> Active | None:
         if nth or repair:
@@ -1426,7 +1448,8 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
     일시 오류로 끝났으면 실패로 세지 않고 세워 둔다(_net_tick이 다시 띄운다). 네트워크 끊김 중이면 리뷰·재리뷰를 미룬다.
     리뷰로 갈 때 리뷰부터 잇는 표시를 먼저 남긴다: 끝나기 전에 gs가 어떻게 끝나든 다음 gs go가 worker를 다시 띄우지 않고 리뷰를 다시 한다.
     그 뒤는 _review_tick이 맡는다: 리뷰(재리뷰)가 티켓 head까지 닿으면(_review_to_head, 병합 전 대조가 거기 있다. 기다린 뒤의 대조는 _leave_review, 병합 직전의 대조는 _merge_stage) 고칠 지적이 있으면 수정 worker(최대 2회), 없으면 병합·검증이다.
-    지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review).
+    지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review). 빈 diff에서 판정을 유지한 재리뷰(_verdict_kept)처럼 수정을 더 띄우지 않던 티켓은 여기서도 띄우지 않는다.
+    대조의 한 번 더가 끝나기 전에 멈춘 티켓(reviewed_again)은 worker 결과를 다시 보지 않고 그 한 번을 잇는다(_review_again): 합쳐 한 번이고 끝나면 대조 기록이 남는다. 새로 띄운 worker의 Active는 이 값이 False다.
     수리 worker도 여기로 온다: 커밋을 남겼으면 재리뷰, 아니면 바로 다시 병합·검증이다(_end_repair). 수리 자리를 기다리던 티켓과 다시 검증 차례인 티켓은 그 자리로 돌아간다(_resume, _start_repair).
     오류는 _loop가 처리한다.
     """
@@ -1434,8 +1457,11 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
         if a.repair == REPAIR_VERIFY:
             return _merge_stage(r, a)
         # 수정은 티켓당 최대 2회다. 수리 뒤와 버린 수정 뒤에는 고치지 않는다
-        todo = [] if a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) else _todo(r, a.t, a.fix + 1)
+        todo = [] if a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) or _verdict_kept(r, a.t, a.fix) else _todo(r, a.t, a.fix + 1)
         r.reviews.tickets[a.t.id] = Reviewing(a, finished=True, todo=todo, waited=True, repair=a.repair == REPAIR_SEAT)
+        return
+    if a.reviewed_again:
+        r.reviews.tickets[a.t.id] = Reviewing(a, moved=git.sha(r.repo, a.branch))
         return
     step = _check_worker(r, a, code, others, error)
     if step == TO_REVIEW:
@@ -1505,7 +1531,7 @@ def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error:
 def _review_stage(r: Run, a: Active, moved: str = "") -> ReviewFlow:
     """2단계(제너레이터, ReviewFlow): 구현 worker면 리뷰, 수정 worker면 재리뷰, 수리 worker면 수리 재리뷰를 티켓 head까지 하고 다음 수정 worker가 고칠 지적을 돌려준다.
 
-    moved는 끝난 리뷰 뒤에 움직인 head다(기다리는 사이 _moved_while_waiting, 병합 단계 _late_commit). 있으면 대조의 "한 번 더"부터 한다(_review_again).
+    moved는 끝난 리뷰 뒤에 움직인 head다(기다리는 사이 _moved_while_waiting, 병합 단계 _late_commit, 끝나기 전에 멈춘 대조의 재개 _finish). 있으면 대조의 "한 번 더"부터 한다(_review_again).
 
     한 번의 리뷰는 준비 → 호출 → 반영이다. 호출(_call_reviewers, _call_rereviewers)만 루프 밖 스레드에서 돈다: 여기서 낸 호출을 _review_step이 보내고, 결과나 예외를 넣어 잇는다.
     호출은 인자로 받은 값만 보고 결과만 돌려준다. 그 밖의 모든 코드는 루프 스레드에서 돈다: 준비·반영(_plan_review·_apply_review, _plan_rereviews·_apply_rereviews), 호출 직전의 agy 세기, 병합 전 대조(_review_to_head).
@@ -1616,7 +1642,8 @@ def _late_commit(r: Run, a: Active, head: str) -> bool:
 
     규칙은 리뷰 단계의 대조(_review_again)와 같다: 한 번만 더 본다. 이미 더 봤으면 False다: 경고와 기록을 남기고 호출한 쪽이 a.target을 병합한다. 리뷰를 깨끗해질 때까지 돌리지 않는다.
     늦은 커밋은 브랜치에 남는다. 끝이 integration에 없으니 _cleanup_merged가 브랜치를 지우지 않는다.
-    돌려보낸 티켓은 리뷰부터 잇는 표시를 남기고 다른 리뷰처럼 자리와 끊김의 끝을 기다린다(_review_step). 수리를 거친 티켓의 표시는 REPAIR_VERIFY 그대로다: 재개하면 이 대조로 다시 온다.
+    돌려보낸 티켓은 리뷰부터 잇는 표시를 남기고 다른 리뷰처럼 자리와 끊김의 끝을 기다린다(_review_step). 표시에 reviewed_again도 남긴다: 돌아가는 도중 멈춰도 다음 gs go가 이 한 번을 잇고 더 부르지 않는다(_finish).
+    수리를 거친 티켓의 표시는 REPAIR_REVIEW로 되돌린다: REPAIR_VERIFY로 남기면 다음 gs go가 이미 한 번 더 본 줄 알고 늦은 커밋을 보지 않은 채 병합한다.
     수정을 버린 티켓도 늦은 커밋은 재리뷰한다. 재리뷰는 다음 수정을 띄우지 않고 버린 기록을 덮어쓰지 않는다(_fix_discarded).
     """
     if a.reviewed_again:
@@ -1627,6 +1654,9 @@ def _late_commit(r: Run, a: Active, head: str) -> bool:
         r.save()
         return False
     _reset_integration(r, r.ihead)
+    a.reviewed_again = True
+    if a.repair:
+        a.repair = REPAIR_REVIEW
     _mark_resume(r, a, done=True)
     r.reviews.tickets[a.t.id] = Reviewing(a, moved=head)
     return True
@@ -1636,6 +1666,7 @@ def _catch_up_reviewed(r: Run, a: Active, head: str) -> None:
     """catch-up이 리뷰 대상 위에 커밋 head를 만들었다. 리뷰 대상을 옮긴다. 이미 본 내용에 integration을 합쳤을 뿐이니 다시 리뷰하지 않는다.
 
     기준(a.base)도 옮긴다: 뒤에 늦은 커밋을 재리뷰하면 그 diff에 다른 티켓의 변경이 들지 않는다. 표시에도 적는다: 다음 gs go가 catch-up을 늦은 커밋으로 보지 않게.
+    그 뒤의 늦은 커밋이 비어 diff가 없어도 앞 재리뷰의 판정은 그대로다(_empty_rereview). 수정 전 기준은 남기지 않는다(재리뷰 전용 기준은 범위 밖 rereview-diff-base).
     """
     a.target = a.base = head
     mark = r.st.ticket(a.t.id).network_resume
@@ -1831,8 +1862,17 @@ def _review_to_head(r: Run, a: Active, call: Callable[[Run, Active], ReviewFlow]
 
 
 def _review_again(r: Run, a: Active, call: Callable[[Run, Active], ReviewFlow], moved: str) -> ReviewFlow:
-    """head가 moved로 움직였다: 한 번만 더 본다(리뷰를 깨끗해질 때까지 돌리지 않는다). 또 다르면 경고와 기록만 남긴다(_note_unseen)."""
+    """head가 moved로 움직였다: 한 번만 더 본다(리뷰를 깨끗해질 때까지 돌리지 않는다). 또 다르면 경고와 기록만 남긴다(_note_unseen).
+
+    표시에 먼저 남긴다: 호출 도중 멈추면 다음 gs go가 끊긴 호출만 다시 하고 더 부르지 않는다(_finish).
+    기다리는 사이의 대조면 앞 리뷰가 끝났다는 표시(reviewed)가 있다. 지운다: 남으면 이 호출도 끝난 것으로 읽어(_resume) 대조를 건너뛴다. 끝나면 다시 적힌다(_resume_flow).
+    """
     a.reviewed_again = True
+    mark = r.st.ticket(a.t.id).network_resume
+    if mark:
+        mark.pop("reviewed", None)
+        mark["reviewed_again"] = True
+        r.save()
     say(f"[{a.t.id}] 병합 전 대조: head {moved[:8]}가 마지막으로 리뷰한 head와 달라 다시 리뷰한다")
     todo = yield from call(r, a)
     left = _moved_head(r, a)
@@ -1931,6 +1971,11 @@ def _received(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
 def _fix_discarded(r: Run, t: Ticket, nth: int) -> bool:
     """nth번째 수정을 버렸나(_end_fix). 지적의 기록으로 가리므로 재개해도 그대로다. 받은 지적이 없으면(nth가 0) 아니다."""
     return any(f.get("fix_attempt") == review.DISCARDED for _, found in _received(r, t, nth) for f in found)
+
+
+def _verdict_kept(r: Run, t: Ticket, nth: int) -> bool:
+    """nth번째 재리뷰가 빈 diff에서 앞 판정을 유지했나(_empty_rereview). 기록으로 가리므로 재개해도 그대로다. 그 판정대로 병합 단계까지 왔으니 수정 worker를 새로 띄우지 않는다."""
+    return any(rec.get("kept_round") == nth for rec in state.reviews(r.st.ticket(t.id)))
 
 
 def _to_rereview(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
@@ -2248,7 +2293,7 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
     중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 재리뷰부터 잇고, 뒤는 티켓 실패다: 확인 없이 병합하지 않는다.
     병합 전 대조로 다시 불려도 같은 지적을 본다(a.base..head이므로 수정 뒤에 생긴 커밋도 diff에 든다).
     2차면 수정 worker가 받은 지적에 더해 앞서 resolved인 지적도 최종 커밋에서 본다. 수정 커밋의 diff가 비면 받은 지적만 unresolved다:
-    트리가 앞 재리뷰가 본 그대로이니 앞 판정은 그대로 맞다.
+    트리가 앞 재리뷰가 본 그대로이니 앞 판정은 그대로 맞다. catch-up이 기준을 옮긴 뒤의 빈 diff는 받은 지적의 판정도 그대로 두고 2차 수정을 띄우지 않는다(_empty_rereview).
     버린 수정 뒤의 늦은 커밋을 보는 재리뷰(_late_commit)는 판정만 적고 2차 수정을 띄우지 않는다: 실패한 수정 뒤에는 고치지 않는다.
     """
     t, nth = a.t, a.fix
@@ -2259,11 +2304,8 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
         if git.out(r.repo, "diff", "--no-ext-diff", "--name-only", f"{a.base}..{head}"):
             with _review_tree(r, a, head, rereview=True) as tree:
                 yield from _run_rereviews(r, a, targets, head, tree)
-        else:  # 부를 것도 없다: 바뀐 것이 없으니 고쳐졌을 수 없다
-            for rec, found in _received(r, t, nth):
-                rec["reviewed_head"] = head
-                review.mark_rereview(found, nth, review.UNRESOLVED, "", "수정 커밋의 diff가 비었다")
-                _append_fix(rec, f"재리뷰 {nth}차: 수정 커밋의 diff가 비어 부르지 않았다(unresolved)")
+        else:  # 부를 것도 없다: 바뀐 것이 없다
+            _empty_rereview(r, a, head)
     except (transient.NetworkAbort, ReviewThreadError):
         raise
     except Exception as e:  # noqa: BLE001 — verify가 병합 관문이다
@@ -2272,8 +2314,32 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
             done = rec.get("rereviews", [])
             if not done or done[-1].get("head") != head:  # 먼저 끝난 다른 리뷰어의 결과는 그대로 둔다
                 review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_FAILED, f"뜻밖의 오류 {_err(e)}")
+                rec.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
     r.save()
-    return _todo(r, t, nth + 1) if nth == 1 and not _fix_discarded(r, t, nth) else []  # 수정은 티켓당 최대 2회다
+    return _todo(r, t, nth + 1) if nth == 1 and not _verdict_kept(r, t, nth) and not _fix_discarded(r, t, nth) else []  # 수정은 티켓당 최대 2회다
+
+
+def _empty_rereview(r: Run, a: Active, head: str) -> None:
+    """a.base..head가 비어 재리뷰어를 부르지 않는다. 받은 지적의 판정을 적거나 앞 판정을 유지한다.
+
+    이 회차 판정을 낸 head가 a.base 아래에 있으면 catch-up이 기준을 그 위로 옮겼다(_catch_up_reviewed). 트리는 판정한 트리에 integration을 합친 그대로이니 빈 diff는 판정에 대해 말해 주는 것이 없다.
+    그 밖에는 고쳐졌을 수 없어 unresolved다: 앞서 이 회차 판정이 없거나(빈 수정 커밋, 버린 수정), 판정한 head가 기준 위에 있는데 diff가 비었다(늦은 커밋이 수정을 되돌렸다).
+    유지했으면 기록에 남긴다(kept_round, _verdict_kept): reviewed_head는 여기서 빈 커밋으로 옮겨 가므로 재개해 다시 오면 판정한 head로 가릴 수 없다.
+    그 기록의 지적에 결과를 새로 적으면 지운다: 재리뷰 결과(_apply_rereviews), 한도(_plan_rereviews), 뜻밖의 오류(_rereview). 남기면 다른 리뷰어의 새 판정까지 2차 수정에서 뺀다.
+    """
+    nth = a.fix
+    for rec, found in _received(r, a.t, nth):
+        judged = rec.get("reviewed_head", "")
+        moved_past = rec.get("kept_round") == nth or (
+            judged != a.base and git.run(r.repo, "merge-base", "--is-ancestor", judged, a.base, check=False).returncode == 0)
+        left = [f for f in found if not (moved_past and f.get("rereview_round") == nth)]
+        rec["reviewed_head"] = head
+        if len(left) < len(found):
+            rec["kept_round"] = nth
+            _append_fix(rec, f"재리뷰 {nth}차: catch-up 뒤 diff가 비어 부르지 않았다(앞 판정을 유지)")
+        if left:
+            review.mark_rereview(left, nth, review.UNRESOLVED, "", "수정 커밋의 diff가 비었다")
+            _append_fix(rec, f"재리뷰 {nth}차: 수정 커밋의 diff가 비어 부르지 않았다(unresolved)")
 
 
 class TreeUnavailable(Exception):
@@ -2342,6 +2408,7 @@ def _plan_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]],
         if _is_agy(who) and state.agy_reached(r.st, _agy_limit(r)):
             detail = f"이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다"
             review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_LIMIT, detail)
+            rec.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
             _append_fix(rec, f"재리뷰 {nth}차 {review.LIMIT}: {detail}")
             say(f"[{t.id}] 재리뷰 {nth}차({who}) {review.LIMIT}: {detail}")
             continue
@@ -2378,6 +2445,7 @@ def _apply_rereviews(r: Run, a: Active, launch: list[tuple[dict, list[dict]]], r
                    "failed": review.REASON_FAILED, "verdicts": {}, "findings": []}
         review.apply_rereview(rec, found, res, nth)
         rec["reviewed_head"] = head
+        rec.pop("kept_round", None)  # 유지한 뒤 새로 판정했다(_empty_rereview)
         msg = f"재리뷰 {nth}차: {review.rereview_counts(found, len(res['findings']))}" \
             + (f" — {res['note']}" if res["note"] else "")
         _append_fix(rec, msg)

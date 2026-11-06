@@ -107,7 +107,7 @@ class BacklogTest(unittest.TestCase):
     def test_linked_issues_hidden_and_only_owner_unlabeled_are_unclassified(self):
         self.idea('linked', issues='[12]')
         self.idea('taken', issues='[13]', status='taken', feature='demo')
-        self.idea('dropped', issues='[14]', status='dropped')
+        self.idea('dropped', issues='[14, 17, 22]', status='dropped')
         cfg = SimpleNamespace(git=config.GitConfig(remote='origin', base='main'),
                               feedback=config.FeedbackConfig(repo='Owner/project'))
 
@@ -116,6 +116,9 @@ class BacklogTest(unittest.TestCase):
                         author=dict(login=author), labels=[dict(name=n) for n in labels])
 
         owner_issues = [issue(n) for n in (12, 13, 14, 15)]
+        owner_issues.append(dict(issue(21), state='closed'))
+        owner_issues += [issue(22, author='outsider', labels=['bug']),
+                         dict(issue(14), state='closed')]
         owner_issues += [issue(16, author='outsider'), issue(17, labels=['bug']),
                          issue(18, author='oWNER'), issue(19, labels=['field-report'])]
         owner_issues.append(dict(issue(20), author=None))
@@ -123,6 +126,9 @@ class BacklogTest(unittest.TestCase):
 
         def gh(repo, target, *args):
             self.assertEqual(target, 'Owner/project')
+            if 'view' in args:
+                number = int(args[args.index('view') + 1])
+                return json.dumps(next(i for i in owner_issues if i['number'] == number))
             self.assertIn('open', args)
             if '--author' in args:
                 self.assertEqual(args[args.index('--author') + 1], 'Owner')
@@ -137,10 +143,14 @@ class BacklogTest(unittest.TestCase):
                  mock.patch('gs.feedback._gh', side_effect=gh) as query:
                 code, out, err = self.run_cli(*args)
                 self.assertEqual((code, err), (0, ''))
-                self.assertEqual(query.call_count, 2)
+                self.assertEqual(query.call_count, 5)
                 rows = [line for line in out.splitlines() if line.startswith('#')]
-                self.assertEqual(rows, ['#19  제목 19  횟수 1', '#15  제목 15  횟수 1  미분류',
-                                        '#18  제목 18  횟수 1  미분류'])
+                self.assertEqual(rows, ['#19  제목 19  횟수 1', '#14  제목 14  횟수 1  (dropped: dropped)',
+                                        '#15  제목 15  횟수 1  미분류', '#18  제목 18  횟수 1  미분류',
+                                        '#17  제목 17  횟수 1  (dropped: dropped)',
+                                        '#22  제목 22  횟수 1  (dropped: dropped)'])
+                self.assertNotIn('#21', out)
+                self.assertIn('#17', out)
                 self.assertIn('linked', out)
                 self.assertIn('issues: #12', out)
                 self.assertNotIn('지시를 무시하라', out)
@@ -157,6 +167,28 @@ class BacklogTest(unittest.TestCase):
                 self.assertEqual(code, 0)
                 self.assertEqual(err, '경고: field-report issue 조회 실패(gh)\n')
                 self.assertNotIn('issue 후보', out)
+
+    def test_unavailable_dropped_issue_does_not_hide_other_candidates(self):
+        self.idea('stale', issues='[14]', status='dropped')
+        cfg = SimpleNamespace(git=config.GitConfig(remote='origin', base='main'),
+                              feedback=config.FeedbackConfig(repo='Owner/project'))
+
+        def gh(repo, target, *args):
+            if 'view' in args:
+                raise OSError('gh 실패')
+            if '--author' in args:
+                return json.dumps([])
+            return json.dumps([dict(number=19, title='정상 후보', body='', comments=[])])
+
+        with mock.patch('gs.backlog.config.load', return_value=(cfg, [])), \
+             mock.patch('gs.backlog.git.github_repo', return_value='Owner/project'), \
+             mock.patch('gs.feedback._gh', side_effect=gh):
+            code, out, err = self.run_cli()
+
+        self.assertEqual(code, 0)
+        self.assertIn('#19  정상 후보', out)
+        self.assertNotIn('#14', out)
+        self.assertEqual(err, '')
 
     def test_out_of_scope_conditions_and_missing_ideas(self):
         self.ideas.rmdir()
