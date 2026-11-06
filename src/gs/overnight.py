@@ -22,6 +22,10 @@
 모르지만 그때 디스크에 있는 글에 글자를 바꾸므로 더해진 줄이 남는다(2026-11-06 Claude Code 2.1.319로 쟀다). Write 도구로 통째로 쓰면 지워지므로
 skill이 Edit을 쓰라고 적는다. 살아 있는 표시가 곧 코디네이터다. `/overnight`이 첫 `gs go`를 띄울 때 켜서 밤이 끝날 때 끄기 때문이다.
 `/go`로만 돌고 있으면 표시가 없고, 이어 줄 세션이 없다.
+
+대기열을 닫는 것은 `disarm`이다. 아침 보고를 쓴 밤은 표시가 있을 때만 줄을 받으므로, `disarm`이 `add`와 같은 잠금 안에서 표를 보고
+`대기` 줄이 남았으면 끄지 않는다. 표시를 본 `add`가 더한 줄은 끄기 전에 드러나고, 끈 뒤의 `add`는 끝난 밤으로 거부된다.
+끈 다음에 다시 읽고 다시 켜지 않는다. 그 틈의 `add`가 새 파일로 가고, 사람이 없는 밤에 `arm`이 창을 띄울 수 있다.
 """
 from __future__ import annotations
 
@@ -58,6 +62,7 @@ RESULT_HEADING = "## 결과"
 REPORT_HEADING = "## 아침 보고"
 TABLE_SEPARATOR = re.compile(r"\|[\s:|-]+\|")
 WAITING = "대기"
+ROWS_LEFT = f"`{WAITING}` 줄이 남아"
 NO_COORDINATOR = "코디네이터: 없음"
 MAKE_NIGHT = "`/overnight <feature>`로 시작하거나 `/overnight add <feature>`로 새 밤샘 파일을 만든다"
 
@@ -217,7 +222,10 @@ def arm(repo: Path, out: TextIO, err: TextIO) -> int:
 
 
 def disarm(repo: Path, out: TextIO, err: TextIO) -> int:
-    """이 Claude 세션의 표시만 지운다. 켜져 있지 않아도 성공이다. 다른 세션의 표시는 그대로 둔다."""
+    """이 Claude 세션의 표시만 지운다. 켜져 있지 않아도 성공이다. 다른 세션의 표시는 그대로 둔다.
+
+    아침 보고를 쓴 밤에 `대기` 줄이 남았으면 끄지 않고 실패한다. 끄면 아무도 그 줄을 잇지 않는다.
+    """
     table = _table(err)
     if table is None:
         return 1
@@ -229,12 +237,18 @@ def disarm(repo: Path, out: TextIO, err: TextIO) -> int:
         print(f"오류: 조상에 claude 프로세스가 없어 어느 표시를 끌지 모른다. 켜진 세션 pid: {others}. "
               "그 세션에서 치거나 그 세션을 끝낸다", file=err)
         return 1
-    path = _marker(root, session.pid)
-    if any(marker.same(session) for marker in live):
-        path.unlink(missing_ok=True)
-        print(f"끔: Claude 세션 pid {session.pid}의 승인 창이 다시 뜬다", file=out)
-    else:
+    if not any(marker.same(session) for marker in live):  # 잠금 파일도 만들지 않는다
         print(f"이미 꺼져 있다: Claude 세션 pid {session.pid}", file=out)
+        return 0
+    with _queue_lock(root):
+        left = _rows_left(root)
+        if not left:
+            _marker(root, session.pid).unlink(missing_ok=True)
+    if left:
+        print(f"오류: 가장 최근 밤샘 파일에 아침 보고가 있는데 {ROWS_LEFT} 끄지 않았다: {', '.join(left)}. "
+              "그 줄을 잇거나 상태를 고친 뒤 다시 친다", file=err)
+        return 1
+    print(f"끔: Claude 세션 pid {session.pid}의 승인 창이 다시 뜬다", file=out)
     return 0
 
 
@@ -277,7 +291,7 @@ def latest_night(root: Path) -> Path | None:
 
 @contextlib.contextmanager
 def _queue_lock(root: Path):
-    """줄 더하기 하나씩. 밤샘 파일은 rename으로 바뀌므로 잠금은 따로 둔 파일에 건다. 프로세스가 죽으면 저절로 풀린다."""
+    """줄 더하기와 대기열 닫기를 하나씩. 밤샘 파일은 rename으로 바뀌므로 잠금은 따로 둔 파일에 건다. 프로세스가 죽으면 저절로 풀린다."""
     fd = os.open(root / QUEUE_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -320,8 +334,31 @@ def _replace(path: Path, text: str) -> None:
         raise
 
 
+def _reported(lines: list[str]) -> bool:
+    return any(line.rstrip() == REPORT_HEADING for line in lines)
+
+
+def _rows_left(root: Path) -> list[str]:
+    """아침 보고를 쓴 가장 최근 밤에 남은 `대기` 줄의 feature들. 잠금 안에서 부른다.
+
+    표를 읽지 못하면 없다고 본다. `add`도 그 표에 더하지 못하고, 끄기는 창을 되돌릴 뿐이다.
+    """
+    night = latest_night(root)
+    if night is None:
+        return []
+    try:
+        lines = night.read_text(encoding="utf-8").split("\n")
+        rows = _result_table(lines)[2:] if _reported(lines) else []
+    except (ResultFileError, OSError, UnicodeDecodeError):
+        return []
+    return [cells[0] for cells in (_cells(lines[i]) for i in rows) if cells[1:2] == [WAITING]]
+
+
 def _reopened(root: Path) -> bool:
-    """아침 보고가 있는 밤을 잇는 세션이 있는가. `/overnight resume`은 멈춘 밤의 보고를 남긴 채 같은 파일을 잇는다."""
+    """아침 보고가 있는 밤을 잇는 세션이 있는가. `/overnight resume`은 멈춘 밤의 보고를 남긴 채 같은 파일을 잇는다.
+
+    보고를 막 쓰고 아직 끄지 않은 세션도 여기 든다. 그 세션은 `disarm`이 거부해서 더해진 줄을 잇는다.
+    """
     try:
         return bool(_live_markers(root, processes()))
     except (OSError, subprocess.SubprocessError) as e:
@@ -335,7 +372,7 @@ def _enqueue(root: Path, night: Path, name: str) -> str | None:
     아침 보고를 쓰고 잇는 세션이 없는 밤에는 더하지 않는다. 며칠 전 허락이 새 feature에 쓰이게 된다.
     """
     lines = night.read_text(encoding="utf-8").split("\n")
-    if any(line.rstrip() == REPORT_HEADING for line in lines) and not _reopened(root):
+    if _reported(lines) and not _reopened(root):
         raise ResultFileError(f"아침 보고까지 쓴 끝난 밤이다. {MAKE_NIGHT}")
     table = _result_table(lines)
     for i in table[2:]:

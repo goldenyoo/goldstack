@@ -130,7 +130,7 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 
 ## 7. 아침 보고
 
-파일을 다시 읽어 `대기` 줄이 생겼으면 사이 단계로 돌아간다. `.goldstack/overnight/denied.log`에서 이 파일 날짜 이후 줄을 `쓴 허락`에 옮긴다. `결과`·`쓴 허락`·`아침에 물을 것`으로 한 장을 쓴다. 파일 끝 `## 아침 보고`에 넣고 같은 글을 세션에 보인다. PR은 state.json의 `finish.url`이다. `남은 high`는 `gs go` 출력의 `■ 남은 high …`·`■ 건너뛴 리뷰: …` 줄이나 `report.md`의 `마무리:` 줄 뒤쪽을 그대로 옮기고, 없으면 `–`다. 이 값이 있어도 `verified`는 바꾸지 않는다. feature마다 `/retro <feature>` 권고를 `회고:` 줄 하나에 넣는다. 피드백 건수는 `gs feedback list`로 센다.
+파일을 다시 읽어 `대기` 줄이 생겼으면 사이 단계로 돌아간다. `.goldstack/overnight/denied.log`에서 이 파일 날짜 이후 줄을 `쓴 허락`에 옮긴다. `결과`·`쓴 허락`·`아침에 물을 것`으로 한 장을 쓴다. 파일 끝 `## 아침 보고`에 넣고(있으면 고친다) 같은 글을 세션에 보인다. PR은 state.json의 `finish.url`이다. `남은 high`는 `gs go` 출력의 `■ 남은 high …`·`■ 건너뛴 리뷰: …` 줄이나 `report.md`의 `마무리:` 줄 뒤쪽을 그대로 옮기고, 없으면 `–`다. 이 값이 있어도 `verified`는 바꾸지 않는다. feature마다 `/retro <feature>` 권고를 `회고:` 줄 하나에 넣는다. 피드백 건수는 `gs feedback list`로 센다.
 
 ```markdown
 # 밤샘 보고 <날짜>
@@ -149,7 +149,7 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
 
 텔레그램을 켰으면 마지막에 요약 한 통을 보낸다. feature별 결과 한 줄과 남은 질문 수를 `.goldstack/overnight/<날짜>-telegram.txt`에 쓰고 `gs notify .goldstack/overnight/<날짜>-telegram.txt`를 친다. 실패는 결과를 바꾸지 않고 파일에만 적는다.
 
-끝으로(멈춘 밤도) `gs overnight disarm`을 친다.
+끝으로(멈춘 밤도) `gs overnight disarm`을 친다. `대기` 줄이 남아 거부하면 사이 단계로 돌아간다.
 
 ## 이어받기
 
@@ -162,7 +162,7 @@ force push, 원격 브랜치 수동 삭제(`gs clean --force` 포함), 허락에
    - 실행 중이면 다시 띄우지 않는다. 알림이 오지 않으므로 그 pid에 묶기 명령을 `run_in_background`로 걸고 그 완료 알림을 `gs go` 완료 알림으로 삼고 `gs overnight arm`을 친다.
    - 실행 기록이 없으면 사이 단계부터 밟는다. `받은 허락`에 다시 돌리라는 답이 있으면 5단계로 간다.
    - 그 밖에는 6단계 판정부터 한다. 사이 단계를 어디까지 밟았는지 모르면 처음부터 밟는다.
-5. 남은 feature가 없으면 `## 아침 보고`를 쓰거나 고쳐 보이고 `gs overnight disarm`을 친 뒤 끝낸다.
+5. 남은 feature가 없으면 `## 아침 보고`를 쓰거나 고쳐 보이고 7단계 끝처럼 `gs overnight disarm`을 치고 끝낸다.
 
 ## 대기열에 더하기
 

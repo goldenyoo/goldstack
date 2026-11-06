@@ -718,6 +718,95 @@ class OvernightTest(unittest.TestCase):
                 self.assertNotIn("끝난 밤", err.getvalue())
                 self.assertEqual(path.read_text(encoding="utf-8"), text)
 
+    def test_report_written_before_disarm_keeps_the_added_row_alive(self):
+        """7단계의 마지막 확인과 보고 뒤, 끄기 전에 들어온 줄. 끄기가 거부해 코디네이터가 잇고, 끈 뒤에는 거부되어 줄이 방치되지 않는다."""
+        path, _ = self.night(NIGHT + REPORT), self.feature("c", "d")
+        typist, coordinator = FakeClaude(self), FakeClaude(self)
+        self.arm(coordinator)
+        code, out, err = typist.run([*GS, "overnight", "add", "c"], self.repo)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn(f"코디네이터: 세션 pid {coordinator.pid}", out)
+
+        code, out, err = coordinator.run([*GS, "overnight", "disarm"], self.repo)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn(overnight.ROWS_LEFT, err)
+        self.assertIn(": c.", err)
+        self.denial(self.hook(coordinator))  # 켜진 채로 다음 feature를 잇는다
+
+        path.write_text(path.read_text(encoding="utf-8").replace(ROW_C, "| c | verified | 0 | – | – |"), encoding="utf-8")
+        code, out, err = coordinator.run([*GS, "overnight", "disarm"], self.repo)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("끔", out)
+        self.assertWindow(coordinator)
+
+        before = path.read_text(encoding="utf-8")
+        code, _, err = typist.run([*GS, "overnight", "add", "d"], self.repo)
+        self.assertEqual(code, 1)
+        self.assertIn("끝난 밤", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), before)
+
+    def disarm_in_lock(self, inside):
+        """`gs overnight disarm`을 켜진 가짜 세션으로 돌린다. 잠금을 얻은 자리에서 `inside()`를 부르고, 그 직후와 놓기 직전의 표시 유무를 함께 돌려준다."""
+        session = overnight.Session(4242, 1000)
+        overnight._ensure_ignored(self.repo)
+        overnight._write_marker(self.repo, session)
+        marker = overnight._marker(self.repo, session.pid)
+        real = overnight._queue_lock
+        seen = []
+
+        @contextlib.contextmanager
+        def watched(root):
+            with real(root):
+                inside()
+                seen.append(marker.exists())
+                yield
+                seen.append(marker.exists())
+
+        table = {session.pid: overnight.Process(1, session.started, "claude")}
+        with mock.patch("gs.overnight._queue_lock", watched), mock.patch("gs.overnight.current_session", return_value=session):
+            return (*self.run_cmd("overnight", "disarm", table=table), seen)
+
+    def test_disarm_reads_the_table_after_it_gets_the_lock(self):
+        """표시를 본 `add`가 잠금 안에서 더하는 동안 끄는 쪽이 기다렸다가 그 줄을 본다. 잠금 전에 읽으면 줄이 방치된다."""
+        path, _ = self.night(NIGHT + REPORT), self.feature("c")
+        code, _, err, seen = self.disarm_in_lock(lambda: path.write_text(NIGHT + ROW_C + "\n" + REPORT, encoding="utf-8"))
+        self.assertEqual(code, 1)
+        self.assertIn(overnight.ROWS_LEFT, err)
+        self.assertEqual(seen, [True, True])
+
+    def test_disarm_removes_the_mark_inside_the_lock(self):
+        """잠금을 놓기 전에 꺼져 있어야 그 뒤의 `add`가 표시 없는 끝난 밤을 본다."""
+        self.night(NIGHT + REPORT)
+        code, out, _, seen = self.disarm_in_lock(lambda: None)
+        self.assertEqual(code, 0)
+        self.assertIn("끔", out)
+        self.assertEqual(seen, [True, False])
+
+    def test_disarm_is_refused_only_for_a_waiting_row_on_a_reported_night(self):
+        cases = {"보고 전의 대기 줄(사전 점검, 밤 중의 수동 끄기)": NIGHT + ROW_C + "\n",
+                 "보고 뒤 다른 상태의 줄": NIGHT + REPORT,
+                 "보고가 있고 표가 깨졌다": "## 결과\n글\n" + REPORT}
+        for label, text in cases.items():
+            with self.subTest(label):
+                self.night(text)
+                code, out, err, _ = self.disarm_in_lock(lambda: None)
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn("끔", out)
+        with self.subTest("읽지 못하는 파일"):
+            self.night().write_bytes(b"\xff\xfe")
+            self.assertEqual(self.disarm_in_lock(lambda: None)[0], 0)
+        with self.subTest("모델이 다르게 쓴 줄"):
+            self.night(NIGHT + "|`c`|`대기`|0|–|–|\n" + REPORT)
+            self.assertEqual(self.disarm_in_lock(lambda: None)[0], 1)
+
+    def test_disarm_of_an_unarmed_session_ignores_waiting_rows(self):
+        """켜져 있지 않으면 닫을 대기열이 없다. 사전 점검의 `gs overnight disarm`이 멈추지 않는다."""
+        self.night(NIGHT + ROW_C + "\n" + REPORT)
+        code, out, _ = FakeClaude(self).run([*GS, "overnight", "disarm"], self.repo)
+        self.assertEqual(code, 0)
+        self.assertIn("이미 꺼져", out)
+        self.assertFalse((self.repo / overnight.QUEUE_LOCK).exists())
+
     def test_add_picks_the_newest_night_by_name(self):
         self.feature("c")
         older = [self.night(name=name) for name in ("2026-11-05-9.md", "2026-11-06.md", "2026-11-06-2.md")]

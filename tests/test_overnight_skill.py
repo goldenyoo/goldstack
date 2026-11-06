@@ -125,6 +125,13 @@ class OvernightSkillTest(unittest.TestCase):
         self.assertIn("7단계로 간다", self.parts["멈출 조건"])
         self.assert_in_order(self.parts["이어받기"], "`## 아침 보고`", "`gs overnight disarm`")
 
+    def test_refused_disarm_goes_back_to_the_chain(self):
+        """보고와 끄기 사이에 더해진 줄. 엔진이 끄기를 거부하므로 skill이 그 말을 듣고 잇는다."""
+        section = self.parts["7. 아침 보고"]
+        self.assert_in_order(section, "`gs overnight disarm`", f"{overnight.ROWS_LEFT} 거부하면 사이 단계로 돌아간다")
+        self.assertIn("`## 아침 보고`에 넣고(있으면 고친다)", section)  # 돌아왔다 다시 오면 보고가 이미 있다
+        self.assertIn("7단계 끝처럼 `gs overnight disarm`", self.parts["이어받기"])
+
     def test_resume_arms_when_it_binds_to_a_running_go(self):
         bound = next(line for line in self.parts["이어받기"].splitlines() if "실행 중이면 다시 띄우지 않는다" in line)
         self.assertIn("`gs overnight arm`", bound)
