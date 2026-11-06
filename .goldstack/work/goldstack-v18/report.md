@@ -17,7 +17,7 @@ v18의 목표는 일부만 달성됐다. 티켓 5장 중 01·02·04만 병합됐
 - **`test_tiers` 범위 밖 수정:** 04의 설정 변경으로 깨진 시험을 01의 수리 커밋이 고쳤는데, 이 파일은 01의 `touches`에 없었다. 이제 레포의 agy 값은 Argon High 고정값과 비교한다. 기본값과의 일치는 여전히 확인하지만, 레포 설정이 기본값과 달라도 된다는 예외가 agy에 생겼다.
 - **02 지적 내용 미확인:** 02의 수리 재리뷰에서 지적 1개가 나왔고 채택되지 않았으며, 입력에는 그 내용과 상태가 없다. 그 수리는 conflict로 실패했고 다시 만든 시도 2의 리뷰는 지적 0개였지만, 같은 지적이 해소됐는지는 확인하지 못했다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/38 병합 · main 검증 통과
 리뷰 지적: 수정됨 1
 
 ## Evidence
@@ -87,15 +87,22 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 6 | ticket-01-repair | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | af239d92a18d901725f1ebbf3c7ff9cc49409166 | 37fb497cc9dd2d9196296f1c9590c7b4b2348200 | 601.216165 | passed |
 | 7 | ticket-02 | 2 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 64fc50f0dcef02876e501f15cd38557c86f64517 | 108c03278af14a66581ed85a578584ab8808703a | 404.830167 | passed |
 | 8 | integration | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | bd62a1c3fd2187072c7ba156642338eb0b23d429 | - | 404.690214 | passed |
+| 9 | main | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_profile_brief.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 278955d2da112b985016ba30d682c985a61ffe75 | - | 405.106645 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 433.0 |
-| verify | 404.738 |
+| total | 850.0 |
+| verify | 809.91 |
 | summary | 27.927 |
-| report | 0 |
+| report | 0.072 |
+| push | 2.033 |
+| publish | 3.335 |
+| merge-pr | 3.416 |
+| confirm-merge | 0.006 |
+| postmerge | 406.346 |
+| restore-reverts | 0.024 |
 
 ### 티켓별 결과
 
@@ -581,6 +588,29 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 0.53ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/gs-main-uarhbw6c/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/gs-main-uarhbw6c/base
+Prepared 1 package in 186ms
+Installed 1 package in 1ms
+ + goldstack==0.2.1 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/gs-main-uarhbw6c/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 10240자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/finish/integration-verify.log`
@@ -679,18 +709,117 @@ The directory also runs a safety scan and a policy review that this command does
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+앞 10269자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/finish/main-verify.log`
+
+```text
+n 0.069s
+
+OK
+....
+----------------------------------------------------------------------
+Ran 3 tests in 0.067s
+
+OK
+.................................
+----------------------------------------------------------------------
+Ran 37 tests in 169.962s
+
+OK
+.............................
+----------------------------------------------------------------------
+Ran 15 tests in 51.832s
+
+OK
+...................
+----------------------------------------------------------------------
+Ran 28 tests in 49.176s
+
+OK
+...........
+----------------------------------------------------------------------
+Ran 20 tests in 4.851s
+
+OK
+....
+----------------------------------------------------------------------
+Ran 4 tests in 1.179s
+
+OK
+....
+----------------------------------------------------------------------
+Ran 13 tests in 30.595s
+
+OK
+.................................................................
+----------------------------------------------------------------------
+Ran 70 tests in 30.499s
+
+OK
+....................................
+----------------------------------------------------------------------
+Ran 66 tests in 156.715s
+
+OK
+...............
+----------------------------------------------------------------------
+Ran 49 tests in 114.588s
+
+OK
+Validating marketplace manifest: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/gs-main-uarhbw6c/base/.claude-plugin/marketplace.json
+
+⚠ Found 1 warning:
+
+  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
+
+Validating plugin: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/gs-main-uarhbw6c/base/.claude-plugin/plugin.json
+
+  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
+  ❯ types ./types/index.d.ts declares state: goldstack.line
+
+Validating hooks: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/gs-main-uarhbw6c/base/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
+  ❯ ./register.tsx state writes: goldstack.line
+  ❯ ./register.tsx state reads: goldstack.line
+
+Plugin directory checks for /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v18/run/gs-main-uarhbw6c/base. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
+
+⚠ Found 1 plugin directory warning:
+
+  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
+    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
 
 agy 사용: 0/6
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/38
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `278955d2da112b985016ba30d682c985a61ffe75`
 
 ### 되돌리는 법
 
@@ -700,7 +829,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 278955d2da112b985016ba30d682c985a61ffe75
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v18/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
