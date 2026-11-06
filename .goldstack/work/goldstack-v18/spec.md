@@ -48,7 +48,7 @@ codex 첫 worker가 통과할 수 없는 전체 시험에 쓰는 시간을 없�
 - `worker.write_brief`의 `narrow=False` 지시가 "개발 중에는 관련 시험만 돌리고, 커밋 전에 이 명령을 한 번 돌린다"이고, `tests/test_fix_brief.py`와 `tests/test_ticket_verify.py`가 이 문구를 요구한다. `Codex.NOTE`는 좁은 시험을 권하지만 전체 시험을 막지 않는다.
 - `write_brief`를 부르는 곳은 `go.py` 네 군데다(첫 worker·재개 둘, 수정·수리 둘).
 - v12–v15 앞뒤 티켓 쌍에서 겹친 파일: `tests/test_skills.py` 6건, `review.py`·`report.py` 2건씩, `go.py` 1건.
-- `tests/test_skills.py`는 359줄, 시험 30개이고 `SkillTest`, `GrillBreakdownTest`, `IdeaFlowTest`, `PortedSkillTest`가 있다. spec들의 `verify`가 이 파일 이름을 부른다.
+- `tests/test_skills.py`는 364줄, 시험 31개이고(v17 병합 뒤 다시 잼) `SkillTest`, `GrillBreakdownTest`, `IdeaFlowTest`, `PortedSkillTest`가 있다. spec들의 `verify`가 이 파일 이름을 부른다.
 - `.goldstack/config.toml`은 `[tiers.agy] small = gemini-3.8-flash-medium`, `medium = gemini-4-argon-medium`, `[agy] max_calls_per_run = 6`이다.
 - `gs go`는 시작할 때 config를 한 번 읽고, `/overnight`은 모든 grill 커밋을 첫 실행 전에 push한다.
 
