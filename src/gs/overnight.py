@@ -496,6 +496,9 @@ def _onto_base(repo: Path, remote: str, base: str) -> str:
         if not ahead:
             git.run(repo, "pull", "--ff-only", remote, base, env=env)
             return f"{behind}커밋 fast-forward"
+        merges = git.out(repo, "rev-list", "--merges", f"{tip}..HEAD").split()
+        if merges:  # 경로로는 못 가린다. `--rebase-merges`도 병합 때 직접 고친 내용은 옮기지 않는다
+            raise NextError(f"push 안 된 병합 커밋이 있어 rebase하지 않았다. rebase가 병합 커밋을 버려 그 안의 수정을 잃는다. 사람이 일렬로 다시 쌓는다: {', '.join(merges)}")
         _pull_rebase(repo, remote, base, env)
         return f"grill 커밋 {ahead}개를 {remote}/{base} 위로 rebase"
     except git.GitError as e:

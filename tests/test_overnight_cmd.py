@@ -1173,6 +1173,48 @@ class OvernightNextTest(unittest.TestCase):
         self.assertIn("src/b.py", self.assertFailedAt(overnight.STEP_BASE, self.next()))
         self.assertStopped(before)
 
+    def grill_merge(self):
+        """두 grill 브랜치를 합치며 병합 커밋에서만 파일을 더 고쳤다. 경로는 모두 grill이다."""
+        repo = self.repo
+        self.git(repo, "checkout", "-q", "-b", "side")
+        self.commit(repo, "grill: s", {".goldstack/ideas/s.md": "s\n"})
+        self.git(repo, "checkout", "-q", "main")
+        self.commit(repo, "grill: q", {".goldstack/ideas/q.md": "q\n"})
+        self.git(repo, "merge", "-q", "--no-commit", "--no-ff", "side")
+        head = self.commit(repo, "병합", {".goldstack/ideas/x.md": "병합 때만 고친 결정\n"})
+        self.git(repo, "branch", "-q", "-D", "side")
+        return head
+
+    def test_grill_only_merge_commit_refuses_the_rebase(self):
+        """rebase는 병합 커밋을 버린다. 그 커밋에서만 고친 내용이 종료 코드 0으로 사라지면 안 된다."""
+        before, tip = self.grill_merge(), self.merged()
+        result = self.next()
+        self.assertEqual((self.repo / ".goldstack/ideas/x.md").read_text(encoding="utf-8"), "병합 때만 고친 결정\n")
+        err = self.assertFailedAt(overnight.STEP_BASE, result)
+        self.assertIn("병합 커밋", err)
+        self.assertIn(before, err)
+        self.assertStopped(before)
+        self.assertEqual(self.origin_tip(), tip)
+
+    def test_grill_only_merge_commit_stays_when_base_is_not_ahead(self):
+        """rebase가 없으면 잃을 것도 없다."""
+        before = self.grill_merge()
+        self.assertIn("push 안 된 grill 커밋 3개", self.assertPassed(self.next()))
+        self.assertEqual(self.head(), before)
+
+    def test_merge_commits_already_on_base_do_not_refuse_the_rebase(self):
+        """티켓을 merge 방식으로 병합하는 레포의 base에는 병합 커밋이 있다. push 안 된 커밋이 아니다."""
+        upstream = self.upstream
+        self.git(upstream, "checkout", "-q", "-b", "feature")
+        self.commit(upstream, "티켓", {"src/feature.py": "f\n"})
+        self.git(upstream, "checkout", "-q", "main")
+        self.commit(upstream, "다른 티켓", {"src/other.py": "o\n"})
+        self.git(upstream, "merge", "-q", "--no-edit", "feature")
+        self.git(upstream, "push", "-q", "origin", "main")
+        self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC})
+        self.assertIn("grill 커밋 1개를 origin/main 위로 rebase", self.assertPassed(self.next()))
+        self.assertEqual(self.git(self.repo, "rev-parse", "HEAD~1"), self.origin_tip())
+
     def test_conflict_aborts_back_to_the_original_state(self):
         """둘째 커밋에서 충돌해도 첫 커밋까지 옮겨진 자리가 아니라 시작 전으로 돌아간다."""
         self.commit(self.repo, "grill: q", {".goldstack/work/q/spec.md": SPEC})
