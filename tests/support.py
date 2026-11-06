@@ -46,15 +46,33 @@ def link_real_git(real, parent=None):
     return directory
 
 
+def real_git_env(real):
+    """진짜 git의 하위 명령·템플릿 경로. 찾지 못하면 None.
+
+    Command Line Tools의 git은 링크된 위치를 기준으로 이 둘을 찾는다. Xcode가 없는 Mac에서 그대로 링크하면
+    `git init`이 `hooks` 없는 저장소를 만들고 하위 명령 경로도 틀어진다."""
+    try:
+        found = subprocess.run([real, "--exec-path"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    exec_path = found.stdout.strip()
+    templates = os.path.normpath(os.path.join(exec_path, "..", "..", "share", "git-core", "templates"))
+    if found.returncode != 0 or not os.path.isdir(exec_path) or not os.path.isdir(templates):
+        return None
+    return {"GIT_EXEC_PATH": exec_path, "GIT_TEMPLATE_DIR": templates}
+
+
 def bypass_git_shim():
-    """Apple shim이면 링크 디렉터리를 PATH 맨 앞에 올린다. 아니면 아무것도 바꾸지 않는다."""
+    """Apple shim이면 링크 디렉터리를 PATH 맨 앞에 올린다. 아니거나 진짜 git의 경로를 모르면 아무것도 바꾸지 않는다."""
     global _shim_dir
     real = real_git_for_shim()
-    if real is None:
+    env = real_git_env(real) if real is not None else None
+    if env is None:
         return None
     _shim_dir = link_real_git(real)
     atexit.register(shutil.rmtree, _shim_dir, ignore_errors=True)
     os.environ["PATH"] = _shim_dir + os.pathsep + os.environ.get("PATH", "")
+    os.environ.update(env)
     return _shim_dir
 
 

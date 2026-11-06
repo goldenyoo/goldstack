@@ -97,6 +97,34 @@ class GitShimTest(unittest.TestCase):
         self.fake_xcrun(f'echo "{self.real}"\n')
         self.assertIsNone(support.real_git_for_shim(self.path(), shim=str(self.real)))
 
+    def fake_real_git(self, exec_path):
+        self.real.write_text(f'#!/bin/sh\n[ "$1" = --exec-path ] && echo "{exec_path}"\n')
+
+    def test_env_pins_exec_path_and_templates_of_the_real_git(self):
+        exec_path = self.root / "usr" / "libexec" / "git-core"
+        templates = self.root / "usr" / "share" / "git-core" / "templates"
+        exec_path.mkdir(parents=True)
+        templates.mkdir(parents=True)
+        self.fake_real_git(exec_path)
+        self.assertEqual(support.real_git_env(str(self.real)),
+                         {"GIT_EXEC_PATH": str(exec_path), "GIT_TEMPLATE_DIR": str(templates)})
+
+    def test_env_is_none_without_templates_so_shim_stays(self):
+        exec_path = self.root / "usr" / "libexec" / "git-core"
+        exec_path.mkdir(parents=True)
+        self.fake_real_git(exec_path)
+        self.assertIsNone(support.real_git_env(str(self.real)))
+
+    def test_env_is_none_when_real_git_fails(self):
+        self.real.write_text("#!/bin/sh\nexit 1\n")
+        self.assertIsNone(support.real_git_env(str(self.real)))
+
+    def test_bare_repo_from_fixture_git_has_hooks(self):
+        """Xcode 없이 Command Line Tools만 있는 Mac에서 링크한 git은 템플릿을 못 찾아 `hooks`를 만들지 않았다."""
+        bare = self.root / "remote.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True, capture_output=True)
+        self.assertTrue((bare / "hooks").is_dir())
+
     def test_import_prepends_only_the_link_dir(self):
         link = support._shim_dir
         if link is None:
