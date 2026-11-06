@@ -1103,6 +1103,42 @@ class MergeReviewedShaTest(Base):
         self.assertIn("리뷰하지 못했다", rec["fix"])
         self.assertEqual(merged_sha(self), rec["reviewed_head"])
 
+    def assert_the_cut_look_was_done_once(self, out):
+        """끝난 리뷰 뒤의 대조가 끊겼다. 다음 gs go가 끊긴 호출을 다시 하고 늦은 커밋까지 본 SHA를 병합한다."""
+        rec = self.ts().review
+        self.assertEqual(self.subject(rec["reviewed_head"]), "late")
+        self.assertEqual(merged_sha(self), rec["reviewed_head"])
+        self.assertIn("late", self.files())
+        self.assertIn("다시 리뷰를 띄웠다", rec["fix"])
+        self.assertNotIn("리뷰하지 못했다", rec["fix"])
+        self.assertNotIn("경고: 병합 전 대조", out)
+
+    def test_stop_during_the_look_after_waiting_resumes_it(self):
+        self.stopped_after_the_review()
+        late_commit("late", self.wt())(None, None)
+        with at_call("_review", stop), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        mark = self.ts().network_resume
+        self.assertTrue(mark["reviewed_again"])
+        self.assertNotIn("reviewed", mark)  # 앞 리뷰의 끝 표시다. 남으면 이 대조를 끝난 것으로 읽는다
+        self.assertEqual(self.lines("review.calls"), ["codex 1"])
+        out = self.run_ok()
+        self.assertEqual(self.lines("review.calls"), ["codex 1", "codex 2"])
+        self.assert_the_cut_look_was_done_once(out)
+
+    def test_abort_during_the_look_after_waiting_resumes_it(self):
+        self.network_limit(1)
+        self.stopped_after_the_review()
+        late_commit("late", self.wt())(None, None)
+        (self.bin / "down.review").write_text("2")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 3, out + err)
+        (self.bin / "up").touch()
+        n = len(self.lines("review.calls"))
+        out = self.run_ok()
+        self.assertEqual(len(self.lines("review.calls")), n + 1)  # 끊긴 호출 하나만 다시 한다
+        self.assert_the_cut_look_was_done_once(out)
+
     def test_fix_is_not_noted_again_when_resuming_the_look(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         self.answer("codex", 1, [(1, "resolved", "앞 판정")])

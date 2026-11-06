@@ -1433,7 +1433,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
     일시 오류로 끝났으면 실패로 세지 않고 세워 둔다(_net_tick이 다시 띄운다). 네트워크 끊김 중이면 리뷰·재리뷰를 미룬다.
     리뷰로 갈 때 리뷰부터 잇는 표시를 먼저 남긴다: 끝나기 전에 gs가 어떻게 끝나든 다음 gs go가 worker를 다시 띄우지 않고 리뷰를 다시 한다.
     그 뒤는 _review_tick이 맡는다: 리뷰(재리뷰)가 티켓 head까지 닿으면(_review_to_head, 병합 전 대조가 거기 있다. 기다린 뒤의 대조는 _leave_review, 병합 직전의 대조는 _merge_stage) 고칠 지적이 있으면 수정 worker(최대 2회), 없으면 병합·검증이다.
-    지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review).
+    지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review). 빈 diff에서 판정을 유지한 재리뷰(_verdict_kept)처럼 수정을 더 띄우지 않던 티켓은 여기서도 띄우지 않는다.
     대조의 한 번 더가 끝나기 전에 멈춘 티켓(reviewed_again)은 worker 결과를 다시 보지 않고 그 한 번을 잇는다(_review_again): 합쳐 한 번이고 끝나면 대조 기록이 남는다. 새로 띄운 worker의 Active는 이 값이 False다.
     수리 worker도 여기로 온다: 커밋을 남겼으면 재리뷰, 아니면 바로 다시 병합·검증이다(_end_repair). 수리 자리를 기다리던 티켓과 다시 검증 차례인 티켓은 그 자리로 돌아간다(_resume, _start_repair).
     오류는 _loop가 처리한다.
@@ -1442,7 +1442,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
         if a.repair == REPAIR_VERIFY:
             return _merge_stage(r, a)
         # 수정은 티켓당 최대 2회다. 수리 뒤와 버린 수정 뒤에는 고치지 않는다
-        todo = [] if a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) else _todo(r, a.t, a.fix + 1)
+        todo = [] if a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) or _verdict_kept(r, a.t, a.fix) else _todo(r, a.t, a.fix + 1)
         r.reviews.tickets[a.t.id] = Reviewing(a, finished=True, todo=todo, waited=True, repair=a.repair == REPAIR_SEAT)
         return
     if a.reviewed_again:
@@ -1850,10 +1850,12 @@ def _review_again(r: Run, a: Active, call: Callable[[Run, Active], ReviewFlow], 
     """head가 moved로 움직였다: 한 번만 더 본다(리뷰를 깨끗해질 때까지 돌리지 않는다). 또 다르면 경고와 기록만 남긴다(_note_unseen).
 
     표시에 먼저 남긴다: 호출 도중 멈추면 다음 gs go가 끊긴 호출만 다시 하고 더 부르지 않는다(_finish).
+    기다리는 사이의 대조면 앞 리뷰가 끝났다는 표시(reviewed)가 있다. 지운다: 남으면 이 호출도 끝난 것으로 읽어(_resume) 대조를 건너뛴다. 끝나면 다시 적힌다(_resume_flow).
     """
     a.reviewed_again = True
     mark = r.st.ticket(a.t.id).network_resume
     if mark:
+        mark.pop("reviewed", None)
         mark["reviewed_again"] = True
         r.save()
     say(f"[{a.t.id}] 병합 전 대조: head {moved[:8]}가 마지막으로 리뷰한 head와 달라 다시 리뷰한다")
@@ -1954,6 +1956,11 @@ def _received(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
 def _fix_discarded(r: Run, t: Ticket, nth: int) -> bool:
     """nth번째 수정을 버렸나(_end_fix). 지적의 기록으로 가리므로 재개해도 그대로다. 받은 지적이 없으면(nth가 0) 아니다."""
     return any(f.get("fix_attempt") == review.DISCARDED for _, found in _received(r, t, nth) for f in found)
+
+
+def _verdict_kept(r: Run, t: Ticket, nth: int) -> bool:
+    """nth번째 재리뷰가 빈 diff에서 앞 판정을 유지했나(_empty_rereview). 기록으로 가리므로 재개해도 그대로다. 그 판정대로 병합 단계까지 왔으니 수정 worker를 새로 띄우지 않는다."""
+    return any(rec.get("kept_round") == nth for rec in state.reviews(r.st.ticket(t.id)))
 
 
 def _to_rereview(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
@@ -2277,14 +2284,13 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
     t, nth = a.t, a.fix
     targets = _to_rereview(r, t, nth)
     head = ""
-    kept = False
     try:
         head = a.target = git.sha(r.repo, a.branch)
         if git.out(r.repo, "diff", "--no-ext-diff", "--name-only", f"{a.base}..{head}"):
             with _review_tree(r, a, head, rereview=True) as tree:
                 yield from _run_rereviews(r, a, targets, head, tree)
         else:  # 부를 것도 없다: 바뀐 것이 없다
-            kept = _empty_rereview(r, a, head)
+            _empty_rereview(r, a, head)
     except (transient.NetworkAbort, ReviewThreadError):
         raise
     except Exception as e:  # noqa: BLE001 — verify가 병합 관문이다
@@ -2294,29 +2300,29 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
             if not done or done[-1].get("head") != head:  # 먼저 끝난 다른 리뷰어의 결과는 그대로 둔다
                 review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_FAILED, f"뜻밖의 오류 {_err(e)}")
     r.save()
-    return _todo(r, t, nth + 1) if nth == 1 and not kept and not _fix_discarded(r, t, nth) else []  # 수정은 티켓당 최대 2회다
+    return _todo(r, t, nth + 1) if nth == 1 and not _verdict_kept(r, t, nth) and not _fix_discarded(r, t, nth) else []  # 수정은 티켓당 최대 2회다
 
 
-def _empty_rereview(r: Run, a: Active, head: str) -> bool:
-    """a.base..head가 비어 재리뷰어를 부르지 않는다. 받은 지적의 앞 판정을 유지했으면 True다: 그 판정대로 이미 병합 단계까지 왔으니 수정 worker를 새로 띄우지 않는다(_rereview).
+def _empty_rereview(r: Run, a: Active, head: str) -> None:
+    """a.base..head가 비어 재리뷰어를 부르지 않는다. 받은 지적의 판정을 적거나 앞 판정을 유지한다.
 
     이 회차 판정을 낸 head가 a.base 아래에 있으면 catch-up이 기준을 그 위로 옮겼다(_catch_up_reviewed). 트리는 판정한 트리에 integration을 합친 그대로이니 빈 diff는 판정에 대해 말해 주는 것이 없다.
     그 밖에는 고쳐졌을 수 없어 unresolved다: 앞서 이 회차 판정이 없거나(빈 수정 커밋, 버린 수정), 판정한 head가 기준 위에 있는데 diff가 비었다(늦은 커밋이 수정을 되돌렸다).
+    유지했으면 기록에 남긴다(kept_round, _verdict_kept): reviewed_head는 여기서 빈 커밋으로 옮겨 가므로 재개해 다시 오면 판정한 head로 가릴 수 없다. 새 판정이 나면 지운다(_apply_rereviews).
     """
     nth = a.fix
-    kept = False
     for rec, found in _received(r, a.t, nth):
         judged = rec.get("reviewed_head", "")
-        moved_past = judged != a.base and git.run(r.repo, "merge-base", "--is-ancestor", judged, a.base, check=False).returncode == 0
+        moved_past = rec.get("kept_round") == nth or (
+            judged != a.base and git.run(r.repo, "merge-base", "--is-ancestor", judged, a.base, check=False).returncode == 0)
         left = [f for f in found if not (moved_past and f.get("rereview_round") == nth)]
         rec["reviewed_head"] = head
         if len(left) < len(found):
-            kept = True
+            rec["kept_round"] = nth
             _append_fix(rec, f"재리뷰 {nth}차: catch-up 뒤 diff가 비어 부르지 않았다(앞 판정을 유지)")
         if left:
             review.mark_rereview(left, nth, review.UNRESOLVED, "", "수정 커밋의 diff가 비었다")
             _append_fix(rec, f"재리뷰 {nth}차: 수정 커밋의 diff가 비어 부르지 않았다(unresolved)")
-    return kept
 
 
 class TreeUnavailable(Exception):
@@ -2421,6 +2427,7 @@ def _apply_rereviews(r: Run, a: Active, launch: list[tuple[dict, list[dict]]], r
                    "failed": review.REASON_FAILED, "verdicts": {}, "findings": []}
         review.apply_rereview(rec, found, res, nth)
         rec["reviewed_head"] = head
+        rec.pop("kept_round", None)  # 유지한 뒤 새로 판정했다(_empty_rereview)
         msg = f"재리뷰 {nth}차: {review.rereview_counts(found, len(res['findings']))}" \
             + (f" — {res['note']}" if res["note"] else "")
         _append_fix(rec, msg)
