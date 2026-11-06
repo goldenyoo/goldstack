@@ -15,6 +15,7 @@ CONFIG_PATH = ".goldstack/config.toml"
 IGNORE_LINES = (".goldstack/local.env", ".goldstack/work/*/run/", ".goldstack/feedback/", ".goldstack/overnight/")
 FEEDBACK_MODES = ("off", "draft", "auto")
 FEEDBACK_DETAILS = ("errors", "minimal")
+OVERNIGHT_AUTONOMY = ("stop", "record")
 DEFAULT_CONFIG = '''[git]
 remote = "origin"
 base = {base}
@@ -174,6 +175,12 @@ class FeedbackConfig:
 
 
 @dataclass(frozen=True)
+class OvernightConfig:
+    """절이 없거나 `gs init`이 쓴 config는 stop(밤사이 판단이 필요하면 멈춘다)이다. record는 이 레포가 켠다."""
+    autonomy: str = "stop"
+
+
+@dataclass(frozen=True)
 class Config:
     git: GitConfig
     models: ModelsConfig
@@ -184,6 +191,7 @@ class Config:
     tiers: TiersConfig = TiersConfig()
     goldstack: GoldstackConfig = GoldstackConfig()
     feedback: FeedbackConfig = FeedbackConfig()
+    overnight: OvernightConfig = OvernightConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -206,7 +214,7 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
         if section == "tiers":
             sections[section] = _load_tiers(data.get(section, {}), problems)
             continue
-        if section not in data and section not in ("agy", "worktree", "goldstack", "feedback"):
+        if section not in data and section not in ("agy", "worktree", "goldstack", "feedback", "overnight"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
             continue
         raw = data.get(section, {})
@@ -237,6 +245,8 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0 이상이어야 한다"))
             elif section == "feedback" and (message := _feedback_problem(key, raw[key])):
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`{message}"))
+            elif section == "overnight" and raw[key] not in OVERNIGHT_AUTONOMY:
+                problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 " + "|".join(OVERNIGHT_AUTONOMY) + " 중 하나여야 한다"))
             elif (section == "models" and key != "codex" and not raw[key].strip()
                   and (key != "failure_summary" or key in data[section])):
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 비어 있으면 안 된다"))

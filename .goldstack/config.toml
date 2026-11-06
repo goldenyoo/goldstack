@@ -41,3 +41,6 @@ telegram = false
 
 [agy]
 max_calls_per_run = 24
+
+[overnight]
+autonomy = "record"
