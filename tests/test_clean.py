@@ -168,6 +168,23 @@ class CleanTest(unittest.TestCase):
             code, out, err = self.clean()
         self.assertEqual(code, 1, out + err)
         self.assertIn("push URL changed: old -> new", err)
+        self.assertNotIn("경고", err)
+
+    def test_integration_cleanup_raises_push_settings_change_during_remote_delete(self):
+        """바깥 `except Exception`의 "경고" 삼킴이 아니라, 원격 삭제 안쪽 re-raise가 예외를 올리는지 직접 본다."""
+        from types import SimpleNamespace
+        from gs import clean
+        self.prepare()
+        st = state.State(feature="demo", finish={"phase": "verified", "base_report_tried": True}, push_record={})
+        r = SimpleNamespace(st=st, name="demo", repo=self.repo, iwt=self.rundir / "wt/integration", remote=self.REMOTE)
+        change = git.PushSettingsChanged("push URL changed: old -> new")
+        out = io.StringIO()
+        # 첫 check_push는 ls-remote 전 대조, 둘째는 `git push --delete` 안의 대조다.
+        with mock.patch("gs.git.check_push", side_effect=[None, change]), contextlib.redirect_stdout(out):
+            with self.assertRaises(git.PushSettingsChanged) as caught:
+                clean.integration(r)
+        self.assertIn("push URL changed: old -> new", str(caught.exception))
+        self.assertNotIn("경고", out.getvalue())
 
     def test_auto_cleanup_only_removes_integration(self):
         wt = self.rundir / "wt/99-retry-2"

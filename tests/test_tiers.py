@@ -41,7 +41,11 @@ class TiersTest(unittest.TestCase):
         for family, entries in expected.items():
             for tier, pair in zip(feature.TIERS, entries):
                 self.assertEqual(cfg.tiers.worker(family, tier), (tier, config.ModelEffort(*pair)))
-                self.assertEqual(cfg.tiers.worker(family, tier), actual_repo.tiers.worker(family, tier))
+                if family == 'agy':  # 이 레포는 agy를 모든 티어에서 Argon High로 쓴다(기본값과 다르다).
+                    self.assertEqual(actual_repo.tiers.worker(family, tier),
+                                     (tier, config.ModelEffort('gemini-4-argon-high', '')))
+                else:
+                    self.assertEqual(cfg.tiers.worker(family, tier), actual_repo.tiers.worker(family, tier))
         cfg, problems = self.load(self.default.replace('review = "large"\nrereview = "medium"\n', ''))
         self.assertEqual(problems, [])
         self.assertEqual((cfg.tiers.review, cfg.tiers.rereview), ('large', 'medium'))
