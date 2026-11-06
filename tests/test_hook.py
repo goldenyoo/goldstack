@@ -128,6 +128,28 @@ class HookTest(unittest.TestCase):
             self.assertBlocked(cmd)
         self.assertAllowed("gh api -X GET search/issues -f q=x")
 
+    # ---- 이름으로 프로세스 끄기
+    def test_kill_by_name_blocked_for_worker(self):
+        for cmd in ['pkill -f "unittest discover"', "pkill python", "killall python3", "killall -9 node",
+                    "bash -c 'pkill -f unittest'", "sh -lc 'killall python'", "echo x | xargs pkill",
+                    "pgrep -f unittest | xargs killall", "sudo pkill -f x", "/usr/bin/pkill -f x",
+                    "/usr/bin/killall node", "env FOO=1 pkill x", "cd src && pkill x", "git status; pkill x",
+                    "eval 'pkill x'", "timeout 5 killall x"]:
+            self.assertBlocked(cmd)
+        reason = self.bash('pkill -f "unittest discover"')
+        self.assertIn("PID", reason)
+        self.assertIn("kill <PID>", reason)
+
+    def test_kill_by_pid_and_pgrep_allowed(self):
+        for cmd in ["kill 123", "kill -9 123", "kill $!", "pgrep -f unittest", "bash -c 'kill 123'",
+                    "/usr/bin/pgrep python", "echo pkill", "grep -rn pkill src", "git commit -m 'no pkill'"]:
+            self.assertAllowed(cmd)
+
+    def test_kill_by_name_passes_without_worker_role(self):
+        for env in [{}, {"GS_ROLE": ""}, {"GS_ROLE": "reviewer"}]:
+            for cmd in ['pkill -f "unittest discover"', "killall python", "/usr/bin/pkill x"]:
+                self.assertIsNone(self.bash(cmd, env), (env, cmd))
+
     # ---- worktree 밖 쓰기
     def test_write_outside_worktree_bash(self):
         for cmd in ["echo x > ../integration/evil", "cd .. && echo x > evil", "rm -rf ..", "rm -rf ~",
