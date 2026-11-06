@@ -104,6 +104,14 @@ def stop(*_):
     raise KeyboardInterrupt
 
 
+def integration_moved(r, a):
+    """그 사이 다른 티켓이 병합된 것처럼 integration을 옮기는 action. 이 티켓은 catch-up을 한다."""
+    (r.iwt / "other").write_text("x\n")
+    support.sh(r.iwt, "git", "add", "-A")
+    support.sh(r.iwt, "git", "commit", "-qm", "other")
+    r.ihead = go.git.sha(r.iwt, "HEAD")
+
+
 def merged_sha(test, tid="01"):
     """이 티켓의 integration 병합 커밋이 병합한 커밋(둘째 부모)."""
     parents = test.integration("log", f"--grep=gs-ticket: demo/{tid}", "--format=%P", "gs/demo/integration")
@@ -1013,6 +1021,143 @@ class MergeReviewedShaTest(Base):
         self.assertIn("같은 worktree에서 리뷰부터", out)
         self.assertEqual(self.subject(merged_sha(self)), "late")
 
+    def stopped_on_the_way_back(self):
+        """늦은 커밋을 봐 재리뷰로 돌아가다 멈춘다. 리뷰어는 아직 한 번만 불렀다."""
+        with at_call("_merge_stage", late_commit("late")), at_call("_review", None, stop), \
+                self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        self.assertEqual(self.lines("review.calls"), ["codex 1"])
+        return self.ts().network_resume
+
+    def test_resume_on_the_way_back_leaves_the_look_on_record(self):
+        self.stopped_on_the_way_back()
+        out = self.run_ok()
+        self.assert_late_was_reviewed_before_merging(out)
+
+    def test_commit_during_the_resumed_look_calls_no_third_review(self):
+        self.stopped_on_the_way_back()
+        self.late("review", 2)
+        out = self.run_ok()
+        self.assertEqual(self.lines("review.calls"), ["codex 1", "codex 2"])
+        rec = self.ts().review
+        self.assertEqual(self.subject(rec["reviewed_head"]), "late")
+        self.assertIn("리뷰하지 못했다", rec["fix"])
+        self.assertIn("경고: 병합 전 대조", out)
+        self.assertEqual(merged_sha(self), rec["reviewed_head"])
+        self.assertNotIn("late_review2", self.files())
+        self.assertEqual(self.subject("gs/demo/01"), "late review 2")  # 늦은 커밋은 브랜치에 남는다
+
+    def test_commit_at_the_merge_after_the_resumed_look_stays_out(self):
+        self.stopped_on_the_way_back()
+        out = self.run_ok(at_call("_merge_stage", late_commit("later")))
+        self.assertEqual(self.lines("review.calls"), ["codex 1", "codex 2"])
+        rec = self.ts().review
+        self.assertEqual(self.subject(merged_sha(self)), "late")
+        self.assertNotIn("later", self.files())
+        self.assertIn("다시 리뷰를 띄웠다", rec["fix"])
+        self.assertIn("병합에 넣지 않는다", rec["fix"])
+        self.assertIn("경고: 병합 전 대조", out)
+
+    def test_old_mark_without_reviewed_again_reads_false(self):
+        self.stopped_on_the_way_back()
+        raw = json.loads(state.path(self.rundir).read_text())
+        self.assertTrue(raw["tickets"]["01"]["network_resume"].pop("reviewed_again"))
+        state.path(self.rundir).write_text(json.dumps(raw, ensure_ascii=False))
+        self.late("review", 2)
+        out = self.run_ok()
+        # 옛 표시로는 한 번 더를 쓴 줄 모른다: 이 기능 전처럼 리뷰부터 하고 대조의 한 번 더가 남아 있다
+        self.assertEqual(self.lines("review.calls"), ["codex 1", "codex 2", "codex 3"])
+        self.assertIn("late_review2", (self.bin / "review.diff.codex.3").read_text())
+        self.assertEqual(merged_sha(self), self.ts().review["reviewed_head"])
+        self.assertIn("병합 전 대조", out)
+
+    def test_mark_has_no_reviewed_again_before_the_look(self):
+        self.assertNotIn("reviewed_again", self.stopped_after_the_review())
+
+    def test_commit_while_stopped_after_the_look_calls_no_third_review(self):
+        self.late("review", 1)
+        mark = self.stopped_after_the_review()
+        self.assertTrue(mark["reviewed"])
+        late_commit("later", self.wt())(None, None)
+        out = self.run_ok()
+        self.assertEqual(self.lines("review.calls"), ["codex 1", "codex 2"])
+        self.assertIn("리뷰하지 못했다", self.ts().review["fix"])
+        self.assertIn("경고: 병합 전 대조", out)
+        self.assertEqual(self.subject(merged_sha(self)), "late review 1")
+        self.assertNotIn("later", self.files())
+
+    def test_abort_during_the_look_in_the_review_calls_no_more_after_it(self):
+        """리뷰 단계 안의 대조(_review_to_head)도 같다: 끊긴 호출은 다시 하지만 그 뒤로 더 부르지 않는다."""
+        self.network_limit(1)
+        self.late("review", 1)
+        (self.bin / "down.review").write_text("2")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 3, out + err)
+        (self.bin / "up").touch()
+        n = len(self.lines("review.calls"))
+        self.late("review", n + 1)
+        out = self.run_ok()
+        self.assertEqual(len(self.lines("review.calls")), n + 1)
+        rec = self.ts().review
+        self.assertEqual(self.subject(rec["reviewed_head"]), "late review 1")
+        self.assertIn("리뷰하지 못했다", rec["fix"])
+        self.assertEqual(merged_sha(self), rec["reviewed_head"])
+
+    def assert_the_cut_look_was_done_once(self, out):
+        """끝난 리뷰 뒤의 대조가 끊겼다. 다음 gs go가 끊긴 호출을 다시 하고 늦은 커밋까지 본 SHA를 병합한다."""
+        rec = self.ts().review
+        self.assertEqual(self.subject(rec["reviewed_head"]), "late")
+        self.assertEqual(merged_sha(self), rec["reviewed_head"])
+        self.assertIn("late", self.files())
+        self.assertIn("다시 리뷰를 띄웠다", rec["fix"])
+        self.assertNotIn("리뷰하지 못했다", rec["fix"])
+        self.assertNotIn("경고: 병합 전 대조", out)
+
+    def test_stop_during_the_look_after_waiting_resumes_it(self):
+        self.stopped_after_the_review()
+        late_commit("late", self.wt())(None, None)
+        with at_call("_review", stop), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        mark = self.ts().network_resume
+        self.assertTrue(mark["reviewed_again"])
+        self.assertNotIn("reviewed", mark)  # 앞 리뷰의 끝 표시다. 남으면 이 대조를 끝난 것으로 읽는다
+        self.assertEqual(self.lines("review.calls"), ["codex 1"])
+        out = self.run_ok()
+        self.assertEqual(self.lines("review.calls"), ["codex 1", "codex 2"])
+        self.assert_the_cut_look_was_done_once(out)
+
+    def test_abort_during_the_look_after_waiting_resumes_it(self):
+        self.network_limit(1)
+        self.stopped_after_the_review()
+        late_commit("late", self.wt())(None, None)
+        (self.bin / "down.review").write_text("2")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 3, out + err)
+        (self.bin / "up").touch()
+        n = len(self.lines("review.calls"))
+        out = self.run_ok()
+        self.assertEqual(len(self.lines("review.calls")), n + 1)  # 끊긴 호출 하나만 다시 한다
+        self.assert_the_cut_look_was_done_once(out)
+
+    def test_fix_is_not_noted_again_when_resuming_the_look(self):
+        self.findings("codex", finding("FIX A: 값이 틀렸다"))
+        self.answer("codex", 1, [(1, "resolved", "앞 판정")])
+        self.answer("codex", 2, [(1, "resolved", "늦은 커밋까지 보고 확인")])
+        with at_call("_merge_stage", late_commit("late")), at_call("_rereview", None, stop), \
+                self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        before = self.ts().review["fix"]
+        self.late("rereview", 2)
+        out = self.run_ok()
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1"])
+        rec = self.ts().review
+        self.assertTrue(rec["fix"].startswith(before))
+        self.assertEqual(rec["fix"].count("수정 커밋"), 1)
+        self.assertIn("리뷰하지 못했다", rec["fix"])
+        self.assertIn("경고: 병합 전 대조", out)
+        self.assertEqual(self.subject(merged_sha(self)), "late")
+
 
 class RepairMergeShaTest(test_verify_repair.Base):
     """수리 worker의 커밋과 재리뷰 흐름은 그대로이고 그 끝의 병합도 리뷰 대상 SHA로 간다."""
@@ -1100,13 +1245,6 @@ class RepairMergeShaTest(test_verify_repair.Base):
 
     def test_stopped_during_verify_keeps_the_catch_up_as_its_target(self):
         self.worker(BREAKS, REPAIRS)
-
-        def integration_moved(r, a):  # 수리하는 사이 다른 티켓이 병합된 것처럼
-            (r.iwt / "other").write_text("x\n")
-            support.sh(r.iwt, "git", "add", "-A")
-            support.sh(r.iwt, "git", "commit", "-qm", "other")
-            r.ihead = go.git.sha(r.iwt, "HEAD")
-
         mark = self.stopped_at_the_second_verify(None, integration_moved)
         self.assertEqual(mark["repair"], go.REPAIR_VERIFY)
         self.assertEqual(self.subject(mark["target"]), "gs: 최신 integration을 01에 합침")
@@ -1148,6 +1286,27 @@ class RepairMergeShaTest(test_verify_repair.Base):
         self.assertEqual(self.reviewers(), ["codex", "codex"])  # 기록에 없는 head지만 수리의 기준이다: 늦은 커밋이 아니다
         self.assertNotIn("병합 전 대조", out)
         self.assertEqual(merged_sha(self, "12"), self.ts("12").repairs[0]["base"])
+
+    def test_stopped_on_the_way_back_to_the_repair_rereview_looks_once(self):
+        self.worker(BREAKS, REPAIRS)
+        with at_call("_merge_stage", None, late_commit("late")), at_call("_repair_review", None, stop), \
+                self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        mark = self.ts().network_resume
+        self.assertEqual((mark["repair"], mark["done"], mark["reviewed_again"]), (go.REPAIR_REVIEW, True, True))
+        self.assertEqual(self.reviewers(), ["codex", "codex"])
+        with at_call("_merge_stage", late_commit("later")):
+            out = self.run_ok()
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        self.assertEqual(self.calls(), ["01", "01"])  # 수리 worker를 다시 띄우지 않는다
+        self.assertEqual(self.reviewers(), ["codex", "codex", "codex"])  # 더 부르지 않는다
+        self.assertIn("late", (Path(ts.review["rereviews"][-1]["dir"]) / "repair.patch").read_text())
+        self.assertEqual(self.subject(merged_sha(self)), "late")
+        self.assertEqual(merged_sha(self), ts.review["reviewed_head"])
+        self.assertIn("병합에 넣지 않는다", ts.review["fix"])
+        self.assertIn("경고: 병합 전 대조", out)
+        self.assertEqual(state.repair_summary(ts), "수리: 시도 1 커밋 1개 → 다시 검증 통과")  # 늦은 커밋은 수리의 결과가 아니다
 
     def test_failed_repair_merges_the_verified_sha(self):
         self.worker(GOOD, f"{USELESS}; exit 3")

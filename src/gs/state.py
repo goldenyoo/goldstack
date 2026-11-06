@@ -66,6 +66,7 @@ class TicketState:
     # reviewed_head는 이 리뷰어를 부른 마지막 리뷰·재리뷰의 대상 head다(go가 적는다). 호출이 실패해도 남고 실패는 note·failed가 말한다.
     # 부르지 못한 리뷰(거부, 한도, 트리 실패)는 옮기지 않는다. 옛 state의 기록에는 없다.
     # 재리뷰가 있었으면 rereviews(회차마다 round, dir, base, head, note, failed)도 있다. 수리 재리뷰의 round는 review.REPAIR_ROUND다.
+    # kept_round는 catch-up 뒤 빈 diff에서 앞 판정을 유지한 재리뷰 회차다(go._empty_rereview). 지적에 결과를 새로 적으면(한도·오류의 unchecked도) 지운다. 없으면 유지한 적 없다(옛 state도 그렇다).
     # 지적마다 severity·location·claim·evidence·action(fix|report)·why, 그리고 수정·재리뷰 결과(review.Finding):
     #   fix_attempt("" | attempted | discarded), fix_round(이 지적을 받은 마지막 수정 worker 회차, 0이면 받은 적 없음),
     #   fix_reason(수정 못 한 이유: 한도, 띄우지 못함, 수정 worker 실패…),
