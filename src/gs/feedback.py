@@ -13,6 +13,8 @@
 
 3번이 있어 레포를 몰라도 파일·브랜치·사람 이름이 나가지 않는다. 진단 정보가 줄어도 이름이 나가는 쪽보다 낫다.
 단계, 오류 종류, 프레임은 레포의 값을 보지 않고 모양과 gs 소스만으로 거른다. 그래서 지문이 레포마다 같다.
+지문에는 gs 버전과 줄 번호가 들어가 새 gs의 재발은 지문으로 이어지지 않는다. 그래서 본문에 `- 재발 키:`를 더한다.
+재발 키는 단계 + 오류 종류 + `파일:함수`의 해시다(버전·줄 번호 없음). `send`는 지문으로 못 찾을 때만 키로 찾는다.
 
 가리기 전 줄은 `.goldstack/feedback/<지문>.md`의 로컬 전용 부분에만 남는다.
 보낼 내용은 `read_draft`로만 읽는다. 로컬 전용 부분을 돌려주지 않고 지금의 `detail`을 따른다.
@@ -173,6 +175,7 @@ _KIND_PIECE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z0-9]+", re.ASCII)
 _VERSION_TEXT = re.compile(r"[0-9][0-9A-Za-z.+-]{0,40}", re.ASCII)
 _VERSION_IN_OUTPUT = re.compile(r"\d+\.\d+(?:\.\d+)*", re.ASCII)
 _COUNT_LINE = re.compile(r"^- 횟수: \d+$", re.MULTILINE)
+_KEY_LINE = re.compile(r"^- 재발 키: ([0-9a-f]{16})$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -447,6 +450,15 @@ def _fingerprint(version: str, phase: str, kind: str, frames: list[str]) -> str:
     return hashlib.sha256("\0".join((version, phase, kind, *frames)).encode()).hexdigest()[:16]
 
 
+def _recurrence_key(phase: str, kind: str, frames: list[str]) -> str:
+    """단계 + 오류 종류 + `파일:함수`. 지문과 달리 버전과 줄 번호를 넣지 않아 새 gs의 재발도 같은 키다.
+
+    frames는 `_clean_frames`의 `gs/파일:함수:줄`이다. 줄 번호를 떼고 해시한다.
+    """
+    places = [frame.rsplit(":", 1)[0] for frame in frames]
+    return hashlib.sha256("\0".join(("재발 키", phase, kind, *places)).encode()).hexdigest()[:16]
+
+
 def _config_line(cfg: config.Config) -> str:
     """값은 열거값과 있음/없음만. setup 명령, 원격, base는 싣지 않는다."""
     method = cfg.git.merge_method if cfg.git.merge_method in ("merge", "squash") else "모름"
@@ -463,11 +475,12 @@ def compose(*, phase: str, kind: str, frames: Iterable[Frame], error_lines: Iter
     shown = _clean_frames(frames)
     lines = redactor.lines(error_lines)
     fingerprint = _fingerprint(version, phase, kind, shown)
+    key = _recurrence_key(phase, kind, shown)
     clis = ", ".join(f"{name} {_clean_version(value) if value != '없음' else value}"
                      for name, value in env.clis if name in _CLIS)
     body = [f"- gs: {version}", f"- CLI: {clis or '모름'}", f"- OS: {redactor.line(env.os) or '모름'}",
             f"- 단계: {phase}", f"- 오류 종류: {kind}", f"- config: {_config_line(cfg)}",
-            f"- 지문: {fingerprint}", f"- 횟수: {int(count)}"]
+            f"- 지문: {fingerprint}", f"- 재발 키: {key}", f"- 횟수: {int(count)}"]
     if shown:
         body += ["", "## gs 프레임", *(f"- {frame}" for frame in shown)]
     if lines:
@@ -599,7 +612,9 @@ def record_manual(repo: Path, cfg: config.Config, message: str) -> Path | None:
         return path
     except (FileNotFoundError, KeyError, ValueError):
         pass
-    body = issue.body.replace(issue.fingerprint, fingerprint) + "\n\n## 사람이 쓴 피드백\n" + message
+    # 수동 피드백은 글마다 다른 issue다. 모두 같은 단계·종류라서 재발 키를 두면 서로 합쳐진다.
+    body = re.sub(r"^- 재발 키: .*\n", "", issue.body.replace(issue.fingerprint, fingerprint), flags=re.MULTILINE)
+    body += "\n\n## 사람이 쓴 피드백\n" + message
     _write_draft(path, {"fingerprint": fingerprint, "title": issue.title, "labels": list(issue.labels), "count": "1"},
                  body, "")
     return path
@@ -644,12 +659,20 @@ def _fixed_release(repo: Path, target: str, number: int) -> tuple[int, ...] | No
     return None
 
 
+def _find_issues(repo: Path, target: str, label: str, value: str) -> list[dict]:
+    """`- <label>: <value>` 줄이 본문에 있는 issue. 검색은 부분 일치일 수 있어 줄까지 대조한다."""
+    found = json.loads(_gh(repo, target, "issue", "list", "--state", "all", "--search", value,
+                           "--json", "number,body,state", "--limit", "100"))
+    return [item for item in found if f"- {label}: {value}" in item.get("body", "").splitlines()]
+
+
 def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path | None = None, err=None) -> int:
     """쌓인 초안을 보내고 성공한 issue/댓글 수를 돌려준다. draft는 명시적 force만 보낸다.
 
     실패는 한 줄로 알리고 초안을 보존한다. 시작 때 재전송할 호출 지점은 수집 쪽에서 맡는다.
     성공한 횟수는 초안에, 일일 한도와 issue별 댓글 날짜는 전송 장부에 남긴다.
     only_path가 있으면 그 초안만 보낸다. 손상된 초안은 보존하고 다음 초안으로 넘어간다.
+    issue는 지문으로 찾고, 못 찾으면 재발 키로 찾는다. 같은 키의 열린 issue에는 횟수 댓글을 단다.
     닫힌 issue는 초안의 발생 버전이 고친 버전보다 새로울 때 다시 열고, 같거나 옛 버전이면 업데이트를 안내한다.
     고친 버전이나 발생 버전을 비교할 수 없으면 새 issue를 만든다.
     장부가 손상되면 당일 잔여 한도를 알 수 없으므로 다음 날까지 전송을 미룬다.
@@ -702,11 +725,10 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path
                     continue
                 if draft.count <= already:
                     continue
-                matches = json.loads(_gh(repo, target, "issue", "list", "--state", "all", "--search",
-                                         draft.fingerprint, "--json", "number,body,state", "--limit", "100"))
-                # 검색은 부분 일치일 수 있다. 본문의 지문 줄까지 대조한다.
-                matches = [item for item in matches
-                           if f"- 지문: {draft.fingerprint}" in item.get("body", "").splitlines()]
+                matches = _find_issues(repo, target, "지문", draft.fingerprint)
+                recurrence = _KEY_LINE.search(draft.body)
+                if not matches and recurrence:
+                    matches = _find_issues(repo, target, "재발 키", recurrence[1])  # 새 gs의 재발. 키 줄이 없는 옛 초안·issue는 지문뿐이다
                 issue = next((item for item in matches if item["state"] == "OPEN"), None)
                 reopen = False
                 if issue is None and matches:

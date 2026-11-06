@@ -574,5 +574,105 @@ class FeedbackSendTest(unittest.TestCase):
         self.assertEqual(feedback.read_draft(a, self.cfg).count, 2)
 
 
+class RecurrenceKeyTest(unittest.TestCase):
+    """지문(버전 포함)이 달라진 새 gs의 재발을 버전 없는 재발 키로 이전 issue와 잇는다."""
+    # 가짜 gh와 전송 도구는 FeedbackSendTest의 것을 쓴다(그 시험들을 다시 돌리지 않으려 상속하지 않는다).
+    setUp = FeedbackSendTest.setUp
+    send = FeedbackSendTest.send
+    calls = FeedbackSendTest.calls
+
+    def record_at(self, version, kind='GitError', frames=None):
+        with mock.patch('gs.feedback.environment', return_value=dataclasses.replace(ENV, gs_version=version)), \
+                mock.patch('gs.feedback.metadata.version', return_value=version):
+            return feedback.record(self.repo, self.cfg, phase='verify', kind=kind,
+                                   frames=[] if frames is None else frames, error_lines=['fatal: permission denied'])
+
+    def earlier_issue(self, *, closed=False, fixed=None, strip_key=False, kind='GitError', frames=None):
+        """0.1.0에서 올라간 issue 12. 그 초안은 지우고, 다음 `record_at`이 새 지문의 초안을 만든다."""
+        path = self.record_at('0.1.0', kind, frames)
+        body = feedback.read_draft(path, self.cfg).body
+        path.unlink()
+        if strip_key:
+            body = '\n'.join(line for line in body.splitlines() if not line.startswith('- 재발 키:'))
+        issue = {'number': 12, 'body': body, 'closed': closed}
+        if fixed:
+            issue['comments'] = [{'body': f'{fixed}에서 고침 ({"a" * 40})'}]
+        (self.repo / 'issues').write_text(json.dumps([issue]))
+
+    def test_draft_body_has_the_key_line_and_new_gs_has_another_fingerprint(self):
+        old = feedback.read_draft(self.record_at('0.1.0'), self.cfg)
+        new = feedback.read_draft(self.record_at('0.2.1'), self.cfg)
+        self.assertNotEqual(old.fingerprint, new.fingerprint)
+        key = [line for line in old.body.splitlines() if line.startswith('- 재발 키: ')]
+        self.assertEqual(len(key), 1)
+        self.assertIn(key[0], new.body.splitlines())
+
+    def test_open_issue_with_the_same_key_gets_a_count_comment(self):
+        self.earlier_issue()
+        path = self.record_at('0.2.1')
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(self.calls('issue', 'create'), [])
+        self.assertEqual(self.calls('issue', 'reopen'), [])
+        comment, = self.calls('issue', 'comment')
+        self.assertEqual(comment[2], '12')
+        self.assertIn('- 횟수: 1', comment[comment.index('--body') + 1])
+        self.assertEqual(feedback.read_draft(path, self.cfg).meta['issue'], '12')
+
+    def test_closed_issue_with_the_same_key_reopens_when_the_draft_is_newer(self):
+        self.earlier_issue(closed=True, fixed='0.1.0')
+        self.record_at('0.2.1')
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(len(self.calls('issue', 'reopen')), 1)
+        comment, = self.calls('issue', 'comment')
+        self.assertEqual(comment[2], '12')
+        self.assertEqual(self.calls('issue', 'create'), [])
+
+    def test_closed_issue_with_the_same_key_guides_update_when_the_draft_is_not_newer(self):
+        for fixed in ('0.2.1', '0.3.0'):
+            with self.subTest(fixed=fixed):
+                self.earlier_issue(closed=True, fixed=fixed)
+                path = self.record_at('0.2.1')
+                before = path.read_bytes()
+                self.assertEqual(self.send(), 0)
+                self.assertIn('gs self-update', self.err.getvalue())
+                self.assertEqual(self.calls('issue', 'reopen'), [])
+                self.assertEqual(self.calls('issue', 'comment'), [])
+                self.assertEqual(self.calls('issue', 'create'), [])
+                self.assertEqual(path.read_bytes(), before)
+                path.unlink()
+
+    def test_issue_without_a_key_line_is_found_only_by_fingerprint(self):
+        self.earlier_issue(strip_key=True)
+        self.record_at('0.2.1')
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(len(self.calls('issue', 'create')), 1)
+        self.assertEqual(self.calls('issue', 'comment'), [])
+        self.assertEqual(self.calls('issue', 'reopen'), [])
+
+    def test_issue_without_a_key_line_still_matches_by_fingerprint(self):
+        self.earlier_issue(strip_key=True)
+        self.record_at('0.1.0')
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(self.calls('issue', 'create'), [])
+        self.assertEqual(self.calls('issue', 'comment')[0][2], '12')
+
+    def test_other_kind_or_frame_does_not_share_the_key(self):
+        self.earlier_issue()
+        self.record_at('0.2.1', kind='KeyError')
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(len(self.calls('issue', 'create')), 1)
+        self.assertEqual(self.calls('issue', 'comment'), [])
+
+    def test_manual_feedback_has_no_key_line_and_never_joins_another_issue(self):
+        path = feedback.record_manual(self.repo, self.cfg, '첫 제안')
+        self.assertNotIn('재발 키', feedback.read_draft(path, self.cfg).body)
+        self.assertEqual(self.send(), 1)
+        feedback.record_manual(self.repo, self.cfg, '다른 제안')
+        self.assertEqual(self.send(), 1)
+        self.assertEqual(len(self.calls('issue', 'create')), 2)
+        self.assertEqual(self.calls('issue', 'comment'), [])
+
+
+
 if __name__ == '__main__':
     unittest.main()
