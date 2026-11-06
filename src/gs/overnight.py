@@ -1,4 +1,4 @@
-"""`gs overnight`: 무인으로 켠 세션의 승인 창을 거부로 바꾸는 표시와 그 판정.
+"""`gs overnight`: 무인으로 켠 세션의 승인 창을 거부로 바꾸는 표시와 그 판정, 도는 밤에 feature를 더하는 대기열.
 
 `gs overnight arm`이 `.goldstack/overnight/armed/<pid>.json`에 표시를 남기고, `gs hook permissionrequest`(`hook.py`)가
 이 표시를 보고 창 대신 거부를 낸다. 창은 사람이 없으면 닫히지 않아 아침까지 선다. 거부는 세션이 받아 다음 일로 넘어간다.
@@ -16,12 +16,25 @@
 표시는 레포의 주 체크아웃에 둔다. linked worktree로 `cd`한 세션도 같은 표시를 본다. 세션이 다른 레포로 옮겨 가면 그 레포에는
 표시가 없어 창이 그대로 뜬다. `arm`·`disarm`은 거부와 창 사이만 바꾼다. 어느 쪽도 호출을 허용하지 않으므로 모델이 꺼도
 권한이 넓어지지 않는다. 판정이 실패하면 창으로 돌아간다. 낮 세션을 건드리지 않는 쪽이다.
+
+대기열은 밤샘 파일(`.goldstack/overnight/<날짜>.md`)의 `결과` 표다. 저장소를 따로 두지 않는다. `/overnight`이 feature가 끝날 때마다
+이 파일을 다시 읽으므로 `gs overnight add`가 더한 줄을 잇는다. 줄 더하기끼리는 잠금으로 줄을 잃지 않는다. 모델의 Edit 도구는 잠금을
+모르지만 그때 디스크에 있는 글에 글자를 바꾸므로 더해진 줄이 남는다(2026-11-06 Claude Code 2.1.319로 쟀다). Write 도구로 통째로 쓰면 지워지므로
+skill이 Edit을 쓰라고 적는다. 살아 있는 표시가 곧 코디네이터다. `/overnight`이 첫 `gs go`를 띄울 때 켜서 밤이 끝날 때 끄기 때문이다.
+`/go`로만 돌고 있으면 표시가 없고, 이어 줄 세션이 없다.
+
+대기열을 닫는 것은 `disarm`이다. 아침 보고를 쓴 밤은 표시가 있을 때만 줄을 받으므로, `disarm`이 `add`와 같은 잠금 안에서 표를 보고
+`대기` 줄이 남았으면 끄지 않는다. 표시를 본 `add`가 더한 줄은 끄기 전에 드러나고, 끈 뒤의 `add`는 끝난 밤으로 거부된다.
+끈 다음에 다시 읽고 다시 켜지 않는다. 그 틈의 `add`가 새 파일로 가고, 사람이 없는 밤에 `arm`이 창을 띄울 수 있다.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -41,6 +54,17 @@ PS_TIMEOUT = 10  # 초. 넘기면 판정 실패로 보고 창으로 돌아간다
 START_SLACK = 2
 PS_LINE = re.compile(r"\s*(\d+)\s+(\d+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d+)\s+(.*)")
 LSTART_FORMAT = "%a %b %d %H:%M:%S %Y"
+
+QUEUE_LOCK = f"{OVERNIGHT_DIR}/.queue.lock"
+NIGHT_FILE = re.compile(r"(\d{4}-\d{2}-\d{2})(?:-(\d+))?\.md")  # `<날짜>.md`, 같은 날 둘째부터 `<날짜>-2.md`
+FEATURE_NAME = re.compile(r"(?!\.)[^\s|/\\]+")  # 표의 한 칸이자 경로의 한 조각
+RESULT_HEADING = "## 결과"
+REPORT_HEADING = "## 아침 보고"
+TABLE_SEPARATOR = re.compile(r"\|[\s:|-]+\|")
+WAITING = "대기"
+ROWS_LEFT = f"`{WAITING}` 줄이 남아"
+NO_COORDINATOR = "코디네이터: 없음"
+MAKE_NIGHT = "`/overnight <feature>`로 시작하거나 `/overnight add <feature>`로 새 밤샘 파일을 만든다"
 
 
 @dataclass(frozen=True)
@@ -198,7 +222,10 @@ def arm(repo: Path, out: TextIO, err: TextIO) -> int:
 
 
 def disarm(repo: Path, out: TextIO, err: TextIO) -> int:
-    """이 Claude 세션의 표시만 지운다. 켜져 있지 않아도 성공이다. 다른 세션의 표시는 그대로 둔다."""
+    """이 Claude 세션의 표시만 지운다. 켜져 있지 않아도 성공이다. 다른 세션의 표시는 그대로 둔다.
+
+    아침 보고를 쓴 밤에 `대기` 줄이 남았으면 끄지 않고 실패한다. 끄면 아무도 그 줄을 잇지 않는다.
+    """
     table = _table(err)
     if table is None:
         return 1
@@ -210,12 +237,18 @@ def disarm(repo: Path, out: TextIO, err: TextIO) -> int:
         print(f"오류: 조상에 claude 프로세스가 없어 어느 표시를 끌지 모른다. 켜진 세션 pid: {others}. "
               "그 세션에서 치거나 그 세션을 끝낸다", file=err)
         return 1
-    path = _marker(root, session.pid)
-    if any(marker.same(session) for marker in live):
-        path.unlink(missing_ok=True)
-        print(f"끔: Claude 세션 pid {session.pid}의 승인 창이 다시 뜬다", file=out)
-    else:
+    if not any(marker.same(session) for marker in live):  # 잠금 파일도 만들지 않는다
         print(f"이미 꺼져 있다: Claude 세션 pid {session.pid}", file=out)
+        return 0
+    with _queue_lock(root):
+        left = _rows_left(root)
+        if not left:
+            _marker(root, session.pid).unlink(missing_ok=True)
+    if left:
+        print(f"오류: 가장 최근 밤샘 파일에 아침 보고가 있는데 {ROWS_LEFT} 끄지 않았다: {', '.join(left)}. "
+              "그 줄을 잇거나 상태를 고친 뒤 다시 친다", file=err)
+        return 1
+    print(f"끔: Claude 세션 pid {session.pid}의 승인 창이 다시 뜬다", file=out)
     return 0
 
 
@@ -238,3 +271,155 @@ def record_denied(root: Path, call: str) -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     with (root / DENIED_LOG).open("a", encoding="utf-8") as f:
         f.write(f"{stamp} {call}\n")
+
+
+# ---------------------------------------------------------------- 대기열
+
+class ResultFileError(Exception):
+    """밤샘 파일에 줄을 더할 수 없는 이유."""
+
+
+def latest_night(root: Path) -> Path | None:
+    """가장 최근 밤샘 파일. 이름으로 고른다. 글자 순서로는 `<날짜>-2.md`가 `<날짜>.md`보다 앞이고, 고친 시각은 옛 밤을 고쳐도 바뀐다."""
+    nights = {}
+    for path in (root / OVERNIGHT_DIR).glob("*.md"):
+        m = NIGHT_FILE.fullmatch(path.name)
+        if m:
+            nights[(m.group(1), int(m.group(2) or 1))] = path
+    return nights[max(nights)] if nights else None
+
+
+@contextlib.contextmanager
+def _queue_lock(root: Path):
+    """줄 더하기와 대기열 닫기를 하나씩. 밤샘 파일은 rename으로 바뀌므로 잠금은 따로 둔 파일에 건다. 프로세스가 죽으면 저절로 풀린다."""
+    fd = os.open(root / QUEUE_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def _cells(line: str) -> list[str]:
+    return [cell.strip(" `") for cell in line.strip().strip("|").split("|")]
+
+
+def _result_table(lines: list[str]) -> list[int]:
+    """`결과` 표의 줄 번호들(머리와 구분 줄 포함). 표가 없거나 모양이 다르면 ResultFileError. 고칠 자리를 어림하지 않는다."""
+    start = next((i for i, line in enumerate(lines) if line.rstrip() == RESULT_HEADING), None)
+    table: list[int] = []
+    if start is not None:
+        for i in range(start + 1, len(lines)):
+            line = lines[i].strip()
+            if line.startswith("|"):
+                table.append(i)
+            elif table or line.startswith("#"):
+                break
+    if (len(table) < 2 or _cells(lines[table[0]])[0] != "feature"
+            or not TABLE_SEPARATOR.fullmatch(lines[table[1]].strip())):
+        raise ResultFileError(f"`{RESULT_HEADING[3:]}` 표를 찾지 못했다. 표 모양을 고친 뒤 다시 친다")
+    return table
+
+
+def _replace(path: Path, text: str) -> None:
+    """읽는 쪽이 반쯤 쓴 파일을 보지 않게 rename한다."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _reported(lines: list[str]) -> bool:
+    return any(line.rstrip() == REPORT_HEADING for line in lines)
+
+
+def _rows_left(root: Path) -> list[str]:
+    """아침 보고를 쓴 가장 최근 밤에 남은 `대기` 줄의 feature들. 잠금 안에서 부른다.
+
+    표를 읽지 못하면 없다고 본다. `add`도 그 표에 더하지 못하고, 끄기는 창을 되돌릴 뿐이다.
+    """
+    night = latest_night(root)
+    if night is None:
+        return []
+    try:
+        lines = night.read_text(encoding="utf-8").split("\n")
+        rows = _result_table(lines)[2:] if _reported(lines) else []
+    except (ResultFileError, OSError, UnicodeDecodeError):
+        return []
+    return [cells[0] for cells in (_cells(lines[i]) for i in rows) if cells[1:2] == [WAITING]]
+
+
+def _reopened(root: Path) -> bool:
+    """아침 보고가 있는 밤을 잇는 세션이 있는가. `/overnight resume`은 멈춘 밤의 보고를 남긴 채 같은 파일을 잇는다.
+
+    보고를 막 쓰고 아직 끄지 않은 세션도 여기 든다. 그 세션은 `disarm`이 거부해서 더해진 줄을 잇는다.
+    """
+    try:
+        return bool(_live_markers(root, processes()))
+    except (OSError, subprocess.SubprocessError) as e:
+        # 끝났다고 하면 skill이 새 파일을 만들어 도는 코디네이터가 읽지 않는 표에 줄이 간다
+        raise ResultFileError(f"아침 보고가 있는데 프로세스 목록을 읽지 못해({e}) 이 밤을 잇는 세션이 있는지 모른다. 다시 친다") from e
+
+
+def _enqueue(root: Path, night: Path, name: str) -> str | None:
+    """잠금 안에서 부른다. 줄을 더했으면 None, 이미 있으면 그 줄의 상태.
+
+    아침 보고를 쓰고 잇는 세션이 없는 밤에는 더하지 않는다. 며칠 전 허락이 새 feature에 쓰이게 된다.
+    """
+    lines = night.read_text(encoding="utf-8").split("\n")
+    if _reported(lines) and not _reopened(root):
+        raise ResultFileError(f"아침 보고까지 쓴 끝난 밤이다. {MAKE_NIGHT}")
+    table = _result_table(lines)
+    for i in table[2:]:
+        cells = _cells(lines[i])
+        if cells[0] == name:
+            return cells[1] if len(cells) > 1 else "?"
+    lines.insert(table[-1] + 1, f"| {name} | {WAITING} | 0 | – | – |")
+    _replace(night, "\n".join(lines))
+    return None
+
+
+def _coordinator(root: Path) -> str:
+    """`코디네이터: …` 한 줄. 프로세스 목록을 못 읽어도 줄은 이미 더해졌으니 실패로 돌리지 않는다. `모름`은 `없음`이 아니어서 코디네이터를 새로 세우지 않는다."""
+    try:
+        table = processes()
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"코디네이터: 모름(프로세스 목록을 읽지 못했다: {e})"
+    live = _live_markers(root, table)
+    if not live:
+        return f"{NO_COORDINATOR}. 이 줄을 이을 세션이 없다. `/overnight add`나 `/overnight resume`을 친 세션이 잇는다"
+    session = current_session(table)
+    if session and any(marker.same(session) for marker in live):
+        return f"코디네이터: 이 세션(pid {session.pid})"
+    return "코디네이터: 세션 pid " + ", ".join(str(marker.pid) for marker in live)
+
+
+def add(repo: Path, name: str, out: TextIO, err: TextIO) -> int:
+    """가장 최근 밤샘 파일의 `결과` 표에 `대기` 줄을 더하고 이을 세션이 있는지 알린다. 이미 있으면 그대로 두고 성공이다."""
+    root = shared_root(repo) or repo
+    if not FEATURE_NAME.fullmatch(name):
+        print(f"오류: feature 이름으로 쓸 수 없다: {name!r}", file=err)
+        return 1
+    if not featmod.work_dir(root, name).is_dir():
+        print(f"오류: {featmod.work_rel(name)}가 없다. feature 이름을 확인하거나 `/grill`부터 한다", file=err)
+        return 1
+    night = latest_night(root)
+    if night is None:  # 잠금 파일도 만들지 않는다
+        print(f"오류: 줄을 더할 밤샘 파일이 없다. {MAKE_NIGHT}", file=err)
+        return 1
+    where = night.relative_to(root)
+    _ensure_ignored(root)
+    try:
+        with _queue_lock(root):
+            state = _enqueue(root, night, name)
+    except (ResultFileError, OSError, UnicodeDecodeError) as e:
+        print(f"오류: {where}: {e}", file=err)
+        return 1
+    print(f"더함: {where}의 결과 표에 {name}({WAITING})" if state is None else f"이미 있다: {where}의 {name}({state})", file=out)
+    print(_coordinator(root), file=out)
+    return 0
