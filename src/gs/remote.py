@@ -27,12 +27,15 @@ STATUS_TIMEOUT = 20  # herdr의 ssh ConnectTimeout(10초)보다 길게. 끊긴 �
 PULL_TIMEOUT = 60  # 원격 git pull 하나. 준비 전체는 TIMEOUT을 더한 만큼 기다린다.
 FETCH_TIMEOUT = 60  # 로컬 git fetch 하나.
 CREATE_TIMEOUT = 30  # 세션 workspace 만들기·프롬프트 보내기 하나.
-SHELL_READY_MS = 30_000  # 새 pane의 셸이 명령을 받을 때까지.
+SHELL_READY_MS = 30_000  # 새 pane의 셸이 명령을 받을 때까지. 표시 줄을 다시 보내는 시도를 모두 합한 상한이다.
+SHELL_READY_TRIES = 5  # 표시 줄을 보내는 최대 횟수. 시도 하나는 SHELL_READY_MS를 이 수로 나눈 만큼 기다린다.
 AGENT_READY_MS = 120_000  # claude가 입력을 받을 때까지(herdr 상한 300000).
 MIN_FREE = 1024 ** 3  # 최소 1 GiB. worker 산출물을 위한 여유 공간.
 GUIDE = "docs/guide.md의 tmux 절"
 FEATURE_NAME = re.compile(r"\w[\w.-]*")  # `/go`의 인자는 공백으로 나뉘고 경로에도 들어간다.
 EXIT_PREFIX = "GS_REMOTE_EXIT="
+SHELL_START_HINT = ("시간 초과; 새 셸이 입력을 받지 않는다. 셸 시작 질문(예: oh-my-zsh 업데이트 질문)이 "
+                    "떠 있는지 원격에서 셸을 열어 답한다")
 NOT_REFUSED = ("timeout", "remote", "unknown")  # 서버의 거절 코드가 아니다. 요청이 적용됐는지 모른다.
 
 # 원격 python3는 gs의 실행 환경과 독립적으로 준비 상태를 검사한다.
@@ -185,6 +188,36 @@ def _root_pane(result: dict) -> str:
     return pane
 
 
+def _shell_ready(machine: str, pane: str, budget: float = SHELL_READY_MS / 1000) -> None:
+    """새 pane의 셸이 입력을 받을 때까지 표시 줄을 보내 확인한다. 전체 대기는 budget초 안이다.
+
+    셸 시작 질문(예: oh-my-zsh 업데이트 `[Y/n]`)이 떠 있으면 첫 입력 글자가 질문의 답으로 먹힌다.
+    그래서 실제 조각을 보내기 전에 표시 줄을 보내 줄 첫머리에 단독으로 나올 때까지 기다리고,
+    먹혔으면 새 표시 줄로 다시 보낸다. 명령은 `printf`로 시작해 첫 글자가 `Y`(업데이트 승낙)로 읽히지 않는다.
+    끝내 나오지 않으면 `timeout` 코드의 HerdrError를 `shell_start`를 켠 채 올린다.
+    """
+    deadline = time.monotonic() + budget
+    attempt = budget / SHELL_READY_TRIES
+    for _ in range(SHELL_READY_TRIES):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        marker = f"GS_REMOTE_READY_{uuid.uuid4().hex}"
+        wait = min(attempt, left)
+        try:
+            herdr.machine_run(machine, ["pane", "run", pane, f"printf '\\n%s\\n' {marker}"], min(left, CREATE_TIMEOUT))
+            herdr.machine_run(machine, ["pane", "wait-output", pane, "--regex", f"(?m)^{marker}\\r?$",
+                                        "--timeout", str(max(1, int(wait * 1000))), "--source", "recent-unwrapped"],
+                              wait + 5)
+            return
+        except herdr.HerdrError as e:
+            if e.code != "timeout":
+                raise
+    error = herdr.HerdrError("timeout", "새 pane의 셸이 입력을 받지 않는다")
+    error.shell_start = True
+    raise error
+
+
 def _script_in_pane(machine: str, script: str, argv: list[str], *, label: str,
                     timeout: float = TIMEOUT, lines: int = 200) -> str:
     """임시 workspace의 pane에서 python3 스크립트를 돌려 그 출력을 돌려준다. pane은 닫는다.
@@ -217,6 +250,8 @@ def _script_in_pane(machine: str, script: str, argv: list[str], *, label: str,
               "--timeout", str(max(1, int(remaining() * 1000))), "--source", "recent-unwrapped"])
 
     try:
+        # 셸 시작 질문이 첫 글자를 먹을 수 있어 조각을 보내기 전에 셸이 입력을 받는지 본다.
+        _shell_ready(machine, pane, min(SHELL_READY_MS / 1000, remaining()))
         for index, offset in enumerate(range(0, len(packed), 400)):
             chunk = packed[offset:offset + 400]
             previous = f'"${variable}"' if offset else ""
@@ -281,7 +316,6 @@ def launch(machine: str, repo_path: str, feature: str) -> tuple[str, str, bool]:
     workspace = info.get("workspace_id") if isinstance(info, dict) else None
     if not isinstance(workspace, str) or not workspace:
         raise herdr.HerdrError("remote", "workspace 응답에 workspace_id가 없다")
-    marker = f"GS_REMOTE_READY_{uuid.uuid4().hex}"
 
     def close(cause: BaseException) -> None:
         try:
@@ -292,10 +326,7 @@ def launch(machine: str, repo_path: str, feature: str) -> tuple[str, str, bool]:
 
     try:
         # agent start는 셸 프롬프트에서만 받는다. 새 셸이 명령을 돌릴 수 있을 때까지 기다린다.
-        herdr.machine_run(machine, ["pane", "run", pane, f"printf '\\n%s\\n' {marker}"], CREATE_TIMEOUT)
-        herdr.machine_run(machine, ["pane", "wait-output", pane, "--regex", f"(?m)^{marker}\\r?$",
-                                    "--timeout", str(SHELL_READY_MS), "--source", "recent-unwrapped"],
-                          SHELL_READY_MS / 1000 + 5)
+        _shell_ready(machine, pane)
         # 이름은 살아 있는 agent 사이에서 유일해야 하고 feature 이름의 문자를 다 받지 못한다. 이후는 pane id로 부른다.
         herdr.machine_run(machine, ["agent", "start", f"gs-go-{uuid.uuid4().hex[:8]}", "--kind", "claude",
                                     "--pane", pane, "--timeout", str(AGENT_READY_MS)], AGENT_READY_MS / 1000 + 5)
@@ -334,6 +365,8 @@ def _not_pushed(repo: Path, cfg: config.Config, feature: str) -> str | None:
 
 def _failure_text(e: herdr.HerdrError) -> str:
     """오류 코드만 보인다. 본문은 원격 출력일 수 있다."""
+    if getattr(e, "shell_start", False):
+        return SHELL_START_HINT
     if e.code == "timeout":
         return "시간 초과(요청은 적용됐을 수 있다)"
     return e.code if re.fullmatch(r"[a-z_]+", e.code or "") and e.code not in ("remote", "unknown") else "요청 실패"
@@ -511,5 +544,7 @@ def check(repo: Path, machine: str, out: TextIO, err: TextIO, feature: str | Non
     except (OSError, subprocess.TimeoutExpired, herdr.HerdrError, metadata.PackageNotFoundError) as e:
         # 명령 출력에는 비밀이 있을 수 있어 예외 본문을 그대로 내보내지 않는다.
         reason = "시간 초과" if isinstance(e, subprocess.TimeoutExpired) or getattr(e, "code", "") == "timeout" else "조회 실패"
+        if getattr(e, "shell_start", False):
+            reason = SHELL_START_HINT
         item("원격 검사", False, f"{reason}; herdr 연결·python3·pane 상태를 확인하고 다시 실행한다")
     return int(failed)
