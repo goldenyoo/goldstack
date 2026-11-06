@@ -594,6 +594,9 @@ def record(repo: Path, cfg: config.Config, *, phase: str, kind: str, frames: Ite
     return path
 
 
+MANUAL_HEADING = "\n\n## 사람이 쓴 피드백\n"
+
+
 def record_manual(repo: Path, cfg: config.Config, message: str) -> Path | None:
     """사람이 명시적으로 보낸 글. 자동 수집과 달리 자유 글을 그대로 싣는다."""
     if os.environ.get("GS_ROLE") == "worker":
@@ -614,7 +617,7 @@ def record_manual(repo: Path, cfg: config.Config, message: str) -> Path | None:
         pass
     # 수동 피드백은 글마다 다른 issue다. 모두 같은 단계·종류라서 재발 키를 두면 서로 합쳐진다.
     body = re.sub(r"^- 재발 키: .*\n", "", issue.body.replace(issue.fingerprint, fingerprint), flags=re.MULTILINE)
-    body += "\n\n## 사람이 쓴 피드백\n" + message
+    body += MANUAL_HEADING + message
     _write_draft(path, {"fingerprint": fingerprint, "title": issue.title, "labels": list(issue.labels), "count": "1"},
                  body, "")
     return path
@@ -726,7 +729,8 @@ def send(repo: Path, cfg: config.Config, *, force: bool = False, only_path: Path
                 if draft.count <= already:
                     continue
                 matches = _find_issues(repo, target, "지문", draft.fingerprint)
-                recurrence = _KEY_LINE.search(draft.body)
+                # 수동 피드백은 사람이 쓴 글에 키 줄이 있어도 재발로 보지 않는다. 헤더에서만 찾는다.
+                recurrence = _KEY_LINE.search(draft.body.split(MANUAL_HEADING, 1)[0])
                 if not matches and recurrence:
                     matches = _find_issues(repo, target, "재발 키", recurrence[1])  # 새 gs의 재발. 키 줄이 없는 옛 초안·issue는 지문뿐이다
                 issue = next((item for item in matches if item["state"] == "OPEN"), None)

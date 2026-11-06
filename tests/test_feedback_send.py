@@ -672,6 +672,15 @@ class RecurrenceKeyTest(unittest.TestCase):
         self.assertEqual(len(self.calls('issue', 'create')), 2)
         self.assertEqual(self.calls('issue', 'comment'), [])
 
+    def test_manual_feedback_that_pastes_a_key_line_is_still_sent_as_a_new_issue(self):
+        self.earlier_issue()
+        key = next(line for line in json.loads((self.repo / 'issues').read_text())[0]['body'].splitlines()
+                   if line.startswith('- 재발 키: '))
+        feedback.record_manual(self.repo, self.cfg, f'이 issue와 비슷합니다\n{key}\n그래서 제안합니다')
+        self.assertEqual(self.send(), 1)
+        create, = self.calls('issue', 'create')
+        self.assertIn(key, create[create.index('--body') + 1])
+        self.assertEqual(self.calls('issue', 'comment'), [])
 
 
 if __name__ == '__main__':
