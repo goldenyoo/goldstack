@@ -29,6 +29,9 @@ POLL_SECONDS = 2.0
 PUSH_BLOCKED = "/dev/null/gs-worker-push-blocked/"  # 만들 수 없는 경로: push가 여기로 바뀌면 반드시 실패한다
 GH_BLOCKED = "gs-worker-no-gh"  # gh는 GH_TOKEN을 keyring보다 먼저 쓴다. 틀린 토큰이라 쓰기도 읽기도 못 한다
 PROFILE_REL = ".goldstack/profile.md"  # /adopt가 쓰는 레포 요약. brief에는 포인터 한 줄만(내용은 넣지 않는다)
+SEE_FAIL_RULE = (
+    "- 버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다. "
+    "복구한 뒤 커밋하고, 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다.")
 NETWORK_RESUME = "지난 시도가 네트워크로 끊겼다. `git status`와 `git diff`로 남은 변경을 보고 이어라."
 
 
@@ -62,13 +65,18 @@ class Job:
 def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "",
                 resumed: bool = False, narrow: bool = False) -> None:
     """worker brief를 쓴다. `narrow`는 수정·수리 worker용이다: 전체 검증은 gs가 병합 트리에서 하므로 좁은 시험만 시킨다.
-    첫 구현 worker(`narrow=False`)의 brief는 전체 검증을 한 번 돌리라고 한다."""
+    첫 구현 worker(`narrow=False`)의 brief는 전체 검증을 한 번 돌리라고 한다. 다만 티켓 `model`이 codex면
+    첫 worker도 좁은 시험까지만 시킨다: sandbox에서 통과할 수 없는 전체 시험에 시간을 쓰지 않게 하고, 전체 검증은
+    gs가 sandbox 밖 병합 트리에서 한다(`Codex.NOTE`와 같은 말). 재개로 부르는 호출도 같다.
+    어느 brief든 버그를 고치면 새 시험의 실패를 직접 보라는 규칙이 붙는다(`SEE_FAIL_RULE`)."""
     t = job.ticket
     verify = spec.verify_for(t)
-    verify_rule = (
+    narrow_rule = (
         f"- 검증 명령 `{verify}`: 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌린다. 너는 돌리지 않는다. "
-        "고친 곳에 닿는 좁은 시험만 돌린다."
-        if narrow else
+        "고친 곳에 닿는 좁은 시험만 돌린다.")
+    verify_rule = (
+        narrow_rule
+        if narrow or t.model.strip().lower() == "codex" else
         f"- 검증 명령 `{verify}`: 개발 중에는 관련 시험만 돌리고, 커밋 전에 이 명령을 한 번 돌린다. "
         "통과시켜야 한다. gs가 커밋된 내용만으로 병합 트리에서 다시 돌려 확인한다.")
     spec_rel = f"{work_rel(feature)}/spec.md"
@@ -85,6 +93,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 - 끝나면 변경을 이 브랜치에 커밋한다(여러 커밋 가능). 커밋이 없으면 실패로 처리된다.
 - push, PR 생성, 병합은 하지 않는다. gs가 한다.
 {verify_rule}
+{SEE_FAIL_RULE}
 - sandbox에서 네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 검증 단계만 돌릴 수 없다면 실패로 보지 않는다. 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다. 돌릴 수 없던 단계와 이유를 마지막 메시지에 적고 변경을 커밋한다. gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.
 - 완료 조건이 이 티켓의 명세다. 범위 밖은 건드리지 않는다.
