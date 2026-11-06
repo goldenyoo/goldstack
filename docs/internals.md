@@ -13,7 +13,7 @@
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 리뷰·수정·재리뷰 띄우기(두 리뷰 동시), agy 호출 세기, 재개 뒤 멈춤, 요약 출력, 알림 |
 | `worker.py`, `herdr.py`, `adapters.py`, `streamfmt.py` | worker 띄우기(brief, 실행 스크립트, push 차단), herdr pane, 모델별 명령·판정, pane 출력 정리 |
 | `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰(2차 재리뷰의 재확인) |
-| `remote.py` | `gs remote check·go·status`: herdr `--machine`으로 원격 준비 검사(`_script_in_pane`과 `launch`는 먼저 `_shell_ready`로 표시 줄을 `SHELL_READY_MS` 안에서 최대 `SHELL_READY_TRIES`번 다시 보내 셸이 입력을 받는지 확인하고, 끝내 안 되면 `shell_start` 표시가 붙은 timeout 오류로 셸 시작 질문을 짚는 안내를 낸다; pane에서 python 프로브를 돌려 참/거짓만 받는다), 버전·grill 커밋 관문, 원격 pane에 claude를 띄워 `/go <feature> <UNATTENDED>` 전송(무인 세션 문장: 멈추면 원인 후보만 적고 멈춘다), `check` 끝의 재로그인 `안내:` 줄, 원격 `gs status` 조회 |
+| `remote.py` | `gs remote check·go·status`: herdr `--machine`으로 원격 준비 검사(`_script_in_pane`과 `launch`는 먼저 `_shell_ready`로 표시 줄을 `SHELL_READY_MS` 안에서 최대 `SHELL_READY_TRIES`번 다시 보내 셸이 입력을 받는지 확인하고, 끝내 안 되면 `shell_start` 표시가 붙은 timeout 오류로 셸 시작 질문을 짚는 안내를 낸다; pane에서 python 프로브를 돌려 참/거짓만 받는다), 버전·grill 커밋 관문, 원격 pane에 claude를 띄워 `/go <feature> -- <UNATTENDED>` 전송(무인 세션 문장: 멈추면 원인 후보만 적고 멈춘다), `check` 끝의 재로그인 `안내:` 줄, 원격 `gs status` 조회 |
 | `retrolog.py` | `gs retro-log`: `/retro`용 로그 파일 하나(`run/retro-log.md`)를 크기 상한 안에 모은다 |
 | `findings.py` | 보고만 high·medium 지적을 `.goldstack/ideas/` 파일로 넘긴다 |
 | `transient.py` | 일시 오류 판별, 대기 일정(`Backoff`), 중단 예외(`NetworkAbort`), codex `Reconnecting` 감시 |

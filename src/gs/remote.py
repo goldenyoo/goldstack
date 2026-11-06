@@ -36,7 +36,7 @@ FEATURE_NAME = re.compile(r"\w[\w.-]*")  # `/go`의 인자는 공백으로 나�
 EXIT_PREFIX = "GS_REMOTE_EXIT="
 SHELL_START_HINT = ("시간 초과; 새 셸이 입력을 받지 않는다. 셸 시작 질문(예: oh-my-zsh 업데이트 질문)이 "
                     "떠 있는지 원격에서 셸을 열어 답한다")
-# 원격 세션에는 사람이 없다. 멈춘 실행을 보고 회고·수정·재실행으로 번지지 않게 `/go` 뒤에 붙인다(한 줄이어야 herdr가 한 번에 보낸다).
+# 원격 세션에는 사람이 없다. 멈춘 실행을 보고 회고·수정·재실행으로 번지지 않게 `/go <feature> -- ` 뒤에 붙인다(`--` 뒤는 /go가 feature 목록에서 뺀다. 한 줄이어야 herdr가 한 번에 보낸다).
 UNATTENDED = ("사람이 없다. 실행이 멈추면 로그를 읽어 원인 후보만 적고 멈춘다. "
               "회고·수정·재실행은 하지 않는다.")
 RELOGIN_HINT = ("재부팅이나 잠자기 뒤에는 Claude 로그인이 풀릴 수 있다. 비대화형 ssh 판정은 이를 못 잡으니 "
@@ -343,7 +343,7 @@ def launch(machine: str, repo_path: str, feature: str) -> tuple[str, str, bool]:
         close(e)
         raise
     try:
-        herdr.machine_run(machine, ["agent", "prompt", pane, f"/go {feature} {UNATTENDED}"], CREATE_TIMEOUT)
+        herdr.machine_run(machine, ["agent", "prompt", pane, f"/go {feature} -- {UNATTENDED}"], CREATE_TIMEOUT)
     except KeyboardInterrupt:
         return workspace, pane, False
     except herdr.HerdrError as e:

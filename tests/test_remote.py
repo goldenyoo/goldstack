@@ -509,12 +509,14 @@ class RemoteGoTest(RemoteGoFixture):
         self.assertEqual(start[start.index('--pane') + 1], 'remote:p1')
         self.assertRegex(start[4], r'^[a-z][a-z0-9_-]{0,31}$')  # herdr의 agent 이름 규칙
         # --wait 없이 보내고 바로 돌아온다.
-        self.assertEqual(prompt[4:], ['remote:p1', '/go demo ' + remote.UNATTENDED])
+        self.assertEqual(prompt[4:], ['remote:p1', '/go demo -- ' + remote.UNATTENDED])
         # 보낸 글자가 사람 없음과 "원인 후보만 적고 멈춤"을 뜻한다.
         self.assertIn('사람이 없다', prompt[5])
         self.assertIn('원인 후보만 적고 멈춘다', prompt[5])
         self.assertIn('회고·수정·재실행은 하지 않는다', prompt[5])
         self.assertNotIn('\n', prompt[5])
+        # feature 목록은 `--` 앞까지다. 지침 낱말이 feature로 읽히지 않는다.
+        self.assertEqual(prompt[5].split(' -- ')[0].split(), ['/go', 'demo'])
         # 세션 pane은 닫지 않는다. 앞선 임시 pane만 닫았다.
         self.assertEqual(self.actions().count(['pane', 'close']), 2)
         self.assertNotIn(['workspace', 'close'], self.actions())
