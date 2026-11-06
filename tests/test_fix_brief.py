@@ -63,9 +63,16 @@ class FixBriefTest(unittest.TestCase):
         briefs = self.briefs()
         for name in ("fix1", "fix2", "repair"):
             with self.subTest(brief=name):
-                for phrase in ("네트워크, localhost, 홈 디렉터리 쓰기가 필요한 검증 단계만",
+                for phrase in ("네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 검증 단계만",
                                "사람에게 묻지 않는다", "완료 조건이 이 티켓의 명세다"):
                     self.assertIn(phrase, briefs[name])
+
+    def test_review_prompts_exempt_ps(self):
+        p = Path("x")
+        for name, text in (("review", review.review_prompt(p, p, p, p)),
+                           ("rereview", review.rereview_prompt(p, p, p, p, p))):
+            with self.subTest(prompt=name):
+                self.assertIn("네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 단계", text)
 
     def test_only_the_verify_rule_differs(self):
         briefs = self.briefs()
