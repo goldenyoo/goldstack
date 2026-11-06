@@ -134,7 +134,10 @@ class HookTest(unittest.TestCase):
                     "bash -c 'pkill -f unittest'", "sh -lc 'killall python'", "echo x | xargs pkill",
                     "pgrep -f unittest | xargs killall", "sudo pkill -f x", "/usr/bin/pkill -f x",
                     "/usr/bin/killall node", "env FOO=1 pkill x", "cd src && pkill x", "git status; pkill x",
-                    "eval 'pkill x'", "timeout 5 killall x"]:
+                    "eval 'pkill x'", "timeout 5 killall x",
+                    "sudo -u root pkill -f unittest", "sudo -u root /usr/bin/killall python3", "sudo -uroot pkill x",
+                    "sudo -Eu root pkill x", "sudo --user root pkill x", "sudo --user=root pkill x",
+                    "sudo -g wheel -u root killall x", "sudo -n -- pkill x"]:
             self.assertBlocked(cmd)
         reason = self.bash('pkill -f "unittest discover"')
         self.assertIn("PID", reason)
@@ -142,7 +145,7 @@ class HookTest(unittest.TestCase):
 
     def test_kill_by_pid_and_pgrep_allowed(self):
         for cmd in ["kill 123", "kill -9 123", "kill $!", "pgrep -f unittest", "bash -c 'kill 123'",
-                    "/usr/bin/pgrep python", "echo pkill", "grep -rn pkill src", "git commit -m 'no pkill'"]:
+                    "/usr/bin/pgrep python", "sudo -u root kill 123", "echo pkill", "grep -rn pkill src", "git commit -m 'no pkill'"]:
             self.assertAllowed(cmd)
 
     def test_kill_by_name_passes_without_worker_role(self):

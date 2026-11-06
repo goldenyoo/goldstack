@@ -710,6 +710,21 @@ def _xargs_filled(words: list[str], fill: tuple[str, ...]) -> list[str]:
     return [XARGS_INPUT if any(s in word for s in fill) else word for word in words]
 
 
+SUDO_SHORT_VALUED = set("CDghpRrTtUu")
+SUDO_LONG_VALUED = ("--close-from", "--chdir", "--chroot", "--group", "--host", "--prompt", "--role", "--type",
+                    "--command-timeout", "--other-user", "--user")
+
+
+def _sudo_takes_next(word: str) -> bool:
+    """이 sudo 옵션의 값이 다음 단어인가(`-u root`, `-Eu root`, `--user root`). 그 단어는 명령이 아니다."""
+    if word.startswith("--"):
+        return "=" not in word and word in SUDO_LONG_VALUED
+    for k, ch in enumerate(word[1:], 1):
+        if ch in SUDO_SHORT_VALUED:
+            return k == len(word) - 1  # 뒤에 글자가 더 있으면 `-uroot`처럼 값이 붙어 있다
+    return False
+
+
 def strip_prefix(argv: list[str]) -> list[str]:
     """`FOO=1 sudo env -i nohup git push`에서 `git push`만 남긴다."""
     i = 0
@@ -721,9 +736,11 @@ def strip_prefix(argv: list[str]) -> list[str]:
             i += 1
         elif os.path.basename(a).lstrip("\\") in WRAPPERS:
             xargs = _is_xargs(a)  # `xargs -I {} git …`의 `{}`는 명령이 아니다
+            sudo = os.path.basename(a).lstrip("\\") == "sudo"  # `sudo -u root pkill …`의 `root`도 명령이 아니다
             i += 1
             while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i] or re.match(r"^\d+[smhd]?$", argv[i])):
-                i += 2 if xargs and _xargs_takes_next(argv[i]) else 1
+                takes = (xargs and _xargs_takes_next(argv[i])) or (sudo and argv[i].startswith("-") and _sudo_takes_next(argv[i]))
+                i += 2 if takes else 1
         else:
             break
     return argv[i:]
