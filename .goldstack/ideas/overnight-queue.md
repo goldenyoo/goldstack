@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v11 실행 중 대화"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v20"
 ---
 `gs go vN`이 도는 동안 v(N+1)을 grill하고 대기열에 넣으면, vN이 끝난 뒤 승인 창 없이 v(N+1)까지 이어 돈다.
 

@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v16 원격 첫 실행 뒤 대화(2026-11-06)"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v20"
 ---
 맥미니에는 worker를 나눠 주지 말고, 서로 독립인 feature를 통째로 맡겨 맥북과 동시에 돌린다.
 
