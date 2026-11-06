@@ -38,4 +38,4 @@ class VersionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run([sys.executable, "-m", "gs.cli", "--version"],
                                     cwd=directory, capture_output=True, text=True)
-        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "gs 0.2.1\n", ""))
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "gs 0.2.2\n", ""))
