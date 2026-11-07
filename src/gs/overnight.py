@@ -12,6 +12,7 @@
 - **가장 가까운** 조상이라야 켜진 코디네이터가 `gs go`로 띄운 worker claude가 표시를 물려받지 않는다.
 - pid만 믿으면 죽은 세션의 pid가 재사용됐을 때 속는다(`state.py`의 잠금과 같은 이유). 그래서 시작 시각도 맞춘다.
   프로세스가 사라진 표시는 어떤 세션의 값과도 맞지 않아 저절로 꺼진 것이 되고, `arm`·`disarm`이 지운다.
+  지우기 전에 `ps`를 한 번 다시 읽는다. 호출 전에 읽은 목록이 낡아 그 뒤에 켠 세션의 표시를 지우면 안 되기 때문이다.
 
 표시는 레포의 주 체크아웃에 둔다. linked worktree로 `cd`한 세션도 같은 표시를 본다. 세션이 다른 레포로 옮겨 가면 그 레포에는
 표시가 없어 창이 그대로 뜬다. `arm`·`disarm`은 거부와 창 사이만 바꾼다. 어느 쪽도 호출을 허용하지 않으므로 모델이 꺼도
@@ -187,16 +188,38 @@ def _write_marker(root: Path, session: Session) -> None:
 
 
 def _live_markers(root: Path, table: dict[int, Process]) -> list[Session]:
-    """살아 있는 세션의 표시들. 프로세스가 사라진 표시와 읽지 못하는 표시는 지운다."""
-    live = []
+    """살아 있는 세션의 표시들. 프로세스가 사라진 표시와 읽지 못하는 표시는 지운다.
+
+    받은 `table`은 호출 전에 읽은 것이라 낡았을 수 있다. 그 뒤에 켠 세션의 표시를 낡은 목록으로 지우면 살아 있는 세션의 거부가 풀린다.
+    그래서 목록에서 살아 있지 않아 보이는 표시가 있을 때만 `ps`를 한 번 다시 읽고, 새 목록에서도 없거나 시작 시각이 다를 때만 지운다.
+    표시가 모두 살아 있으면 `ps`를 더 부르지 않는다. 다시 읽기가 실패하면 그 표시를 지우지 않고 살아 있지 않은 것으로만 다룬다.
+    """
+    live: list[Session] = []
+    doubtful: list[tuple[Path, Session]] = []
     for path in sorted((root / ARMED_DIR).glob("*.json")):
         marker = _read_marker(path)
-        row = table.get(marker.pid) if marker else None
-        if marker and row and marker.same(Session(marker.pid, row.started)) and path == _marker(root, marker.pid):
+        if marker is None or path != _marker(root, marker.pid):
+            path.unlink(missing_ok=True)
+        elif _running(marker, table):
             live.append(marker)
         else:
-            path.unlink(missing_ok=True)
+            doubtful.append((path, marker))
+    if doubtful:
+        try:
+            fresh = processes()
+        except (OSError, subprocess.SubprocessError):
+            return live
+        for path, marker in doubtful:
+            if _running(marker, fresh):
+                live.append(marker)
+            else:
+                path.unlink(missing_ok=True)
     return live
+
+
+def _running(marker: Session, table: dict[int, Process]) -> bool:
+    row = table.get(marker.pid)
+    return row is not None and marker.same(Session(marker.pid, row.started))
 
 
 def _ensure_ignored(root: Path) -> None:

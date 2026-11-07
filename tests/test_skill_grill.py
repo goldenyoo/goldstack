@@ -91,6 +91,10 @@ class GrillBreakdownTest(unittest.TestCase):
                      "두 번째 리뷰어(`second_reviewer`)", "verify: 문서·설정 티켓은 좁은 명령, 코드 티켓은 `전체`"):
             self.assertIn(text, comment)
 
+    def test_spec_template_config_ticket_uses_full_verify(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        self.assertIn("`.goldstack/config.toml`을 고치는 티켓은 문서·설정 티켓이어도 `전체`", comment)
+
     def test_second_reviewer_criteria_match_guide(self):
         comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
         guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
@@ -104,6 +108,10 @@ class GrillBreakdownTest(unittest.TestCase):
         for text in ("skill 글(`skills/*/SKILL.md`)을 고치는 티켓", "`WORD_LIMITS`의 상한과 지금 단어 수",
                      "좁은 verify에 `test_skills.py`를 넣는다"):
             self.assertIn(text, comment)
+
+    def test_ticket_template_asks_for_tests_that_fail_without_the_behavior(self):
+        text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
+        self.assertIn("완료 조건의 동작을 지우면 실패하는", text)
 
     def test_ticket_template_keys(self):
         ticket = fill((TEMPLATES / "ticket.md").read_text(encoding="utf-8"), NN="01")

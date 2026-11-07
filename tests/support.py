@@ -293,8 +293,18 @@ def ticket(tid, deps="[]", title=None):
     return f'---\nid: "{tid}"\ntitle: {title}\nblocked_by: {deps}\nmodel: claude\nreviewer: codex\n---\n## 목표\n{tid}\n'
 
 
+class _ShError(subprocess.CalledProcessError):
+    """CalledProcessError인데 메시지에 stderr도 싣는다."""
+
+    def __str__(self):
+        return f"{super().__str__()}\nstderr:\n{self.stderr}"
+
+
 def sh(cwd, *args):
-    return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    try:
+        return subprocess.run(args, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+    except subprocess.CalledProcessError as e:
+        raise _ShError(e.returncode, e.cmd, e.stdout, e.stderr) from None
 
 
 class GoTest(unittest.TestCase):

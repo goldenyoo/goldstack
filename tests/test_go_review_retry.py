@@ -362,7 +362,7 @@ class GoReviewRetryTest(support.GoTest):
         log = self.rundir / "01/1/verify.log"
         self.assertIn(f"[01] 실패: 검증 시간 초과(0.02분, 로그 {log})", out)
         self.assertIn("같은 계열(claude)로", out)
-        self.assertTrue(log.read_text().endswith("\n시간 초과: 0.02분\n"))
+        self.assertRegex(log.read_text(), r"\n시간 초과: 0\.02분\n\n종료 코드: -?\d+\n\Z")
         self.assertIn("검증 시간 초과(0.02분", (self.rundir / "01/1/failure.log").read_text())
         self.assertNotIn("시간 초과", (self.rundir / "01/2/verify.log").read_text())
         self.assertNotIn("HANG", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())

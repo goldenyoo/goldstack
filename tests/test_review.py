@@ -123,6 +123,50 @@ class CheckedAndStdoutTest(unittest.TestCase):
         self.assertEqual((rdir / "review.txt").read_text(), payload)
         return rec
 
+    def test_prompt_requirements_differ_by_reviewer_family(self):
+        """claude 리뷰어(Read, Grep, Glob만)에게는 실행·재현을 요구하지 않고 코드 인용과 "코드 추적" 표기를 요구한다.
+        codex·agy는 돌려 본 명령과 좁은 재현을 지금처럼 요구한다. run·rereview·repair_review가 실제로 계열을 넘기는지 본다."""
+        answers = {0: '{"findings": []}', 1: '{"verdicts": [], "findings": []}', "수리": '{"findings": []}'}
+        for nth, answer in answers.items():
+            for family in ("claude", "codex", "agy"):
+                with self.subTest(family=family, round=nth):
+                    self.run_review(family, answer, nth)
+                    prompt = (self.root / family / str(nth) / "prompt.md").read_text(encoding="utf-8")
+                    if family == "claude":
+                        for text in ("코드 인용(파일:줄과 원문)", '"코드 추적"', "Read, Grep, Glob만 쓴다"):
+                            self.assertIn(text, prompt)
+                        for text in ("돌려 본 명령", "좁은 재현", "돌린 명령과 결과"):
+                            self.assertNotIn(text, prompt)
+                    else:
+                        self.assertIn("좁은 재현만 돌린다", prompt)
+                        self.assertIn("돌린 명령과 결과", prompt)
+                        self.assertNotIn("코드 추적", prompt)
+                        self.assertNotIn("Read, Grep, Glob", prompt)
+
+    def test_claude_prompts_do_not_ask_to_run_commands(self):
+        p = Path("x")
+        prompts = (review.review_prompt(p, p, p, p, family="claude"), review.rereview_prompt(p, p, p, p, p, family="claude"),
+                   review.repair_review_prompt(p, "log", p, p, p, family="claude"))
+        for prompt in prompts:
+            self.assertIn("명령을 실행하거나 재현하지 못하니", prompt)
+            self.assertIn("코드 추적", prompt)
+        for family in ("", "codex", "agy"):  # 계열을 모르거나 claude가 아니면 지금 요구 그대로
+            self.assertEqual(review.review_prompt(p, p, p, p), review.review_prompt(p, p, p, p, family=family))
+            self.assertEqual(review.rereview_prompt(p, p, p, p, p), review.rereview_prompt(p, p, p, p, p, family=family))
+
+    def test_claude_reviewer_keeps_read_only_tools(self):
+        argv, _, _ = review.reviewer_argv("claude", self.root, "prompt", self.root / "out", self.cfg.models)
+        self.assertEqual(argv[argv.index("--tools") + 1], "Read,Grep,Glob")
+
+    def test_judge_prompt_fixes_weakened_assertions_unless_spec_asks(self):
+        p = Path("x")
+        prompt = review.judge_prompt(p, p, p, p)
+        fix = next(line for line in prompt.splitlines() if "기존 단언을 약하게" in line)
+        self.assertIn("심각도와 상관없이 fix", fix)
+        self.assertIn("예외", fix)
+        self.assertIn("요구했으면", fix)
+        self.assertLess(prompt.index(fix), prompt.index("애매하면 report다"))
+
     def test_optional_checked_and_original_stdout_for_every_family_and_round(self):
         for family in ("claude", "codex", "agy"):
             for nth in (0, 1, "수리"):
