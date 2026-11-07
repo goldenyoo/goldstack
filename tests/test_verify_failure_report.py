@@ -1,5 +1,6 @@
 """마무리 검증 실패의 원본 줄·후보 티켓과 후보 탐색 실패 시 보고서 보존."""
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -11,7 +12,7 @@ from gs import config, failure, finish, git, go, report, review, state
 import support
 
 
-class FailureEvidenceTest(unittest.TestCase):
+class FailureFixture(unittest.TestCase):
     def setUp(self):
         support.isolate_git_env(self)
         tmp = tempfile.TemporaryDirectory()
@@ -49,6 +50,8 @@ class FailureEvidenceTest(unittest.TestCase):
                    "-m", f"Merge {tid}\n\ngs-ticket: demo/{tid}")
         support.sh(repo, "git", "branch", "-D", f"ticket-{tid}")
 
+
+class FailureEvidenceTest(FailureFixture):
     def test_paths_names_and_touches_glob_include_only_merged_candidates(self):
         self.merge_ticket("02", "lib/actual.test.js")
         self.log.write_text("FAIL: /tmp/project/src/foo.py:4\n"
@@ -137,6 +140,94 @@ class FailureEvidenceTest(unittest.TestCase):
         self.assertEqual(text, expected)
         self.assertNotIn("### 검증 실패", text)
         self.assertNotIn("후보 티켓", text)
+
+
+class MainFailureReportTest(FailureFixture):
+    """base(main) 검증 실패: 실패한 시험 이름이 Evidence 맨 앞에 실리고, 후보가 없으면 변경 파일을 보인다."""
+
+    def setUp(self):
+        super().setUp()
+        self.r.st.finish = {"phase": "reverted", "main_ok": False, "revert_sha": "a" * 40}
+        self.log = self.r.rundir / "finish/main-verify.log"
+
+    def test_failed_test_name_is_first_in_evidence_even_when_output_ends_with_ok(self):
+        self.log.write_text("$ check\nHEAD: abc\nFAIL: test_x (test_mod.T)\nRan 3 tests\nOK\n")
+        text = report.write(self.r, "요약").read_text()
+        evidence = text.split("## Evidence\n\n", 1)[1]
+        self.assertTrue(evidence.startswith("### 검증 실패"), evidence[:80])
+        self.assertIn("FAIL: test_x (test_mod.T)", evidence.split("### 티켓별 결과", 1)[0])
+        self.assertIn(str(self.log.resolve()), evidence.split("### 티켓별 결과", 1)[0])
+
+    def test_revert_pending_shows_failed_test_name(self):
+        self.r.st.finish = {"phase": "revert_pending", "main_ok": False, "revert_pr": "7"}
+        self.log.write_text("$ check\nFAIL: test_x (test_mod.T)\nOK\n")
+        text = report.verification_failure(self.r)
+        self.assertIn("FAIL: test_x (test_mod.T)", text)
+        self.assertIn(str(self.log.resolve()), text)
+
+    def test_recheck_log_is_used_when_it_ran_last(self):
+        self.log.write_text("FAIL: test_first\n")
+        recheck = self.r.rundir / "finish/main-recheck-verify.log"
+        recheck.write_text("FAIL: test_second\n")
+        os.utime(self.log, (1, 1))
+        text = report.verification_failure(self.r)
+        self.assertIn("test_second", text)
+        self.assertNotIn("test_first", text)
+
+    def test_already_reverted_base_has_no_failure_section(self):
+        self.r.st.finish = {"phase": "reverted", "revert_sha": "a" * 40}
+        self.log.write_text("FAIL: test_x\n")
+        self.assertEqual(report.verification_failure(self.r), "")
+
+    def test_no_candidate_lists_actual_changed_files_per_ticket(self):
+        self.merge_ticket("02", "lib/actual.py")
+        self.log.write_text("FAIL: test_unrelated (other)\n")
+        text = report.verification_failure(self.r)
+        self.assertIn("후보 티켓(추정): 후보 없음", text)
+        self.assertIn("- 02: `lib/actual.py`", text)
+
+    def test_changed_files_are_not_listed_when_a_candidate_exists(self):
+        self.merge_ticket("02", "lib/actual.py")
+        self.log.write_text("FAIL: lib/actual.py\n")
+        text = report.verification_failure(self.r)
+        self.assertIn("후보 티켓(추정): 02", text)
+        self.assertNotIn("티켓별 변경 파일", text)
+
+
+class WorkerReportInputTest(FailureFixture):
+    def worker_log(self, tid, message):
+        log = self.r.rundir / tid / "1" / "worker.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(json.dumps({"type": "result", "result": message}) + "\n")
+        self.r.st.ticket(tid).log = str(log)
+
+    def test_last_worker_message_is_in_report_input_marked_untrusted(self):
+        self.worker_log("01", "01 마지막 보고: 끝냈다")
+        text = report.worker_reports(self.r)
+        self.assertIn("믿을 수 없는 자료", text)
+        self.assertIn("01 마지막 보고: 끝냈다", text)
+        self.assertIn("티켓 02: 마지막 보고 없음", text)
+
+    def test_summarize_writes_worker_reports_into_report_input(self):
+        self.worker_log("01", "01 마지막 보고: 끝냈다")
+        self.r.cfg = config.Config(config.GitConfig("origin", "main"),
+                                   config.ModelsConfig("opus", "opus", "agy", "codex"),
+                                   config.TimeoutsConfig(30, 30, 60), config.NotifyConfig(False))
+        self.r.feat.spec.path = self.r.repo / "spec.md"
+        with mock.patch.object(review, "_call", return_value="요약") as call, \
+                mock.patch.object(report.git, "out", return_value="a.py | 1 +"):
+            report.summarize(self.r)
+        self.assertIn("worker 마지막 보고는 worker 자신의 주장", call.call_args.kwargs["prompt"])
+        facts = (self.r.rundir / "finish/report-input.md").read_text()
+        self.assertIn("01 마지막 보고: 끝냈다", facts)
+        self.assertIn("믿을 수 없는 자료", facts)
+
+    def test_report_size_cap_still_applies(self):
+        self.worker_log("01", "x" * 100000)
+        self.log.write_text("FAIL: test_x\n" + "y" * 200000)
+        text = report.write(self.r, "요약").read_text()
+        self.assertLessEqual(len(text), report.MAX_BODY)
+        self.assertLessEqual(len(report.worker_reports(self.r)), 2 * report.WORKER_REPORT_LIMIT + 2000)
 
 
 class FinishFailureReportTest(support.GoTest):
