@@ -9,7 +9,7 @@ v9부터 리뷰는 루프 밖이라 다른 티켓의 리뷰 시간은 여기 들
 검증이 루프를 막으면 그동안 끝난 리뷰의 결과는 받아지지 않는다. 그 대기다. 한 호출로 나간 리뷰어(둘이면 함께)는 같은 값이고, 기록이 없는 옛 state는 보고서에 `기록 없음`이다.
 받은 뒤 리뷰 자리를 기다린 시간은 여기 들지 않고 단계 `review_wait`로, 수정 worker 자리는 `fix_wait`로, 수리 worker 자리는 `repair_wait`로 남는다(state.phases).
 수리(go._start_repair): worker는 workers에 phase `repair`로 남고(끊겨 이으면 디렉터리가 `repair-net<n>`이어도 같다), 수리 재리뷰는 reviewers의 round가
-review.REPAIR_ROUND다. 수리 뒤 다시 한 검증은 validations의 label이 `ticket-<NN>-repair`다(go._verify).
+review.REPAIR_ROUND다. 수리 뒤 다시 한 검증은 validations의 label이 `ticket-<NN>-repair`다. 끊긴 검증은 그 label 끝에 `-끊김`이 붙는다(go._verify).
 validations 한 줄은 검증 하나의 재시도 하나다. `integration_head`(검증한 integration 끝)와 `ticket_head`(병합하려던 티켓 커밋)는 다르고,
 같은 티켓의 검증이 여러 번이어도 integration_head가 같을 수 있다. `ticket_attempt`는 티켓 worker 시도 번호, `retry`는 한 검증 안의 재시도 번호다.
 """
