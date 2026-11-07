@@ -289,6 +289,35 @@ class HookTest(unittest.TestCase):
                     "echo $(( 1 << 2 ))\ncat <<'123'\n===\n123", "x=$(( 1 << 2 )); cat <<'9'\n===\n9"]:
             self.assertAllowed(cmd)
 
+    def test_arithmetic_shift_with_matching_line_is_not_heredoc(self):
+        """`<<` 뒤 글과 같은 줄이 아래에 있어도 산술식은 heredoc이 아니다. zsh는 사이 줄을 명령으로 돌린다."""
+        for opener, end in [('(( 1 << "2" ))', "2"), ("(( 1 << '2' ))", "2"), ("(( 1 << x ))", "x"), ('(( (1) << "2" ))', "2"),
+                            ('echo $(( 1 << "2" ))', "2"), ('echo "$(( 1 << "2" ))"', "2"), ("echo $(( 1 << x ))", "x"),
+                            ('echo $[ 1 << "2" ]', "2"), ('echo $[ a[1] << "2" ]', "2"), ("echo $[ 1 << x ]", "x"),
+                            ('for (( i = 1 << "2"; i < 0; i++ )); do :; done', "2"), ('while (( 0 << "2" )); do :; done', "2"),
+                            ('echo `(( 1 << "2" ))`', "2"), ('true&&((1<<"2"))', "2"), ('f() ((1<<"2"))', "2"),
+                            ('echo ${a[1<<"2"]}', "2"), ('echo ${a:1<<"2"}', "2")]:
+            self.assertEqualsBlocked(f"{opener}\necho ===\n{end}")
+            self.assertBlocked(f"{opener}\ngit push\n{end}")
+        self.assertEqualsBlocked('(( 1 << "2" ))\necho ===\nprintf "%s\\n" "\n2\n"')
+        for cmd in ["eval '(( 1 << x ))\necho ===\nx'", "zsh -f -c '(( 1 << x ))\necho ===\nx'"]:
+            self.assertEqualsBlocked(cmd)
+        self.assertBlocked("bash -c '(( 1 << x ))\ngit push\nx'")
+        # 산술식 속 `$(...)`는 명령이다. 바깥에 숨어도 본다
+        self.assertBlocked('echo "$(( 1 << "2"\n$(git push)\n2\n))"')
+
+    def test_heredoc_outside_arithmetic_frames_still_read(self):
+        """겹친 subshell, 산술식 속 `$(...)`, 산술식이 닫힌 뒤, `let`·`typeset`의 `<<`는 진짜 heredoc이다. zsh는 본문을 돌리지 않는다."""
+        for body in ["===", "git push"]:
+            for cmd in [f"((cat <<'2'\n{body}\n2\n) | cat)", f"echo $((cat <<'2'\n{body}\n2\n) | cat)", f"( (cat <<'2'\n{body}\n2\n) )",
+                        f"(( $(cat <<'2'\n{body}\n2\n) ))", f"echo $(( $(cat <<'2'\n{body}\n2\n) ))",
+                        f"echo \"$(( $(cat <<'2'\n{body}\n2\n) ))\"", f"echo `cat <<'2'\n{body}\n2\n`",
+                        f"echo $[ 1 ]; cat <<'2'\n{body}\n2", f"echo $[ a[1] ]; cat <<'2'\n{body}\n2",
+                        f"echo ${{x}}; cat <<'2'\n{body}\n2", f"echo ${{a[1]}}; cat <<'2'\n{body}\n2",
+                        f"(( 1 )); cat <<'2'\n{body}\n2", f"echo $(( 1 )); cat <<'2'\n{body}\n2",
+                        f"let x=1<<\"2\"\n{body}\n2", f"typeset -i x=1<<\"2\"\n{body}\n2"]:
+                self.assertAllowed(cmd)
+
     def test_equals_body_checked_in_same_zsh(self):
         for cmd in ["eval 'echo ===; echo done'", 'eval "echo ===; echo done"', "eval echo '==='", "eval sh -c 'echo ==='",
                     "eval 'echo $(echo ===)'", "eval 'eval \"echo ===\"'", "eval 'echo \"\"==='",

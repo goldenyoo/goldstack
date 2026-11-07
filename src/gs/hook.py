@@ -493,8 +493,8 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
 # ---------------------------------------------------------------- Bash
 
 def check_bash(command: str, ctx: Ctx, depth: int = 0, substitution: bool = False) -> str | None:
-    """`substitution`: 바깥 글에서 떼어 낸 치환 속이다. `equals_word`가 바깥 글에서 이미 봤고, 떼어 내면 산술식을 알아보지 못한다
-    (`$(( a == b ))`의 `( a == b )`). 그 속의 `eval`·`zsh -c` 본문은 새 글이라 다시 본다."""
+    """`substitution`: 바깥 글에서 떼어 낸 치환 속이다. `equals_word`가 바깥 글에서 이미 봤다.
+    그 속의 `eval`·`zsh -c` 본문은 새 글이라 다시 본다."""
     if depth > 3:
         return None
     text, subs = scan(command.replace("\\\n", " "))
@@ -699,15 +699,32 @@ EMPTY_QUOTES = re.compile(r"\$?''|\"\"")
 CODE = ("top", "(", "$(", "`")  # 셸이 명령으로 읽는 자리(따옴표 밖)
 WORD_START = " \t\n;&|()"  # 이 글자 뒤에서 셸의 새 단어가 시작한다
 FD_NUMBER = re.compile(r"[0-9]+(?=[<>])")
-# 숫자로 시작하는 끝말은 따옴표가 있을 때만 읽는다(`(( 1 << 2 ))`와 `<<123`은 글로 구별하지 못한다)
+# 숫자로 시작하는 끝말은 따옴표가 있을 때만 읽는다
 HEREDOC_OPEN = re.compile(r"""<<-?\s*(?:(['"])([\w.-]+)\1|([A-Za-z_][\w.-]*))""")
+MATH_PAREN = re.compile(r"""\\.|'[^']*'|"(?:\\.|[^"\\])*"|[()]""", re.S)
+NO_HEREDOC = ("((", "$[", "${")  # 이 틀 속의 `<<`는 리다이렉션이 아니다
+
+
+def _closes_as_math(text: str, i: int) -> bool:
+    """`text[i:]`의 `((`가 산술식인가. zsh는 안쪽 `(`의 짝 바로 뒤가 `)`일 때만 산술식으로 읽고, 아니면 겹친 subshell로 읽는다(`((a) | b)`)."""
+    depth = 0
+    for m in MATH_PAREN.finditer(text, i + 1):
+        if m.group(0) == "(":
+            depth += 1
+        elif m.group(0) == ")":
+            depth -= 1
+            if depth == 0:
+                return text.startswith(")", m.end())
+    return False
 
 
 def scan(text: str) -> tuple[str, list[str]]:
     """따옴표를 따라가며 한 번 훑는다. (heredoc 본문과 주석을 지운 글, 실제로 도는 가장 바깥 명령 치환들)를 돌려준다.
 
     - heredoc 본문(커밋 메시지 등)은 명령이 아니다. 여는 줄만 남긴다. 따옴표 속 `<<EOF`는 heredoc이 아니다.
-      끝말 줄이 뒤에 없으면 heredoc으로 읽지 않는다. 산술식의 `<<`(`(( x << y ))`, `$[ x << y ]`)를 heredoc으로 읽어 뒤 명령을 삼키지 않게 한다.
+      끝말 줄이 뒤에 없으면 heredoc으로 읽지 않는다.
+    - 산술식(`(( ))`, `$(( ))`, `$[ ]`)과 `${ }` 속의 `<<`는 heredoc이 아니다. 뒤에 같은 글의 줄이 있어도 뒤 명령을 삼키지 않는다.
+      `$(( ))`는 명령 치환이 아니다. 그 속의 `$(...)`가 치환이고, 그 속의 `<<`는 다시 heredoc이다.
     - 따옴표 밖, 단어 처음의 `#`부터 줄 끝까지 지운다(주석 속 따옴표가 해석을 깨지 않게).
     - `$(...)`와 `` `...` ``는 따옴표 밖이나 큰따옴표 안에서만 치환이다. 작은따옴표 안은 글자다.
     - 리다이렉션에 붙은 fd 번호(`2>f`의 2)를 지운다. 토큰으로 나누면 `x 2 >f`의 인자 2와 구별되지 않는다.
@@ -753,6 +770,11 @@ def scan(text: str) -> tuple[str, list[str]]:
             out.append(text[i:i + 2])
             i += 2
             continue
+        if text.startswith("$((", i) and _closes_as_math(text, i + 1):
+            out.append("$((")
+            i += 3
+            stack += ["((", "("]
+            continue
         if c == "$" and text.startswith("$(", i):
             out.append("$(")
             i += 2
@@ -776,9 +798,19 @@ def scan(text: str) -> tuple[str, list[str]]:
         # 따옴표 밖(명령 자리)
         if c in "'\"":
             stack.append(c)
+        elif text.startswith(("$[", "${"), i):
+            out.append(text[i:i + 2])
+            stack.append(text[i:i + 2])
+            i += 2
+            continue
+        elif c == "[" and ctx == "$[":
+            stack.append("$[")
+        elif (c == "]" and ctx == "$[") or (c == "}" and ctx == "${"):
+            stack.pop()
         elif c == "(":
-            stack.append("(")
-        elif c == ")" and ctx in ("(", "$("):
+            math = (i == 0 or text[i - 1] in WORD_START + "`") and text.startswith("((", i) and _closes_as_math(text, i)
+            stack.append("((" if math else "(")
+        elif c == ")" and ctx in ("(", "((", "$("):
             if ctx == "$(":
                 close_sub()
             else:
@@ -790,7 +822,8 @@ def scan(text: str) -> tuple[str, list[str]]:
         elif (i == 0 or text[i - 1] in WORD_START) and (m := FD_NUMBER.match(text, i)):
             i = m.end()
             continue
-        elif c == "<" and text.startswith("<<", i) and not text.startswith("<<<", i) and (i == 0 or text[i - 1] != "<"):
+        elif (c == "<" and text.startswith("<<", i) and not text.startswith("<<<", i) and (i == 0 or text[i - 1] != "<")
+              and next(k for k in reversed(stack) if k != "(") not in NO_HEREDOC):
             m = HEREDOC_OPEN.match(text, i)
             end = m and (m.group(2) or m.group(3))
             if end and any(line.strip() == end for line in text[m.end():].split("\n")[1:]):
