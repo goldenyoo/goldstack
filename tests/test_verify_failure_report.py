@@ -193,6 +193,29 @@ class FinishFailureReportTest(support.GoTest):
         self.assert_failure("integration-final")
 
 
+    def test_log_has_one_exit_code_line_at_the_end(self):
+        script = self.bin / "verify.sh"
+        script.write_text("echo 'not ok 3 file_01'; exit 1\n")
+        self.configure(f"bash {script}")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        log = (self.rundir / "finish/integration-verify.log").read_text()
+        self.assertEqual(log.count("종료 코드: "), 1, log)
+        self.assertTrue(log.endswith("\n종료 코드: 1\n"), log)
+
+    def test_interrupted_finish_verify_is_an_ordinary_failure(self):
+        # 티켓 검증만 다시 돌린다. 마무리 검증은 끊겨도 한 번으로 끝난다
+        runs = self.bin / "runs"
+        script = self.bin / "verify.sh"
+        script.write_text(f"echo 'not ok 3 file_01'; echo run >> '{runs}'; kill -TERM $$\n")
+        self.configure(f"bash {script}")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        self.assert_failure("integration")
+        self.assertEqual(runs.read_text().splitlines(), ["run"])
+        self.assertNotIn("끊김", out)
+
+
 class ChangedFilesLogTest(support.GoTest):
     """티켓 검증이 트리를 바꾸면 verify.log에 바뀐 파일을 남긴다."""
 

@@ -89,6 +89,7 @@ class TicketState:
     # done(worker는 끝났고 리뷰부터 하면 된다). 있으면 _start가 새 worktree 대신 여기서 잇는다. 비었으면 없음.
     # 리뷰 단계 동안에도 done으로 있다: 끝나지 않은 리뷰는 gs가 어떻게 끝나든 다음 gs go가 다시 한다(go._finish).
     # 수리 중이면 repair(go.REPAIR_*: 어디까지 했나)도 있다. 수리는 검증 실패부터 다시 검증까지 이 표시로 잇는다. 옛 state에는 없다.
+    # 끊긴 검증의 다시 검증 차례면 verify_again(True)도 있다(go._verify_interrupted). 옛 state에는 없다.
     network_resume: dict = field(default_factory=dict)
     # 수리(go._start_repair)마다 한 줄. 재시도·재실행 뒤에도 보존한다. 옛 state에는 없다.
     # attempt(시도 번호), verify_log(수리 worker가 받은 실패 로그), reason(첫 검증 실패 이유), base(수리 전 head),
