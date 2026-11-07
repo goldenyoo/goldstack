@@ -16,7 +16,7 @@
 - 시험은 **unittest**다(pytest 아님). 린터·포맷터 설정 없음.
 - 전체 병렬: `ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p`. worker와 함께 돌면 5–10분 걸린다(goldstack-v10 보고서). 순차 실행은 훨씬 느리니 쓰지 않는다.
 - 한 파일: `uv run python -m unittest discover -s tests -p test_x.py`.
-- skill 시험은 `tests/test_skill_<이름>.py`(grill, go, idea, retro, adopt, feedback)로 나뉜다. `WORD_LIMITS`와 모든 skill 공통 시험은 `tests/test_skills.py`에 있다. skill 글만 고치면 해당 `test_skill_<이름>.py`를 쓰고, 상한을 바꿀 때만 `test_skills.py`를 건드린다.
+- skill 시험은 `tests/test_skill_<이름>.py`(grill, go, idea, retro, adopt, feedback, overnight)로 나뉜다. `/overnight` 문장 일부는 `tests/test_skill_go.py`가 단언하니 overnight 글을 고치면 그 시험도 돌린다. `WORD_LIMITS`와 모든 skill 공통 시험은 `tests/test_skills.py`에 있다. skill 글만 고치면 해당 `test_skill_<이름>.py`를 쓰고, 상한을 바꿀 때만 `test_skills.py`를 건드린다.
 - sandbox(codex worker)에서 쓸 한 파일 시험: `.venv/bin/python -m unittest discover -s tests -p test_x.py`. `.venv`는 worktree setup(`uv sync --locked`)이 sandbox 전에 만든다. `uv run`은 `~/.cache/uv` 쓰기 차단으로 sandbox에서 실패한다.
 - 그 밖의 검증: `claude plugin validate .`, `uv build -q -o "$(mktemp -d)"`(레포 안에 `dist/`를 만들면 verify가 "worktree 바뀜"으로 실패한다).
 - `verify_ticket`은 쓰지 않는다. 코드 티켓은 전체 검증을 쓴다.
@@ -26,6 +26,7 @@
 - 커밋 메시지: 짧은 한 줄. `gs:`, `docs:`, `fix:`, `feat:`, `grill: <feature>` 접두어를 쓰거나 평문이다. worker 커밋은 영어가 섞이기도 한다.
 - 브랜치: gs가 만든다. `gs/<feature>/integration`, `gs/<feature>/<티켓>`. feature 이름은 `goldstack-vN`.
 - 코드: 표준 라이브러리만. `from __future__ import annotations`. 외부 CLI 호출은 시험에서 바꿀 수 있게 환경 변수 seam을 둔다(`GS_AGY`, `GS_CLAUDE`, `GS_GH`, `GS_JUDGE`, `GS_REVIEWER_CMD`, `GS_RUNNER`, `GS_VERIFY_TIMEOUT`, `GS_WORKER_CMD` 등).
+- 새 예외 이름은 `src/gs/feedback.py`의 `_KIND_WORDS` 낱말로 짓고 `tests/test_feedback_format.py`로 확인한다.
 - 환경을 가정하지 않는다: 경로·브랜치·모델 이름·시간 상수는 대상 레포의 `.goldstack/config.toml`로 뺀다.
 - 시험 fixture: `tests/support.py`의 `GoTest`(가짜 worker·리뷰어·판단 모델, `FAKE_GH`, bare 원격). 보호된 base는 `tests/test_protected_base.py`. 임시 레포 시험은 `support.isolate_git_env`로 바깥 차단 환경을 끊는다.
 - 리뷰 기준 문서는 따로 없다. 티켓 완료 조건과 spec이 기준이다.
