@@ -222,7 +222,11 @@ class HookTest(unittest.TestCase):
         for cmd in ["echo ===", "echo =====", "x ==", "[ a == a ]", "test a == a", "x=$(echo ==)",
                     'echo "$(echo ==)"', "echo hi && echo === && echo done", "echo =ls", 'echo ="ls"',
                     "echo `echo ==`", "(echo ==)", "echo $'a' ==", "[[ a == a ]]; echo ==",
-                    "cat <<EOF\nx\nEOF\necho ==", "echo a >=="]:
+                    "cat <<EOF\nx\nEOF\necho ==", "echo a >==",
+                    "[[ $(echo ===) == x ]]; echo done", "[[ $(echo ==) == a ]]", '[[ "$(echo ===)" == a ]]',
+                    "[[ `echo ==` == a ]]", "[[ a == a ]]\necho [[ ===", "echo [[ a ]] ===", "echo $((1)) ==",
+                    "(( x == 1 )); echo ==", "echo a\\ == b ==", "[[ a == b ]] && echo ===",
+                    "echo \\ [[ && echo ==="]:
             reason = self.bash(cmd)
             self.assertIsNotNone(reason, cmd)
             self.assertIn("따옴표", reason, cmd)
@@ -232,7 +236,9 @@ class HookTest(unittest.TestCase):
                     "git log --format==", 'echo "==="', "echo '==='", "echo \\===", "echo $'=='", "echo a\"==\"",
                     "[[ a == a ]]", "if [[ a == a ]]; then echo ok; fi", "[[ $x == a && $y == b ]]",
                     "cat <<EOF\n===\nEOF", "cat <<'EOF'\n== x\nEOF", "echo hi # ===", "echo hi #==",
-                    "echo =(true)", "echo '=' \"=\"", 'echo "$(echo "==")"', "sh -c 'echo =='"]:
+                    "echo =(true)", "echo '=' \"=\"", "x=1; (( x == 1 )); echo done", "echo $(( 1 == 1 ))",
+                    "for ((i=0; i==0; i++)); do :; done", "echo $(echo a)==b", "echo a\\ ==", "echo \\ ===", "echo \\(==\\)",
+                    "echo \\ [[ && echo a", "[[ ( a == a ) ]]", "[[ a == a ]] && [[ b == b ]]", 'echo "$(echo "==")"', "sh -c 'echo =='"]:
             self.assertAllowed(cmd)
 
     def test_unquoted_equals_word_passes_without_worker_role(self):
