@@ -268,9 +268,10 @@ flaky: main 재시도 1번 만에 통과
 
 `verify_ticket`으로 좁히면 놓친 실패가 마무리까지 간다. 시험이 파일별로 독립이면 전체를 나눠 돌리는 쪽이 먼저다. 이 레포의 spec frontmatter:
 ```yaml
-verify: ls tests | grep '^test_' | xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
+verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
 ```
 시험 파일마다 프로세스 하나, 동시 6개다. 파일 하나라도 실패하면 `xargs`가 0 아닌 코드로 끝나 `&&` 뒤로 가지 않고 검증 실패가 된다. 이 레포에서 순차 약 11–12분이 약 4분이 됐다(`.goldstack/profile.md`의 측정, 다른 실행 없이 1회).
+- **`xargs`로 `uv run`을 띄우지 않는다.** `uv run`은 자식이 신호로 죽으면 신호 줄 없이 종료 코드만 옮기므로 xargs가 `terminated with signal` 줄을 남기지 않는다. gs는 그 실패를 끊김이 아닌 일반 실패로 보고 수리로 보낸다([신호로 끊긴 검증](#신호로-끊긴-검증)). 가상환경의 파이썬을 직접 부르면(`.venv/bin/python`, 위 예시) 줄이 남아 끊김으로 판정된다. 대신 `verify` 앞에 `uv sync --locked -q`를 둔다. `uv run`이 하던 동기화가 없어져, 버전을 올린 뒤 `.venv` 메타데이터가 옛 값으로 남기 때문이다.
 - **프로세스로 나눈다.** 시험이 `os.environ`·현재 디렉터리를 바꾸면 스레드로는 나눌 수 없다.
 - **파일끼리 겹치는 자원이 없어야 한다.** 고정 포트, 같은 임시 경로, 공유 DB를 쓰는 시험은 먼저 분리한다. 나눠 돌린 결과를 여러 번 재 보고 쓴다.
 - **가장 느린 파일이 하한이다.** 프로세스를 늘려도 그 밑으로 안 내려간다. 한 파일이 크게 차지하면 그 파일을 쪼갠다.
@@ -640,7 +641,7 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 - 시간 초과, 병합 충돌, 검증하는 동안 integration이 바뀐 경우는 끊김이어도 처리가 그대로다.
 - 다시 검증 도중 gs가 죽어도 다음 `gs go`가 구현·리뷰를 다시 하지 않고 같은 worktree에서 다시 검증부터 잇는다. 그 검증이 끊기면 실패다.
 - integration·main 마무리 검증은 이 규칙이 없다. 끊겨도 여느 실패와 같다.
-- `uv run`처럼 자식의 신호를 종료 코드로 옮기는 명령을 xargs가 띄우면 줄이 남지 않아 일반 실패로 보인다(실측).
+- `uv run`처럼 자식의 신호를 종료 코드로 옮기는 명령을 xargs가 띄우면 줄이 남지 않아 끊김으로 판정되지 않고 일반 실패로 보인다(실측). 이럴 때는 `.venv/bin/python`처럼 가상환경의 실행 파일을 직접 부른다.
 
 ### worker hook이 막는 `=` 단어와 zsh 구분선
 

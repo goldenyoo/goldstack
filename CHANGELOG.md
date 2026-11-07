@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.2.6 — 2026-11-08
+
+### goldstack-v22
+
+- 다음 `gs go`가 잠금을 잡자마자 죽은 gs가 남긴 검증을 끝낸다. 검증은 `bash -c '<verify>' gs-verify:<로그 경로>`로 떠서 명령줄의 표지로 찾고 그 프로세스 그룹을 SIGTERM, 안 끝나면 SIGKILL로 끝낸다(`verify.stop_stale`).
+- base 검증이 실패했고 검증 통과 커밋과 병합 커밋의 차이가 `.goldstack/`뿐이면 revert 전에 한 번 다시 검증한다(`main-retry`). 통과하면 병합을 유지하고 보고서에 flaky로 적는다.
+- 보고서가 main 검증 실패의 실패 시험 이름을 Evidence 맨 앞에 싣고, revert면 Summary 맨 위에 상태와 `gs go <feature>`를 적는다.
+- 이 레포 `verify`를 `uv sync --locked -q && … .venv/bin/python …`으로 바꿨다. `xargs`로 띄운 `uv run`은 신호 줄이 남지 않아 끊김으로 판정되지 않는다. `docs/guide.md`에 한계를 적었다.
+- 버전을 `0.2.6`으로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.5 — 2026-11-07
 
 ### goldstack-v21
