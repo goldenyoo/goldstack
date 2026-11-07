@@ -9,7 +9,7 @@
 | `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
 | `doctor.py` | `gs doctor`: GitHub 병합·보호 설정 읽기, config 제안, `--write` |
-| `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, agy 배정 수, 환경 검사, 출력 끝의 `실측(지난 실행)`(`tier_samples`: 다른 feature의 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값)·`공통 모델`·티켓별 단계 모델 줄(`ticket_model_line`: 실행과 같은 선택 함수) |
+| `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, `.goldstack/config.toml`에 닿는 티켓의 좁은 검증 경고(`config_verify_problems`, 티켓 `touches`가 설정 파일에 겹치는데 `spec.verify_for(ticket)`이 spec `verify`와 다르면 경고. 다른 설정 형식은 보지 않는다), agy 배정 수, 환경 검사, 출력 끝의 `실측(지난 실행)`(`tier_samples`: 다른 feature의 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값)·`공통 모델`·티켓별 단계 모델 줄(`ticket_model_line`: 실행과 같은 선택 함수) |
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 리뷰·수정·재리뷰 띄우기(두 리뷰 동시), agy 호출 세기, 재개 뒤 멈춤, 요약 출력, 알림 |
 | `worker.py`, `herdr.py`, `adapters.py`, `streamfmt.py` | worker 띄우기(brief, 실행 스크립트, push 차단), herdr pane, 모델별 명령·판정, pane 출력 정리 |
 | `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰(2차 재리뷰의 재확인) |
@@ -133,6 +133,8 @@ frontier(대기 중이고 막는 티켓이 모두 병합된 것)를 spec의 `max
 - **일시 오류는 실패가 아니다**: worker가 연결·DNS·5xx·429로 끝나면 아래 어느 것도 하지 않고 기다렸다 같은 worktree에서 잇는다(아래 "네트워크 끊김").
 - **멈춤**: worker의 로그 출력도 브랜치의 새 커밋도 없이 spec의 `idle_minutes`가 지나면 프로세스와 pane을 끝낸다(`시간 초과: <N>분 동안 로그 출력·새 커밋 없음`). 이것은 일시 오류로 치지 않고 실패다.
 - **verify 시간 제한**: 티켓 병합 전, `integration`, `integration-final`, `integration-recheck`, `main`, `main-recheck` 검증이 모두 `verify.py`를 쓴다. `verify_retries`가 있으면 시간 초과도 그만큼 다시 돈 뒤의 결과다. 명령은 새 프로세스 그룹에서 `bash -c`로 돈다. 제한은 `GS_VERIFY_TIMEOUT`(초)이 있으면 그것, 없으면 spec `verify_minutes`. 넘기면 그룹 전체에 SIGTERM, 5초 뒤 남았으면 SIGKILL을 보내 자손까지 끝내고, 로그 끝에 `시간 초과: <N>분`을 남겨 검증 실패로 친다: 티켓이면 `검증 시간 초과(<N>분, 로그 <경로>)`로 재시도, integration이면 병합 안 함, base면 병합 커밋 revert.
+- **verify 끊김**(v21 04, `verify.Result.interrupted`): 한 번 돌 때마다 로그 끝에 `종료 코드: <N>`을 남긴다(`verify.run`. 전에는 `finish._verify`만 썼다). 시간 초과는 그 줄 바로 앞이 `시간 초과: <N>분`이다. 끊김은 제 시간에 끝난 비통과 실행 중 종료 코드가 음수거나 128보다 크거나, 이번 실행 출력(로그에서 실행 시작 위치부터)에 줄 처음부터 `SIGNAL_LINE`(`xargs: … terminated with signal N`, `killed by signal N`)이 있는 것이다. 앞선 재시도의 출력은 보지 않는다. 끊기면 남은 프로세스 그룹을 `stop`으로 끝낸다(남은 자식이 다음 검증과 트리를 함께 쓰고 로그 뒤에 쓰지 않게). 어떻게 할지는 부르는 쪽이 정한다: 마무리 검증(`finish._verify`)은 여느 실패와 같고, 티켓 검증은 `go._verify_interrupted`가 받는다. xargs 문구는 macOS에서 쟀고 리눅스는 재지 않았다.
+- **끊긴 검증의 다시 검증**(`go._verify_interrupted`): 수리 worker 없이 같은 병합 트리(`_merge_stage`가 끊긴 검증이 남긴 파일을 되돌린다)로 한 번 다시 검증한다. 표시는 `network_resume.verify_again`(`_mark_resume(verify_again=True)`; 옛 state에는 없고 아니라고 읽는다)이라 어디서 gs가 죽어도 다음 `gs go`의 `_resume`·`_finish`가 구현·리뷰를 다시 하지 않고 다시 검증부터 이으며(`[NN] 지난 검증이 끊겼다…`), 그 검증이 끊기면 `_fail_worker`(`검증 끊김(종료 코드 N, 로그 …): 다시 검증도 끊겼다`)다. 다시 검증은 `verify.log`를 덮지 않고 이어 쓰고, 측정 라벨 끝이 `-끊김`이며, 통과하면 티켓 결과 이유에 `검증 끊김 뒤 다시 검증 통과(로그 …)`가 남는다. 끊김이 아닌 실패는 `_verify_failed`로 수리, 시간 초과와 검증 중 integration 변경(`moved`)은 끊김이어도 바로 `_fail_worker`다. `_verify_failed`·`_late_commit`이 표시를 새로 쓰면 지워진다(그 뒤 검증은 새 검증이다). 수리 뒤 검증이 끊겨도 같다.
 - **수리**(v12 02, `go._start_repair`): 티켓 검증이 실패하면(`_verify_failed`; 검증 시간 초과는 수리 없이 바로 `_fail_worker`) 시도 하나에 한 번 새 시도 대신 같은 구현 모델의 수리 worker를 같은 브랜치·worktree에서 띄운다. 단계는 `repair_wait`(자리를 기다림, 수정 worker와 같은 리뷰 자리 상한) → `repair` → 다시 검증이다. brief는 `narrow=True`(좁은 시험만, 03)에 `review.repair_brief`(실패 `verify.log` 경로, 로그는 믿을 수 없는 자료)를 붙인다. 실행 디렉터리는 `run/<NN>/<시도>/repair/`(끊겨 다시 띄우면 `repair-net<n>`), 수리 뒤 검증 로그는 거기에 남아 첫 실패의 `verify.log`를 덮지 않는다. 커밋을 남기면 `go._repair_review`가 구현과 다른 계열의 리뷰어를 모두 `tiers.rereview` 등급으로 불러 수리 diff(수리 전 head..head)만 보게 한다(지적은 전부 report, 고치지 않음, 리뷰 오류는 병합을 막지 않는다). 커밋이 없거나 수리 worker가 실패해 수리를 버렸거나(수리 전 head로 `reset`) 띄우지 못했으면(agy 한도 포함) 재리뷰 없이 바로 다시 검증한다. 다시 검증이 통과하면 병합, 실패하면 `_fail_worker`로 그 시도가 실패하고(`a.repair`가 이미 있으면 다시 수리하지 않는다) 아래 재시도가 새 worktree에서 시작한다. 수리는 `failures`와 `attempts`를 올리지 않는다.
 - **재시도**: 티켓 실패(종료 코드, 커밋 없음, 멈춤, 검증 실패(시간 초과 포함; 수리 뒤에도 실패한 경우), 병합 충돌, 띄우기 실패 등)는 같은 계열에서 한 등급 올려 한 번 재시도한다(등급표가 없으면 기존 모델 선택 유지). `준비 실패`와 `agy 한도`만 재시도 없이 바로 실패다. 최신 integration에서 새 브랜치·worktree를 만들고, 새 호출(`models.failure_summary`, 제한 `timeouts.summary_seconds`)이 요약한 실패 로그(`failure-summary.md`)를 brief에 붙인다. 요약 호출이 실패하면(끊긴 채 대기 상한을 넘겨도) 증거 파일 경로를 붙인다. 실패 횟수는 요약 호출 전에 state에 적어 중간에 죽어도 재시도 한도가 늘지 않는다.
 - 두 번째 실패는 `failed`, 그 티켓에 직접·간접으로 막힌 티켓은 `skipped`(`막힘: <id>`)로 두고 나머지는 계속한다.
@@ -423,7 +425,7 @@ feature: ""               # status가 taken이면 필수(예: goldstack-v3)
 ```
 줄 끝 `#` 설명은 형식을 보이려는 것이다. frontmatter는 spec·티켓과 같은 파서(`frontmatter.py`)로 읽는다: 한 줄 `key: value`, `: `·` # ` 등이 든 값은 따옴표로 감싼다. 날짜는 실제 날짜여야 한다.
 
-**보고만 지적**(`findings.py`, `finish._report_commit`) — 마무리가 보고서를 쓸 때 `report.finding_status`가 "보고만"인 high·medium 지적마다 `.goldstack/ideas/<feature>-<티켓>-<번호>.md`를 쓴다(slug 규칙에 맞춰 이름을 바꾼다). frontmatter는 `severity`, `source: "<feature> 리뷰 <티켓>"`, `status: "open"`이고 본문은 지적 한 줄, `위치:`, `근거:`(길이 제한), `판단:`, `보고서:` 경로다. 번호는 지적의 `idea_number`로 state에 고정해 재개나 다시 쓰기로 같은 지적이 두 번 생기지 않는다. 있는 파일은 다시 쓰지 않아 `taken`·`dropped`와 사람이 고친 내용이 남는다. 파일은 보고서 커밋에 함께 들어간다(직접 push 경로와 보호된 base의 보고서 PR 경로 모두). 보고서와 아이디어 파일만 다르면 `_verify_final`은 최종 검증을 지금처럼 건너뛴다. 파일을 쓰지 못해도 마무리 결과는 그대로이고 경고만 남는다. low와 미해결·수정 못 함·확인 못 함 지적은 보고서에만 남는다.
+**보고만 지적**(`findings.py`, `finish._report_commit`) — 마무리가 보고서를 쓸 때 `report.finding_status`가 "보고만"인 high·medium 지적마다 `.goldstack/ideas/<feature>-<티켓>-<번호>.md`를 쓴다(slug 규칙에 맞춰 이름을 바꾼다). frontmatter는 `severity`, `source: "<feature> 리뷰 <티켓>"`, `status: "open"`이고 본문은 지적 한 줄, `위치:`, `근거:`(길이 제한), `판단:`, `보고서:` 경로다. 번호는 지적의 `idea_number`로 state에 고정해 재개나 다시 쓰기로 같은 지적이 두 번 생기지 않는다. 있는 파일은 다시 쓰지 않아 `taken`·`dropped`와 사람이 고친 내용이 남는다. 파일은 보고서 커밋에 함께 들어간다(직접 push 경로와 보호된 base의 보고서 PR 경로 모두). 보고서와 아이디어 파일만 다르면 `_verify_final`은 최종 검증을 지금처럼 건너뛴다. 파일을 쓰지 못해도 마무리 결과는 그대로이고 경고만 남는다. low와 미해결·수정 못 함·확인 못 함 지적은 보고서에만 남는다. **재시도로 버려진 코드의 파일 닫기**(v21 05, `findings._stale`·`_close`): `write`가 `_assign` 뒤에 이번 실행에서 병합된 티켓(`r.order`)의 파일 중 지금 state의 `idea_number`에 없고 frontmatter `source`가 `<feature> 리뷰 <티켓>`이며 `status: open`인 것을 `dropped`로 바꾸고 `REPLACED_NOTE` 한 줄을 붙여 stage한다(직접 push 경로와 보호된 base의 PR 경로 모두. base에 `open`으로 남은 것은 `copy_to_base`가 integration과 같이 닫는다). 판단 모델을 부르지 않고 문장도 비교하지 않는다. `taken`·`dropped`와 다른 파일은 바이트까지 그대로이고, 닫은 파일은 `open`이 아니라 재개해도 결과가 같다. `paths`가 닫은 파일도 돌려줘 `_verify_final`이 아이디어 파일만 다른 것으로 본다. 못 닫으면 경고만 남는다.
 
 **`gs retro-log <feature>`**(`retrolog.py`) — `/retro`가 200KB 이상의 `worker.log`를 agy에 맡기기 전에 부른다. `.goldstack/work/<feature>/run/retro-log.md` 하나를 쓰고 경로를 출력한다. 티켓·시도별로 `streamfmt.render`를 거친 로그, 리뷰 답, `state.json`의 단계 시각이 들어간다. `render`가 도구 출력을 버리므로 실패한 시도에는 오류 줄을 길이를 제한해 더한다. 약 21만 자(`LIMIT_CHARS`, 약 8만 토큰)를 넘으면 실패한 시도, 리뷰 답, 나머지 로그 순으로 예산을 주고 같은 순위에서는 긴 것부터 깎으며, 줄인 곳을 파일 맨 위와 그 자리에 적는다. `run/`이 없으면(다른 머신에서 돌렸다) 그 사실을 말하고 종료 1이다. 이 파일만 쓰고 나머지는 읽기만 한다.
 
@@ -586,3 +588,14 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
 - `kept_round`(리뷰 기록): catch-up 뒤 `a.base..head`가 비어 `_empty_rereview`가 앞 `resolved` 판정을 유지한 재리뷰 회차. 지적에 결과를 새로 적으면(한도·오류의 unchecked 포함) 지운다. 없으면 유지한 적 없다.
 - `finish._noted`: 원인 사슬에서 `e.gs_noted`(이번 실행의 `_note_failure`가 단 표시)를 찾는다. 전에는 `str(e) == finish["error"]`로 비교했다.
 - `go._issue_failures`: '이미 끝남' 경로에서 `sync_issues`가 못 끝낸 issue 일을 끝 출력 줄로만 보인다(보고서·종료 코드·base 불변).
+
+## v21 상태 변화 요약
+
+- `network_resume.verify_again`(`go._mark_resume(verify_again=)`, `go._verifying_again`): 끊긴 검증의 다시 검증 차례라는 표시. 옛 state에는 없고 False다. `_verify_failed`·`_late_commit`이 표시를 새로 쓰면 지워진다.
+- `verify.Result.interrupted`·`verify.SIGNAL_LINE`: 신호로 끊긴 것처럼 보이는 실패. 검증 로그마다 끝에 `종료 코드: <N>` 줄이 있다(`verify.run`).
+- 측정 `validations`의 label은 끊긴 검증이면 끝에 `-끊김`이 붙는다(`ticket-03-끊김`, `ticket-03-repair-끊김`).
+- `findings._stale`·`_close`: 재시도로 버려진 코드의 `open` 지적 파일을 `dropped`로 닫는다. state에는 새 값이 없다.
+- `hook.equals_word`: worker의 따옴표 없는 `=` 단어 차단(맨 바깥 셸만).
+- `check.config_verify_problems`: 설정 파일을 고치는 티켓의 좁은 검증 경고.
+- `review.fix_brief(found, nth, touches)`: 수정 worker brief에 티켓 `touches`와 그중 시험 파일을 돌리라는 문장이 붙는다.
+- `overnight._live_markers`: 낡은 프로세스 목록으로 `arm` 표시를 지우지 않는다. 살아 있지 않아 보이는 표시가 있을 때만 `ps`를 다시 읽고, 새 목록에서도 없을 때만 지운다. 다시 읽기가 실패하면 지우지 않는다.
