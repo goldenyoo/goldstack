@@ -375,7 +375,8 @@ def _merge(r, rev: str) -> None:
 @metrics.stage("verify")
 def _verify(r, wt: Path, label: str) -> bool:
     """명령과 실제 출력·종료 코드를 보존한다. 검증이 worktree를 바꾸면 통과로 인정하지 않는다.
-    종료 코드 줄은 verify.run이 쓴다. 시간을 넘기면 그 줄 바로 앞이 `시간 초과: <N>분` 줄이고 실패다. 끊김(Result.interrupted)도 여느 실패와 같다: 다시 돌리는 것은 티켓 검증뿐이다."""
+    종료 코드 줄은 verify.run이 쓴다. 시간을 넘기면 그 줄 바로 앞이 `시간 초과: <N>분` 줄이고 실패다. 끊김(Result.interrupted)도 여느 실패와 같다: 다시 돌리는 것은 티켓 검증뿐이다.
+    지난 gs가 남긴 검증은 이번 gs go가 시작할 때 이미 끝냈다(verify.stop_stale). 로그 경로가 그 표지다."""
     log = r.rundir / "finish" / f"{label}-verify.log"
     head = git.sha(wt, "HEAD")
     branch = git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout
