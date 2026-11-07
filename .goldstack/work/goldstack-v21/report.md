@@ -2,48 +2,47 @@
 
 ## Summary
 
-v21은 0.2.5에 들어갈 작은 개선 묶음으로, 끊긴 검증의 오진·옛 지적 파일의 중복·worker의 zsh `=` 오류를 줄이고 리뷰와 시험 규칙을 조인다. 다만 리뷰 지적 7건이 고쳐지지 않은 채 남았고, 그중 1건이 high다.
+이번 변경은 gs를 0.2.5로 올리며, v20에 남은 아이디어와 issue #32~#35에 해당하는 검증·리뷰·hook의 허점을 고칩니다. 다만 리뷰에서 보고만 된 지적이 남아 있으며, 그중 하나는 high입니다.
 
-**변경의 의미**
-- **검증:** 로그 끝에 종료 코드를 남긴다. 신호로 끊긴 검증은 수리 없이 한 번 다시 돌리고, 또 끊기면 티켓을 실패로 처리한다.
-- **지적 파일:** 재시도가 병합되면 그 티켓의 옛 시도에서 나온 `open` 파일을 판단 모델 없이 `dropped`로 닫는다. 본문을 사람이 고쳤어도 `source`와 `status: open`이 그대로면 닫히며, 이 동작은 문서에 적었다.
-- **worker hook:** 따옴표 없이 `=`로 시작하는 단어를 worker 세션에서만 막는다.
-- **`arm` 경합:** 표시를 지우기 전에 프로세스 목록을 다시 읽는다.
-- **`/retro`:** agy 호출에서 권한 플래그를 뺐고, `no output produced`를 담은 답도 실패로 본다.
-- **규칙과 프롬프트:**
-  - 수정 worker brief에 `touches`의 시험을 돌리라는 안내를 넣었다.
-  - 시험 품질 규칙을 worker 지시문과 티켓 템플릿에 넣었고, 판단 프롬프트에서는 명세에 없는 단언 약화를 fix로 본다.
-  - Claude 리뷰어에게는 코드 인용 근거를 요구한다.
-  - `config.toml`을 고치는 티켓의 좁은 검증은 `gs check`가 경고한다.
-  - skill 단어 상한을 올렸다.
+**바뀌는 것**
+- **검증:** 신호로 끊긴 검증은 코드 결함으로 오진해 수리하지 않고, 같은 트리로 한 번 다시 돌립니다. 또 끊기면 티켓 실패로 처리합니다.
+- **worker hook:** worker의 Bash 명령에서 따옴표 없이 `=`로 시작하는 단어를 막습니다. zsh의 `=` 확장 때문에 뒤 명령이 실행되지 않는 사고를 줄이기 위해서입니다. 일반 세션은 막지 않습니다.
+- **리뷰·수정 품질:**
+  - 시험은 동작을 지우면 실패해야 하고, 명세가 요구하지 않은 단언 약화는 fix로 판단합니다.
+  - Claude 리뷰어는 코드 인용을 근거로 내고, 실행하지 않은 판정은 "코드 추적"이라고 밝힙니다.
+  - 수정 worker는 touches의 시험을 돌립니다.
+- **운영 안전:**
+  - 재시도가 병합되면 옛 시도의 `open` 지적 파일을 `dropped`로 닫습니다. 사람이 본문을 고친 파일도 source와 `status: open`이 그대로면 닫힙니다.
+  - 승인 창 표시는 `ps`를 다시 읽어 확인한 뒤에만 지웁니다.
+  - `/retro`의 agy 호출에서 권한 플래그를 뺍니다.
+  - `.goldstack/config.toml`을 고치는 티켓의 좁은 `verify`에는 `gs check`가 경고합니다.
+  - 시험 도우미 `sh`는 실패 메시지에 stderr를 싣습니다.
 
 **남은 위험**
 
-리뷰 지적은 모두 "보고만" 상태이고, 내용은 `[전언]`(리뷰어 재현과 판단을 옮긴 것)이다.
-- **04 [high] 살아남는 검증:** gs만 SIGKILL로 죽으면 검증 프로세스가 살아남는다. 다음 `gs go`는 이를 정리하지 않고 같은 integration에서 새 검증을 시작하므로, 옛 검증이 파일과 로그를 계속 바꿔 재개 결과를 믿을 수 없다. 모든 검증의 재개에 걸친 기존 문제이고, 고치려면 PGID 저장을 새로 설계해야 한다.
-- **04 [medium] 종료 코드 0:** 종료 코드가 0이면 신호 문구를 보지 않는다. 파이프라인 끝 명령이 성공하면 xargs 자식이 신호로 죽었어도 통과로 처리한다.
-- **07 [medium 3건] hook 판정의 틈:**
-  - `eval`과 `zsh -c` 본문은 검사하지 않아 실제 오류를 놓친다.
-  - `""===`는 놓치고, `foo\ ===`는 정상인데 막는다.
-  - 숫자로 된 heredoc 종료자(`<<'123'`)의 본문은 잘못 막는다.
-- **07 [low 1건] 잘못된 차단:** `$'...\''` 뒤의 주석이나 heredoc 본문에 있는 `==`를 막는다.
-- **05 [low 1건] 닫히지 않는 파일:** `status : "open"`처럼 콜론 앞에 공백이 있는 옛 파일은 닫히지 않고 `open`으로 남는다.
+[전언] 아래 1~4번은 리뷰어의 보고이며, 이 요약을 쓰면서 직접 재현하지 않았습니다.
 
-**실제로 재지 않은 것**
-- `[미확인]` 리눅스 xargs의 신호 문구 형식은 재지 않아, 리눅스에서는 끊김을 일반 실패로 볼 수 있다.
-- `[미확인]` `setopt noequals` 안내는 Claude Code Bash 도구에서 재지 않았다.
-- `[전언]` #33의 agy 변경은 리뷰에서 실제 호출 없이 문구와 시험으로만 확인했고, 사전 측정은 1회뿐이다.
+1. **high, 04:** gs만 SIGKILL로 죽으면 검증 프로세스가 살아남습니다. 다음 `gs go`가 같은 integration에서 새 검증을 시작하므로 재개 결과를 믿기 어렵습니다. 모든 검증 재개에 걸친 기존 틈이고, 고치려면 PGID 저장을 새로 설계해야 합니다.
+2. **medium, 04:** 종료 코드가 0이면 로그에 신호 줄이 있어도 끊김으로 보지 않고 통과합니다. 파이프라인 끝 명령이 성공하면 자식이 죽었어도 병합될 수 있습니다.
+3. **hook 판정의 빈틈, 07:**
+   - **놓침:** `eval`과 `zsh -c` 본문, `""===` 형태
+   - **오차단:** `foo\ ===`, 숫자 종료자를 쓴 heredoc 본문, `$'...\''` 뒤의 주석과 heredoc 본문(low)
+4. **경미한 지적:**
+   - **05(low):** `status :`처럼 콜론 앞에 공백이 있는 손 편집 파일은 닫히지 않습니다.
+   - **11(medium):** 예외가 `CalledProcessError` 자체가 아니라 그 하위 클래스 `_ShError`입니다.
+5. **원인 미확인:** `test_revert_landed_through_side_pr`의 `git clone` 오류는 원인을 밝히지 못했고, 시험 파일도 이번 diff에서 바뀌지 않았습니다. 티켓 11은 다음 실패 때 stderr를 남길 뿐 이 오류를 고치지 않습니다.
+6. **측정 안 한 환경:** 리눅스 xargs의 신호 문구와, Claude Code Bash 도구에서의 `setopt noequals` 효과는 재지 않았습니다.
 
-**후속으로 정할 것:** 위 지적 중 먼저 볼 것은 04 [high]이며, 후속 티켓으로 다룰지 정해야 한다.
-
-마무리: reverted · main 검증 실패 → revert a7aff299 · 남은 high 1(보고만 1)
-리뷰 지적: 수정됨 12 · 보고만 7
+마무리: preparing · 병합 전 · 남은 high 1(보고만 1)
+리뷰 지적: 수정됨 12 · 보고만 8
 
 ## Evidence
 
 ### 실행 측정
 
 - gs 0.2.4 · 설치 commit: ee3e173f1ebdddbbf087f844df7a2d5445737f4f · 시작 2026-11-07T10:40:52+09:00
+- gs 0.2.4 · 설치 commit: ee3e173f1ebdddbbf087f844df7a2d5445737f4f · 시작 2026-11-07T12:52:31+09:00
+- gs 0.2.4 · 설치 commit: ee3e173f1ebdddbbf087f844df7a2d5445737f4f · 시작 2026-11-07T12:54:38+09:00
 - 일시 오류 0회 · 대기 0.0초
 - 01: 일시 오류 0회 · 대기 0.0초
 - 02: 일시 오류 0회 · 대기 0.0초
@@ -55,6 +54,7 @@ v21은 0.2.5에 들어갈 작은 개선 묶음으로, 끊긴 검증의 오진·�
 - 08: 일시 오류 0회 · 대기 0.0초
 - 09: 일시 오류 0회 · 대기 0.0초
 - 10: 일시 오류 0회 · 대기 0.0초
+- 11: 일시 오류 0회 · 대기 0.0초
 
 worker 시도별 실제 모델·effort와 소요
 
@@ -76,6 +76,7 @@ worker 시도별 실제 모델·effort와 소요
 | 08/1/worker | claude | sonnet/medium | 33.903761 | 1.174164 |
 | 10/1/worker | claude | sonnet/medium | 98.226973 | 1.460703 |
 | 10/1/fix | claude | sonnet/medium | 12.379865 | 1.867844 |
+| 11/1/worker | claude | sonnet/medium | 32.809286 | 2.025744 |
 
 리뷰어별 소요와 채택(판단이 fix인 지적, 해결 수와 다름)
 
@@ -102,6 +103,7 @@ worker 시도별 실제 모델·effort와 소요
 | agy/0 | 04 | gemini-4-argon-high/CLI 기본값 | 535.137806 | 1.865573 | 0 | 0 |
 | codex/0 | 10 | gpt-6.1-sol/high | 95.92553 | 0.271114 | 1 | 1 |
 | codex/1 | 10 | gpt-6.1-sol/medium | 44.255752 | 1.840552 | 0 | 0 |
+| codex/0 | 11 | gpt-6.1-sol/high | 86.201356 | 0.153192 | 1 | 0 |
 
 리뷰 호출별 시간(재호출 포함)
 
@@ -128,6 +130,7 @@ worker 시도별 실제 모델·effort와 소요
 | agy | 04 | gemini-4-argon-high/CLI 기본값 | 535.082691 | passed |
 | codex | 10 | gpt-6.1-sol/high | 76.674935 | passed |
 | codex | 10 | gpt-6.1-sol/medium | 44.233792 | passed |
+| codex | 11 | gpt-6.1-sol/high | 73.558943 | passed |
 
 gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티켓 worker 시도, 재시도는 한 검증 안의 번호)
 
@@ -145,21 +148,25 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 10 | ticket-10 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 4f6dc1581c083a2e8ce94d5efb2ebc64bd17a839 | f4b56f0746ef0d3c5e9cb44e3e52c64cf6c89908 | 623.326876 | passed |
 | 11 | integration | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 0f89be69cdb7e7425efd49d7fb834793b3989d4c | - | 612.11118 | passed |
 | 12 | main | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 74d26da1e2bc39840704ec8c699730519f9b958e | - | 549.735974 | failed |
+| 13 | ticket-11 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | fe1367e38a544ea1b5727189d5b5504f670bedc5 | 27ceefaa838f362be753c398377530b69687f215 | 468.959391 | passed |
+| 14 | integration | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | d0b91c7e39d70e1610f945f6246015300224f97e | - | 469.099165 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 1214.0 |
-| verify | 1162.054 |
-| summary | 30.019 |
-| report | 0.139 |
-| push | 2.053 |
+| total | 1737.481 |
+| verify | 1631.201 |
+| summary | 70.839 |
+| report | 0.227 |
+| push | 7.165 |
 | publish | 3.224 |
 | merge-pr | 3.697 |
 | confirm-merge | 0.008 |
 | postmerge | 553.03 |
-| restore-reverts | 0.267 |
+| restore-reverts | 0.351 |
+| report-to-base | 2.618 |
+| sync-integration | 4.173 |
 
 ### 티켓별 결과
 
@@ -175,6 +182,7 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 08 | 설정 파일을 고치는 티켓의 좁은 검증에 경고한다 | merged | integration에 병합·검증됨 |
 | 09 | /retro의 agy 호출에서 권한 플래그를 뺀다 | merged | integration에 병합·검증됨 |
 | 10 | v21 문서와 버전 0.2.5 | merged | integration에 병합·검증됨 |
+| 11 | 시험 도우미 sh가 실패 메시지에 stderr를 싣는다 | merged | integration에 병합·검증됨 |
 
 - 01 단계별 소요: 리뷰 1분
 - 02 단계별 소요: worker 4분 · 리뷰 대기 9분 · 리뷰 1분 · 재리뷰 1분 · 검증 7분
@@ -186,6 +194,7 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 - 08 단계별 소요: worker 1분 · 리뷰 1분 · 검증 10분
 - 09 단계별 소요: worker 1분 · 리뷰 대기 2분 · 리뷰 8분 · 재리뷰 14분
 - 10 단계별 소요: worker 2분 · 리뷰 2분 · 재리뷰 1분 · 검증 10분
+- 11 단계별 소요: worker 1분 · 리뷰 1분 · 검증 8분
 
 ### 리뷰 지적
 
@@ -368,6 +377,8 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 - 10 리뷰(codex) [medium] docs/guide.md:878: “사람이 고친 파일”은 건드리지 않는다는 설명이 실제 동작과 다르다. 옛 시도의 지적 본문을 사람이 수정해도 source와 status: open을 유지하면 재시도 병합 시 dropped로 닫힌다. 이 설명을 믿고 보존한 지적이 열린 백로그에서 사라질 수 있다. — 상태: 수정됨(재리뷰 확인)
   근거: 추가된 문구는 “안 건드리는 것: … 사람이 고친 파일”이라고 보장한다. 그러나 src/gs/findings.py:166–184의 _stale은 병합 상태·번호·source만 확인하고, :197–204의 _close는 `if data.get("status") != "open": return False` 이후 dropped로 바꾼다. `.venv/bin/python -B -c`로 파일 접근과 git.run을 mock한 좁은 재현에서, 본문이 “사람이 직접 고친 설명: 새 코드에도 유효함”인 옛 파일에 _close_stale을 호출하자 `closed: ['.goldstack/ideas/demo-01-1.md']`와 `status: "dropped"` 쓰기가 확인됐다. 실제 파일은 수정하지 않았다. 티켓 목표인 “v21에서 바뀐 동작을 문서에 맞추고”에 어긋나는 설명이다.; 판단: `src/gs/findings.py`의 `_stale`·`_close`는 본문 수정 여부를 보지 않고 source가 맞는 `status: open` 파일을 닫으며 spec 2-6도 그렇게 정하므로, `docs/guide.md`의 '안 건드리는 것: 사람이 고친 파일'은 실제 동작과 어긋나고 코드 변경 없이 이 티켓 범위의 문서 수정으로 고칠 수 있다.; 재리뷰 근거: docs/guide.md:878에서 '사람이 고친 파일'을 보호한다는 설명을 제거하고, '본문을 사람이 고쳐도 source와 status: open이 그대로면 닫히니'라고 명시했다. src/gs/findings.py:179–184는 source를 확인하고, :197–198은 status가 open이 아니면 변경하지 않는다. `.venv/bin/python -B -c`로 Path의 읽기·쓰기와 git.run을 mock하여 _close_stale을 좁게 재현했다(종료 0). 사람이 수정한 본문을 가진 open 파일은 dropped로 변경되고 안내문이 추가됐으며(writes=1), taken·dropped·preserved 파일은 모두 closed=[], writes=0, git=0이었다. 수정 설명이 실제 동작과 일치한다. 실제 파일은 수정하지 않았다.
+- 11 리뷰(codex) [medium] tests/support.py:307: 실패 예외를 _ShError로 교체하여 예외 종류 보존 조건을 어겼다. 새 시험도 assertRaises만 사용하므로 이 위반을 잡지 못한다. — 상태: 보고만
+  근거: 티켓 완료 조건은 “예외 종류는 subprocess.CalledProcessError 그대로”라고 명시한다. 구현은 `raise _ShError(e.returncode, e.cmd, e.stdout, e.stderr) from None`으로 다른 클래스를 던진다. `.venv/bin/python -B -c`에서 support.py의 해당 정의를 AST로 추출하고 종료 코드 3인 자식 명령을 실행한 결과, `type(exc).__name__`은 `_ShError`, `type(exc) is subprocess.CalledProcessError`는 False였다. stderr 표시와 네 속성 보존은 확인됐다.; 판단: diff에서 `_ShError` 교체는 확인되지만 CalledProcessError의 하위 클래스라 `except`·`isinstance` 동작과 네 속성이 유지되어 실제 결함이 없고, '그대로'가 정확한 타입 일치까지 요구하는지 애매하며, 정확한 타입을 쓰면 `str(e)`에 stderr를 실으면서 `cmd`를 그대로 두기 어려워 다른 완료 조건과 충돌할 수 있다.
 
 ### verify 출력
 
@@ -381,487 +392,126 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 #### 01/1/verify.log
 
-```text
-$ uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_skill_overnight.py && uv run python -m unittest discover -s tests -p test_feedback_format.py
-cwd: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/integration
-..........
-----------------------------------------------------------------------
-Ran 10 tests in 0.005s
-
-OK
-...................................
-----------------------------------------------------------------------
-Ran 35 tests in 0.004s
-
-OK
-......................................................................
-----------------------------------------------------------------------
-Ran 70 tests in 2.637s
-
-OK
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/01/1/verify.log`
 
 #### 01/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.63ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/01
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/01
-Prepared 1 package in 177ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/01)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/01/1/setup.log`
 
 #### 02/1/fix/verify.log
 
-앞 14330자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/02/1/fix/verify.log`
-
-```text
-are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/02/1/fix/verify.log`
 
 #### 02/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.79ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/02
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/02
-Prepared 1 package in 185ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/02)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/02/1/setup.log`
 
 #### 03/1/verify.log
 
-앞 14349자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/03/1/verify.log`
-
-```text
-are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/03/1/verify.log`
 
 #### 03/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.89ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/03
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/03
-Prepared 1 package in 198ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/03)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/03/1/setup.log`
 
 #### 04/1/verify.log
 
-앞 14408자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/04/1/verify.log`
-
-```text
-are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/04/1/verify.log`
 
 #### 04/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.63ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/04
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/04
-Prepared 1 package in 160ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/04)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/04/1/setup.log`
 
 #### 05/1/fix/verify.log
 
-앞 14340자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/05/1/fix/verify.log`
-
-```text
-are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/05/1/fix/verify.log`
 
 #### 05/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.89ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/05
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/05
-Prepared 1 package in 175ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/05)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/05/1/setup.log`
 
 #### 06/1/verify.log
 
-앞 14325자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/06/1/verify.log`
-
-```text
-are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/06/1/verify.log`
 
 #### 06/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.68ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/06
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/06
-Prepared 1 package in 152ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/06)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/06/1/setup.log`
 
 #### 07/1/fix2/verify.log
 
-앞 14368자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/07/1/fix2/verify.log`
-
-```text
-are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/07/1/fix2/verify.log`
 
 #### 07/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 1ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/07
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/07
-Prepared 1 package in 288ms
-Installed 1 package in 2ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/07)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/07/1/setup.log`
 
 #### 08/1/verify.log
 
-앞 14364자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/08/1/verify.log`
-
-```text
-are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/08/1/verify.log`
 
 #### 08/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.83ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/08
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/08
-Prepared 1 package in 197ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/08)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/08/1/setup.log`
 
 #### 09/1/fix/verify.log
 
-```text
-$ uv run python -m unittest discover -s tests -p test_skill_retro.py && uv run python -m unittest discover -s tests -p test_skills.py
-cwd: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/integration
-....
-----------------------------------------------------------------------
-Ran 4 tests in 0.001s
-
-OK
-..........
-----------------------------------------------------------------------
-Ran 10 tests in 0.003s
-
-OK
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/09/1/fix/verify.log`
 
 #### 09/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 13ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/09
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/09
-Prepared 1 package in 179ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/09)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/09/1/setup.log`
 
 #### 10/1/fix/verify.log
 
-앞 14693자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/10/1/fix/verify.log`
-
-```text
-are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/10/1/fix/verify.log`
 
 #### 10/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.99ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/10
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/10
-Prepared 1 package in 227ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/10)
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/10/1/setup.log`
 
-종료 코드: 0
-```
+#### 11/1/verify.log
+
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/11/1/verify.log`
+
+#### 11/1/setup.log
+
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/11/1/setup.log`
 
 #### integration/1/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 18ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/integration
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/integration
-Prepared 1 package in 317ms
-Installed 1 package in 1ms
- + goldstack==0.2.4 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/wt/integration)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/integration/1/setup.log`
 
 #### finish/setup.log
 
-```text
-Using CPython 3.12.13
-Creating virtual environment at: .venv
-Resolved 1 package in 0.63ms
-   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/gs-main-553qq4_5/base
-      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/gs-main-553qq4_5/base
-Prepared 1 package in 216ms
-Installed 1 package in 1ms
- + goldstack==0.2.5 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/gs-main-553qq4_5/base)
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/finish/setup.log`
 
 integration-final: 보고서만 바뀜, 건너뜀
 
 #### finish/integration-final-verify.log
 
-```text
-integration-final: 보고서만 바뀜, 건너뜀
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/finish/integration-final-verify.log`
 
 #### finish/integration-verify.log
 
-앞 14377자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/finish/integration-verify.log`
-
-```text
-cepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
-
-About these checks:
-
-  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
-  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
-
-These plugin directory checks do not change the result below.
-
-The directory also runs a safety scan and a policy review that this command does not.
-
-No digest: .venv/bin/python3 is not a regular file
-
-✔ Validation passed with warnings
-
-종료 코드: 0
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/finish/integration-verify.log`
 
 #### finish/main-verify.log
 
-앞 13389자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/finish/main-verify.log`
-
-```text
-.................
-----------------------------------------------------------------------
-Ran 15 tests in 53.536s
-
-OK
-.............................
-----------------------------------------------------------------------
-Ran 20 tests in 5.396s
-
-OK
-......
-----------------------------------------------------------------------
-Ran 4 tests in 1.199s
-
-OK
-.
-----------------------------------------------------------------------
-Ran 28 tests in 51.768s
-
-OK
-.........
-----------------------------------------------------------------------
-Ran 13 tests in 32.319s
-
-OK
-.........................................
-----------------------------------------------------------------------
-Ran 70 tests in 35.469s
-
-OK
-................................................................
-----------------------------------------------------------------------
-Ran 77 tests in 187.162s
-
-OK
-........................
-----------------------------------------------------------------------
-Ran 67 tests in 160.547s
-
-OK
-
-종료 코드: 1
-```
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/finish/main-verify.log`
 
 
-agy 사용: 5/24
+agy 사용: 0/24
 
 ## Merge Danger
 
-결과: main 검증 실패 → revert a7aff299839f3d32d25058cb82bd92305278f0b3를 main에 push함
+결과: integration 검증 중
 
-PR: https://github.com/goldenyoo/goldstack/pull/42
+PR: 아직 없음
 
 integration verify: True
 
-main verify: False
-
-병합 커밋: `74d26da1e2bc39840704ec8c699730519f9b958e`
-
-revert 커밋: `a7aff299839f3d32d25058cb82bd92305278f0b3` (main에 일반 push, force push 없음)
+main verify: 미실행
 
 main가 이 feature의 병합 `74d26da1e2bc39840704ec8c699730519f9b958e`을 되돌렸다(revert `a7aff299839f3d32d25058cb82bd92305278f0b3`). integration에서 그 revert를 다시 되돌렸다(`bff02eaf8721adbc32bd03c8ef3fe7a543b6cf60`). main로 가는 다음 PR이 feature 코드를 다시 들인다.
 
@@ -880,7 +530,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 74d26da1e2bc39840704ec8c699730519f9b958e
+git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v21/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
