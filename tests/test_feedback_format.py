@@ -398,7 +398,16 @@ class RedactionTest(unittest.TestCase):
         self.assertIn("NetworkAbort", names)
         for name in [*names, "CalledProcessError", "TimeoutExpired", "JSONDecodeError", "TOMLDecodeError"]:
             with self.subTest(name):
-                self.assertEqual(feedback._clean_kind(name), name)
+                self.assert_valid_kind(name)
+
+    def assert_valid_kind(self, name):
+        self.assertEqual(feedback._clean_kind(name), name,
+                         f"예외 이름 {name}의 낱말이 src/gs/feedback.py의 _KIND_WORDS에 없다. 이름을 _KIND_WORDS 낱말로 짓거나 낱말을 더한다")
+
+    def test_invalid_kind_failure_names_kind_words(self):
+        with self.assertRaises(AssertionError) as caught:
+            self.assert_valid_kind("ZzqxvError")
+        self.assertIn("_KIND_WORDS", str(caught.exception))
 
     def test_config_shows_enumerated_values_only(self):
         base = cfg()
