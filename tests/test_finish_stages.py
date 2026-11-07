@@ -497,6 +497,39 @@ class MainRetryTest(support.GoTest):
         self.assertEqual(code, 0, out + err)
         self.assert_flaky_kept()
 
+    def retry_setup_fails(self):
+        real = finish._prepare_base
+
+        def prepare(r, wt):
+            return None if r.st.finish["phase"] == "main_retry" else real(r, wt)
+
+        with mock.patch("gs.finish._prepare_base", side_effect=prepare):
+            code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        f = self.finish()
+        self.assertEqual((f["phase"], f["main_ok"], f["outcome"]), ("main_retry", False, "base 미검증(준비 실패)"), f)
+        self.assertEqual(self.reverts(), [])
+        self.assertIn("file_01", self.remote_files())
+        self.assertEqual(len(self.runs()), 1)
+        self.assertIn("마무리: main_retry · ", self.final_report())
+
+    def test_retry_setup_failure_passes_on_next_go_as_flaky(self):
+        self.main_fails(1)
+        self.retry_setup_fails()
+        code, out, err = self.go_01()
+        self.assertEqual(code, 0, out + err)
+        self.assert_flaky_kept()
+        self.assertEqual(len(self.runs()), 2)
+        self.assertTrue(self.log("main-retry").exists())
+
+    def test_retry_setup_failure_fails_on_next_go_and_reverts_without_a_third_run(self):
+        self.main_fails(2)  # 세 번째로 돌면 통과한다. 재시도가 한 번이면 거기까지 가지 않는다
+        self.retry_setup_fails()
+        code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        self.assert_reverted_once()
+        self.assertEqual(len(self.runs()), 2)
+
     def test_dead_retry_passes_on_next_go(self):
         self.main_fails(1)
         self.dies_in_retry()

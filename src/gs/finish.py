@@ -963,6 +963,9 @@ def _read_and_step(r) -> bool | None:
             facts = replace(facts, base_ready=main_head is not None,
                             base_moved=facts.base_moved or f.get("main_head") != main_head)
             step = revert_decision.next_step(facts)
+            if step == revert_decision.KEEP_RETRY:
+                _save(r, outcome="base 미검증(준비 실패)")
+                return False
             if step == revert_decision.RECORD_UNVERIFIED:
                 _save(r, phase="base_unverified", main_ok=None, outcome="base 미검증(준비 실패)")
                 return False

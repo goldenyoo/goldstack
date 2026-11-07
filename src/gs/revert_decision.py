@@ -35,6 +35,7 @@ PUSH_REVERT = "push_revert"  # 만들어 둔 revert를 일반 push한다
 OPEN_REVERT_PR = "open_revert_pr"  # 만들어 둔 revert를 PR로 올린다
 # base를 검증하고 결과를 남긴다.
 RECORD_UNVERIFIED = "record_unverified"  # setup 실패: base_unverified, revert하지 않는다
+KEEP_RETRY = "keep_retry"  # 재시도의 setup 실패: phase main_retry를 그대로 두고 revert하지 않는다
 VERIFY_MAIN = "verify_main"  # 검증 로그 main
 RETRY_MAIN = "retry_main"  # 검증 로그 main-retry
 RECHECK_MAIN = "recheck_main"  # 검증 로그 main-recheck
@@ -99,7 +100,8 @@ def next_step(f: Facts) -> str:
     if f.base_ready is None:
         return PREPARE_BASE
     if not f.base_ready:
-        return RECORD_UNVERIFIED
+        # 재시도의 준비 실패는 재시도를 쓴 것이 아니다. phase를 덮어쓰면 다음 실행이 첫 검증으로 돌아가 flaky 표시를 잃고 재시도를 한 번 더 얻는다.
+        return KEEP_RETRY if f.phase == "main_retry" else RECORD_UNVERIFIED
     if f.main_ok is None:
         # 재시도 도중 끊긴 실행도 여기로 온다. 지난 실패와 같은 커밋일 때만 재시도다.
         if f.phase == "main_retry" and not f.base_moved:

@@ -162,7 +162,8 @@ TABLE = [
     ("재시도 재개: 남이 되돌렸으면 다시 돌리지도 revert하지도 않는다", facts(**{**BASE_READ, "external_revert": True}, phase="main_retry"),
      rd.RECORD_EXTERNAL_REVERT),
     ("재시도 재개: 준비부터 다시", facts(**BASE_READ, phase="main_retry"), rd.PREPARE_BASE),
-    ("재시도 재개: 준비 실패", ready(phase="main_retry", base_ready=False), rd.RECORD_UNVERIFIED),
+    ("재시도 재개: 준비 실패는 재시도를 쓴 것이 아니다", ready(phase="main_retry", base_ready=False, base_moved=False), rd.KEEP_RETRY),
+    ("재시도 재개: base가 움직여도 준비 실패면 표시를 지우지 않는다", ready(phase="main_retry", base_ready=False), rd.KEEP_RETRY),
     ("같은 커밋: 재시도", ready(phase="main_retry", base_moved=False), rd.RETRY_MAIN),
     ("재시도 차례에 코드가 같다는 사실은 답을 바꾸지 않는다", ready(phase="main_retry", base_moved=False, code_same=True), rd.RETRY_MAIN),
     ("재시도 전에 base가 움직였다: 같은 코드가 아니니 재검증", ready(phase="main_retry"), rd.RECHECK_MAIN),
@@ -257,8 +258,11 @@ class NextStepTest(unittest.TestCase):
                                 and not has and not branch, given)
             if step == rd.RECORD_FLAKY:  # 같은 커밋이 실패했다가 통과했을 때만 flaky다
                 self.assertTrue(phase == "main_retry" and ok is True and not moved, given)
-            if phase == "main_retry":  # 재시도는 한 번이다
+            if phase == "main_retry":  # 재시도는 한 번이다. 재시도 표시를 지우지 않는다
                 self.assertNotEqual(step, rd.MARK_RETRY, given)
+                self.assertNotEqual(step, rd.RECORD_UNVERIFIED, given)
+            if step == rd.KEEP_RETRY:  # 재시도 차례의 준비 실패에만 phase를 그대로 둔다
+                self.assertTrue(phase == "main_retry" and base_ready is False, given)
             if step in (rd.MAKE_REVERT_PUSH, rd.MAKE_REVERT_PR):  # 실패가 확인됐을 때만 되돌린다
                 self.assertTrue(ok is False or (ok is None and (phase == "main_failed" or branch) and not moved), given)
             if step == rd.RECHECK_MAIN:
@@ -744,14 +748,40 @@ class PostmergeTest(unittest.TestCase):
         self.assertEqual(self.verified_labels(), [])
         self.assertEqual(self.fake.count("revert"), 1)
 
-    def test_retry_setup_failure_does_not_revert_and_next_run_verifies(self):
+    # 재시도의 준비가 실패했다
+
+    def retry_setup_failed(self) -> dict:
         self.assertFalse(self.postmerge(phase="merged", verified_head=PASSED, setup_cmd="make", setup_ok=[True, False],
                                         verify_ok=[False]))
         self.assertEqual(self.verified_labels(), ["main"])
-        self.assertEqual((self.stored["phase"], self.stored["main_ok"]), ("base_unverified", None))
+        left = dict(self.stored)
+        self.assertEqual((left["phase"], left["main_ok"], left["main_head"]), ("main_retry", False, TIP))
+        self.assertEqual(left["outcome"], "base 미검증(준비 실패)")
+        self.assert_kept_merge()
+        return left
+
+    def test_retry_setup_failure_passing_on_next_run_says_flaky(self):
+        self.assertTrue(self.postmerge(**self.retry_setup_failed(), setup_cmd="make", verify_ok=True))
+        self.assertEqual(self.verified_labels(), ["main-retry"])
+        self.assertEqual(self.stored["phase"], "verified")
+        self.assertIn(FLAKY, self.stored["outcome"])
+        self.assert_kept_merge()
+
+    def test_retry_setup_failure_failing_on_next_run_reverts_without_a_third_run(self):
+        self.assertFalse(self.postmerge(**self.retry_setup_failed(), setup_cmd="make", verify_ok=[False, True]))
+        self.assertEqual(self.verified_labels(), ["main-retry"])
+        self.assertEqual(self.fake.count("revert"), 1)
+        self.assertEqual(self.push.call_count, 1)
+        self.assertEqual((self.stored["phase"], self.stored["main_ok"]), ("reverted", False))
+
+    def test_retry_setup_failing_again_still_keeps_the_retry(self):
+        self.assertFalse(self.postmerge(**self.retry_setup_failed(), setup_cmd="make", setup_ok=False))
+        self.assertEqual(self.verified_labels(), [])
+        self.assertEqual((self.stored["phase"], self.stored["main_ok"], self.stored["main_head"]), ("main_retry", False, TIP))
         self.assert_kept_merge()
         self.assertTrue(self.postmerge(**self.stored, setup_cmd="make", verify_ok=True))
-        self.assertEqual(self.verified_labels(), ["main"])
+        self.assertEqual(self.verified_labels(), ["main-retry"])
+        self.assertIn(FLAKY, self.stored["outcome"])
 
     # 재시도 도중 gs가 죽었다
 
