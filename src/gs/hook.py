@@ -524,25 +524,34 @@ def equals_word(text: str) -> str | None:
     """
     word_re = re.compile(r"[^ \t\n;&|()<>]+")
     stack = ["top"]
-    saved = [0]  # 틀마다, 그 틀을 열 때 밖에서 열려 있던 `[[` 수
+    saved = [(0, True)]  # 틀마다, 그 틀을 열 때 밖에서 열려 있던 (`[[` 수, 명령 자리 여부)
     n = len(text)
     i = 0
     cond = 0  # 지금 틀에서 열린 `[[` 수
     ws = True  # 다음 글자가 셸 단어의 처음인가
     cmd = True  # 다음 단어가 명령 자리인가
+    redir = False  # 다음 단어가 리다이렉션 대상인가(대상은 명령 자리를 바꾸지 않는다: `> f [[ a == a ]]`)
 
     def push(kind: str, keep_cond: bool = False) -> None:
         nonlocal cond, cmd
         stack.append(kind)
-        saved.append(cond)
+        saved.append((cond, cmd))
         if not keep_cond:
             cond = 0
         cmd = True
 
     def pop() -> None:
-        nonlocal cond
+        nonlocal cond, cmd
         stack.pop()
-        cond = saved.pop()
+        cond, cmd = saved.pop()  # 치환이 닫히면 바깥의 명령 자리 여부로 돌아간다
+
+    def lead() -> None:
+        """따옴표·역슬래시·치환으로 시작하는 단어. 예약어가 될 수 없으니 명령 자리가 끝난다."""
+        nonlocal cmd, redir
+        if redir:
+            redir = False
+        else:
+            cmd = False
 
     while i < n:
         c = text[i]
@@ -563,22 +572,31 @@ def equals_word(text: str) -> str | None:
                 saved.pop()
             i += 1
             continue
+        lead_ok = was and ctx in CODE
         if c == "\\":
+            if lead_ok:
+                lead()
             i += 2
             continue
         if c == "$" and text.startswith("$(", i):
+            if lead_ok:
+                lead()
             if text.startswith("$((", i):
                 push("((")
                 i += 3
             else:
                 push("$(")
+                ws = True  # 치환 속 첫 글자는 새 단어의 처음이다
                 i += 2
             continue
         if c == "`":
             if ctx == "`":
                 pop()
             else:
+                if lead_ok:
+                    lead()
                 push("`")
+                ws = True
             i += 1
             continue
         if ctx == '"':
@@ -599,13 +617,17 @@ def equals_word(text: str) -> str | None:
             i += 1
             continue
         if c == "'":
+            if lead_ok:
+                lead()
             stack.append("$'" if i > 0 and text[i - 1] == "$" else "'")
-            saved.append(cond)
+            saved.append((cond, cmd))
             i += 1
             continue
         if c == '"':
+            if lead_ok:
+                lead()
             stack.append('"')
-            saved.append(cond)
+            saved.append((cond, cmd))
             i += 1
             continue
         if c == "(":
@@ -614,6 +636,7 @@ def equals_word(text: str) -> str | None:
                 i += 2
                 continue
             push("(", keep_cond=True)
+            redir = False
             ws = True
             i += 1
             continue
@@ -621,26 +644,37 @@ def equals_word(text: str) -> str | None:
             if ctx in ("(", "$("):
                 pop()
                 ws = ctx == "("
+                if ctx == "(":
+                    cmd = False
             else:
                 ws = True
-            cmd = False
+                cmd = False
             i += 1
             continue
         if c in " \t\n;&|<>":
             ws = True
-            if c in "\n;&|":
+            if c in "<>":
+                redir = True
+            elif c in "&|" and i > 0 and text[i - 1] in "<>":
+                pass  # `>&2`, `>|f`: 리다이렉션 연산자의 일부다
+            elif c == "&" and text.startswith("&>", i):
+                redir = True  # `&>f`
+            elif c in "\n;&|":
                 cmd = True
+                redir = False
             i += 1
             continue
         if was:
             word = word_re.match(text, i).group(0)
-            if word == "[[" and cmd:
+            target, redir = redir, False
+            if word == "[[" and cmd and not target:
                 cond += 1
-            elif word == "]]" and cond:
+            elif word == "]]" and cond and not target:
                 cond -= 1
             elif word[0] == "=" and len(word) >= 2 and not cond:
                 return word
-            cmd = word in CMD_WORDS
+            if not target:
+                cmd = word in CMD_WORDS
         i += 1
     return None
 
