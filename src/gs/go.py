@@ -1297,6 +1297,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     수리(repair)도 수정과 같다: 도중이면 같은 worktree에 다시 띄우고, 띄우지 못하면 실패한 수리로 처리한다(수리 전 브랜치를 다시 검증한다). 시도 수를 올리지 않는다.
     수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish).
     대조의 한 번 더를 썼으면(reviewed_again) 그대로 잇는다: 옛 state의 표시에는 없고 False다. 끝나지 않은 대조는 _finish가 잇는다.
+    다시 띄우는 수정 worker의 brief도 처음과 같이 지적에 티켓 touches와 설명 확인 문장(review.fix_brief)을 붙인다.
     다시 띄우지 못한 수정·수리의 자리는 새 실행 디렉터리를 쓴다: 결함 수집은 실패 이유를 옆의 worker.log와 함께 읽는데, 지난 디렉터리의 로그는 이 대기를 일으킨 일시 오류라 이유까지 걸러 낸다.
     """
     ts = r.st.ticket(t.id)
@@ -1350,7 +1351,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True)
         if nth or repair:
             with job.brief.open("a", encoding="utf-8") as f:
-                f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth))
+                f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth, t.touches))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
@@ -1991,7 +1992,7 @@ def _attempt_dir(a: Active) -> Path:
 
 
 def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Active | None:
-    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적 첨부). 띄우지 못하면 None.
+    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적과 티켓 touches·그중 시험 파일을 돌리라는 문장 첨부). 띄우지 못하면 None.
 
     띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 리뷰한 구현을 병합·검증한다.
     수정의 기준은 지금 리뷰 대상이다. 브랜치가 그 위로 움직였으면(못 본 늦은 커밋, _note_unseen) 수정이 그 위에 쌓이니 재리뷰 diff에 함께 든다. 수정이 실패하면 함께 버린다(_end_fix).
@@ -2010,7 +2011,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         job.rundir.mkdir(parents=True)
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
-            f.write(review.fix_brief(todo, nth))
+            f.write(review.fix_brief(todo, nth, t.touches))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
