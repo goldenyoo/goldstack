@@ -1007,7 +1007,7 @@ def fix_brief(found: list[dict], nth: int = 1, touches: list[str] | None = None)
         lines += [f"이 티켓이 건드리는 파일(touches): {', '.join(f'`{t}`' for t in touches)}"]
         tests = [t for t in touches if is_test_path(t)]
         if tests:
-            lines += [f"그중 시험 파일 {', '.join(f'`{t}`' for t in tests)}을 고친 뒤 돌려 통과하는지 확인한다. 돌릴 시험을 따로 찾지 않아도 된다."]
+            lines += [f"그중 시험 파일 {', '.join(f'`{t}`' for t in tests)}을 돌려 통과하는지 확인한다. 돌릴 시험을 따로 찾지 않아도 된다."]
         lines += [""]
     for f in found:
         lines += [f"### {f['id']}. [{f['severity']}] {f['location']}", f"- 주장: {f['claim']}",

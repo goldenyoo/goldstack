@@ -129,7 +129,7 @@ class FixBriefTouchesTest(unittest.TestCase):
             with self.subTest(nth=nth):
                 text = review.fix_brief([FINDING], nth, self.TOUCHES)
                 self.assertIn("이 티켓이 건드리는 파일(touches): `src/gs/review.py`, `tests/test_fix_brief.py`, `docs/guide.md`", text)
-                self.assertIn("그중 시험 파일 `tests/test_fix_brief.py`을 고친 뒤 돌려 통과하는지 확인한다", text)
+                self.assertIn("그중 시험 파일 `tests/test_fix_brief.py`을 돌려 통과하는지 확인한다", text)
                 self.assertNotIn("시험 파일 `src/gs/review.py`", text)
 
     def test_no_test_file_means_no_test_sentence(self):
