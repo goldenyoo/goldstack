@@ -28,6 +28,7 @@ goldstack-v20 회고와 리뷰에 남은 medium 아이디어 7개와 함께 고�
 | 2-9 | #33 `/retro`의 agy | `--dangerously-skip-permissions`를 빼고 읽기 전용 설명을 고치며 `no output produced` 답도 실패로 본다 |
 | 2-10 | #34 시험 품질 | worker 지시문과 티켓 템플릿에 "동작을 지우면 실패하는 시험"을 넣고, 판단 프롬프트에서 명세가 요구하지 않은 단언 약화는 심각도와 무관하게 fix다. low 이관은 하지 않는다 |
 | 2-11 | #35 Claude 리뷰어 | Claude 리뷰어에게는 코드 인용을 근거로 요구하고, 실행하지 않은 판정은 "코드 추적"이라고 밝히게 한다. 명령 권한은 주지 않는다 |
+| 3-1 | 재진입 | `reverted`로 끝난 v21에 티켓 11을 더한다. 새 티켓이 든 다음 PR이 feature 코드를 다시 들인다 |
 
 ## 5. 티켓 그래프
 | id | 제목 | blocked_by(이유) | wave | tier(이유) | 예상 | 구현 | 수정 | 수리 | 첫 리뷰 | 재리뷰 | touches | verify |
@@ -42,6 +43,7 @@ goldstack-v20 회고와 리뷰에 남은 medium 아이디어 7개와 함께 고�
 | 08 | 설정 파일을 고치는 티켓의 좁은 검증에 경고한다 | 03 같은 파일 | 3 | small(경고 하나와 규칙 한 줄) | 25분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `src/gs/check.py`, `skills/grill/templates/spec.md`, `tests/test_check.py`, `tests/test_skill_grill.py` | 전체 |
 | 09 | /retro의 agy 호출에서 권한 플래그를 뺀다 | – | 1 | small(skill 글과 문서) | 25분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `skills/retro/SKILL.md`, `docs/guide.md`, `tests/test_skill_retro.py` | `test_skill_retro.py`·`test_skills.py` |
 | 10 | v21 문서와 버전 0.2.5 | 01–09 앞 결과 필요 | 4 | small(문서와 버전) | 25분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `docs/guide.md`, `docs/internals.md`, `CHANGELOG.md`, `pyproject.toml`, `uv.lock`, `.claude-plugin/plugin.json`, `tests/test_version.py` | 전체 |
+| 11 | 시험 도우미 sh가 실패 메시지에 stderr를 싣는다 | – | 1 | small(시험 도우미 한 곳) | 25분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `tests/support.py`, `tests/test_support_sh.py` | 전체 |
 
 계열: 코디네이터·hook·프롬프트라 claude로 짓고 codex가 본다. 틀리면 바로 사고인 04(수리·재개 상태 전이), 06(승인 창 거부 표시), 07(차단 hook)에 agy를 붙인다.
 
@@ -61,6 +63,7 @@ goldstack-v20 회고와 리뷰에 남은 medium 아이디어 7개와 함께 고�
 - 아이디어 파일로 넘어간 지적 중 재시도 중복으로 기록된 것은 `goldstack-v11-09-1`·`-3`이다. `goldstack-v15-04-2`·`-3`도 문장이 비슷하지만 재시도 때문인지는 보지 않았다. `findings.write`는 보고서 커밋 때 돈다.
 - zsh 구분선 오류: 이 머신의 실행 기록 5개 feature, `worker.log` 56개 중 1개 파일에서 2회. 이번 grill의 대화 세션에서는 명령 묶음 3개가 멈췄다. `ZDOTDIR`의 `.zshenv`에 `setopt noequals`를 두면 `zsh -c 'echo ==='`가 정상이다. Claude Code Bash 도구에서는 재지 않았다.
 - `hooks/hooks.json`의 `PreToolUse`는 `GS_ROLE=worker`가 아니면 셸에서 바로 끝나 `gs`를 부르지 않는다. 범위 밖 `claude-reviewer-bash`는 worktree를 바꿀 위험 때문에 claude 리뷰어에 명령을 주지 않기로 했다.
+- main 검증 실패(2026-11-07): `test_revert_landed_through_side_pr`의 `git clone`이 종료 코드 1을 냈고 revert `a7aff29`가 나갔다. integration worktree에서 그 시험 단독 5회와 파일 전체 1회는 통과했다. `reverted`면 `gs go`를 다시 쳐도 끝난 결과만 낸다(`revert_decision.next_step`, 재실행 3초).
 - `gs retro-log goldstack-v20`이 만든 `run/retro-log.md`는 199507바이트다.
 - agy 측정(2026-11-07, agy 1.5.1, gemini-4-argon-high, 1회): `--sandbox --disable-slash-commands`로 199507바이트 `retro-log.md`를 89초에 끝까지 읽었다(마지막 `####` 제목 L1781 일치). 종료 코드 0, 레포 변경 없음.
 
@@ -85,3 +88,7 @@ goldstack-v20 회고와 리뷰에 남은 medium 아이디어 7개와 함께 고�
 
 ### 라운드 3 — 티켓 분해 (모두 추천대로)
 1. 티켓 10장(§5)과 범위 밖 `hook-equals-all-sessions`, `agy-reviewer-permission-flag`, `skill-text-pin-removal` 갱신 → 확정. grill이 정한 세부: 다시 검증이 또 끊기면 티켓 실패이고 끊김이 아닌 실패면 수리로 간다(04). `ps`를 다시 읽지 못하면 표시를 지우지 않는다(06).
+
+### 라운드 4 — revert 뒤 재진입 (추천대로)
+사람이 고른 "지금 다시 넣기"는 `gs go` 재실행으로 되지 않았다. 추천할 때 `reverted`가 끝 상태인지 확인하지 않았다.
+1. 재진입: A 티켓 11 stderr 보존 / B 문서 한 줄 티켓 / C 손으로 PR / D 멈춤 — 추천 A(이번 main 검증부터 실패 원인이 남는다) → 확정 A

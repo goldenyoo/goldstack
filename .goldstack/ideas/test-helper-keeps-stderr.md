@@ -2,9 +2,9 @@
 date: "2026-11-07"
 severity: "high"
 source: "/retro goldstack-v21"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v21"
 ---
 시험 도우미 `sh`가 명령의 stderr를 버려, `git clone` 실패의 원인이 로그 어디에도 남지 않는다.
 
