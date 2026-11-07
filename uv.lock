@@ -4,5 +4,5 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "goldstack"
-version = "0.2.6"
+version = "0.2.7"
 source = { editable = "." }
