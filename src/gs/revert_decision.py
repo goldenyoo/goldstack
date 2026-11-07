@@ -10,6 +10,10 @@ revert 브랜치를 올린 적이 있으면(보호된 base) PR 상태를 base �
 base가 그대로면 그 PR을 기다리고, base가 움직였으면 옛 revert를 병합하지 않고 재검증한다. 통과하면 PR을 닫고(phase `revert_closing`이
 "재검증 통과, 닫기가 남음"이다), 실패하면 최신 base 위에 revert를 다시 만들어 같은 브랜치를 갱신한다. 직접 push 경로는 브랜치를 올리지 않아 이 줄들을 지나지 않는다.
 재검증이 도는 동안 PR이 병합될 수 있어 `_postmerge`는 그 브랜치를 덮어쓰기 직전에 PR을 다시 읽어 묻는다. 병합됐으면 검증 결과와 상관없이 그 PR로 끝난다.
+
+첫 검증이 실패했고 코드가 같으면(`code_same`) revert 전에 한 번 다시 돌린다. `MARK_RETRY`가 phase `main_retry`("첫 실패, 재시도가 남음")를 남기고, 그 phase가 곧 "이미
+재시도를 썼다"는 표시다: 재시도와 재검증의 실패는 다시 묻지 않고 revert로 간다. 끊긴 실행을 잇는 다음 `gs go`도 같은 줄을 지나므로 남이 한 revert를 먼저 보고 revert를 두 번 만들지 않는다.
+실패 뒤 base가 움직였으면 같은 코드의 재시도가 아니라 재검증이고, 통과해도 flaky로 적지 않는다.
 """
 from __future__ import annotations
 
@@ -31,9 +35,13 @@ PUSH_REVERT = "push_revert"  # 만들어 둔 revert를 일반 push한다
 OPEN_REVERT_PR = "open_revert_pr"  # 만들어 둔 revert를 PR로 올린다
 # base를 검증하고 결과를 남긴다.
 RECORD_UNVERIFIED = "record_unverified"  # setup 실패: base_unverified, revert하지 않는다
+KEEP_RETRY = "keep_retry"  # 재시도의 setup 실패: phase main_retry를 그대로 두고 revert하지 않는다
 VERIFY_MAIN = "verify_main"  # 검증 로그 main
+RETRY_MAIN = "retry_main"  # 검증 로그 main-retry
 RECHECK_MAIN = "recheck_main"  # 검증 로그 main-recheck
+MARK_RETRY = "mark_retry"  # 코드가 같은 첫 실패: phase main_retry를 남기고 worktree를 치운 뒤 처음부터 다시 읽는다
 RECORD_VERIFIED = "record_verified"
+RECORD_FLAKY = "record_flaky"  # 재시도 통과: verified, outcome에 flaky 표시
 CLOSE_REVERT_PR = "close_revert_pr"  # 재검증을 통과해 쓰지 않는 revert PR을 닫고 브랜치를 지운 뒤 verified로 끝낸다
 MAKE_REVERT_PUSH = "make_revert_push"  # base 끝 위에 revert를 새로 만들어 일반 push한다
 MAKE_REVERT_PR = "make_revert_pr"  # base 끝 위에 revert를 새로 만들어 PR로 올린다
@@ -53,6 +61,7 @@ class Facts:
     main_ok: bool | None = None  # 이번에 돈 base 검증의 결과. 돌리지 않았으면 None
     revert_pushed: bool = False  # revert_head가 있다: revert 브랜치를 올린 적이 있어 그 PR이 남았을 수 있다
     revert_pr_merged: bool | None = None  # 그 PR이 이미 병합됐다
+    code_same: bool = False  # 마지막으로 통과한 integration 커밋과 병합 커밋의 차이가 `.goldstack/`뿐이다. 모르면(옛 state, 못 읽음) 지금처럼 revert한다
 
 
 def next_step(f: Facts) -> str:
@@ -91,13 +100,22 @@ def next_step(f: Facts) -> str:
     if f.base_ready is None:
         return PREPARE_BASE
     if not f.base_ready:
-        return RECORD_UNVERIFIED
+        # 재시도의 준비 실패는 재시도를 쓴 것이 아니다. phase를 덮어쓰면 다음 실행이 첫 검증으로 돌아가 flaky 표시를 잃고 재시도를 한 번 더 얻는다.
+        return KEEP_RETRY if f.phase == "main_retry" else RECORD_UNVERIFIED
     if f.main_ok is None:
-        if f.phase != "main_failed" and not f.revert_pushed:
+        # 재시도 도중 끊긴 실행도 여기로 온다. 지난 실패와 같은 커밋일 때만 재시도다.
+        if f.phase == "main_retry" and not f.base_moved:
+            return RETRY_MAIN
+        if f.phase not in ("main_failed", "main_retry") and not f.revert_pushed:
             return VERIFY_MAIN
         # 실패 뒤 base가 움직였다(사람이 고쳤거나 그사이 push로 revert push가 거부됐다). 그대로면 지난 실패를 믿고 아래로 간다.
         if f.base_moved:
             return RECHECK_MAIN
     if f.main_ok:
-        return CLOSE_REVERT_PR if f.revert_pushed else RECORD_VERIFIED
+        if f.revert_pushed:
+            return CLOSE_REVERT_PR
+        return RECORD_FLAKY if f.phase == "main_retry" and not f.base_moved else RECORD_VERIFIED
+    # 재시도는 revert를 만들기 전의 첫 실패에만 한 번이다. main_failed·revert가 있으면 이미 revert로 가기로 정한 뒤다.
+    if f.code_same and f.phase not in ("main_failed", "main_retry") and not f.has_revert and not f.revert_pushed:
+        return MARK_RETRY
     return MAKE_REVERT_PR if via_pr else MAKE_REVERT_PUSH

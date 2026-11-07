@@ -473,9 +473,9 @@ def _failed_verification(r) -> tuple[str, Path] | None:
     finish_dir = r.rundir / "finish"
     if f.get("phase") == "not_merged" and f.get("failed_verify") in ("integration", "integration-final"):
         return f["failed_verify"], finish_dir / f"{f['failed_verify']}-verify.log"
-    if f.get("phase") in ("reverted", "main_failed", "revert_pending") and f.get("main_ok") is False:
-        # 다시 검증(main-recheck)이 있으면 마지막으로 돈 쪽이 최종 실패다.
-        found = [(label, finish_dir / f"{label}-verify.log") for label in ("main", "main-recheck")]
+    if f.get("phase") in ("reverted", "main_failed", "main_retry", "revert_pending") and f.get("main_ok") is False:
+        # 다시 검증(main-retry, main-recheck)이 있으면 마지막으로 돈 쪽이 최종 실패다.
+        found = [(label, finish_dir / f"{label}-verify.log") for label in ("main", "main-retry", "main-recheck")]
         found = [x for x in found if x[1].is_file()]
         if found:
             return max(found, key=lambda x: x[1].stat().st_mtime)
@@ -534,6 +534,8 @@ def status_line(r) -> str:
         parts = [f"{pr} 병합", f"보고서 PR {f.get('report_pr', '')} 병합 대기"]
     elif phase == "main_failed":
         parts = [f"{r.base} 검증 실패", f"revert {revert} push 안 됨" if revert else "revert push 안 됨"]
+    elif phase == "main_retry":
+        parts = [f"{pr} 병합", f"{r.base} 검증 실패", "코드가 같아 재검증 대기"]
     elif phase == "setup_failed":
         parts = ["준비 실패", "병합 안 함"]
     elif phase == "base_unverified":
