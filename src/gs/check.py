@@ -177,6 +177,27 @@ def touches_problems(feat: featmod.Feature, g: graph.Graph,
     return problems
 
 
+def config_verify_problems(feat: featmod.Feature, scope: Iterable[str]) -> list[featmod.Problem]:
+    """`.goldstack/config.toml`에 닿는 티켓의 검증이 spec `verify`와 다르면 경고한다.
+    좁은 검증으로 병합된 설정이 전체 시험을 깬 채 뒤 티켓을 연쇄로 떨어뜨리는 일을 막는다.
+    `verify_ticket`을 물려받는 경우도 포함한다. 다른 설정 형식은 보지 않는다."""
+    if feat.spec is None:
+        return []
+    problems = []
+    for tid in sorted(scope):
+        ticket = feat.tickets[tid]
+        verify = feat.spec.verify_for(ticket)
+        if verify == feat.spec.verify:
+            continue
+        hit = next((t for t in ticket.touches if _touches_overlap(t, config.CONFIG_PATH) is not None), None)
+        if hit is not None:
+            problems.append(featmod.Problem(
+                "경고", "",
+                f"{tid}의 touches `{hit}`가 {config.CONFIG_PATH}에 닿는데 검증이 spec `verify`와 다르다. "
+                "설정을 고치는 티켓은 `전체`(spec `verify`)를 쓴다"))
+    return problems
+
+
 def environment_problems(repo: Path, cfg: config.Config, feat: featmod.Feature,
                          scope: dict[str, list[str]]) -> list[featmod.Problem]:
     required = {"git", "gh", "claude"}  # judge·보고서·실패 요약은 티켓 모델과 무관하게 claude를 쓴다
@@ -265,6 +286,7 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
                 "경고", config.CONFIG_PATH,
                 f"`tiers.{family}` 표가 없다. 모델·effort가 사용자 설정을 따른다"))
     feat.problems.extend(touches_problems(feat, full_graph, g))
+    feat.problems.extend(config_verify_problems(feat, g))
     feat.problems.extend(agy_problems(cfg, feat, g))
     feat.problems.extend(environment_problems(repo, cfg, feat, g))
     lines.append("순서: " + " ".join(graph.topo_order(g)))

@@ -552,7 +552,7 @@ max_calls_per_run = 3
 
 ## 리뷰와 재리뷰
 
-worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보고, 판단 모델이 지적마다 `fix`(고친다)·`report`(보고만)를 정한다. 리뷰어는 전체 시험 대신 지적을 확인할 좁은 재현만 돌린다. `fix`가 있으면 이렇게 간다. `verify`는 마지막에 한 번 돈다.
+worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보고, 판단 모델이 지적마다 `fix`(고친다)·`report`(보고만)를 정한다. codex·agy 리뷰어는 전체 시험 대신 지적을 확인할 좁은 재현만 돌린다. Claude 리뷰어는 명령을 돌리지 못하니(`--tools Read,Grep,Glob`) 코드 인용을 근거로 대고, 실행하지 않은 판정은 "코드 추적"이라고 밝힌다. `fix`가 있으면 이렇게 간다. `verify`는 마지막에 한 번 돈다.
 
 1. **수정** — 같은 구현 모델의 수정 worker가 같은 브랜치에서 `fix` 지적을 고치고 커밋한다.
 2. **재리뷰** — 지적을 낸 리뷰어가 수정 커밋의 diff만 다시 본다: 지적마다 고쳐졌는가(근거와 함께), 수정이 새로 만든 문제가 있는가. `second_reviewer`까지 둘 다 지적했으면 동시에 각자 자기 지적을, 한쪽만 냈으면 그쪽만 본다. 한 번의 상한은 `timeouts.rereview_minutes`(기본 10분)다.
@@ -1104,11 +1104,11 @@ Claude가 놓친 맥락부터 짧게 깔고, 짧은 문장으로, 약어와 자�
 ```
 agy로 로그 7개 요약(한도 1회, gs 상한에는 안 셈)
 ```
-그리고 레포 루트에서 한 번만 부른다(`--sandbox`라 읽기 전용, 모델은 `gs config models.agy`):
+그리고 레포 루트에서 한 번만 부른다(권한 플래그 없이 부른다. 헤드리스 `-p`가 쓰기와 셸을 자동 거부한다. 모델은 `gs config models.agy`):
 ```
-agy -p "<프롬프트>" --sandbox --dangerously-skip-permissions --disable-slash-commands --model "$model"
+agy -p "<프롬프트>" --sandbox --disable-slash-commands --model "$model"
 ```
-먼저 `gs retro-log csv-export`가 `.goldstack/work/csv-export/run/retro-log.md` 하나를 쓰고 그 경로를 출력한다. 티켓·시도별로 읽기 쉽게 바꾼 로그, 리뷰 답, `state.json`의 단계 시각이 들어 있고, 실패한 시도에는 오류 줄을 더한다. 약 21만 자(약 8만 토큰)를 넘으면 실패한 시도를 먼저 남기고 나머지를 줄이며 줄였다고 파일에 적는다. `run/`이 없으면(다른 머신에서 돌린 feature) 그렇다고 말하고 0이 아닌 코드로 끝난다. agy에는 이 파일 하나만 주고 근거는 그 파일의 줄 번호로 받는다. 티켓·시도별 실패 이유, 재시도 횟수, 반복된 리뷰 지적, 오래 걸린 단계를 요약하게 한다. Claude는 그 요약과 `report.md`·`state.json`으로 후보를 정하고, 근거로 인용할 곳만 원본 로그를 직접 연다. agy가 없거나 실패하면(종료 코드, 빈 답) 다시 부르지 않고 그렇다고 한 줄 말한 뒤 로그마다 끝부분과 오류 줄을 직접 읽는다. 200KB 미만이면 agy를 부르지 않는다. 이 호출은 gs가 아니라 skill이 부르므로 [`[agy] max_calls_per_run`](#agy-max_calls_per_run--gemini-호출-상한)에 세지 않는다.
+먼저 `gs retro-log csv-export`가 `.goldstack/work/csv-export/run/retro-log.md` 하나를 쓰고 그 경로를 출력한다. 티켓·시도별로 읽기 쉽게 바꾼 로그, 리뷰 답, `state.json`의 단계 시각이 들어 있고, 실패한 시도에는 오류 줄을 더한다. 약 21만 자(약 8만 토큰)를 넘으면 실패한 시도를 먼저 남기고 나머지를 줄이며 줄였다고 파일에 적는다. `run/`이 없으면(다른 머신에서 돌린 feature) 그렇다고 말하고 0이 아닌 코드로 끝난다. agy에는 이 파일 하나만 주고 근거는 그 파일의 줄 번호로 받는다. 티켓·시도별 실패 이유, 재시도 횟수, 반복된 리뷰 지적, 오래 걸린 단계를 요약하게 한다. Claude는 그 요약과 `report.md`·`state.json`으로 후보를 정하고, 근거로 인용할 곳만 원본 로그를 직접 연다. agy가 없거나 실패하면(종료 코드, 빈 답, `no output produced`를 담은 답. 앞뒤 문구가 붙어도 해당한다) 다시 부르지 않고 그렇다고 한 줄 말한 뒤 로그마다 끝부분과 오류 줄을 직접 읽는다. 200KB 미만이면 agy를 부르지 않는다. 이 호출은 gs가 아니라 skill이 부르므로 [`[agy] max_calls_per_run`](#agy-max_calls_per_run--gemini-호출-상한)에 세지 않는다.
 길 찾기, 자동 검사, 리뷰 기준, `CLAUDE.md`·`AGENTS.md`, 도구 비용, 효과 없는 지시, goldstack 자체(`gs`, skill, spec·티켓 형식), 정보 접근 범주로 고칠 후보를 심각한 순으로 보인다. 후보마다 본 근거와 고칠 곳이 붙고, 다른 feature에도 있던 실패면 `[반복]`이 붙는다. **사람이 고르기 전에는 아무 파일도 바꾸지 않는다.** feature 회고면 고른 후보를 `/idea` 형식으로 `.goldstack/ideas/`에 쓰고(`source: /retro csv-export`), 세션 회고면 고른 것만 고치고 사람이 원하는 후보만 아이디어 함에 적는다.
 
 ### `/writing-for-agents` — agent가 읽는 문서를 쓸 때(사용자 호출)
