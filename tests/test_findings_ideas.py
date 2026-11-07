@@ -151,10 +151,8 @@ class WriteTest(Unit):
         self.ts.review = {"findings": [finding("앞 시도의 지적")]}
         self.write()
         self.ts.review = {"findings": [finding("새 시도의 지적")]}  # go._start는 재시도에서 기록을 비운다
-        self.assertEqual(self.write(), [IDEA.format("01-2"), IDEA.format("01-1")])  # 새 파일, 닫은 옛 파일
+        self.assertEqual(self.write(), [IDEA.format("01-2")])
         self.assertEqual(backlog.read_idea(self.idea("01-1")).summary, "앞 시도의 지적")
-        self.assertEqual(backlog.read_idea(self.idea("01-1")).status, "dropped")
-        self.assertEqual(backlog.read_idea(self.idea("01-2")).status, "open")
 
     def test_retry_with_same_finding_uses_its_file(self):
         self.ts.review = {"findings": [finding("같은 지적")]}
@@ -219,120 +217,6 @@ class WriteTest(Unit):
         self.assertLess(len(evidence), findings.EVIDENCE_LIMIT + 40)
         self.assertIn("ㄱ" * findings.EVIDENCE_LIMIT, evidence)
         self.assertNotIn("ㄱ" * (findings.EVIDENCE_LIMIT + 1), evidence)
-
-
-class RetryTest(Unit):
-    """spec 2-6: 재시도가 병합되면 옛 시도의 open 파일을 dropped로 닫는다."""
-
-    def retry(self, old="옛 시도", new="새 시도"):
-        self.ts.review = {"findings": [finding(old)]}
-        self.write()
-        self.ts.review = {"findings": [finding(new, location="b.py:9")]}  # go._start는 재시도에서 기록을 비운다
-
-    def raw(self, tail):
-        return self.idea(tail).read_bytes()
-
-    def test_open_file_of_dropped_attempt_is_closed_with_a_note(self):
-        self.retry()
-        before = self.raw("01-1")
-        self.assertEqual(self.write(), [IDEA.format("01-2"), IDEA.format("01-1")])
-        text = self.raw("01-1").decode()
-        self.assertEqual(text, before.decode().replace('status: "open"', 'status: "dropped"') + findings.REPLACED_NOTE + "\n")
-        self.assertEqual(backlog.read_idea(self.idea("01-2")).status, "open")
-        self.assertIn(IDEA.format("01-1"), sh(self.repo, "git", "diff", "--cached", "--name-only"))
-
-    def test_rerun_gives_the_same_result(self):
-        self.retry()
-        self.write()
-        after = {n: self.raw(n) for n in ("01-1", "01-2")}
-        self.reload()
-        self.assertEqual(self.write(), [])
-        self.assertEqual({n: self.raw(n) for n in ("01-1", "01-2")}, after)
-
-    def test_taken_dropped_and_numbered_files_stay_byte_for_byte(self):
-        self.ts.review = {"findings": [finding("하나"), finding("둘", location="b.py:1", number=2),
-                                       finding("셋", location="c.py:1", number=3)]}
-        self.write()
-        self.idea("01-1").write_bytes(HUMAN.encode())  # taken
-        self.idea("01-2").write_bytes(HUMAN.replace("taken", "dropped").encode())
-        self.ts.review = {"findings": [finding("셋", location="c.py:1", number=3)]}  # 3번은 지금 state에 있다
-        self.ts.review["findings"][0][findings.NUMBER] = 3
-        kept = {n: self.raw(n) for n in ("01-1", "01-2", "01-3")}
-        self.assertEqual(self.write(), [])
-        self.assertEqual({n: self.raw(n) for n in ("01-1", "01-2", "01-3")}, kept)
-
-    def test_unmerged_ticket_and_other_ticket_files_stay(self):
-        self.r.order = ["01", "02"]
-        other = self.r.st.ticket("02")
-        other.status = state.FAILED
-        other.review = {"findings": [finding("실패한 티켓")]}
-        self.write()
-        self.r.st.ticket("03").status = state.MERGED  # 범위 밖(r.order에 없음)
-        self.r.st.tickets["03"].review = {"findings": [finding("범위 밖")]}
-        self.r.order = ["01", "02", "03"]
-        self.write()
-        self.r.order = ["01", "02"]
-        other.review = {}
-        self.r.st.tickets["03"].review = {}
-        self.ts.review = {"findings": [finding("01의 지적")]}
-        self.write()
-        kept = {n: self.raw(n) for n in ("02-1", "03-1")}
-        self.assertEqual(self.write(), [])
-        self.assertEqual({n: self.raw(n) for n in ("02-1", "03-1")}, kept)
-        self.assertEqual(backlog.read_idea(self.idea("02-1")).status, "open")
-
-    def test_similar_ticket_names_do_not_mix(self):
-        self.r.order = ["A_1", "A-1"]
-        self.r.st.tickets.pop("01")
-        under, dash = self.r.st.ticket("A_1"), self.r.st.ticket("A-1")
-        under.status = dash.status = state.MERGED
-        under.review = {"findings": [finding("밑줄 옛 시도")]}
-        dash.review = {"findings": [finding("줄표 옛 시도", location="b.py:1")]}
-        self.write()
-        self.assertEqual(self.names(), ["demo-a-1-1", "demo-a-1-2"])
-        under.review = {"findings": [finding("밑줄 새 시도", location="c.py:1")]}  # 밑줄만 재시도
-        dash.status = state.FAILED
-        self.write()
-        statuses = {n: backlog.read_idea(self.idea(n)).status for n in ("a-1-1", "a-1-2", "a-1-3")}
-        owners = {n: backlog.read_idea(self.idea(n)).source for n in statuses}
-        dash_file = next(n for n in owners if owners[n] == "demo 리뷰 A-1")
-        self.assertEqual(statuses[dash_file], "open")  # 줄표 티켓은 병합되지 않았으니 그대로다
-        under_old = next(n for n in owners if owners[n] == "demo 리뷰 A_1" and "밑줄 옛" in backlog.read_idea(self.idea(n)).summary)
-        self.assertEqual(statuses[under_old], "dropped")
-
-    def test_other_feature_with_same_prefix_is_not_closed(self):
-        """feature demo-a의 티켓 1과 feature demo의 티켓 A_1은 파일 prefix(demo-a-1-)가 같다. source로 가른다."""
-        self.r.order = ["A_1"]
-        self.r.st.tickets.pop("01")
-        self.r.st.ticket("A_1").status = state.MERGED
-        foreign = self.idea("a-1-1")
-        foreign.parent.mkdir(parents=True, exist_ok=True)
-        foreign.write_text('---\ndate: "2026-11-05"\nseverity: "high"\nsource: "demo-a 리뷰 1"\nstatus: "open"\n'
-                           'feature: ""\n---\n다른 feature의 지적\n', encoding="utf-8")
-        sh(self.repo, "git", "add", "-A")
-        sh(self.repo, "git", "commit", "-qm", "다른 feature의 파일")
-        before = foreign.read_bytes()
-        self.assertEqual(self.write(), [])
-        self.assertEqual(foreign.read_bytes(), before)
-
-    def test_close_failure_only_warns_and_restores(self):
-        self.retry()
-        before = self.raw("01-1")
-        with mock.patch("gs.findings.git.run", side_effect=RuntimeError("add 실패")):
-            self.assertEqual(self.write(), [])
-        self.assertIn("■ 경고: 재시도로 대체된 지적 파일", self.warnings)
-        self.assertEqual(self.raw("01-1"), before)
-
-    def test_broken_file_only_warns(self):
-        self.retry()
-        self.idea("01-1").write_bytes(b"\xff\xfe not utf8")
-        self.assertEqual(self.write(), [IDEA.format("01-2")])
-        self.assertIn("■ 경고: 재시도로 대체된 지적 파일", self.warnings)
-
-    def test_paths_include_closed_files_so_verify_can_be_skipped(self):
-        self.retry()
-        self.write()
-        self.assertIn(IDEA.format("01-1"), findings.paths(self.r))
 
 
 class WriteFailureTest(Unit):
@@ -401,39 +285,6 @@ class CopyToBaseTest(Unit):
         self.assertEqual((wt / IDEA.format("01-1")).read_text(encoding="utf-8"), HUMAN)
         self.assertEqual((wt / IDEA.format("01-2")).read_bytes(), self.idea("01-2").read_bytes())
         self.assertFalse((wt / IDEA.format("01-3")).exists())
-
-
-class CopyToBaseRetryTest(Unit):
-    """copy_to_base와 함께 돌면 base 쪽도 같은 상태가 된다."""
-
-    base = CopyToBaseTest.base
-
-    def test_base_open_file_of_dropped_attempt_is_closed_like_integration(self):
-        self.ts.review = {"findings": [finding("옛 시도")]}
-        self.write()
-        wt = self.base()
-        (wt / ".goldstack/ideas").mkdir(parents=True)
-        (wt / IDEA.format("01-1")).write_bytes(self.idea("01-1").read_bytes())  # feature PR로 이미 base에 있다
-        self.ts.review = {"findings": [finding("새 시도", location="b.py:9")]}
-        self.write()
-        copied = findings.copy_to_base(self.r, wt)
-        self.assertEqual(copied, [IDEA.format("01-2"), IDEA.format("01-1")])
-        self.assertEqual((wt / IDEA.format("01-1")).read_bytes(), self.idea("01-1").read_bytes())
-        self.assertEqual((wt / IDEA.format("01-2")).read_bytes(), self.idea("01-2").read_bytes())
-        self.assertEqual(findings.copy_to_base(self.r, wt), [])  # 두 번째는 달라질 것이 없다
-        self.assertEqual((wt / IDEA.format("01-1")).read_bytes(), self.idea("01-1").read_bytes())
-
-    def test_base_taken_file_and_missing_file_stay(self):
-        self.ts.review = {"findings": [finding("옛 시도")]}
-        self.write()
-        self.ts.review = {"findings": [finding("새 시도", location="b.py:9")]}
-        self.write()
-        wt = self.base()
-        (wt / ".goldstack/ideas").mkdir(parents=True)
-        (wt / IDEA.format("01-1")).write_text(HUMAN, encoding="utf-8")
-        copied = findings.copy_to_base(self.r, wt)
-        self.assertEqual(copied, [IDEA.format("01-2")])  # 닫힌 옛 파일이 base에 없으면 옮기지 않는다
-        self.assertEqual((wt / IDEA.format("01-1")).read_text(encoding="utf-8"), HUMAN)
 
 
 class OldStateTest(Unit):

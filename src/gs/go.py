@@ -9,15 +9,11 @@ worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰�
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
 worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 보고, 그 지적을 낸 리뷰어도 부른다.
 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
-순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(통과할 때 한 번, 실패하면 아래 수리 뒤 한 번 더, 끊기면 바로 한 번 더) → 병합.
+순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(통과할 때 한 번, 실패하면 아래 수리 뒤 한 번 더) → 병합.
 티켓 검증이 실패하면(_verify_failed) 시도 하나에 한 번 새 시도 대신 수리 worker가 같은 브랜치·worktree에서 돈다(_start_repair, brief에 verify.log 경로, 단계 repair).
 커밋을 남기면 수리 diff를 tiers.rereview 등급으로 재리뷰하고(_repair_review, 지적은 보고만) 다시 병합·검증한다. 커밋이 없거나, 수리 worker가 실패해 그 수정을 버렸거나, 띄우지 못했으면 재리뷰 없이 바로 다시 검증한다(불안정한 시험이면 여기서 통과한다).
 다시 검증도 실패하면 그때 _fail로 간다: 실패는 시도마다 한 번만 센다. 병합 충돌, 검증 시간 초과, 검증하는 동안 integration이 바뀐 것은 수리하지 않고 바로 _fail이다.
 수리는 검증 실패부터 다시 검증까지 network_resume의 repair(REPAIR_*)로 이어 간다: 어디서 gs가 죽거나 끊겨도 다음 gs go가 그 지점부터 같은 worktree에서 잇는다. 옛 state에는 이 값이 없고 수리하지 않은 티켓처럼 읽는다.
-티켓 검증이 끊기면(verify.Result.interrupted: 신호로 죽은 것처럼 보인다) 코드 결함으로 보지 않고 수리 worker 없이 같은 트리로 한 번 다시 검증한다(_verify_interrupted). 수리 뒤의 검증이 끊겨도 같다.
-다시 검증이 통과하면 병합, 끊김이 아닌 실패면 일반 실패처럼 수리, 또 끊기면 _fail이다. 시간 초과, 병합 충돌, 검증하는 동안 integration이 바뀐 것의 처리는 끊김이어도 그대로다.
-다시 검증은 network_resume의 verify_again으로 이어 간다: 어디서 gs가 죽어도 다음 gs go가 다시 검증부터 하고, 그 검증이 끊기면 실패다. 옛 state에는 이 값이 없고 끊기지 않은 것으로 읽는다.
-로그는 첫 검증의 verify.log에 이어 쓴다. `gs go` 출력과 티켓 결과의 이유에 `검증 끊김`이 나오고, 보고서의 검증별 측정 표에는 끊긴 검증의 라벨이 `-끊김`으로 끝난다.
 수리 worker의 agy 상한은 수정 worker와 같다: 닿으면 띄우지 않고 티켓을 실패시키지 않고 다음 단계(다시 검증)로 간다.
 끝난 worker 처리는 단계로 나뉜다: 결과 확인(_finish, _check_worker) → 리뷰(_review_stage)와 수정 worker 판단(_next_fix) → catch-up·병합·검증(_merge_stage).
 리뷰 단계는 제너레이터다: 루프 스레드에서 돌다가 호출에서 멈추고, 호출이 끝나면 _review_tick이 결과를 넣어 잇는다.
@@ -333,7 +329,7 @@ def _begin(r: Run) -> None:
     """state.json을 읽어 이번 실행을 시작한다. 지난 실행이 죽어 running으로 남은 티켓은 실패로 세지 않는다.
 
     리뷰 단계에서 죽었으면(network_resume의 done) worker는 끝났으니 시도로 세고 다음 _start가 리뷰부터 다시 한다.
-    수리 중에 죽었으면(network_resume의 repair) 같은 시도이니 시도 수를 그대로 두고 다음 _start가 그 지점부터 잇는다. 끊긴 검증의 다시 검증(verify_again)도 같다.
+    수리 중에 죽었으면(network_resume의 repair) 같은 시도이니 시도 수를 그대로 두고 다음 _start가 그 지점부터 잇는다.
     표시가 없는 옛 state는 전처럼 새로 시작한다.
     """
     st = state.load(r.rundir, r.name)
@@ -358,8 +354,7 @@ def _begin(r: Run) -> None:
         if ts.status == state.RUNNING:
             done, repair = ts.network_resume.get("done"), ts.network_resume.get("repair")
             say(f"[{tid}] 지난 실행이 중간에 끝나 running으로 남았다. 실패로 세지 않고 "
-                + ("끊긴 검증을 같은 worktree에서 다시 한다" if ts.network_resume.get("verify_again") else
-                   "수리를 같은 worktree에서 잇는다" if repair else "리뷰부터 다시 한다" if done else "새로 시작한다"))
+                + ("수리를 같은 worktree에서 잇는다" if repair else "리뷰부터 다시 한다" if done else "새로 시작한다"))
             _stop_previous(tid, ts)
             if not done and not repair:
                 ts.attempts = max(0, ts.attempts - 1)
@@ -1084,15 +1079,12 @@ def _stop_reviews(r: Run) -> None:
             rv.flow = None
 
 
-def _mark_resume(r: Run, a: Active, *, done: bool = False, verify_again: bool = False) -> None:
-    """이 worker를 다음에 같은 worktree에서 잇도록 state에 남긴다. done이면 worker는 끝났고 리뷰부터 하면 된다. 수리 중이면 어디까지 왔는지(repair)도, 리뷰 대상이 있으면 그 SHA(target)도, 대조의 한 번 더를 썼으면 그것(reviewed_again)도 남긴다.
-
-    verify_again은 끊긴 검증의 다시 검증 차례라는 표시다(_verify_interrupted). 넘기지 않으면 지워진다: 수리나 재리뷰로 가는 표시를 쓰면 그 뒤의 검증은 새 검증이다.
-    """
+def _mark_resume(r: Run, a: Active, *, done: bool = False) -> None:
+    """이 worker를 다음에 같은 worktree에서 잇도록 state에 남긴다. done이면 worker는 끝났고 리뷰부터 하면 된다. 수리 중이면 어디까지 왔는지(repair)도, 리뷰 대상이 있으면 그 SHA(target)도, 대조의 한 번 더를 썼으면 그것(reviewed_again)도 남긴다."""
     r.st.ticket(a.t.id).network_resume = {
         "branch": a.branch, "worktree": str(a.wt.resolve()), "base": a.base, "fix": a.fix, "done": done,
         "rundir": str(a.proc.job.rundir), **({"repair": a.repair} if a.repair else {}), **({"target": a.target} if a.target else {}),
-        **({"reviewed_again": True} if a.reviewed_again else {}), **({"verify_again": True} if verify_again else {})}
+        **({"reviewed_again": True} if a.reviewed_again else {})}
     r.save()
 
 
@@ -1303,9 +1295,8 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     worker가 끝나 있으면(done) 프로세스 없이 리뷰부터 잇는다. 새 시도 디렉터리를 쓰므로 지난 로그는 남고 base는 처음 그대로라
     앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정으로 처리한다(수정 전 구현을 병합·검증한다).
     수리(repair)도 수정과 같다: 도중이면 같은 worktree에 다시 띄우고, 띄우지 못하면 실패한 수리로 처리한다(수리 전 브랜치를 다시 검증한다). 시도 수를 올리지 않는다.
-    수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish). 끊긴 검증의 다시 검증 차례(verify_again)도 그렇다.
+    수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish).
     대조의 한 번 더를 썼으면(reviewed_again) 그대로 잇는다: 옛 state의 표시에는 없고 False다. 끝나지 않은 대조는 _finish가 잇는다.
-    다시 띄우는 수정 worker의 brief도 처음과 같이 지적에 티켓 touches와 설명 확인 문장(review.fix_brief)을 붙인다.
     다시 띄우지 못한 수정·수리의 자리는 새 실행 디렉터리를 쓴다: 결함 수집은 실패 이유를 옆의 worker.log와 함께 읽는데, 지난 디렉터리의 로그는 이 대기를 일으킨 일시 오류라 이유까지 걸러 낸다.
     """
     ts = r.st.ticket(t.id)
@@ -1328,9 +1319,6 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         return None
 
     if mark.get("done"):
-        if mark.get("verify_again"):
-            say(f"[{t.id}] 지난 검증이 끊겼다. 같은 worktree에서 다시 검증부터 잇는다({wt})")
-            return replace(stand_in(0), review_done=True)
         if repair in (REPAIR_SEAT, REPAIR_VERIFY):
             say(f"[{t.id}] 지난 수리를 같은 worktree에서 잇는다: " + ("수리 worker부터" if repair == REPAIR_SEAT else "다시 검증부터") + f"({wt})")
             return replace(stand_in(0), review_done=True)
@@ -1362,7 +1350,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True)
         if nth or repair:
             with job.brief.open("a", encoding="utf-8") as f:
-                f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth, t.touches))
+                f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
@@ -1461,11 +1449,11 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
     그 뒤는 _review_tick이 맡는다: 리뷰(재리뷰)가 티켓 head까지 닿으면(_review_to_head, 병합 전 대조가 거기 있다. 기다린 뒤의 대조는 _leave_review, 병합 직전의 대조는 _merge_stage) 고칠 지적이 있으면 수정 worker(최대 2회), 없으면 병합·검증이다.
     지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review). 빈 diff에서 판정을 유지한 재리뷰(_verdict_kept)처럼 수정을 더 띄우지 않던 티켓은 여기서도 띄우지 않는다.
     대조의 한 번 더가 끝나기 전에 멈춘 티켓(reviewed_again)은 worker 결과를 다시 보지 않고 그 한 번을 잇는다(_review_again): 합쳐 한 번이고 끝나면 대조 기록이 남는다. 새로 띄운 worker의 Active는 이 값이 False다.
-    수리 worker도 여기로 온다: 커밋을 남겼으면 재리뷰, 아니면 바로 다시 병합·검증이다(_end_repair). 수리 자리를 기다리던 티켓과 다시 검증 차례인 티켓(수리 뒤, 끊긴 검증 뒤)은 그 자리로 돌아간다(_resume, _start_repair).
+    수리 worker도 여기로 온다: 커밋을 남겼으면 재리뷰, 아니면 바로 다시 병합·검증이다(_end_repair). 수리 자리를 기다리던 티켓과 다시 검증 차례인 티켓은 그 자리로 돌아간다(_resume, _start_repair).
     오류는 _loop가 처리한다.
     """
     if a.review_done:
-        if a.repair == REPAIR_VERIFY or _verifying_again(r, a.t.id):
+        if a.repair == REPAIR_VERIFY:
             return _merge_stage(r, a)
         # 수정은 티켓당 최대 2회다. 수리 뒤와 버린 수정 뒤에는 고치지 않는다
         todo = [] if a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) or _verdict_kept(r, a.t, a.fix) else _todo(r, a.t, a.fix + 1)
@@ -1571,8 +1559,7 @@ def _merge_stage(r: Run, a: Active) -> None:
     catch-up이 합친 커밋은 늦은 커밋이 아니다(_is_catch_up). 리뷰 대상이 그 커밋으로 옮겨 간다.
     a.target이 없으면 옛 state의 표시로 이은 것이다. 리뷰 기록으로 대조할 SHA를 정한다(_old_target). 리뷰 없이 verify만으로 가는 티켓도 대상은 리뷰하려던 head다.
     검증 실패는 _verify_failed가 받는다: 이 시도의 첫 실패면 수리로 보낸다. 병합 충돌, 시간 초과, 검증하는 동안 integration이 바뀐 것은 바로 티켓 실패다.
-    검증이 떨어지면서 integration도 바뀌었으면 브랜치의 결함인지 모르니 수리하지 않는다. 끊겼어도 그렇다.
-    끊긴 검증은 _verify_interrupted가 받는다: 트리를 되돌리고 여기로 다시 와 같은 SHA를 병합해 한 번 더 검증한다. 그 사이 브랜치가 움직였으면 맨 앞의 대조가 재리뷰로 보낸다.
+    검증이 떨어지면서 integration도 바뀌었으면 브랜치의 결함인지 모르니 수리하지 않는다.
     """
     t = a.t
     head = git.sha(r.repo, a.branch)
@@ -1610,9 +1597,7 @@ def _merge_stage(r: Run, a: Active) -> None:
     if not res.ok:
         _reset_integration(r, r.ihead)
         reason = f"검증 실패(로그 {log})"
-        if moved:
-            return _fail_worker(r, a, reason)
-        return _verify_interrupted(r, a, res.code, log) if res.interrupted else _verify_failed(r, a, reason, log)
+        return _fail_worker(r, a, reason) if moved else _verify_failed(r, a, reason, log)
     if moved:
         _reset_integration(r, r.ihead)
         return _fail_worker(r, a, "검증하는 동안 integration이 바뀌었다(되돌림): 검증한 것과 커밋할 것이 다르다")
@@ -1636,8 +1621,7 @@ def _merge_stage(r: Run, a: Active) -> None:
     a.proc.finish(True)
     _reopen_finished(r)  # 아래 _set이 merged와 함께 저장한다: 어느 지점에서 죽어도 "merged인데 끝난 마무리"가 남지 않는다
     state.close_repair(r.st.ticket(t.id), state.REPAIR_PASSED)
-    passed = f"검증 끊김 뒤 다시 검증 통과(로그 {log})" if _verifying_again(r, t.id) else ""  # 보고서의 티켓 결과에 끊김이 남는다
-    _set(r, t.id, status=state.MERGED, ended_at=state.now(), reason=passed, network_resume={})
+    _set(r, t.id, status=state.MERGED, ended_at=state.now(), reason="", network_resume={})
     say(f"[{t.id}] 검증 통과 → integration 병합")
     _cleanup_merged(r, t.id)
 
@@ -2007,7 +1991,7 @@ def _attempt_dir(a: Active) -> Path:
 
 
 def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Active | None:
-    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적과 티켓 touches·그중 시험 파일을 돌리라는 문장 첨부). 띄우지 못하면 None.
+    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적 첨부). 띄우지 못하면 None.
 
     띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 리뷰한 구현을 병합·검증한다.
     수정의 기준은 지금 리뷰 대상이다. 브랜치가 그 위로 움직였으면(못 본 늦은 커밋, _note_unseen) 수정이 그 위에 쌓이니 재리뷰 diff에 함께 든다. 수정이 실패하면 함께 버린다(_end_fix).
@@ -2026,7 +2010,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         job.rundir.mkdir(parents=True)
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
-            f.write(review.fix_brief(todo, nth, t.touches))
+            f.write(review.fix_brief(todo, nth))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
@@ -2113,27 +2097,6 @@ def _mark_fixes(r: Run, t: Ticket, nth: int, result: str, reason: str = "") -> N
             if reason:
                 f["fix_reason"] = reason
     r.save()
-
-
-def _verifying_again(r: Run, tid: str) -> bool:
-    """이번 검증이 끊긴 검증의 다시 검증인가(network_resume의 verify_again). 옛 state에는 없고 아니라고 읽는다."""
-    return bool(r.st.ticket(tid).network_resume.get("verify_again"))
-
-
-def _verify_interrupted(r: Run, a: Active, code: int, log: Path) -> None:
-    """티켓 검증이 끊겼다(verify.Result.interrupted). 다른 프로세스가 죽였을 수 있으니 코드 결함으로 보지 않는다: 수리 worker를 띄우지 않고 같은 트리로 한 번 다시 검증한다. 이미 다시 검증이었으면 티켓 실패다.
-
-    다시 검증의 판정은 여느 검증과 같다(_merge_stage): 통과하면 병합, 끊김이 아닌 실패면 _verify_failed로 수리, 시간 초과와 integration 변경은 바로 실패다.
-    표시를 먼저 남긴다: 다시 검증 중 어디서 gs가 죽어도 다음 gs go가 구현·리뷰를 다시 하지 않고 다시 검증부터 잇고, 그 검증이 끊기면 실패다. _verify_failed와 _late_commit이 표시를 새로 쓰면 지워진다: 그 뒤의 검증은 다른 트리의 새 검증이다.
-    끊긴 뒤 남은 파일은 _merge_stage가 이미 되돌렸다.
-    """
-    t = a.t
-    why = f"검증 끊김(종료 코드 {code}, 로그 {log})"
-    if _verifying_again(r, t.id):
-        return _fail_worker(r, a, f"{why}: 다시 검증도 끊겼다")
-    _mark_resume(r, a, done=True, verify_again=True)
-    say(f"[{t.id}] {why} → 수리 없이 같은 트리로 한 번 다시 검증한다")
-    _merge_stage(r, a)
 
 
 def _verify_failed(r: Run, a: Active, reason: str, log: Path) -> None:
@@ -2562,19 +2525,17 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
     """티켓 검증은 명령과 상관없이 커밋될 트리, 곧 integration의 미완 병합에서 돈다(티켓 worktree의 커밋 안 된 파일은 못 본다).
 
     (결과, 로그, 트리가 바뀌었나). 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
-    더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 수리 뒤의 다시 검증은 측정 라벨이 따로다.
-    끊긴 검증의 다시 검증은 로그를 덮지 않고 이어 쓴다: 끊긴 증거가 남고, 수리 worker도 같은 파일을 받는다. 끊긴 검증이 남긴 파일은 트리 변경으로 보지 않고(되돌린다) 측정 라벨 끝이 `-끊김`이다."""
+    더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 수리 뒤의 다시 검증은 측정 라벨이 따로다."""
     log = Path(r.st.ticket(t.id).log).parent / "verify.log"
-    again = _verifying_again(r, t.id)
     spec = r.feat.spec
     command = spec.verify_for(t)
     before = _merge_state(r)
     say(f"[{t.id}] 검증: {command}")
-    with log.open("a" if again else "w", encoding="utf-8") as f:
-        f.write(("\n끊긴 검증을 같은 트리로 다시 돌린다\n" if again else "") + f"$ {command}\ncwd: {r.iwt}\n")
+    with log.open("w", encoding="utf-8") as f:
+        f.write(f"$ {command}\ncwd: {r.iwt}\n")
         res = verify.run(replace(spec, verify=command), r.iwt, f)
         after = _merge_state(r)
-        changed = not res.timed_out and not res.interrupted and (after != before or not setup.is_clean(r.iwt, staged_ok=True))
+        changed = not res.timed_out and (after != before or not setup.is_clean(r.iwt, staged_ok=True))
         if changed:
             f.write("\n검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
             _log_changes(r, f, before, after)
@@ -2582,7 +2543,7 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
             verify.flaky(res, f"ticket-{t.id}", f)
     if res.timed_out:
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
-    label = f"ticket-{t.id}" + ("-repair" if state.open_repair(r.st.ticket(t.id)) else "") + ("-끊김" if res.interrupted else "")
+    label = f"ticket-{t.id}" + ("-repair" if state.open_repair(r.st.ticket(t.id)) else "")
     ts = r.st.ticket(t.id)
     metrics.validation(r, label, command, before[0], res, changed, tree_sha=before[3], ticket_head=before[2],
                        ticket_attempt=ts.phases[-1]["attempt"] if ts.phases else ts.attempts)

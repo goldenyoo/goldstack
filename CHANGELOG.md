@@ -1,19 +1,5 @@
 # CHANGELOG
 
-## 0.2.5 — 2026-11-07
-
-### goldstack-v21
-
-- 티켓 검증이 신호로 끊긴 것처럼 보이면(종료 코드 음수·128 초과, 또는 로그의 `xargs: … terminated with signal` 줄) 수리 worker 없이 같은 트리로 한 번 다시 검증한다. 또 끊기면 티켓 실패이고 끊김이 아닌 실패는 수리로 간다. 검증 로그마다 끝에 `종료 코드: <N>`이 남고 끊긴 검증의 측정 라벨은 `-끊김`으로 끝난다. 다시 검증 도중 gs가 죽어도 다음 `gs go`가 이어 간다. 마무리 검증은 그대로다.
-- 재시도가 병합되면 옛 시도의 `open` 지적 파일을 `dropped`로 닫는다(판단 모델 없음).
-- worker hook이 따옴표 없이 `=`로 시작하는 단어(`echo ===`, zsh `=` 확장으로 명령 묶음이 끊김)를 막는다. 일반 세션은 막지 않는다. `docs/guide.md`에 대화 세션용 `~/.zshenv`의 `setopt noequals`와 `=cmd` 확장에 미치는 영향을 적었다(Claude Code Bash 도구에서는 재지 않았다).
-- `gs check`가 `.goldstack/config.toml`을 고치는 티켓의 좁은 검증을 경고한다. grill의 spec 템플릿에도 규칙이 있다.
-- `gs overnight arm`의 표시를 낡은 프로세스 목록으로 지우지 않는다(`ps`를 다시 읽은 뒤에도 없을 때만).
-- 수정 worker brief에 티켓 `touches`와 그중 시험 파일을 돌리라는 문장, 새 동작 설명은 코드를 확인하고 쓰라는 문장이 붙는다. worker 지시문과 티켓 템플릿에 "동작을 지우면 실패하는 시험"을 넣었고, 판단 프롬프트는 명세가 요구하지 않은 단언 약화를 심각도와 상관없이 `fix`로 분류한다. Claude 리뷰어는 코드 인용을 근거로 내고 실행하지 않은 판정은 "코드 추적"이라고 밝힌다(명령 권한은 없다).
-- `/retro`의 agy 호출에서 `--dangerously-skip-permissions`를 뺐다.
-- skill 단어 상한을 `overnight` 1880, `go` 580으로 올렸고 `tests/test_overnight_skill.py`를 `tests/test_skill_overnight.py`로 옮겼다.
-- 버전을 `0.2.5`로 올렸다(태그·릴리스는 만들지 않았다).
-
 ## 0.2.4 — 2026-11-06
 
 ### goldstack-v20

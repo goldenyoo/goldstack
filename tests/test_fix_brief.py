@@ -95,14 +95,6 @@ class FixBriefTest(unittest.TestCase):
                     self.assertIn("복구한 뒤 커밋", text)
                     self.assertIn("문서 티켓에는 해당하지 않는다", text)
 
-    def test_every_worker_brief_asks_for_tests_that_fail_without_the_behavior(self):
-        for model in ("claude", "codex", "agy"):
-            for name, text in self.briefs(model=model).items():
-                with self.subTest(model=model, brief=name):
-                    self.assertIn(worker.REAL_TEST_RULE, text)
-                    self.assertIn("완료 조건의 동작을 지우면 실패하도록", text)
-                    self.assertIn("기존 단언을 약하게 만들거나 지우지 않는다", text)
-
     def test_every_worker_brief_tells_to_handle_only_own_processes(self):
         for model in ("claude", "codex", "agy"):
             for ticket_verify in (None, "fast"):
@@ -125,72 +117,6 @@ class FixBriefTest(unittest.TestCase):
                 text = self.briefs(model=model)["resumed"]
                 self.assertIn(NARROW_RULE.format(v="full"), text)
                 self.assertIn(worker.NETWORK_RESUME, text)
-
-
-class FixBriefTouchesTest(unittest.TestCase):
-    """수정 worker brief는 티켓 touches와 그중 시험 파일을 돌리라는 문장, 설명 확인 문장을 담는다(goldstack-v21 02)."""
-
-    TOUCHES = ["src/gs/review.py", "tests/test_fix_brief.py", "docs/guide.md"]
-
-    def test_touches_and_test_sentence(self):
-        for nth in (1, 2):
-            with self.subTest(nth=nth):
-                text = review.fix_brief([FINDING], nth, self.TOUCHES)
-                self.assertIn("이 티켓이 건드리는 파일(touches): `src/gs/review.py`, `tests/test_fix_brief.py`, `docs/guide.md`", text)
-                self.assertIn("그중 시험 파일 `tests/test_fix_brief.py`을 돌려 통과하는지 확인한다", text)
-                self.assertNotIn("시험 파일 `src/gs/review.py`", text)
-
-    def test_no_test_file_means_no_test_sentence(self):
-        text = review.fix_brief([FINDING], 1, ["src/gs/review.py", "docs/guide.md"])
-        self.assertIn("(touches): `src/gs/review.py`, `docs/guide.md`", text)
-        self.assertNotIn("시험 파일", text)
-        self.assertNotIn("돌려 통과하는지", text)
-
-    def test_no_touches_means_no_touches_lines(self):
-        for touches in (None, []):
-            with self.subTest(touches=touches):
-                text = review.fix_brief([FINDING], 1, touches)
-                self.assertNotIn("touches", text)
-                self.assertNotIn("시험 파일", text)
-
-    def test_second_fix_gets_touches_too(self):
-        text = review.fix_brief([FINDING], 2, self.TOUCHES)
-        self.assertIn("이번이 마지막 수정이다", text)
-        self.assertIn("그중 시험 파일 `tests/test_fix_brief.py`", text)
-
-    def test_explain_rule_in_every_fix_brief(self):
-        for nth in (1, 2):
-            for touches in (None, self.TOUCHES):
-                with self.subTest(nth=nth, touches=touches):
-                    text = review.fix_brief([FINDING], nth, touches)
-                    self.assertIn(review.EXPLAIN_RULE, text)
-                    self.assertIn("지적이 요구하지 않은 새 동작 설명(주석·docstring·문서)은 쓰지 않는다", text)
-                    self.assertIn("코드 줄을 읽어 사실인지 확인한 뒤에 쓴다", text)
-
-    def test_repair_brief_is_unchanged(self):
-        text = review.repair_brief("/x/verify.log")
-        self.assertNotIn("touches", text)
-        self.assertNotIn(review.EXPLAIN_RULE, text)
-
-    def test_is_test_path(self):
-        for path in ("tests/test_x.py", "tests/support.py", "test_x.py", "a/b_test.go", "hooks/register.test.tsx", "src/__tests__/a.ts"):
-            with self.subTest(path=path):
-                self.assertTrue(review.is_test_path(path))
-        for path in ("src/gs/review.py", "docs/guide.md", "src/latest.py", "src/contest/a.py"):
-            with self.subTest(path=path):
-                self.assertFalse(review.is_test_path(path))
-
-
-class FixBriefGoWiringTest(unittest.TestCase):
-    """go.py의 두 호출(_start_fix, 네트워크로 잇는 수정)이 둘 다 티켓 touches를 넘긴다."""
-
-    def test_both_calls_pass_touches(self):
-        import re
-        src = (Path(__file__).resolve().parent.parent / "src" / "gs" / "go.py").read_text(encoding="utf-8")
-        calls = re.findall(r"review\.fix_brief\(([^\n]*)\)", src)
-        self.assertEqual(len(calls), 2)
-        for call in calls:
-            self.assertIn("t.touches", call)
 
 
 if __name__ == "__main__":

@@ -32,9 +32,6 @@ PROFILE_REL = ".goldstack/profile.md"  # /adopt가 쓰는 레포 요약. brief�
 SEE_FAIL_RULE = (
     "- 버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다. "
     "복구한 뒤 커밋하고, 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다.")
-REAL_TEST_RULE = (
-    "- 시험은 완료 조건의 동작을 지우면 실패하도록 쓴다. 그 동작을 지워도 통과하는 시험은 쓰지 않는다. "
-    "기존 단언을 약하게 만들거나 지우지 않는다(티켓이 요구한 변경은 예외다).")
 MACHINE_RULE = (
     "- 다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 기다리고 끝낸다. "
     "이름이나 패턴으로 프로세스를 찾아 죽이지 않는다(`pkill`, `killall`).")
@@ -74,8 +71,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌리므로 worker는 고친 곳에 닿는 좁은 시험만 돌린다.
     같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없애려는 것이다. 티켓 `verify`가 좁아도 같다.
     모든 brief에 `MACHINE_RULE`도 붙는다: 다른 티켓이 같은 기계에서 함께 도니 자기가 띄운 프로세스만 PID로 다룬다.
-    어느 brief든 버그를 고치면 새 시험의 실패를 직접 보라는 규칙이 붙는다(`SEE_FAIL_RULE`).
-    시험은 완료 조건의 동작을 지우면 실패하게 쓰고 기존 단언을 약하게 하지 않는다는 규칙도 모든 brief에 붙는다(`REAL_TEST_RULE`)."""
+    어느 brief든 버그를 고치면 새 시험의 실패를 직접 보라는 규칙이 붙는다(`SEE_FAIL_RULE`)."""
     t = job.ticket
     verify = spec.verify_for(t)
     verify_rule = (
@@ -96,7 +92,6 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 - push, PR 생성, 병합은 하지 않는다. gs가 한다.
 {verify_rule}
 {SEE_FAIL_RULE}
-{REAL_TEST_RULE}
 {MACHINE_RULE}
 - sandbox에서 네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 검증 단계만 돌릴 수 없다면 실패로 보지 않는다. 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다. 돌릴 수 없던 단계와 이유를 마지막 메시지에 적고 변경을 커밋한다. gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.

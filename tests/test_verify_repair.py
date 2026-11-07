@@ -2,8 +2,6 @@
 
 가짜 worker는 brief로 수리 worker를 알아본다(`## 검증 실패(고칠 것)`). 수리 뒤 통과, 커밋 없는 재검증, 수리 뒤 실패의 새 시도,
 수리 중 재개(gs가 죽음, 네트워크), 수리하지 않는 실패, agy 상한, 옛 state를 끝까지 돌려 본다. 시간에 기대지 않고 파일 신호로 순서를 잡는다.
-
-goldstack-v21 04: 끊긴 검증은 수리 없이 한 번 다시 돈다(InterruptedTest, InterruptedResumeTest). 검증 스크립트가 실제 신호로 죽는다.
 """
 import json
 import os
@@ -28,12 +26,6 @@ GOOD = 'echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"'
 REPAIRS = 'git rm -q BROKEN; git commit -qm "repair $GS_TICKET"'
 USELESS = 'echo tried >> "repair_$GS_TICKET"; git add -A; git commit -qm "useless $GS_TICKET"'
 AFTER_HANG = 'rm -f "$here/hung"; ' + GOOD  # times_out_once_ready는 hung이 있는 동안 도는 명령을 시간 초과로 본다. 멈춘 검증 뒤에는 치운다
-# 검증이 끊기는 모양들(verify.Result.interrupted). 모두 실제 신호다
-TERM_SELF = "kill -TERM $$"  # 검증 스크립트가 신호로 죽는다
-KILL_CHILD = "sh -c 'kill -KILL $$'; exit $?"  # 자식이 신호로 죽어 137로 끝난다
-# xargs는 자식이 신호로 죽어도 1로 끝난다. 문구는 이 맥의 실측 값이다(test_verify.py)
-XARGS = "sh -c 'kill -TERM $$'; echo 'xargs: sleep: terminated with signal 15; aborting'; exit 1"
-NOTHING = ":"  # 이 검증은 끊기지 않는다: BROKEN이 있으면 실패, 없으면 통과다
 
 
 class Base(support.GoTest):
@@ -68,31 +60,6 @@ class Base(support.GoTest):
 
     def reviewers(self):
         return self.lines("review.calls")
-
-    def verifies(self, *runs):
-        """n번째 검증은 runs[n-1]을 돌고, 거기서 끝나지 않으면 `test ! -f BROKEN`이다. 넘어간 검증(마무리 포함)은 그 시험만 돈다."""
-        cases = "".join(f"  {n}) {run} ;;\n" for n, run in enumerate(runs, 1))
-        (self.bin / "verify.sh").write_text(f'here="{self.bin}"\nn=$(( $(cat "$here/verifies" 2>/dev/null || echo 0) + 1 )); echo $n > "$here/verifies"\n'
-                                            f'case $n in\n{cases}esac\ntest ! -f BROKEN\n')
-        self.parallel(1, verify=f"bash {self.bin / 'verify.sh'}")
-
-    def ticket_verifies(self, tid="01"):
-        """측정에 남은 티켓 검증(라벨, 결과). 보고서의 검증별 측정 표가 이것이다."""
-        rows = state.load(self.rundir, "demo").metrics["validations"]
-        return [(x["label"], x["result"]) for x in rows if x["label"].startswith(f"ticket-{tid}")]
-
-    def stop_at_verify(self, nth=2):
-        """nth번째 검증을 시작하기 전에 gs가 멈춘다."""
-        real, seen = go._verify, []
-
-        def stopping(r, t):
-            seen.append(t.id)
-            if len(seen) == nth:
-                raise KeyboardInterrupt
-            return real(r, t)
-
-        with mock.patch("gs.go._verify", side_effect=stopping), self.assertRaises(KeyboardInterrupt):
-            self.go("--only", "01")
 
 
 class RepairTest(Base):
@@ -451,18 +418,6 @@ class NotRepairedTest(Base):
         self.assert_no_repair()
         self.assertIn("검증하는 동안 integration이 바뀌었다", (self.rundir / "01/1/failure.log").read_text())
 
-    def test_integration_changed_during_interrupted_verify(self):
-        self.integration_moves(TERM_SELF)  # 끊겼어도 검증한 트리가 달라졌다: 다시 검증하지 않고 바로 실패다
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
-        self.assertEqual(self.calls(), ["01", "01"])
-        self.assert_no_repair()
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
-        self.assertIn(f"실패 이유: 검증 실패(로그 {self.rundir / '01/1/verify.log'})", (self.rundir / "01/1/failure.log").read_text())
-        self.assertNotIn("다시 검증한다", out)
-
     def test_integration_changed_during_failing_verify(self):
         self.integration_moves("exit 1")  # 브랜치의 결함인지 모른다
         code, out, err = self.go("--only", "01")
@@ -613,9 +568,21 @@ class ResumeTest(Base):
         self.assertEqual(self.calls(), ["01", "01"])
         self.assertEqual(self.reviewers(), ["codex", "codex"])  # 끝난 재리뷰를 다시 부르지 않는다
 
+    def stop_at_second_verify(self):
+        real, seen = go._verify, []
+
+        def stopping(r, t):
+            seen.append(t.id)
+            if len(seen) == 2:
+                raise KeyboardInterrupt
+            return real(r, t)
+
+        with mock.patch("gs.go._verify", side_effect=stopping), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+
     def test_stopped_during_verify_after_a_repair_commit(self):
         self.worker(BREAKS, REPAIRS)
-        self.stop_at_verify()
+        self.stop_at_second_verify()
         ts = self.ts()
         self.assertEqual((ts.network_resume["repair"], ts.network_resume["done"]), (go.REPAIR_VERIFY, True))
         code, out, err = self.go("--only", "01")
@@ -628,7 +595,7 @@ class ResumeTest(Base):
 
     def test_failure_after_resumed_verify_counts_once_and_does_not_repair_again(self):
         self.worker(BREAKS, USELESS, retry=GOOD)
-        self.stop_at_verify()
+        self.stop_at_second_verify()
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         ts = self.ts()
@@ -693,255 +660,6 @@ class OldStateTest(Base):
         self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
         self.assertEqual(self.calls(), ["01", "01"])  # 리뷰부터 이어 가고 첫 검증 실패는 수리한다
         self.assertEqual(ts.repairs[0]["result"], state.REPAIR_PASSED)
-
-
-class InterruptedTest(Base):
-    def assert_second_run_merges(self, run):
-        self.verifies(run)
-        self.worker(GOOD, REPAIRS)
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.network_resume, ts.repairs), ("merged", 1, 0, {}, []))
-        self.assertEqual(self.calls(), ["01"])  # 수리 worker도 새 시도도 없다
-        self.assertEqual(self.reviewers(), ["codex"])  # 재리뷰도 없다
-        self.assertEqual(self.phases(), ["worker", "review", "verify", "verify", "finish"])
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
-        self.assertIn("file_01", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
-        self.assertIn("수리 없이 같은 트리로 한 번 다시 검증한다", out)
-        self.assertFalse((self.rundir / "01/1/repair").exists())
-        return ts, out
-
-    def test_verify_killed_by_a_signal_is_verified_again_on_the_same_tree(self):
-        ts, out = self.assert_second_run_merges(TERM_SELF)
-        log = self.rundir / "01/1/verify.log"
-        self.assertIn(f"[01] 검증 끊김(종료 코드 ", out)
-        self.assertIn(f", 로그 {log}) → 수리 없이", out)
-        rows = [x for x in state.load(self.rundir, "demo").metrics["validations"] if x["label"].startswith("ticket-01")]
-        self.assertEqual(rows[0]["tree_sha"], rows[1]["tree_sha"])
-        self.assertEqual(rows[0]["ticket_head"], rows[1]["ticket_head"])
-        # 끊긴 증거를 덮지 않고 이어 쓴다. 로그 끝은 다시 검증의 종료 코드다
-        text = log.read_text()
-        self.assertEqual(text.count("종료 코드: "), 2, text)
-        self.assertIn("끊긴 검증을 같은 트리로 다시 돌린다\n$ bash", text)
-        self.assertTrue(text.endswith("\n종료 코드: 0\n"), text)
-
-    def test_report_and_status_say_it_was_interrupted(self):
-        ts, _ = self.assert_second_run_merges(TERM_SELF)
-        reason = f"검증 끊김 뒤 다시 검증 통과(로그 {self.rundir / '01/1/verify.log'})"
-        self.assertEqual(ts.reason, reason)
-        self.assertIn(reason, self.status("demo")[1])
-        text = self.final_report()
-        self.assertIn(f"| merged | {reason}", text)  # 티켓별 결과
-        self.assertIn("| ticket-01-끊김 | 1 | 1 |", text)  # 검증별 측정
-
-    def test_child_killed_by_a_signal(self):
-        _, out = self.assert_second_run_merges(KILL_CHILD)
-        self.assertIn("[01] 검증 끊김(종료 코드 137, ", out)
-
-    def test_xargs_line_with_exit_code_1(self):
-        _, out = self.assert_second_run_merges(XARGS)
-        self.assertIn("[01] 검증 끊김(종료 코드 1, ", out)
-
-    def test_files_the_interrupted_verify_left_do_not_fail_the_second_run(self):
-        self.assert_second_run_merges(f"touch stray_from_verify; {TERM_SELF}")
-        log = (self.rundir / "01/1/verify.log").read_text()
-        self.assertNotIn("검증 중 worktree가 바뀌었다", log)
-        self.assertNotIn("stray_from_verify", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
-
-    def test_ordinary_failure_on_the_second_run_goes_to_repair(self):
-        # 로그에 첫 실행의 xargs 줄이 남아 있어도 판단에 쓰지 않는다
-        self.verifies(XARGS)
-        self.worker(BREAKS, REPAIRS)
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
-        self.assertEqual(self.calls(), ["01", "01"])
-        self.assertEqual(self.phases(), ["worker", "review", "verify", "verify", "repair", "rereview", "verify", "finish"])
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01", "failed"), ("ticket-01-repair", "passed")])
-        [rec] = ts.repairs
-        log = self.rundir / "01/1/verify.log"
-        self.assertEqual((rec["verify_log"], rec["reason"], rec["result"]), (str(log), f"검증 실패(로그 {log})", state.REPAIR_PASSED))
-        self.assertIn("terminated with signal 15", log.read_text())
-        self.assertIn("같은 브랜치에서 수리한다", out)
-        self.assertIn("검증 끊김", out)
-        self.assertIn("| ticket-01-끊김 | 1 | 1 |", self.final_report())
-
-    def test_interrupted_twice_fails_the_ticket_and_says_so(self):
-        self.verifies(TERM_SELF, KILL_CHILD, XARGS, TERM_SELF)
-        self.worker(GOOD, REPAIRS)
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 1, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.network_resume, ts.repairs), ("failed", 2, 2, {}, []))
-        self.assertEqual(self.calls(), ["01", "01"])  # 시도마다 구현뿐이다. 수리 worker가 없다
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed")] * 4)
-        log = self.rundir / "01/2/verify.log"
-        self.assertRegex(ts.reason, r"^검증 끊김\(종료 코드 -?\d+, 로그 " + str(log) + r"\): 다시 검증도 끊겼다$")
-        self.assertIn(f"[01] 실패: {ts.reason}", out)
-        self.assertIn("실패 이유: 검증 끊김(종료 코드 137, ", (self.rundir / "01/1/failure.log").read_text())
-        self.assertIn(ts.reason, self.status("demo")[1])
-        self.assertIn(f"| failed | {ts.reason}", self.final_report())
-
-    def test_a_new_attempt_gets_its_own_second_run(self):
-        self.verifies(TERM_SELF, TERM_SELF, TERM_SELF)
-        self.worker(GOOD, REPAIRS)
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.repairs), ("merged", 2, 1, []))
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed")] * 3 + [("ticket-01", "passed")])
-
-    def test_verify_interrupted_after_a_repair_runs_again_without_another_repair(self):
-        self.verifies(NOTHING, TERM_SELF)
-        self.worker(BREAKS, REPAIRS)
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
-        self.assertEqual(self.calls(), ["01", "01"])
-        self.assertEqual(self.reviewers(), ["codex", "codex"])
-        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01-repair-끊김", "failed"), ("ticket-01-repair", "passed")])
-        self.assertEqual(state.repair_summary(ts), "수리: 시도 1 커밋 1개 → 다시 검증 통과")
-        self.assertIn("검증 끊김 뒤 다시 검증 통과", ts.reason)
-        first, second = self.rundir / "01/1/verify.log", self.rundir / "01/1/repair/verify.log"
-        self.assertTrue(first.exists())
-        self.assertEqual(second.read_text().count("종료 코드: "), 2)
-
-    def test_ordinary_failure_after_a_repair_and_an_interruption_fails_the_attempt(self):
-        self.verifies(NOTHING, TERM_SELF)
-        self.worker(BREAKS, USELESS, retry=GOOD)
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
-        self.assertEqual(self.calls(), ["01", "01", "01"])  # 시도마다 수리는 한 번이다
-        [rec] = ts.repairs
-        self.assertEqual((rec["result"], rec["detail"]), (state.REPAIR_FAILED, f"검증 실패(로그 {self.rundir / '01/1/repair/verify.log'})"))
-
-    def test_interrupted_twice_after_a_repair_fails_the_attempt(self):
-        self.verifies(NOTHING, TERM_SELF, TERM_SELF)
-        self.worker(BREAKS, REPAIRS, retry=GOOD)
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
-        self.assertEqual(self.calls(), ["01", "01", "01"])
-        [rec] = ts.repairs
-        self.assertEqual(rec["result"], state.REPAIR_FAILED)
-        self.assertIn("검증 끊김", rec["detail"])
-        self.assertIn("다시 검증도 끊겼다", rec["detail"])
-
-    def test_commit_left_during_the_interrupted_verify_is_reviewed_first(self):
-        # 다시 검증하기 전의 대조가 늦은 커밋을 본다. 재리뷰 뒤의 검증은 다른 트리의 새 검증이다
-        wt = self.rundir / "wt/01"
-        self.verifies(f'echo late > "{wt}/late"; git -C "{wt}" add -A; git -C "{wt}" commit -qm late; {TERM_SELF}', TERM_SELF)
-        self.worker(GOOD, REPAIRS)
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.network_resume), ("merged", 1, 0, {}))
-        self.assertEqual(self.reviewers(), ["codex", "codex"])
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
-        self.assertIn("late", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
-
-
-class InterruptedResumeTest(Base):
-    def assert_same_attempt(self):
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.branch, ts.network_resume), ("merged", 1, 0, "gs/demo/01", {}))
-        return ts
-
-    def test_gs_killed_during_the_second_run_continues_with_it(self):
-        self.verifies(TERM_SELF, 'echo $$ > "$here/verify.pid"; touch "$here/in_verify"; while :; do sleep 0.05; done')
-        self.worker(GOOD, REPAIRS)
-        log = Path(self.tmp.name) / "first.log"
-        with log.open("w") as f:
-            proc = subprocess.Popen([sys.executable, "-m", "gs.cli", "--repo", str(self.repo), "go", "demo", "--only", "01"],
-                                    stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
-        group = None
-        try:
-            deadline = time.monotonic() + 120
-            while not (self.bin / "in_verify").exists():
-                self.assertIsNone(proc.poll(), log.read_text())
-                self.assertLess(time.monotonic(), deadline, log.read_text())
-                time.sleep(0.05)
-            group = os.getpgid(int((self.bin / "verify.pid").read_text()))
-            os.kill(proc.pid, signal.SIGKILL)  # gs만 죽는다
-            proc.wait()
-            mark = self.ts().network_resume
-            self.assertEqual((self.ts().status, mark["verify_again"], mark["done"]), ("running", True, True))
-            os.killpg(group, signal.SIGKILL)  # 지난 실행의 검증이 새 검증과 같은 트리를 쓰지 않게
-            group = None
-            code, out, err = self.go("--only", "01")
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
-            if group is not None:
-                os.killpg(group, signal.SIGKILL)
-        self.assertEqual(code, 0, out + err)
-        self.assertIn("끊긴 검증을 같은 worktree에서 다시 한다", out)
-        self.assertIn("지난 검증이 끊겼다. 같은 worktree에서 다시 검증부터 잇는다", out)
-        ts = self.assert_same_attempt()
-        self.assertEqual(self.calls(), ["01"])  # 구현을 다시 하지 않는다
-        self.assertEqual(self.reviewers(), ["codex"])  # 리뷰도 다시 하지 않는다
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
-        self.assertIn("검증 끊김 뒤 다시 검증 통과", ts.reason)
-        self.assertEqual((self.rundir / "01/1/verify.log").read_text().count("끊긴 검증을 같은 트리로 다시 돌린다"), 2)
-
-    def test_second_run_interrupted_after_a_restart_is_still_the_second_run(self):
-        self.verifies(TERM_SELF, TERM_SELF)
-        self.worker(GOOD, REPAIRS)
-        self.stop_at_verify()
-        self.assertTrue(self.ts().network_resume["verify_again"])
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))  # 재시작해도 한 번을 다시 쓰지 않았다
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
-        self.assertIn("다시 검증도 끊겼다", (self.rundir / "01/1/failure.log").read_text())
-
-    def test_ordinary_failure_after_a_restart_goes_to_repair(self):
-        self.verifies(TERM_SELF)
-        self.worker(BREAKS, REPAIRS)
-        self.stop_at_verify()
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.assert_same_attempt()
-        self.assertEqual(self.calls(), ["01", "01"])
-        self.assertEqual(ts.repairs[0]["result"], state.REPAIR_PASSED)
-
-    def test_restart_keeps_the_repair_mark(self):
-        self.verifies(NOTHING, TERM_SELF)
-        self.worker(BREAKS, REPAIRS)
-        self.stop_at_verify(3)
-        mark = self.ts().network_resume
-        self.assertEqual((mark["repair"], mark["verify_again"]), (go.REPAIR_VERIFY, True))
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.assert_same_attempt()
-        self.assertEqual(self.calls(), ["01", "01"])
-        self.assertEqual(self.reviewers(), ["codex", "codex"])
-        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01-repair-끊김", "failed"), ("ticket-01-repair", "passed")])
-        self.assertEqual(state.repair_summary(ts), "수리: 시도 1 커밋 1개 → 다시 검증 통과")
-
-    def test_old_state_without_the_new_mark_is_read(self):
-        self.verifies(TERM_SELF)
-        self.worker(GOOD, REPAIRS)
-        with mock.patch("gs.go._apply_review", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
-            self.go("--only", "01")
-        path = state.path(self.rundir)
-        raw = json.loads(path.read_text())
-        ticket_state = raw["tickets"]["01"]
-        del ticket_state["repairs"]  # 옛 gs가 쓴 state
-        self.assertNotIn("verify_again", ticket_state["network_resume"])
-        path.write_text(json.dumps(raw, ensure_ascii=False))
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        self.assert_same_attempt()
-        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
 
 
 class NetworkRepairTest(support.GoTest):

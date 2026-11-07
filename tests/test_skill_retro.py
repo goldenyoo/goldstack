@@ -34,17 +34,6 @@ class IdeaFlowTest(unittest.TestCase):
         self.assertIn("`retro/SKILL.md` 4단계대로", step5)  # retro의 고른 후보 다루기 단계 번호
         self.assertTrue(body.partition("\n4. ")[2].startswith("고른 후보를 다룬다"))
 
-    def test_retro_agy_call_has_no_permission_flag(self):
-        body = self.read("retro")
-        self.assertIn('agy -p "<프롬프트>" --sandbox --disable-slash-commands --model "$model"', body)
-        self.assertNotIn("--dangerously-skip-permissions", body)
-        self.assertNotIn("읽기 전용으로 만든다", body)
-        self.assertIn("자동 거부", body)
-        self.assertIn("`no output produced`", body)
-        guide = (SKILLS.parent / "docs" / "guide.md").read_text(encoding="utf-8")
-        self.assertNotIn("--dangerously-skip-permissions --disable", guide)
-        self.assertIn("`no output produced`", guide)
-
     def test_retro_can_file_issue(self):
         body = self.read("retro")
         for text in ("issue로 올리기", 'gs feedback --body-file', "증상·근거·제안", "초안 전체를 보이고 확인받는다", "레포 이름·파일 이름을 넣지 않는다"):

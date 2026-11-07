@@ -1,4 +1,4 @@
-"""모든 skill 공통 시험과 `WORD_LIMITS`. skill별 시험은 `test_skill_<이름>.py`(grill, go, idea, retro, adopt, feedback, overnight)에 있다. grill 템플릿 시험은 `test_skill_grill.py`."""
+"""모든 skill 공통 시험과 `WORD_LIMITS`. skill별 시험은 `test_skill_<이름>.py`(grill, go, idea, retro, adopt, feedback)에 있다. grill 템플릿 시험은 `test_skill_grill.py`."""
 import re
 import unittest
 from pathlib import Path
@@ -9,7 +9,7 @@ SKILLS = REPO / "skills"
 TEMPLATES = SKILLS / "grill" / "templates"
 # skill 본문(frontmatter 뺀 `split()`) 단어 상한. 상한은 여기 한 곳에만 둔다. skill 글을 고치는 티켓은 이 값과 지금 단어 수를 완료 조건에 적는다
 WORD_LIMITS = {
-    "grill": 450, "go": 580, "adopt": 460, "overnight": 1880, "idea": 230,  # overnight은 사전 점검부터 이어받기까지 한 문서라 넓다
+    "grill": 450, "go": 530, "adopt": 460, "overnight": 1710, "idea": 230,  # overnight은 사전 점검부터 이어받기까지 한 문서라 넓다
     "retro": 930, "writing-for-agents": 930, "diagnosing-bugs": 940,  # 모두 지금 단어 수의 약 10% 위(10단위 올림)
 }
 

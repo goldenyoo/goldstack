@@ -217,46 +217,6 @@ class HookTest(unittest.TestCase):
                 self.assertIsNone(self.bash(cmd, env), (env, cmd))
             self.assertIsNone(hook.decide(self.payload("Write", file_path="/etc/hosts", content=""), env))
 
-    # ---- zsh의 `=` 확장: 따옴표 없는 `==`가 "== not found"로 명령 묶음을 끊는다(zsh 5.9 실측)
-    def test_unquoted_equals_word_blocked(self):
-        for cmd in ["echo ===", "echo =====", "x ==", "[ a == a ]", "test a == a", "x=$(echo ==)",
-                    'echo "$(echo ==)"', "echo hi && echo === && echo done", "echo =ls", 'echo ="ls"',
-                    "echo `echo ==`", "(echo ==)", "echo $'a' ==", "[[ a == a ]]; echo ==",
-                    "cat <<EOF\nx\nEOF\necho ==", "echo a >==",
-                    "[[ $(echo ===) == x ]]; echo done", "[[ $(echo ==) == a ]]", '[[ "$(echo ===)" == a ]]',
-                    "[[ `echo ==` == a ]]", "[[ a == a ]]\necho [[ ===", "echo [[ a ]] ===", "echo $((1)) ==",
-                    "(( x == 1 )); echo ==", "echo a\\ == b ==", "[[ a == b ]] && echo ===",
-                    "echo \\ [[ && echo ===",
-                    # review codex-6, agy-4: 치환 속 첫 글자도 단어의 처음이다
-                    "echo $(===); echo done", "x=$(===)", "echo $(=ls)", "x=`===`", "echo $(echo [[ ===)",
-                    # review agy-5: 치환·산술식이 닫히거나 따옴표 단어 뒤에는 명령 자리가 아니다
-                    "echo $((1)) [[ ===", "echo `true;` [[ ===", '"echo" [[ ===', "'echo' [[ ===", "\\echo [[ ===",
-                    # review codex-7: 리다이렉션 대상 뒤에도 명령 자리다(그래서 [[ 속 ==는 통과), 그 뒤 인자 [[ 는 아니다
-                    "> /dev/null echo [[ ===", "echo >&2 [[ ===", '"[[" a == a']:
-            reason = self.bash(cmd)
-            self.assertIsNotNone(reason, cmd)
-            self.assertIn("따옴표", reason, cmd)
-
-    def test_quoted_or_inner_equals_allowed(self):
-        for cmd in ["echo =", "[ a = a ]", "test a = a", "FOO=bar true", "echo a=b", "export X==1",
-                    "git log --format==", 'echo "==="', "echo '==='", "echo \\===", "echo $'=='", "echo a\"==\"",
-                    "[[ a == a ]]", "if [[ a == a ]]; then echo ok; fi", "[[ $x == a && $y == b ]]",
-                    "cat <<EOF\n===\nEOF", "cat <<'EOF'\n== x\nEOF", "echo hi # ===", "echo hi #==",
-                    "echo =(true)", "echo '=' \"=\"", "x=1; (( x == 1 )); echo done", "echo $(( 1 == 1 ))",
-                    "for ((i=0; i==0; i++)); do :; done", "echo $(echo a)==b", "echo a\\ ==", "echo \\ ===", "echo \\(==\\)",
-                    "echo \\ [[ && echo a", "[[ ( a == a ) ]]", "[[ a == a ]] && [[ b == b ]]", 'echo "$(echo "==")"', "sh -c 'echo =='",
-                    "echo $([[ a == a ]])", "echo `[[ a == a ]]`", "> /dev/null [[ a == a ]]; echo done",
-                    "2>/dev/null [[ a == a ]]", ">&2 [[ a == a ]]", "< /dev/null [[ a == a ]]",
-                    "echo $(echo a) [[ a"]:
-            self.assertAllowed(cmd)
-
-    def test_unquoted_equals_word_passes_without_worker_role(self):
-        for env in [{}, {"GS_ROLE": ""}, {"GS_ROLE": "reviewer"}]:
-            self.assertIsNone(self.bash("echo ===", env), env)
-        code, err = self.run_hook(self.payload("Bash", command="echo ==="), self.env)
-        self.assertEqual(code, 2)
-        self.assertIn("따옴표", err)
-
     # ---- 진입점: stdin JSON → 종료 코드와 메시지
     def run_hook(self, payload, env):
         err = io.StringIO()

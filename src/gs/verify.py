@@ -3,18 +3,10 @@
 명령은 새 프로세스 그룹(`start_new_session`)에서 `bash -c`로 돈다. 시간 = `GS_VERIFY_TIMEOUT`(초, 시험 seam)이
 있으면 그것, 없으면 spec `verify_minutes` × 60. 넘기면 그룹 전체에 SIGTERM, GRACE초 뒤 남았으면 SIGKILL을 보낸다.
 `subprocess.run(timeout=)`은 bash만 죽이고 그 자손(pytest 등)은 남기 때문에 그룹으로 끝낸다.
-한 번 돌 때마다 로그 끝에 `종료 코드: <N>` 줄을 남긴다. 통과도 시간 초과도 같다(시간 초과는 `시간 초과: <N>분` 줄 뒤다).
-
-끊김(Result.interrupted)은 명령이 신호로 죽은 것처럼 보이는 실패다: 종료 코드가 음수거나(bash가 죽음) 128보다 크거나(bash의 자식이 죽음),
-이번 실행의 출력에 줄 처음부터 SIGNAL_LINE 형태가 있다. xargs는 띄운 자식이 신호로 죽으면 그 줄을 남기고 나머지 자식을 기다려 1로 끝나서 종료 코드만으로는 가르지 못한다.
-앞선 재시도의 출력은 보지 않는다. 통과와 시간 초과는 끊김이 아니다. `uv run`처럼 자식의 신호를 종료 코드로 옮기는 명령을 xargs가 띄우면 줄이 남지 않아 일반 실패로 보인다(실측).
-끊기면 남은 그룹을 끝낸다: bash나 xargs가 신호로 죽으면 돌던 자식이 남는데(실측), 그 자식이 다음 검증과 같은 트리를 함께 쓰고 로그 끝 뒤에 이어 쓰지 않게 한다.
-끊김을 어떻게 할지는 부르는 쪽이 정한다: 티켓 검증은 수리 없이 한 번 다시 돌리고(go._verify_interrupted), 마무리 검증은 여느 실패와 같다.
 """
 from __future__ import annotations
 
 import os
-import re
 import signal
 import subprocess
 import time
@@ -25,8 +17,6 @@ from typing import IO
 from . import metrics
 
 GRACE = 5.0  # SIGTERM 뒤 SIGKILL까지 기다리는 초
-# 신호로 죽은 자식을 알리는 줄. xargs 문구는 macOS xargs 실측 값이다(`xargs: sleep: terminated with signal 15; aborting`, 종료 코드 1). 리눅스 xargs는 재지 않았다
-SIGNAL_LINE = re.compile(r"^(?:xargs: .*terminated with signal \d+|killed by signal \d+)", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -36,7 +26,6 @@ class Result:
     minutes: str  # 시간 제한(분). 로그·실패 이유에 쓴다
     retries: int = 0  # 첫 실행을 제외하고 다시 돌린 횟수
     samples: tuple[dict, ...] = field(default=(), compare=False)  # 재시도까지 각 명령의 시간·결과
-    interrupted: bool = False  # 이 실행이 신호로 끊긴 것처럼 보인다. 시간 초과는 timed_out이고 끊김이 아니다
 
     @property
     def ok(self) -> bool:
@@ -66,15 +55,13 @@ def env() -> dict[str, str]:
 
 
 def run(spec, cwd: Path, stream: IO[str]) -> Result:
-    """실패한 명령을 verify_retries만큼 다시 돌린다. 각 실행의 시간 제한은 같다. 돌려주는 결과는 마지막 실행의 것이고, 실행마다 로그 끝에 종료 코드 줄을 남긴다."""
+    """실패한 명령을 verify_retries만큼 다시 돌린다. 각 실행의 시간 제한은 같다."""
     samples = []
     for attempt in range(getattr(spec, "verify_retries", 0) + 1):
         if attempt:
             stream.write(f"\n검증 재시도 {attempt}\n")
         start = metrics.clock()
         result = _run_once(spec, cwd, stream)
-        stream.write(f"\n종료 코드: {result.code}\n")
-        stream.flush()
         metrics.sample(samples, start, result)
         if result.ok:
             break
@@ -88,23 +75,18 @@ def flaky(result: Result, label: str, stream: IO[str]) -> None:
 
 
 def _run_once(spec, cwd: Path, stream: IO[str]) -> Result:
-    """spec.verify를 cwd에서 돌려 출력을 stream에 쓴다. 시간을 넘기면 끝에 `시간 초과: <N>분` 줄을 남긴다. 끊겼으면 남은 그룹을 끝낸다."""
+    """spec.verify를 cwd에서 돌려 출력을 stream에 쓴다. 시간을 넘기면 끝에 `시간 초과: <N>분` 줄을 남긴다."""
     seconds = limit_seconds(spec)
     limit = minutes(seconds)
     stream.flush()
     try:
-        start = os.lseek(stream.fileno(), 0, os.SEEK_CUR)  # 자식과 함께 쓰는 위치다. 여기부터가 이번 실행의 출력이다
         p = subprocess.Popen(["bash", "-c", spec.verify], cwd=cwd, stdin=subprocess.DEVNULL, stdout=stream,
                              stderr=subprocess.STDOUT, env=env(), start_new_session=True)
     except OSError as e:
         stream.write(f"검증 명령 실행 실패: {e}\n")
         return Result(1, False, limit)
     try:
-        code = p.wait(timeout=seconds)
-        interrupted = _interrupted(code, stream, start)
-        if interrupted:
-            stop(p)
-        return Result(code, False, limit, interrupted=interrupted)
+        return Result(p.wait(timeout=seconds), False, limit)
     except subprocess.TimeoutExpired:
         code = stop(p)
         stream.write(f"\n시간 초과: {limit}분\n")
@@ -113,23 +95,6 @@ def _run_once(spec, cwd: Path, stream: IO[str]) -> Result:
     except BaseException:
         stop(p)  # 코디네이터가 죽어도(Ctrl-C 등) 검증 프로세스를 남기지 않는다
         raise
-
-
-def _interrupted(code: int, stream: IO[str], start: int) -> bool:
-    """제 시간에 끝난 실행이 신호로 끊긴 것처럼 보이나. 통과는 출력과 상관없이 끊김이 아니다. 로그는 종료 코드로 가리지 못할 때만 읽는다."""
-    if code == 0:
-        return False
-    return code < 0 or code > 128 or SIGNAL_LINE.search(_output(stream, start)) is not None
-
-
-def _output(stream: IO[str], start: int) -> str:
-    """stream의 파일에서 start부터 끝까지(stream은 쓰기 전용이라 다시 연다). 읽지 못하면 빈 문자열이고 끊김은 종료 코드로만 판단한다."""
-    try:
-        with open(stream.name, "rb") as f:
-            f.seek(start)
-            return f.read().decode("utf-8", errors="replace")
-    except (AttributeError, TypeError, OSError):
-        return ""
 
 
 def stop(p: subprocess.Popen) -> int:

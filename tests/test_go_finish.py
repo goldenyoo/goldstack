@@ -353,7 +353,7 @@ fi
         self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), initial)
         log = (self.rundir / "finish/integration-verify.log").read_text()
         self.assertTrue(log.startswith(f"$ bash {self.bin / 'verify.sh'}\nHEAD: "), log)
-        self.assertRegex(log, r"\n시간 초과: 0\.02분\n\n종료 코드: -?\d+\n\Z")
+        self.assertTrue(log.endswith("\n시간 초과: 0.02분\n"), log)
         self.assertFalse((self.rundir / "finish/integration-final-verify.log").exists())
         self.assertTrue(git_clean(self.rundir / "wt/integration"))
         self.assert_children_dead()
@@ -373,7 +373,7 @@ fi
         self.assertEqual(sh(self.remote, "git", "rev-parse", f"{f['revert_sha']}^{{tree}}"),
                          sh(self.remote, "git", "rev-parse", f"{initial}^{{tree}}"))
         log = (self.rundir / "finish/main-verify.log").read_text()
-        self.assertRegex(log, r"\n시간 초과: 0\.02분\n\n종료 코드: -?\d+\n\Z")
+        self.assertTrue(log.endswith("\n시간 초과: 0.02분\n"), log)
         self.assertIn("시간 초과: 0.02분", self.final_report())
         self.assertEqual(list(self.rundir.glob("gs-main-*")), [])
         self.assert_children_dead()
