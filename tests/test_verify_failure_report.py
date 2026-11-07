@@ -158,6 +158,13 @@ class MainFailureReportTest(FailureFixture):
         self.assertIn("FAIL: test_x (test_mod.T)", evidence.split("### 티켓별 결과", 1)[0])
         self.assertIn(str(self.log.resolve()), evidence.split("### 티켓별 결과", 1)[0])
 
+    def test_revert_pending_shows_failed_test_name(self):
+        self.r.st.finish = {"phase": "revert_pending", "main_ok": False, "revert_pr": "7"}
+        self.log.write_text("$ check\nFAIL: test_x (test_mod.T)\nOK\n")
+        text = report.verification_failure(self.r)
+        self.assertIn("FAIL: test_x (test_mod.T)", text)
+        self.assertIn(str(self.log.resolve()), text)
+
     def test_recheck_log_is_used_when_it_ran_last(self):
         self.log.write_text("FAIL: test_first\n")
         recheck = self.r.rundir / "finish/main-recheck-verify.log"

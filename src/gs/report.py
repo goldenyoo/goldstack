@@ -473,7 +473,7 @@ def _failed_verification(r) -> tuple[str, Path] | None:
     finish_dir = r.rundir / "finish"
     if f.get("phase") == "not_merged" and f.get("failed_verify") in ("integration", "integration-final"):
         return f["failed_verify"], finish_dir / f"{f['failed_verify']}-verify.log"
-    if f.get("phase") in ("reverted", "main_failed") and f.get("main_ok") is False:
+    if f.get("phase") in ("reverted", "main_failed", "revert_pending") and f.get("main_ok") is False:
         # 다시 검증(main-recheck)이 있으면 마지막으로 돈 쪽이 최종 실패다.
         found = [(label, finish_dir / f"{label}-verify.log") for label in ("main", "main-recheck")]
         found = [x for x in found if x[1].is_file()]
