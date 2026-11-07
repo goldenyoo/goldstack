@@ -95,6 +95,14 @@ class FixBriefTest(unittest.TestCase):
                     self.assertIn("복구한 뒤 커밋", text)
                     self.assertIn("문서 티켓에는 해당하지 않는다", text)
 
+    def test_every_worker_brief_asks_for_tests_that_fail_without_the_behavior(self):
+        for model in ("claude", "codex", "agy"):
+            for name, text in self.briefs(model=model).items():
+                with self.subTest(model=model, brief=name):
+                    self.assertIn(worker.REAL_TEST_RULE, text)
+                    self.assertIn("완료 조건의 동작을 지우면 실패하도록", text)
+                    self.assertIn("기존 단언을 약하게 만들거나 지우지 않는다", text)
+
     def test_every_worker_brief_tells_to_handle_only_own_processes(self):
         for model in ("claude", "codex", "agy"):
             for ticket_verify in (None, "fast"):

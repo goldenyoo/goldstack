@@ -251,6 +251,31 @@ class CheckTest(unittest.TestCase):
         self.write("01-a.md", ticket("01", blocked_by="\n- 02"))
         self.assert_error("01-a.md:4: 값이 비어 있다")  # 4번 줄 = `blocked_by:`
 
+    def config_verify_warning(self, extra, spec=None):
+        self.write("01-a.md", ticket("01", extra=extra))
+        if spec:
+            (self.repo / ".goldstack/work/demo/spec.md").write_text(spec)
+        code, out, err = self.run_check()
+        self.assertEqual(code, 0, out + err)
+        return "설정을 고치는 티켓" in err
+
+    def test_narrow_verify_on_config_ticket_warns(self):
+        self.assertTrue(self.config_verify_warning('touches: [".goldstack/config.toml"]\nverify: "echo ok"\n'))
+
+    def test_narrow_verify_on_config_glob_warns(self):
+        self.assertTrue(self.config_verify_warning('touches: [".goldstack/*.toml"]\nverify: "echo ok"\n'))
+
+    def test_inherited_verify_ticket_on_config_ticket_warns(self):
+        spec = SPEC.replace('verify: "true"', 'verify: "true"\nverify_ticket: "echo ok"')
+        self.assertTrue(self.config_verify_warning('touches: [".goldstack/config.toml"]\n', spec))
+
+    def test_same_verify_on_config_ticket_does_not_warn(self):
+        self.assertFalse(self.config_verify_warning('touches: [".goldstack/config.toml"]\nverify: "true"\n'))
+        self.assertFalse(self.config_verify_warning('touches: [".goldstack/config.toml"]\n'))
+
+    def test_narrow_verify_without_config_touch_does_not_warn(self):
+        self.assertFalse(self.config_verify_warning('touches: ["src/gs/check.py", ".goldstack/local.env"]\nverify: "echo ok"\n'))
+
     def test_unknown_key_is_warning(self):
         self.write("01-a.md", ticket("01", extra="owner: me\n"))
         code, out, err = self.run_check()
