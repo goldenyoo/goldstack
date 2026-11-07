@@ -91,6 +91,10 @@ class GrillBreakdownTest(unittest.TestCase):
                      "두 번째 리뷰어(`second_reviewer`)", "verify: 문서·설정 티켓은 좁은 명령, 코드 티켓은 `전체`"):
             self.assertIn(text, comment)
 
+    def test_spec_template_config_ticket_uses_full_verify(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        self.assertIn("`.goldstack/config.toml`을 고치는 티켓은 문서·설정 티켓이어도 `전체`", comment)
+
     def test_second_reviewer_criteria_match_guide(self):
         comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
         guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
