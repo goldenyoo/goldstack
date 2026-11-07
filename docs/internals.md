@@ -372,6 +372,20 @@ gs는 base에 아무것도 push하지 않는다. base로 갈 gs 커밋(revert, �
 
 2의 보고서 커밋은 `report.md`만 바꾸는데 전체 `verify`가 느린 프로젝트에서 같은 코드를 한 번 더 돌리게 된다. 그래서 4에서 `git diff --name-only <1에서 통과한 head> HEAD`가 `report.md`뿐이고 worktree가 깨끗하면(`setup.is_clean`) 돌리지 않는다(`finish._verify_final`). 출력 `■ integration-final: 보고서만 바뀜, 건너뜀`, 같은 줄을 `finish/integration-final-verify.log`에 쓰고 보고서 Evidence에도 남긴다. 그 밖의 파일이 바뀌었으면 평소처럼 돈다. 1이 실패했으면 4를 돌리지 않고 병합하지 않는다.
 
+### 옛 검증 정리 (`verify.stop_stale`)
+
+gs만 SIGKILL로 죽으면 돌던 검증은 새 세션에서 살아 남아 다음 `gs go`의 검증과 같은 트리를 함께 바꾼다. 검증은 `bash -c '<verify>' gs-verify:<로그 경로>`로 떠서 명령줄에 표지가 남는다. 번호는 저장하지 않는다. 다음 `gs go`는 잠금을 잡자마자 `ps`에서 이 run 디렉터리 아래 표지를 찾아 그 프로세스 그룹을 SIGTERM, 안 끝나면 SIGKILL로 끝낸다(`go.py`가 새 worker보다 먼저 부른다). 같은 run의 다른 검증(티켓·integration)도 함께 끝낸다. 한 feature에 `gs go`는 하나이고 검증은 한 번에 하나라 잠금을 잡은 때 살아 있는 검증은 모두 옛 것이다. 다른 feature의 run 표지는 건드리지 않고, 못 찾거나 못 끝내도 경고 줄만 낸다. 못 찾는 것: 검증이 `exec`로 bash를 대신한 경우, bash만 먼저 죽고 자식이 남은 그룹.
+
+### main 재검증 (`main-retry`)
+
+base(main) 검증이 처음 실패했고 마지막으로 통과한 integration 커밋(`verified_head`)과 병합 커밋의 차이가 `.goldstack/`뿐이면 코드가 같다. 이때만 revert 전에 한 번 다시 돌린다(`revert_decision.MARK_RETRY`). phase `main_retry`를 남기고 임시 worktree를 치운 뒤 처음부터 다시 읽는다. 끊긴 실행을 잇는 다음 `gs go`도 같은 길이다.
+- 통과하면 병합을 유지하고 verified다. outcome과 보고서에 `flaky: main 재시도 1번 만에 통과`가 남는다.
+- 실패하면 revert한다. phase `main_retry`가 "재시도를 썼다"는 표시라 재시도와 재검증은 다시 묻지 않는다.
+- 재시도의 준비(worktree 만들기)가 실패해도 phase `main_retry`를 지우지 않는다(`KEEP_RETRY`). 지우면 다음 실행이 재시도를 한 번 더 얻는다.
+- 실패 뒤 base가 움직였으면 같은 코드의 재시도가 아니라 재검증이고, 통과해도 flaky로 적지 않는다.
+- 코드가 다르면(차이에 `.goldstack/` 밖 파일이 있으면) 재시도 없이 바로 revert 쪽으로 간다.
+- 보고서 Evidence 맨 앞에 `_failure_lines`가 뽑은 실패 시험 줄과 로그 경로가 오고, revert면 Summary 맨 위 줄에 상태와 `gs go <feature>`가 있다.
+
 ### 검증 명령 고르기와 재시도
 
 spec `verify_ticket`, `verify_retries`. 티켓 검증 명령은 티켓 `verify` → spec `verify_ticket` → spec `verify` 순서로 고르고(`Spec.verify_for`), worker·수정 worker brief의 검증 명령도 그것이다(`worker.write_brief`: 첫·재개·수정·수리 worker 모두 계열과 상관없이 "전체 검증은 gs가 돌린다, 너는 좁은 시험만"을 받는다. `narrow` 인자는 없다. 어느 brief든 `worker.MACHINE_RULE`(자기가 띄운 프로세스만 PID로 다루고 `pkill`·`killall`로 찾아 죽이지 않는다)과 `worker.SEE_FAIL_RULE`, `worker.REAL_TEST_RULE`(시험은 완료 조건의 동작을 지우면 실패하게 쓰고 기존 단언을 약하게 하지 않는다)이 붙어, 버그를 고치면 새 시험을 쓴 뒤 고친 코드만 잠깐 되돌려 그 시험이 실패하는 것을 직접 보고 본 실패를 마지막 메시지에 적게 한다. 재리뷰 지시에는 없다). 어느 명령이든 integration의 미완 병합 트리에서 돈다. 그래서 티켓 worktree의 커밋 안 된 파일은 검증을 통과시키지 못한다. 로그 앞에 `$ <명령>`과 `cwd:`를 쓴다. 검증 뒤 HEAD·브랜치·MERGE_HEAD·index가 달라졌거나 `setup.is_clean(staged_ok=True)`가 거짓이면(index와 다른 파일, 준비 산출물이 아닌 untracked) 로그에 `검증 중 worktree가 바뀌었다`를 남기고 실패다. 이어서 근거를 같은 로그에 적는다(`go._log_changes`): 병합 상태가 달라졌으면 `병합 상태가 달라졌다(전 -> 후):` 아래 바뀐 항목(HEAD, 브랜치, MERGE_HEAD, index 트리)의 전후 값, 그리고 `git status --porcelain --untracked-files=all` 출력이다. 이것을 읽지 못하면 `바뀐 파일 목록을 읽지 못했다: …`를 적을 뿐 판정과 재시도는 그대로다. 실패 요약(`failure.summarize`)의 지시문은 이 목록을 근거로 쓰게 하고, 근거 없는 원인은 추측하지 않고 모른다고 적게 하며, 티켓 검증이 티켓 worktree가 아니라 integration의 병합 트리에서 도는 것이 정상이라고 알린다(그 위치를 원인으로 지목하지 않는다). 다른 곳에서 index·HEAD가 바뀐 것과 구분하지 못하므로 그 경우 이유는 `검증하는 동안 integration이 바뀌었다`다. `integration`, `integration-final`, `integration-recheck`, `main`, `main-recheck`은 늘 `verify`다. `verify_retries`는 어느 지점이든 실패한 명령(시간 초과, 시작 실패 포함)을 그 횟수만큼 다시 돌린다(`verify.run`). 재시도마다 로그에 `검증 재시도 <n>`, 시간 제한은 같고, 통과하면 끝에 `flaky: <지점> 재시도 <n>번 만에 통과`(`verify.flaky`, 지점은 `ticket-<NN>`이나 위 이름)를 적는다. 보고서는 로그를 줄여도 이 줄을 Evidence에 남긴다. 검증이 worktree를 바꾸면 재시도 통과여도 실패다.
