@@ -12,7 +12,8 @@
 - 비밀 파일 읽기(`~/.ssh`, `.env` 등)
 - 이름으로 프로세스를 끄는 `pkill`·`killall`(기계 전체의 같은 이름 프로세스를 끄니 다른 티켓의 검증도 죽는다). `kill <PID>`와 `pgrep`은 통과한다
 - 따옴표 없이 `=`로 시작하는 두 글자 이상 단어(`echo ===`). zsh의 `=` 확장이 `== not found`로 명령 묶음을 끊고, 뒤 명령이 돌지 않았는데 돈 것처럼 읽힌다.
-  `echo "==="`·`[ a = a ]`·`[[ a == a ]]`·heredoc 본문·주석은 통과한다(`equals_word`)
+  `echo "==="`·`[ a = a ]`·`[[ a == a ]]`·heredoc 본문·주석은 통과한다(`equals_word`). 같은 zsh에서 도는 `eval`·`zsh -c` 본문과 치환 속도 본다.
+  `bash -c`·`sh -c` 속은 `=` 확장이 없어 보지 않는다(`Ctx.zsh`)
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
@@ -121,6 +122,7 @@ class Ctx:
     env: Mapping[str, str]
     located: tuple[str, ...] = ()  # 명령 글에서 git이 볼 곳을 바꾸는 말의 값(`_git_locations`)
     xargs_fill: tuple[str, ...] = ()  # 바깥 xargs가 입력으로 바꿔 넣을 글자들(`_xargs_fill`). `sh -c` 안까지 듣는다
+    zsh: bool = True  # 이 글을 읽는 셸이 zsh인가. 맨 바깥과 `zsh -c`는 zsh, `bash -c`·`sh -c`는 아니다. `eval`과 치환은 물려받는다
 
 
 # ---------------------------------------------------------------- 진입점
@@ -490,18 +492,20 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
 
 # ---------------------------------------------------------------- Bash
 
-def check_bash(command: str, ctx: Ctx, depth: int = 0) -> str | None:
+def check_bash(command: str, ctx: Ctx, depth: int = 0, substitution: bool = False) -> str | None:
+    """`substitution`: 바깥 글에서 떼어 낸 치환 속이다. `equals_word`가 바깥 글에서 이미 봤고, 떼어 내면 산술식을 알아보지 못한다
+    (`$(( a == b ))`의 `( a == b )`). 그 속의 `eval`·`zsh -c` 본문은 새 글이라 다시 본다."""
     if depth > 3:
         return None
     text, subs = scan(command.replace("\\\n", " "))
-    if depth == 0:  # 맨 바깥 셸만 zsh다. `sh -c` 속은 다른 셸이라 `=` 확장이 없다
+    if ctx.zsh and not substitution:
         word = equals_word(text)
         if word:
             return (f"따옴표 없는 `{word}`는 zsh의 `=` 확장이라 `{word[1:]} not found`로 명령이 끊긴다. "
                     f"뒤 명령은 돌지 않는다. 따옴표로 감싼다(`\"{word}\"`)")
     ctx = replace(ctx, located=(*ctx.located, *_git_locations(text, ctx.xargs_fill)))
     for inner in subs:  # $(...)와 `...`도 명령이다(큰따옴표 안이어도 돈다. 작은따옴표 안은 글자일 뿐)
-        reason = check_bash(inner, ctx, depth + 1)
+        reason = check_bash(inner, ctx, depth + 1, substitution=True)
         if reason:
             return reason
     cwd = ctx.cwd
@@ -521,6 +525,8 @@ def equals_word(text: str) -> str | None:
     - 산술식 `(( ... ))`·`$(( ... ))`(`(( x == 1 ))`).
     한 글자 `=`(`[ a = a ]`), 중간의 `=`(`a=b`, `X==1`, `--format==`)는 단어 처음이 아니라 통과한다.
     단어 처음인지는 앞 글자를 보지 않고 따라가며 센다(`$(...)` 바로 뒤, 이스케이프된 공백 뒤는 단어 중간이다).
+    빈 따옴표(`""`, `''`, `$''`)는 글자를 남기지 않는다. 뒤의 `=`가 단어 처음이고(`""===`), 글자 수에도 세지 않는다(`=""`는 `=` 한 글자다).
+    `$""`는 `$` 글자를 남긴다.
     """
     word_re = re.compile(r"[^ \t\n;&|()<>]+")
     stack = ["top"]
@@ -616,6 +622,13 @@ def equals_word(text: str) -> str | None:
                     pop()
             i += 1
             continue
+        empty = EMPTY_QUOTES.match(text, i)
+        if empty:
+            if lead_ok:
+                lead()
+            ws = was
+            i = empty.end()
+            continue
         if c == "'":
             if lead_ok:
                 lead()
@@ -671,7 +684,7 @@ def equals_word(text: str) -> str | None:
                 cond += 1
             elif word == "]]" and cond and not target:
                 cond -= 1
-            elif word[0] == "=" and len(word) >= 2 and not cond:
+            elif word[0] == "=" and len(EMPTY_QUOTES.sub("", word)) >= 2 and not cond:
                 return word
             if not target:
                 cmd = word in CMD_WORDS
@@ -680,17 +693,21 @@ def equals_word(text: str) -> str | None:
 
 
 CMD_WORDS = frozenset({"if", "then", "elif", "else", "while", "until", "do", "!", "{", "time"})  # 뒤 단어가 다시 명령 자리
+EMPTY_QUOTES = re.compile(r"\$?''|\"\"")
 
 
 CODE = ("top", "(", "$(", "`")  # 셸이 명령으로 읽는 자리(따옴표 밖)
 WORD_START = " \t\n;&|()"  # 이 글자 뒤에서 셸의 새 단어가 시작한다
 FD_NUMBER = re.compile(r"[0-9]+(?=[<>])")
+# 숫자로 시작하는 끝말은 따옴표가 있을 때만 읽는다(`(( 1 << 2 ))`와 `<<123`은 글로 구별하지 못한다)
+HEREDOC_OPEN = re.compile(r"""<<-?\s*(?:(['"])([\w.-]+)\1|([A-Za-z_][\w.-]*))""")
 
 
 def scan(text: str) -> tuple[str, list[str]]:
     """따옴표를 따라가며 한 번 훑는다. (heredoc 본문과 주석을 지운 글, 실제로 도는 가장 바깥 명령 치환들)를 돌려준다.
 
     - heredoc 본문(커밋 메시지 등)은 명령이 아니다. 여는 줄만 남긴다. 따옴표 속 `<<EOF`는 heredoc이 아니다.
+      끝말 줄이 뒤에 없으면 heredoc으로 읽지 않는다. 산술식의 `<<`(`(( x << y ))`, `$[ x << y ]`)를 heredoc으로 읽어 뒤 명령을 삼키지 않게 한다.
     - 따옴표 밖, 단어 처음의 `#`부터 줄 끝까지 지운다(주석 속 따옴표가 해석을 깨지 않게).
     - `$(...)`와 `` `...` ``는 따옴표 밖이나 큰따옴표 안에서만 치환이다. 작은따옴표 안은 글자다.
     - 리다이렉션에 붙은 fd 번호(`2>f`의 2)를 지운다. 토큰으로 나누면 `x 2 >f`의 인자 2와 구별되지 않는다.
@@ -774,9 +791,10 @@ def scan(text: str) -> tuple[str, list[str]]:
             i = m.end()
             continue
         elif c == "<" and text.startswith("<<", i) and not text.startswith("<<<", i) and (i == 0 or text[i - 1] != "<"):
-            m = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][\w.-]*)\1").match(text, i)
-            if m:
-                pending.append(m.group(2))
+            m = HEREDOC_OPEN.match(text, i)
+            end = m and (m.group(2) or m.group(3))
+            if end and any(line.strip() == end for line in text[m.end():].split("\n")[1:]):
+                pending.append(end)
                 out.append(m.group(0))
                 i = m.end()
                 continue
@@ -794,6 +812,15 @@ def tokens(text: str) -> list[str]:
         return list(lex)
     except ValueError:  # 닫히지 않은 따옴표 등: 거칠게 나눈다
         return [t.strip("'\"") for t in re.findall(r"[;&|()]+|[<>&]*[<>]+|[^\s;&|()<>]+", text)]
+
+
+def _as_script(word: str) -> str:
+    """`tokens`가 준 단어를 셸이 다시 읽을 글로 되돌린다.
+
+    - 줄바꿈마다 넣은 `;`를 뗀다. 남으면 heredoc 끝말 줄을 찾지 못해 뒤 명령을 본문으로 삼킨다.
+    - 큰따옴표 안 `\\$((`에 shlex가 남긴 역슬래시를 뗀다. 남으면 `eval "x=\\$(( a == b ))"`의 산술식을 명령으로 읽는다.
+    """
+    return word.replace("\n;", "\n").replace("\\$((", "$((")
 
 
 def is_separator(tok: str) -> bool:
@@ -941,9 +968,9 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     if name in ("bash", "sh", "zsh", "dash"):
         script = shell_c_script(args)
         if script is not None:
-            return check_bash(script, seg, depth + 1)
+            return check_bash(_as_script(script), replace(seg, zsh=name == "zsh"), depth + 1)
     if name == "eval":
-        return check_bash(" ".join(args), seg, depth + 1)
+        return check_bash(_as_script(" ".join(args)), seg, depth + 1)
 
     if name == "git":
         # xargs 뒤의 git은 글에 없는 단어를 더 받는다. `xargs git config core.hooksPath`는 읽기처럼 보이는 쓰기다

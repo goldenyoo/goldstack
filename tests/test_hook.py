@@ -250,6 +250,111 @@ class HookTest(unittest.TestCase):
                     "echo $(echo a) [[ a"]:
             self.assertAllowed(cmd)
 
+    # ---- goldstack-v23 티켓 01. 입력마다 /bin/zsh -f -c 결과를 재어 막을지 정했다(zsh 5.9)
+    def assertEqualsBlocked(self, cmd):
+        reason = self.bash(cmd)
+        self.assertIsNotNone(reason, cmd)
+        self.assertIn("따옴표", reason, cmd)
+
+    def test_quoted_number_heredoc_terminator_body_allowed(self):
+        for cmd in ["cat <<'123'\n===\n123", 'cat <<"123"\n===\n123', "cat <<-'123'\n\t===\n\t123",
+                    "cat << '123'\n===\n123", "cat <<'123'\ngit push\n123", "cat <<'123'\n===\n123\necho done",
+                    "echo \"$(cat <<'123'\n===\n123\n)\"", "(cat <<'123'\n===\n123\n)",
+                    "(( 1 << 2 )) && cat <<'123'\n===\n123", "echo $(( 1 << 2 )) && cat <<'123'\n===\n123"]:
+            self.assertAllowed(cmd)
+        # 본문이 끝나면 다시 명령이다. 여는 줄의 나머지도 명령이다
+        for cmd in ["cat <<'123'\n===\n123\necho ===", "cat <<'123'; echo ===\nx\n123"]:
+            self.assertEqualsBlocked(cmd)
+        self.assertBlocked("cat <<'123'\n===\n123\ngit push")
+
+    def test_heredoc_needs_its_end_line(self):
+        """끝말 줄이 없으면 heredoc으로 읽지 않는다. `<<'1'2`의 끝말은 12다. 1로 읽고 본문으로 삼키면 뒤 명령을 보지 않는다."""
+        for cmd in ["cat <<'1'2\nx\n12\necho ===", "cat <<EOF'x'\nx\nEOFx\necho ===", 'cat <<"1"2\nx\n12\necho ===']:
+            self.assertEqualsBlocked(cmd)
+        self.assertBlocked("cat <<'1'2\nx\n12\ngit push")
+
+    def test_arithmetic_shift_is_not_heredoc(self):
+        """산술식의 `<<`를 heredoc으로 읽으면 다음 줄을 본문으로 삼켜 그 명령을 보지 않는다. 산술식 뒤의 진짜 heredoc은 그대로 읽는다."""
+        for cmd in ["(( 1 << 2 )); echo ===", "(( 1 << 2 ))\necho ===", '(( 1 << "2" )); echo ===',
+                    '(( 1 << "2" ))\necho ===', "(( x << y ))\necho ===", "((x<<y))\necho ===",
+                    '(( (1) << "2" ))\necho ===', "if (( x << y )); then :; fi\necho ===",
+                    "echo $(( 1 << 2 ))\necho ===", 'echo $(( 1 << "2" ))\necho ===', "x=$(( x << y ))\necho ===",
+                    'echo "$(( x << y ))"\necho ===', 'echo $(( (1) << "2" ))\necho ===',
+                    'echo $[ 1 << "2" ]\necho ===', "echo $[ x << y ]\necho ===",
+                    'a=(1 2); echo ${a[1 << "2" ]}\necho ===', "a=(1 2); echo ${a[x << y ]}\necho ==="]:
+            self.assertEqualsBlocked(cmd)
+        for cmd in ['(( 1 << "2" ))\ngit push', "(( x << y ))\ngit push", "x=$(( x << y ))\ngit push", "echo $[ x << y ]\ngit push"]:
+            self.assertBlocked(cmd)
+        for cmd in ["(( x << y ))\ncat <<'123'\n===\n123", "(( (x) << y )) && cat <<EOF\n===\nEOF",
+                    "echo $(( 1 << 2 ))\ncat <<'123'\n===\n123", "x=$(( 1 << 2 )); cat <<'9'\n===\n9"]:
+            self.assertAllowed(cmd)
+
+    def test_equals_body_checked_in_same_zsh(self):
+        for cmd in ["eval 'echo ===; echo done'", 'eval "echo ===; echo done"', "eval echo '==='", "eval sh -c 'echo ==='",
+                    "eval 'echo $(echo ===)'", "eval 'eval \"echo ===\"'", "eval 'echo \"\"==='",
+                    "zsh -f -c 'echo ===; echo done'", "zsh -fc 'echo ===; echo done'", "zsh -c 'echo ==='",
+                    "zsh -f -o EQUALS -c 'echo ===; echo done'", "/bin/zsh -f -c 'echo ===; echo done'",
+                    "zsh -f -c 'echo $(echo ===)'", "zsh -f -c 'echo `echo ===`'", "zsh -f -c 'eval \"echo ===\"'",
+                    "echo $(echo ===)", 'echo "$(echo ===)"', "echo `echo ===`",
+                    "echo $(eval 'echo ===')", "echo $(zsh -f -c 'echo ===')", "echo `eval 'echo ==='`",
+                    "bash -c 'zsh -f -c \"echo ===; echo done\"; echo after'", "sh -c 'echo $(zsh -c \"echo ===\")'",
+                    # 바깥 zsh가 먼저 푼다. `-c` 뒤가 bash여도 이 치환은 zsh에서 돈다
+                    'sh -c "echo $(echo ===)"', 'bash -c "$(echo ===)"']:
+            self.assertEqualsBlocked(cmd)
+
+    def test_equals_body_keeps_what_zsh_allows(self):
+        """`=` 확장이 없는 글은 본문으로 들어가도 통과한다. 치환만 떼어 다시 보면 `$(( a == b ))`가 명령처럼 읽힌다."""
+        for cmd in ["eval 'echo \"===\"; echo done'", "eval '[[ a == a ]]; echo done'", "eval 'echo $(( 1 == 1 )); echo done'",
+                    "eval 'x=$(( 1 == 1 )); echo done'", "eval \"sh -c 'echo ==='\"; echo done", "eval 'echo =; echo done'",
+                    "zsh -f -c 'echo \"===\"; echo done'", "zsh -f -c '[[ a == a ]]; echo done'",
+                    "zsh -f -c 'echo $(( 1 == 1 )); echo done'", "zsh -f -c 'echo hi # ==='",
+                    "echo $(( 1 == 1 ))", "x=$(( 1 == 1 )); echo $x", "echo \"$(( 1 == 1 ))\"", "echo $(echo $(( 1 == 1 )))",
+                    "echo $([[ a == a ]])", "echo $(eval 'echo $(( 1 == 1 ))')", "echo $(zsh -f -c '[[ a == a ]]')",
+                    # 큰따옴표 안의 `\$`. 안쪽 셸이 받는 글은 `$(( ... ))`다
+                    'eval "echo \\$(( 1 == 1 ))"', 'zsh -f -c "x=\\$(( 1 == 1 )); echo \\$x"',
+                    # 따옴표로 보호된 글은 본문이 아니다
+                    "echo 'eval \"echo ===\"'", "echo \"zsh -c 'echo ==='\"", "printf '%s\\n' 'a; eval \"echo ===\"'",
+                    "git commit -m 'eval \"echo ===\"'", "git commit -m \"zsh -c 'echo ==='\""]:
+            self.assertAllowed(cmd)
+        self.assertEqualsBlocked('zsh -f -c "echo \\$(echo ===)"')
+
+    def test_equals_not_checked_in_other_shells(self):
+        for cmd in ["bash -c 'echo ==='", "sh -c 'echo ==='", "dash -c 'echo ==='", "bash -lc 'echo ==='", "/bin/sh -c 'echo ==='",
+                    "bash -c 'eval \"echo ===\"'", "sh -c 'eval \"echo ===\"'", "bash -c 'echo $(echo ===)'", "sh -c 'echo `echo ===`'",
+                    "echo $(bash -c 'echo ===')", "zsh -f -c 'bash -c \"echo ===\"; echo done'", "bash -c 'sh -c \"echo ===\"'",
+                    "bash -c 'echo \"\"==='"]:
+            self.assertAllowed(cmd)
+        for cmd in ["bash -c 'git push'", "sh -c 'eval \"git push\"'", "bash -c 'echo $(git push)'"]:  # 다른 판정은 그대로 듣는다
+            self.assertBlocked(cmd)
+
+    def test_body_with_heredoc_then_command_is_checked(self):
+        """`tokens`가 줄바꿈마다 넣는 `;`가 본문에 남으면 끝말 줄을 찾지 못해 뒤 명령을 본문으로 삼킨다."""
+        for cmd in ["zsh -f -c 'cat <<EOF\n===\nEOF\necho ===; echo done'", "eval 'cat <<EOF\n===\nEOF\necho ===; echo done'"]:
+            self.assertEqualsBlocked(cmd)
+        for cmd in ["zsh -f -c 'cat <<EOF\n===\nEOF\necho done'", "eval 'cat <<EOF\n===\nEOF\necho done'",
+                    "bash -c 'cat <<EOF\n===\nEOF\necho ===; echo done'"]:
+            self.assertAllowed(cmd)
+        self.assertBlocked("bash -c 'cat <<EOF\nx\nEOF\ngit push'")
+
+    def test_empty_quotes_keep_word_start(self):
+        """빈 따옴표는 글자를 남기지 않아 뒤의 `=`가 단어 처음이다."""
+        for cmd in ['echo ""===; echo done', "echo ''===; echo done", 'echo """"===; echo done', "echo \"\"''===; echo done",
+                    "echo ''\"\"===; echo done", "echo $''===; echo done", 'echo ""=ls', '""===; echo done',
+                    'echo $(""===); echo done', '(""===); echo done', 'echo `""===`', 'echo >/dev/null ""===; echo done',
+                    '"" [[ a == a ]]', '""[[ a == a ]]', 'echo =""=; echo done', "echo =''=; echo done", 'echo ""=""=; echo done',
+                    'echo =""a; echo done']:
+            self.assertEqualsBlocked(cmd)
+
+    def test_quoted_or_escaped_first_letter_is_not_word_start(self):
+        for cmd in ["echo foo\\ ===; echo done", "echo foo\\ =ls; echo done", "echo \\ ===; echo done", 'echo ""\\ ===; echo done',
+                    'echo ""\\===; echo done', "echo \"\"'==='; echo done", 'echo ""a===; echo done', 'echo a""===; echo done',
+                    'echo "a"""===; echo done', 'echo "a"===; echo done', "echo $'a'===; echo done", 'echo $""===; echo done',
+                    'echo ""; echo done', "echo ''; echo done", 'echo ""=; echo done', "echo ''=; echo done",
+                    'echo "" ""; echo done', '[[ a == "" ]]; echo done', '[[ "" == "" ]]; echo done',
+                    # 빈 따옴표는 글자 수에도 세지 않는다. 남는 것은 `=` 한 글자다
+                    'echo =""; echo done', "echo =''; echo done", 'echo ""=""; echo done', "echo ''=''; echo done"]:
+            self.assertAllowed(cmd)
+
     def test_unquoted_equals_word_passes_without_worker_role(self):
         for env in [{}, {"GS_ROLE": ""}, {"GS_ROLE": "reviewer"}]:
             self.assertIsNone(self.bash("echo ===", env), env)
