@@ -29,6 +29,7 @@ from typing import IO
 from urllib.parse import quote
 
 from . import metrics
+from .feature import WORK
 
 GRACE = 5.0  # SIGTERM 뒤 SIGKILL까지 기다리는 초
 # 신호로 죽은 자식을 알리는 줄. xargs 문구는 macOS xargs 실측 값이다(`xargs: sleep: terminated with signal 15; aborting`, 종료 코드 1). 리눅스 xargs는 재지 않았다
@@ -205,12 +206,16 @@ def stop_stale(rundir: Path) -> list[str]:
 
 
 def _marked_groups(rundir: Path) -> dict[int, str]:
-    """{프로세스 그룹: 표지}. `/`까지 대조해 `run2`나 다른 feature를 잡지 않는다. gs 자신의 그룹은 끝내지 않는다."""
+    """{프로세스 그룹: 표지}. `/`까지 대조해 `run2`나 다른 feature를 잡지 않는다. gs 자신의 그룹은 끝내지 않는다.
+
+    worktree도 레포 루트가 되어(feature.find_repo_root) 다른 feature의 run이 rundir 아래에 생길 수 있다. 그 run은 잠금이 따로라 옛 검증으로 볼 수 없으므로, rundir 뒤에 WORK가 또 나오는 표지는 잡지 않는다.
+    """
     under = mark(rundir) + "/"
+    other_run = f"/{WORK}/"
     groups = {}
     for pgid, stat, command in _ps():
         row = MARKED_ROW.match(command)
-        if row and row[1].startswith(under) and not stat.startswith("Z") and pgid not in (0, 1, os.getpgrp()):
+        if row and row[1].startswith(under) and other_run not in row[1][len(under) - 1:] and not stat.startswith("Z") and pgid not in (0, 1, os.getpgrp()):
             groups[pgid] = row[1]
     return groups
 

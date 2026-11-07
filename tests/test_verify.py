@@ -310,6 +310,19 @@ class StaleTest(Case):
         self.assertEqual(len(verify.stop_stale(self.run_dir)), 3)
         self.assertEqual([support.group_alive(g) for g in groups], [False] * 3)
 
+    def test_verify_of_a_feature_inside_a_worktree_stays(self):
+        # worktree도 레포 루트가 되어(feature.find_repo_root) 다른 feature의 run이 이 run 아래에 생긴다. 그 잠금은 따로라 옛 검증이 아니다
+        outer = self.dir / ".goldstack/work/outer/run"
+        inner = outer / "wt/01/.goldstack/work/other/run"
+        mine = self.left_behind(outer / "01/1/verify.log")
+        theirs = self.left_behind(inner / "01/1/verify.log")
+        lines = verify.stop_stale(outer)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertFalse(support.group_alive(mine), "지난 검증의 그룹이 살아 있다")
+        self.assertTrue(support.group_alive(theirs), "worktree 안의 다른 feature 검증이 끝났다")
+        self.assertEqual(len(verify.stop_stale(inner)), 1, "그 feature의 gs go는 제 검증을 찾아야 한다")
+        self.assertFalse(support.group_alive(theirs))
+
     def test_mark_is_the_last_word_and_differs_per_verify(self):
         log = self.run_dir / "01/1/verify.log"
         group = self.left_behind(log)
@@ -358,7 +371,8 @@ class StaleTest(Case):
                 (4242, "Z", f"bash -c x\\012exit $? {mine}"),
                 (4243, "S", f"bash -c x\\012exit $? {verify.mark(self.dir / 'other/run/01/1/verify.log')}"),
                 (4244, "S", f"grep x exit $? {mine}"),
-                (4245, "S", f"bash -c grep {mine}")]  # 사람이나 worker가 표지를 찾는 명령
+                (4245, "S", f"bash -c grep {mine}"),  # 사람이나 worker가 표지를 찾는 명령
+                (4246, "S", f"bash -c x\\012exit $? {verify.mark(self.run_dir / 'gs-main-x/base/.goldstack/work/other/run/finish/main-verify.log')}")]  # 임시 worktree 안의 다른 feature
         with mock.patch.object(verify, "_ps", return_value=rows), mock.patch.object(verify, "_signal") as send:
             self.assertEqual(verify.stop_stale(self.run_dir), [])
         send.assert_not_called()
