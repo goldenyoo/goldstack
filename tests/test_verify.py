@@ -2,6 +2,8 @@
 
 끊김 시험은 실제 프로세스에 신호를 보낸다. xargs 문구는 이 맥의 실측 값이다: `printf 'a\\nb\\n' | xargs -P 2 -n 1 sh -c 'kill -TERM $$'`는
 종료 코드 1로 끝나고 `xargs: sh: terminated with signal 15; aborting`을 남긴다(macOS 27.0.1, -KILL이면 signal 9). 리눅스 xargs는 재지 않아 그 시험은 이 맥에서만 돈다.
+
+goldstack-v22 01: 표지와 stop_stale(StaleTest). 실제 sleep을 띄운 부모를 SIGKILL해 살아 남은 그룹을 끝낸다. `gs go`에서 부르는 것은 test_verify_repair.py의 StaleResumeTest가 본다.
 """
 import os
 import signal
@@ -238,6 +240,150 @@ class InterruptedTest(Case):
         res, log = self.retries("kill -TERM $$", "exit 0")
         self.assertEqual((res.ok, res.retries, res.interrupted), (True, 1, False), log)
         self.assertTrue(log.endswith("\n종료 코드: 0\n"), log)
+
+
+# gs 대신 검증을 띄우는 부모. 시험이 이 부모만 SIGKILL한다
+PARENT = """
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from gs import verify
+log = Path(sys.argv[1])
+with log.open("w", encoding="utf-8") as f:
+    verify.run(SimpleNamespace(verify=sys.argv[2], verify_minutes=20), log.parent, f)
+"""
+
+
+class StaleTest(Case):
+    def setUp(self):
+        super().setUp()
+        self.run_dir = self.dir / "feature/run"
+
+    def rows(self):
+        out = subprocess.run(["ps", "-A", "-ww", "-o", "pgid=,command="], capture_output=True).stdout.decode("utf-8", errors="replace")
+        return [row.strip().split(None, 1) for row in out.split("\n") if len(row.split(None, 1)) == 2]
+
+    def left_behind(self, log, command="sleep 300", ready=None):
+        """부모가 command를 검증으로 띄우고 SIGKILL로 죽는다. 살아 남은 프로세스 그룹을 돌려준다."""
+        log.parent.mkdir(parents=True, exist_ok=True)
+        code = str(Path(verify.__file__).parents[1])
+        parent = subprocess.Popen([sys.executable, "-c", PARENT, str(log), command], env={**os.environ, "PYTHONPATH": code},
+                                  stdin=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(parent.wait)
+        self.addCleanup(parent.kill)
+        deadline, suffix, group = time.monotonic() + 120, " " + verify.mark(log), None
+        while group is None or (ready and not ready.exists()):
+            self.assertIsNone(parent.poll(), "부모가 먼저 끝났다")
+            self.assertLess(time.monotonic(), deadline, "표지가 ps에 보이지 않는다")
+            group = next((int(pgid) for pgid, cmd in self.rows() if cmd.endswith(suffix)), None)
+            time.sleep(0.02)
+        self.addCleanup(support.kill_group_quietly, group)
+        os.kill(parent.pid, signal.SIGKILL)
+        parent.wait()
+        self.assertTrue(support.group_alive(group), "부모가 죽어도 검증은 살아 있어야 한다")
+        return group
+
+    def other_group(self, *argv):
+        p = subprocess.Popen(list(argv), stdin=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(p.wait)
+        self.addCleanup(support.kill_group_quietly, p.pid)
+        return p.pid
+
+    def test_group_of_a_killed_parent_ends_and_other_marks_stay(self):
+        mine = self.left_behind(self.run_dir / "01/1/verify.log")
+        others = {"다른 feature": self.left_behind(self.dir / "other/run/01/1/verify.log"),
+                  "이름 앞부분이 같은 디렉터리": self.left_behind(self.dir / "feature/run2/01/1/verify.log"),
+                  "표지 없음": self.other_group("bash", "-c", "sleep 300; exit $?"),
+                  "bash가 아닌데 끝이 같은 명령": self.other_group("sh", "-c", "sleep 300; exit $?", verify.mark(self.run_dir / "01/1/verify.log"))}
+        lines = verify.stop_stale(self.run_dir)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn("지난 실행의 검증이 아직 돌고 있어 끝냈다", lines[0])
+        self.assertIn(verify.mark(self.run_dir / "01/1/verify.log"), lines[0])
+        self.assertFalse(support.group_alive(mine), "지난 검증의 그룹이 살아 있다")
+        for name, group in others.items():
+            self.assertTrue(support.group_alive(group), f"{name}: 건드리면 안 되는 그룹이 끝났다")
+
+    def test_cleanup_ends_every_verify_of_the_run(self):
+        # 티켓 검증과 integration 검증은 같은 worktree를 쓴다. 재개 뒤 어느 검증이 먼저 돌든 옛 검증과 겹치지 않는다
+        logs = ("01/1/verify.log", "02/1/repair/verify.log", "finish/integration-verify.log")
+        groups = [self.left_behind(self.run_dir / log) for log in logs]
+        self.assertEqual(len(verify.stop_stale(self.run_dir)), 3)
+        self.assertEqual([support.group_alive(g) for g in groups], [False] * 3)
+
+    def test_mark_is_the_last_word_and_differs_per_verify(self):
+        log = self.run_dir / "01/1/verify.log"
+        group = self.left_behind(log)
+        [command] = [cmd for pgid, cmd in self.rows() if int(pgid) == group and cmd.startswith("bash ")]
+        self.assertTrue(command.startswith("bash -c sleep 300"), command)
+        self.assertTrue(command.endswith(f" gs-verify:{log.resolve()}"), command)
+        marks = {verify.mark(self.run_dir / rel) for rel in ("01/1/verify.log", "01/2/verify.log", "02/1/verify.log", "finish/main-verify.log")}
+        self.assertEqual(len(marks), 4)
+
+    def test_mark_survives_a_locale_that_garbles_paths(self):
+        run_dir = self.dir / "한글 경로/run"
+        group = self.left_behind(run_dir / "01/1/verify.log")
+        with mock.patch.dict(os.environ, {"LC_ALL": "C"}):  # launchd·cron처럼 로캘이 없으면 macOS ps는 한글을 `M-m...`로 보인다
+            lines = verify.stop_stale(run_dir)
+        self.assertEqual(len(lines), 1, lines)
+        self.assertFalse(support.group_alive(group))
+
+    def test_group_ignoring_sigterm_gets_sigkill(self):
+        ready = self.dir / "ready"
+        group = self.left_behind(self.run_dir / "01/1/verify.log", f"trap '' TERM; sleep 300 & touch {ready}; wait", ready)
+        with mock.patch.object(verify, "GRACE", 0.3), mock.patch.object(verify.os, "killpg", wraps=os.killpg) as killpg:
+            lines = verify.stop_stale(self.run_dir)
+        self.assertIn("끝냈다", lines[0])
+        self.assertEqual([call.args[1] for call in killpg.call_args_list[:2]], [signal.SIGTERM, signal.SIGKILL])
+        self.assertFalse(support.group_alive(group))
+
+    def test_keeping_bash_keeps_the_exit_code(self):
+        for command, code in (("sh -c 'exit 5'", 5), ("exit 3", 3), ("(exit 4) # 주석", 4), ("true &", 0), ("set -e; false; true", 1), ("no-such-command-xyz", 127)):
+            with self.subTest(command=command):
+                res, log, _ = self.run_verify(command)
+                self.assertEqual((res.code, res.interrupted), (code, False), log)
+
+    def test_single_command_killed_by_a_signal_is_still_interrupted(self):
+        res, log, _ = self.run_verify("sh -c 'kill -TERM $$'")
+        self.assertEqual((res.code, res.interrupted), (143, True), log)
+
+    def test_nothing_to_stop_is_silent(self):
+        with mock.patch.object(verify, "_signal") as send:
+            self.assertEqual(verify.stop_stale(self.run_dir), [])
+        send.assert_not_called()
+
+    def test_rows_that_are_not_stale_verifies_are_left_alone(self):
+        mine = verify.mark(self.run_dir / "01/1/verify.log")
+        rows = [(os.getpgrp(), "S", f"bash -c x\\012exit $? {mine}"),  # gs 자신의 그룹
+                (1, "S", f"bash -c x\\012exit $? {mine}"),
+                (4242, "Z", f"bash -c x\\012exit $? {mine}"),
+                (4243, "S", f"bash -c x\\012exit $? {verify.mark(self.dir / 'other/run/01/1/verify.log')}"),
+                (4244, "S", f"grep x exit $? {mine}"),
+                (4245, "S", f"bash -c grep {mine}")]  # 사람이나 worker가 표지를 찾는 명령
+        with mock.patch.object(verify, "_ps", return_value=rows), mock.patch.object(verify, "_signal") as send:
+            self.assertEqual(verify.stop_stale(self.run_dir), [])
+        send.assert_not_called()
+
+    def test_ps_failure_warns_instead_of_raising(self):
+        for failure in (FileNotFoundError("ps"), subprocess.TimeoutExpired("ps", 30), subprocess.CompletedProcess("ps", 1, b"", b"not allowed")):
+            with self.subTest(failure=failure), mock.patch.object(verify.subprocess, "run", side_effect=[failure]):
+                [line] = verify.stop_stale(self.run_dir)
+            self.assertTrue(line.startswith("경고: 지난 실행의 검증을 찾지 못했다"), line)
+
+    def test_group_that_will_not_end_warns_instead_of_raising(self):
+        group = self.left_behind(self.run_dir / "01/1/verify.log")
+        with mock.patch.object(verify, "GRACE", 0.05), mock.patch.object(verify, "_signal", return_value=False):
+            [line] = verify.stop_stale(self.run_dir)
+        self.assertTrue(line.startswith("경고: 지난 실행의 검증을 끝내지 못했다"), line)
+        self.assertIn(str(group), line)
+        self.assertTrue(support.group_alive(group))
+
+    def test_ps_failing_while_ending_warns_instead_of_raising(self):
+        mine = verify.mark(self.run_dir / "01/1/verify.log")
+        rows = [(4242, "S", f"bash -c x\\012exit $? {mine}")]
+        with mock.patch.object(verify, "_ps", side_effect=[rows, OSError("ps 없음")]), mock.patch.object(verify, "_signal", return_value=False):
+            [line] = verify.stop_stale(self.run_dir)
+        self.assertTrue(line.startswith("경고: 지난 실행의 검증을 끝내지 못했다"), line)
+        self.assertIn("ps 없음", line)
 
 
 if __name__ == "__main__":

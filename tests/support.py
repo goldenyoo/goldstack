@@ -116,6 +116,19 @@ def alive(pid):
     return bool(stat) and not stat.startswith("Z")
 
 
+def group_alive(pgid):
+    """프로세스 그룹에 좀비 아닌 프로세스가 있나."""
+    rows = subprocess.run(["ps", "-A", "-o", "pgid=,stat="], capture_output=True, text=True).stdout.splitlines()
+    return any(int(row.split()[0]) == pgid and not row.split()[1].startswith("Z") for row in rows if len(row.split()) == 2)
+
+
+def kill_group_quietly(pgid):
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):  # macOS: 좀비만 남은 그룹이면 PermissionError
+        pass
+
+
 def kill_quietly(pid):
     try:
         os.kill(pid, signal.SIGKILL)

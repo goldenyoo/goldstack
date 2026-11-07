@@ -17,6 +17,7 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 티켓 검증이 끊기면(verify.Result.interrupted: 신호로 죽은 것처럼 보인다) 코드 결함으로 보지 않고 수리 worker 없이 같은 트리로 한 번 다시 검증한다(_verify_interrupted). 수리 뒤의 검증이 끊겨도 같다.
 다시 검증이 통과하면 병합, 끊김이 아닌 실패면 일반 실패처럼 수리, 또 끊기면 _fail이다. 시간 초과, 병합 충돌, 검증하는 동안 integration이 바뀐 것의 처리는 끊김이어도 그대로다.
 다시 검증은 network_resume의 verify_again으로 이어 간다: 어디서 gs가 죽어도 다음 gs go가 다시 검증부터 하고, 그 검증이 끊기면 실패다. 옛 state에는 이 값이 없고 끊기지 않은 것으로 읽는다.
+gs만 SIGKILL로 죽으면 돌던 검증은 살아 남는다. 다음 gs go가 잠금을 잡자마자 표지로 찾아 끝낸다(verify.stop_stale).
 로그는 첫 검증의 verify.log에 이어 쓴다. `gs go` 출력과 티켓 결과의 이유에 `검증 끊김`이 나오고, 보고서의 검증별 측정 표에는 끊긴 검증의 라벨이 `-끊김`으로 끝난다.
 수리 worker의 agy 상한은 수정 worker와 같다: 닿으면 띄우지 않고 티켓을 실패시키지 않고 다음 단계(다시 검증)로 간다.
 끝난 worker 처리는 단계로 나뉜다: 결과 확인(_finish, _check_worker) → 리뷰(_review_stage)와 수정 worker 판단(_next_fix) → catch-up·병합·검증(_merge_stage).
@@ -180,6 +181,10 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         url, finished = None, False
         issue_lines: list[str] = []
         try:
+            # 지난 gs만 죽었으면 그 검증이 돌고 있다. 트리를 되돌리기(_prepare_integration) 전에 끝낸다: 그 뒤에도 쓰게 두면 티켓이 `worker가 integration worktree를 바꿨다`로 실패한다(실측).
+            # 잠금 안에서는 옛 검증이 새로 생기지 않으니 여기 한 번이 이번 실행의 모든 검증(티켓, verify_again, 마무리)에 앞선다
+            for line in verify.stop_stale(r.rundir):
+                say(f"■ {line}")
             git.run(repo, "fetch", "-q", r.remote, r.base)
             _require_committed(r)
             _begin(r)

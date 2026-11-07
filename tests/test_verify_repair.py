@@ -4,6 +4,8 @@
 수리 중 재개(gs가 죽음, 네트워크), 수리하지 않는 실패, agy 상한, 옛 state를 끝까지 돌려 본다. 시간에 기대지 않고 파일 신호로 순서를 잡는다.
 
 goldstack-v21 04: 끊긴 검증은 수리 없이 한 번 다시 돈다(InterruptedTest, InterruptedResumeTest). 검증 스크립트가 실제 신호로 죽는다.
+
+goldstack-v22 01: gs만 SIGKILL로 죽어 살아 남은 검증을 다음 gs go가 끝낸다(StaleResumeTest, InterruptedResumeTest의 다시 검증).
 """
 import json
 import os
@@ -18,9 +20,9 @@ from unittest import mock
 
 import support
 import test_network_wait
-from support import alive, kill_quietly, sh
+from support import alive, group_alive, kill_group_quietly, kill_quietly, sh
 
-from gs import config, go, report, retrolog, review, state, transient, worker
+from gs import config, go, report, retrolog, review, state, transient, verify, worker
 
 IS_REPAIR = 'grep -q "^## 검증 실패(고칠 것)" "$GS_BRIEF"'
 BREAKS = 'touch BROKEN; echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"'
@@ -34,6 +36,8 @@ KILL_CHILD = "sh -c 'kill -KILL $$'; exit $?"  # 자식이 신호로 죽어 137�
 # xargs는 자식이 신호로 죽어도 1로 끝난다. 문구는 이 맥의 실측 값이다(test_verify.py)
 XARGS = "sh -c 'kill -TERM $$'; echo 'xargs: sleep: terminated with signal 15; aborting'; exit 1"
 NOTHING = ":"  # 이 검증은 끊기지 않는다: BROKEN이 있으면 실패, 없으면 통과다
+HANG = 'echo $$ > "$here/verify.pid"; touch "$here/in_verify"; while :; do sleep 0.05; done'  # gs가 죽어도 돌아간다(gs_killed_in_verify)
+STALE_LINE = "지난 실행의 검증이 아직 돌고 있어 끝냈다"
 
 
 class Base(support.GoTest):
@@ -93,6 +97,37 @@ class Base(support.GoTest):
 
         with mock.patch("gs.go._verify", side_effect=stopping), self.assertRaises(KeyboardInterrupt):
             self.go("--only", "01")
+
+    def gs_killed_in_verify(self, log):
+        """gs go를 따로 띄워 HANG 검증에 닿으면 gs만 SIGKILL한다. 살아 남은 검증의 프로세스 그룹을 돌려준다. 그 검증의 표지가 log(rundir 기준)인지 본다."""
+        output = Path(self.tmp.name) / "first.log"
+        with output.open("w") as f:
+            proc = subprocess.Popen([sys.executable, "-m", "gs.cli", "--repo", str(self.repo), "go", "demo", "--only", "01"],
+                                    stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+        try:
+            deadline = time.monotonic() + 120
+            while not (self.bin / "in_verify").exists():
+                self.assertIsNone(proc.poll(), output.read_text())
+                self.assertLess(time.monotonic(), deadline, output.read_text())
+                time.sleep(0.05)
+            group = os.getpgid(int((self.bin / "verify.pid").read_text()))
+            self.addCleanup(kill_group_quietly, group)
+            os.kill(proc.pid, signal.SIGKILL)  # gs만 죽는다
+            proc.wait()
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+        self.assertTrue(group_alive(group))
+        command = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(group)], capture_output=True, text=True).stdout.strip()
+        self.assertTrue(command.endswith(" " + verify.mark(self.rundir / log)), command)
+        return group
+
+    def assert_stale_ended(self, group, out):
+        """새 검증이 돌기 전에 옛 그룹이 끝났다: 트리를 되돌리는 준비(`■ integration:`)보다 먼저 끝냈다고 출력한다."""
+        self.assertFalse(group_alive(group), out)
+        self.assertIn(STALE_LINE, out)
+        self.assertLess(out.index(STALE_LINE), out.index("■ integration:"), out)
 
 
 class RepairTest(Base):
@@ -847,6 +882,52 @@ class InterruptedTest(Base):
         self.assertIn("late", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
 
 
+class StaleResumeTest(Base):
+    def test_stale_ticket_verify_is_ended_and_its_files_do_not_fail_the_new_one(self):
+        # 옛 검증이 트리에 계속 쓴다. 트리를 되돌리기 전에 끝내야 티켓이 `worker가 integration worktree를 바꿨다`로 실패하지 않는다
+        self.verifies(HANG.replace("sleep 0.05", "echo x > stale_file; sleep 0.05"))
+        self.worker(GOOD, REPAIRS)
+        other = subprocess.Popen(["bash", "-c", f"sleep 300{verify.KEEP_BASH}", verify.mark(self.repo / ".goldstack/work/other/run/01/1/verify.log")],
+                                 stdin=subprocess.DEVNULL, start_new_session=True)
+        self.addCleanup(other.wait)
+        self.addCleanup(kill_group_quietly, other.pid)
+        group = self.gs_killed_in_verify("01/1/verify.log")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assert_stale_ended(group, out)
+        self.assertTrue(group_alive(other.pid), "다른 feature의 검증을 끝냈다")
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.failures, ts.repairs), ("merged", 0, []))
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "passed")])
+        self.assertNotIn("stale_file", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+
+    def test_stale_finish_verify_is_ended(self):
+        self.verifies(NOTHING, HANG)  # 첫 검증은 티켓, 둘째는 마무리의 integration이다
+        self.worker(GOOD, REPAIRS)
+        group = self.gs_killed_in_verify("finish/integration-verify.log")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assert_stale_ended(group, out)
+        self.assertEqual(self.calls(), ["01"])
+        self.assertEqual((self.ts().status, state.load(self.rundir, "demo").finish["phase"]), ("merged", "verified"))
+        self.assertTrue((self.rundir / "finish/integration-verify.log").read_text().endswith("\n종료 코드: 0\n"))
+
+    def test_no_stale_verify_prints_nothing(self):
+        self.worker(GOOD, REPAIRS)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn(STALE_LINE, out)
+        self.assertNotIn("경고: 지난 실행의 검증", out)
+
+    def test_ps_failing_warns_and_the_run_goes_on(self):
+        self.worker(GOOD, REPAIRS)
+        with mock.patch("gs.verify._ps", side_effect=OSError("ps 없음")):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("■ 경고: 지난 실행의 검증을 찾지 못했다: OSError: ps 없음", out)
+        self.assertEqual(self.ts().status, "merged")
+
+
 class InterruptedResumeTest(Base):
     def assert_same_attempt(self):
         ts = self.ts()
@@ -854,33 +935,13 @@ class InterruptedResumeTest(Base):
         return ts
 
     def test_gs_killed_during_the_second_run_continues_with_it(self):
-        self.verifies(TERM_SELF, 'echo $$ > "$here/verify.pid"; touch "$here/in_verify"; while :; do sleep 0.05; done')
+        self.verifies(TERM_SELF, HANG)
         self.worker(GOOD, REPAIRS)
-        log = Path(self.tmp.name) / "first.log"
-        with log.open("w") as f:
-            proc = subprocess.Popen([sys.executable, "-m", "gs.cli", "--repo", str(self.repo), "go", "demo", "--only", "01"],
-                                    stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
-        group = None
-        try:
-            deadline = time.monotonic() + 120
-            while not (self.bin / "in_verify").exists():
-                self.assertIsNone(proc.poll(), log.read_text())
-                self.assertLess(time.monotonic(), deadline, log.read_text())
-                time.sleep(0.05)
-            group = os.getpgid(int((self.bin / "verify.pid").read_text()))
-            os.kill(proc.pid, signal.SIGKILL)  # gs만 죽는다
-            proc.wait()
-            mark = self.ts().network_resume
-            self.assertEqual((self.ts().status, mark["verify_again"], mark["done"]), ("running", True, True))
-            os.killpg(group, signal.SIGKILL)  # 지난 실행의 검증이 새 검증과 같은 트리를 쓰지 않게
-            group = None
-            code, out, err = self.go("--only", "01")
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-                proc.wait()
-            if group is not None:
-                os.killpg(group, signal.SIGKILL)
+        group = self.gs_killed_in_verify("01/1/verify.log")  # 다시 검증은 끊긴 검증의 로그에 이어 쓴다
+        mark = self.ts().network_resume
+        self.assertEqual((self.ts().status, mark["verify_again"], mark["done"]), ("running", True, True))
+        code, out, err = self.go("--only", "01")
+        self.assert_stale_ended(group, out)
         self.assertEqual(code, 0, out + err)
         self.assertIn("끊긴 검증을 같은 worktree에서 다시 한다", out)
         self.assertIn("지난 검증이 끊겼다. 같은 worktree에서 다시 검증부터 잇는다", out)
