@@ -14,7 +14,7 @@
 ## 빌드·시험
 - Python 3.12(`.python-version`), `uv`. 설치: `uv tool install --reinstall .`.
 - 시험은 **unittest**다(pytest 아님). 린터·포맷터 설정 없음.
-- 전체 병렬: `ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p`. worker와 함께 돌면 5–10분 걸린다(goldstack-v10 보고서). `uv run`을 쓰면 신호 줄이 남지 않아 끊김으로 판정되지 않으므로 쓰지 않는다. 순차 실행은 훨씬 느리니 쓰지 않는다.
+- 전체 병렬: `ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p`. worker와 함께 돌면 5–10분 걸린다(goldstack-v10 보고서). `uv run`을 쓰면 신호 줄이 남지 않아 끊김으로 판정되지 않으므로 쓰지 않는다. 대신 `verify` 앞에 `uv sync --locked -q`를 둔다. 없으면 버전을 올린 뒤 `.venv` 메타데이터가 옛 값으로 남는다. 순차 실행은 훨씬 느리니 쓰지 않는다.
 - 한 파일: `uv run python -m unittest discover -s tests -p test_x.py`.
 - skill 시험은 `tests/test_skill_<이름>.py`(grill, go, idea, retro, adopt, feedback, overnight)로 나뉜다. `/overnight` 문장 일부는 `tests/test_skill_go.py`가 단언하니 overnight 글을 고치면 그 시험도 돌린다. `WORD_LIMITS`와 모든 skill 공통 시험은 `tests/test_skills.py`에 있다. skill 글만 고치면 해당 `test_skill_<이름>.py`를 쓰고, 상한을 바꿀 때만 `test_skills.py`를 건드린다.
 - sandbox(codex worker)에서 쓸 한 파일 시험: `.venv/bin/python -m unittest discover -s tests -p test_x.py`. `.venv`는 worktree setup(`uv sync --locked`)이 sandbox 전에 만든다. `uv run`은 `~/.cache/uv` 쓰기 차단으로 sandbox에서 실패한다.

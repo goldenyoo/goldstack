@@ -1,6 +1,6 @@
 ---
 feature: goldstack-v23
-verify: .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
+verify: uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
 max_workers: 3
 ---
 # goldstack-v23 — spec
@@ -55,3 +55,6 @@ worker hook의 `=` 확장 판정에서 놓침과 오차단을 줄인다.
 ### 라운드 3 — 티켓 분해 (모두 추천대로)
 사람이 되물음: Gemini를 쓰지 않는 이유 → `large+` 3장에 두 번째 리뷰어로 쓰며 나머지는 기존 기준을 따랐다고 답함. 확대(B) 대신 지금대로(A)로 확정.
 1. 티켓 표와 범위 밖 목록: 추천 그대로 → 확정
+
+### 밤샘 수정 (2026-11-08)
+`uv run`을 빼면서 동기화도 사라져, 버전을 올린 티켓에서 `.venv` 메타데이터가 옛 값으로 남아 `test_version`이 실패했다(v22-04). `verify` 앞에 `uv sync --locked -q`를 붙인다. 결정 2-4(`.venv/bin/python` 사용)는 그대로다. 측정: 동기화 전 0.2.5, 뒤 0.2.6.
