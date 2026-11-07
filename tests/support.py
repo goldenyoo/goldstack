@@ -116,6 +116,19 @@ def alive(pid):
     return bool(stat) and not stat.startswith("Z")
 
 
+def group_alive(pgid):
+    """프로세스 그룹에 좀비 아닌 프로세스가 있나."""
+    rows = subprocess.run(["ps", "-A", "-o", "pgid=,stat="], capture_output=True, text=True).stdout.splitlines()
+    return any(int(row.split()[0]) == pgid and not row.split()[1].startswith("Z") for row in rows if len(row.split()) == 2)
+
+
+def kill_group_quietly(pgid):
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):  # macOS: 좀비만 남은 그룹이면 PermissionError
+        pass
+
+
 def kill_quietly(pid):
     try:
         os.kill(pid, signal.SIGKILL)
@@ -460,7 +473,8 @@ class GoTest(unittest.TestCase):
 
     # --- 08 리뷰(claude) 반영 ---
     def break_main(self, advance=False):
-        """main 검증(분리 HEAD)에서 file_01이 있으면 실패하는 verify. advance면 첫 main 검증 도중 다른 사람이 main에 push한다."""
+        """main 검증(분리 HEAD)에서 file_01이 있으면 실패하는 verify. advance면 revert 직전의 검증(코드가 같아 다시 도는 재시도) 도중
+        다른 사람이 main에 push해 revert push가 거부된다."""
         (self.bin / "advance.sh").write_text(textwrap.dedent(f"""\
             here="$(dirname "$0")"
             [ -f "$here/advanced" ] && exit 0
@@ -471,7 +485,8 @@ class GoTest(unittest.TestCase):
         (self.bin / "verify.sh").write_text(textwrap.dedent(f"""\
             git symbolic-ref -q HEAD >/dev/null && exit 0  # integration(브랜치)은 통과
             test -f file_01 || exit 0
-            {'bash "$(dirname "$0")/advance.sh"' if advance else ':'}
+            {'[ -f "$(dirname "$0")/failed_once" ] && bash "$(dirname "$0")/advance.sh"' if advance else ':'}
+            touch "$(dirname "$0")/failed_once"
             exit 1
             """))
         self.parallel(1, verify=f"bash {self.bin / 'verify.sh'}")

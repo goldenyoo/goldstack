@@ -5,6 +5,7 @@
 리뷰로 가는 티켓은 리뷰부터 잇는 표시(_mark_resume)를 먼저 남긴다.
 """
 import inspect
+import json
 import os
 import textwrap
 import unittest
@@ -15,10 +16,10 @@ from unittest import mock
 import support
 import test_network_wait
 import test_review_target
-from support import ticket
+from support import sh, ticket
 from test_second_review import finding
 
-from gs import git, go, review, state, transient, worker
+from gs import finish, git, go, review, state, transient, worker
 
 STAGES = ("_check_worker", "_review_stage", "_merge_stage")
 STEPS = ("_net_hold", "_net_park", "_end_fix", "_review", "_rereview", "_call_reviewers", "_call_rereviewers",
@@ -334,6 +335,243 @@ class NetworkWaitStageTest(support.GoTest):
         self.assertLess(events.index(("12", "_net_park")), events.index(("11", "_review_stage")), events)
         restarted = [i for i, e in enumerate(events) if e == ("11", "_mark_resume")][1]  # 첫째는 _net_hold의 표시다
         self.assertLess(restarted, events.index(("12", "_review_stage")), events)  # 미룬 리뷰는 다시 띄운 뒤에
+
+
+class MainRetryTest(support.GoTest):
+    """실제 `gs go`: main 검증 실패가 코드가 같은 병합이면 revert 전에 한 번 다시 돈다. 원격에 든 revert 개수를 본다."""
+    FLAKY = "flaky: main 재시도 1번 만에 통과"
+
+    def main_fails(self, times):
+        """integration(브랜치)은 통과하고 main 검증(분리 HEAD)은 앞 times번 실패한다. 돈 worktree를 bin/main_runs에 줄로 적는다."""
+        (self.bin / "verify.sh").write_text(textwrap.dedent(f"""\
+            git symbolic-ref -q HEAD >/dev/null && exit 0
+            echo "$PWD" >> "{self.bin}/main_runs"
+            test "$(wc -l < "{self.bin}/main_runs")" -gt {times}
+            """))
+        self.parallel(1, verify=f"bash {self.bin / 'verify.sh'}")
+
+    def go_01(self):
+        return self.go("--only", "01")
+
+    def dies_in_retry(self):
+        real = finish._verify
+
+        def verify(r, wt, label):
+            if label == "main-retry":
+                raise RuntimeError("gs가 죽었다")
+            return real(r, wt, label)
+
+        with mock.patch("gs.finish._verify", side_effect=verify), self.assertRaisesRegex(RuntimeError, "gs가 죽었다"):
+            self.go_01()
+        f = self.finish()
+        self.assertEqual((f["phase"], f["main_ok"]), ("main_retry", False), f)
+        self.assertEqual(self.reverts(), [])
+        self.assertIn("file_01", self.remote_files())
+
+    def finish(self):
+        return state.load(self.rundir, "demo").finish
+
+    def runs(self):
+        return self.lines("main_runs")
+
+    def log(self, label):
+        return self.rundir / f"finish/{label}-verify.log"
+
+    def reverts(self):
+        merge = self.finish()["merge_sha"]
+        return sh(self.remote, "git", "log", "--format=%H", "--fixed-strings", f"--grep=This reverts commit {merge}", "main").split()
+
+    def assert_flaky_kept(self):
+        f = self.finish()
+        self.assertEqual((f["phase"], f["main_ok"]), ("verified", True), f)
+        self.assertIn(self.FLAKY, f["outcome"])
+        self.assertIn(f"결과: {f['outcome']}", self.final_report())
+        self.assertIn("file_01", self.remote_files())
+        self.assertEqual(self.reverts(), [])
+        self.assertEqual(self.calls(), ["01"])
+        self.assertEqual(sum(x.startswith("pr merge ") for x in self.lines("gh.log")), 1)
+
+    def assert_reverted_once(self):
+        f = self.finish()
+        self.assertEqual((f["phase"], f["main_ok"]), ("reverted", False), f)
+        self.assertEqual(self.reverts(), [f["revert_sha"]])
+        self.assertNotIn("file_01", self.remote_files())
+        self.assertNotIn(self.FLAKY, f["outcome"])
+        self.assertEqual(self.calls(), ["01"])
+
+    def test_flaky_main_keeps_the_merge(self):
+        self.main_fails(1)
+        code, out, err = self.go_01()
+        self.assertEqual(code, 0, out + err)
+        self.assert_flaky_kept()
+        self.assertTrue(self.log("main").exists())
+        self.assertIn("종료 코드: 0", self.log("main-retry").read_text())
+        first, second = self.runs()
+        self.assertNotEqual(first, second)  # 앞 검증이 더럽힌 worktree를 쓰지 않는다
+        self.assertEqual(list(self.rundir.glob("gs-main-*")), [])
+
+    def test_second_failure_reverts_once_and_report_shows_the_last_run(self):
+        self.main_fails(2)
+        code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        self.assert_reverted_once()
+        self.assertEqual(len(self.runs()), 2)
+        self.assertIn("검증: `main-retry`", self.final_report())
+        self.assertEqual(self.go_01()[0], 1)  # 같은 병합을 두 번 revert하지 않는다
+        self.assert_reverted_once()
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_code_outside_goldstack_reverts_without_retry(self):
+        # integration 검증을 통과한 뒤 다른 사람이 main에 push했다. 병합 커밋에 검증하지 않은 코드가 들어간다.
+        self.main_fails(1)
+        real = finish._publish
+
+        def publish(r, path):
+            result = real(r, path)
+            self.someone("echo other > other.txt", "git add other.txt", "git commit -qm 'someone else'")
+            return result
+
+        with mock.patch("gs.finish._publish", side_effect=publish):
+            code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        self.assert_reverted_once()
+        self.assertEqual(len(self.runs()), 1)
+        self.assertFalse(self.log("main-retry").exists())
+
+    def test_old_state_without_verified_head_reverts_without_retry(self):
+        self.main_fails(1)
+        with mock.patch("gs.finish._postmerge", side_effect=RuntimeError("gs가 죽었다")), self.assertRaisesRegex(RuntimeError, "gs가 죽었다"):
+            self.go_01()
+        path = self.rundir / "state.json"
+        old = json.loads(path.read_text())
+        del old["finish"]["verified_head"]
+        path.write_text(json.dumps(old))
+        code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        self.assert_reverted_once()
+        self.assertEqual(len(self.runs()), 1)
+
+    def test_base_moved_during_first_verify_is_a_recheck_not_flaky(self):
+        self.main_fails(1)
+        real = finish._verify
+
+        def verify(r, wt, label):
+            ok = real(r, wt, label)
+            if label == "main":
+                self.someone("echo other > other.txt", "git add other.txt", "git commit -qm 'someone else'")
+            return ok
+
+        with mock.patch("gs.finish._verify", side_effect=verify):
+            code, out, err = self.go_01()
+        self.assertEqual(code, 0, out + err)
+        f = self.finish()
+        self.assertEqual(f["phase"], "verified", f)
+        self.assertNotIn("flaky", f["outcome"])
+        self.assertTrue(self.log("main-recheck").exists())
+        self.assertFalse(self.log("main-retry").exists())
+        self.assertEqual(self.reverts(), [])
+
+    def test_git_error_before_retry_reports_the_phase_and_next_go_continues(self):
+        self.main_fails(1)
+        real = finish._check_merge
+        seen = []
+
+        def check(r):
+            seen.append(r.st.finish["phase"])
+            if r.st.finish["phase"] == "main_retry" and seen.count("main_retry") == 1:
+                raise git.GitError("일시 오류")
+            return real(r)
+
+        with mock.patch("gs.finish._check_merge", side_effect=check):
+            code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        f = self.finish()
+        self.assertEqual((f["phase"], f["main_ok"]), ("main_retry", False), f)
+        report = self.final_report()
+        self.assertIn("마무리: main_retry · ", report)
+        self.assertIn("main 검증 실패", report)
+        self.assertNotIn("병합 전", report)
+        self.assertIn("검증: `main`", report)  # 재시도 전이니 실패 증거는 첫 검증이다
+        self.assertEqual(len(self.runs()), 1)
+        code, out, err = self.go_01()
+        self.assertEqual(code, 0, out + err)
+        self.assert_flaky_kept()
+
+    def retry_setup_fails(self):
+        real = finish._prepare_base
+
+        def prepare(r, wt):
+            return None if r.st.finish["phase"] == "main_retry" else real(r, wt)
+
+        with mock.patch("gs.finish._prepare_base", side_effect=prepare):
+            code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        f = self.finish()
+        self.assertEqual((f["phase"], f["main_ok"], f["outcome"]), ("main_retry", False, "base 미검증(준비 실패)"), f)
+        self.assertEqual(self.reverts(), [])
+        self.assertIn("file_01", self.remote_files())
+        self.assertEqual(len(self.runs()), 1)
+        self.assertIn("마무리: main_retry · ", self.final_report())
+
+    def test_retry_setup_failure_passes_on_next_go_as_flaky(self):
+        self.main_fails(1)
+        self.retry_setup_fails()
+        code, out, err = self.go_01()
+        self.assertEqual(code, 0, out + err)
+        self.assert_flaky_kept()
+        self.assertEqual(len(self.runs()), 2)
+        self.assertTrue(self.log("main-retry").exists())
+
+    def test_retry_setup_failure_fails_on_next_go_and_reverts_without_a_third_run(self):
+        self.main_fails(2)  # 세 번째로 돌면 통과한다. 재시도가 한 번이면 거기까지 가지 않는다
+        self.retry_setup_fails()
+        code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        self.assert_reverted_once()
+        self.assertEqual(len(self.runs()), 2)
+
+    def test_dead_retry_passes_on_next_go(self):
+        self.main_fails(1)
+        self.dies_in_retry()
+        self.assertEqual(len(self.runs()), 1)
+        code, out, err = self.go_01()
+        self.assertEqual(code, 0, out + err)
+        self.assert_flaky_kept()
+        self.assertEqual(len(self.runs()), 2)  # 첫 검증을 다시 돌리지 않고 재시도를 잇는다
+        self.assertTrue(self.log("main-retry").exists())
+
+    def test_dead_retry_fails_on_next_go_and_reverts_once(self):
+        self.main_fails(2)
+        self.dies_in_retry()
+        code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        self.assert_reverted_once()
+        self.assertEqual(len(self.runs()), 2)
+        self.assertEqual(self.go_01()[0], 1)
+        self.assert_reverted_once()
+
+    def test_dead_retry_after_someone_reverted_does_not_revert_again(self):
+        self.main_fails(1)
+        self.dies_in_retry()
+        theirs = self.someone(f"git revert --no-edit -m 1 {self.finish()['merge_sha']}")
+        code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        f = self.finish()
+        self.assertEqual((f["phase"], f["revert_sha"]), ("reverted", theirs), f)
+        self.assertEqual(self.reverts(), [theirs])
+        self.assertEqual(len(self.runs()), 1)
+
+    def test_dead_retry_after_base_moved_is_a_recheck_not_flaky(self):
+        self.main_fails(1)
+        self.dies_in_retry()
+        self.someone("echo other > other.txt", "git add other.txt", "git commit -qm 'someone else'")
+        code, out, err = self.go_01()
+        self.assertEqual(code, 0, out + err)
+        f = self.finish()
+        self.assertEqual(f["phase"], "verified", f)
+        self.assertNotIn("flaky", f["outcome"])
+        self.assertTrue(self.log("main-recheck").exists())
+        self.assertEqual(self.reverts(), [])
 
 
 class CallBoundaryTest(unittest.TestCase):

@@ -1,5 +1,7 @@
 """goldstack-v3 02: 마무리 상태 줄은 코드가 state에서 쓰고, 마무리가 끝난 최종 report.md를 base에도 push한다."""
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -43,6 +45,25 @@ class StatusLineTest(unittest.TestCase):
                 self.assertEqual(self.line(**finish), want)
         self.assertEqual(self.line(merged=False, phase="not_merged", integration_ok=True),
                          "마무리: not_merged · merged 티켓 없음")
+
+
+class RevertFirstLineTest(unittest.TestCase):
+    def render(self, **finish):
+        st = state.State(feature="demo", finish=finish)
+        with tempfile.TemporaryDirectory() as tmp:
+            r = SimpleNamespace(st=st, name="demo", order=[], base="main", base_ref="origin/main", remote="origin",
+                                rundir=Path(tmp), repo=Path(tmp), iwt=Path(tmp),
+                                feat=SimpleNamespace(tickets={}, spec=SimpleNamespace(verify="v")))
+            with mock.patch.object(report, "verification_failure", return_value=""), \
+                    mock.patch.object(report, "evidence", return_value=""):
+                return report._render(r, "모델 요약", 4000)
+
+    def test_reverted_summary_starts_with_state_and_next_command(self):
+        text = self.render(phase="reverted", main_ok=False, revert_sha=SHA)
+        self.assertIn("## Summary\n\n마무리: reverted · main 검증 실패 → revert abcdef01 · 다음 명령: `gs go demo`\n\n모델 요약\n", text)
+
+    def test_other_phases_have_no_next_command_line(self):
+        self.assertNotIn("gs go demo", self.render(phase="verified", main_ok=True))
 
 
 class FinalReportOnBaseTest(unittest.TestCase):
@@ -110,6 +131,9 @@ class FinalReportOnBaseTest(unittest.TestCase):
         self.assertEqual(self.base_report(), self.final_report())
         self.assertIn(f"\n마무리: reverted · main 검증 실패 → revert {f['revert_sha'][:8]}\n", self.base_report())
         self.assertNotIn("file_01", self.remote_files())  # 보고서 커밋은 revert를 되돌리지 않는다
+        # Summary 바로 아래 첫 줄은 모델 요약이 아니라 코드가 넣은 revert 상태와 다음 명령이다
+        self.assertIn(f"## Summary\n\n마무리: reverted · main 검증 실패 → revert {f['revert_sha'][:8]} · 다음 명령: `gs go demo`\n\n",
+                      self.base_report())
 
     def test_not_merged_pushes_nothing(self):
         before = self.tip()
