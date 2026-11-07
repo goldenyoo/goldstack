@@ -87,6 +87,7 @@ class GrillBreakdownTest(unittest.TestCase):
         comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
         for text in ("일렬 경로", "평균 동시", "`일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1`",
                      "tier: small|medium|large와 이유 한 줄", "문서 small", "재개 흐름 large",
+                     "코드와 상한 있는 skill 글을 함께 고치는 티켓은 `small`로 잡지 않는다(goldstack-v11 09",
                      '"같은 파일" 또는 "앞 결과 필요"', "한 장으로 묶는다",
                      "두 번째 리뷰어(`second_reviewer`)", "verify: 문서·설정 티켓은 좁은 명령, 코드 티켓은 `전체`"):
             self.assertIn(text, comment)

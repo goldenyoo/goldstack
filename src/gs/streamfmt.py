@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
+from collections import deque
 from pathlib import Path
 
 
@@ -149,6 +151,110 @@ def _message_of(ev: dict) -> tuple[str, str] | None:
                  and isinstance(b.get("text"), str) and b["text"].strip()] if isinstance(blocks, list) else []
         return ("assistant", "\n".join(parts)) if parts else None
     return None
+
+
+COMMANDS_LIMIT = 60  # 기록에 남기는 명령 수 상한(끝에서부터). 검증은 대개 뒤쪽에서 돈다
+COMMAND_CHARS = 240  # 명령 한 줄의 글자 상한
+
+
+def commands(log: Path, limit: int = COMMANDS_LIMIT) -> tuple[list[dict], int]:
+    """worker 로그에서 worker가 실행한 명령과 결과를 시간 순으로 뽑는다. (끝의 limit개, 앞에서 잘린 개수).
+
+    각 항목은 `{"command": 명령, "ok": 성공 여부 또는 None(결과를 못 찾음), "detail": 종료 코드나 오류 요약}`이다.
+    claude는 Bash `tool_use`를 `tool_result`의 `is_error`와 짝지어 읽는다(종료 코드는 오류 본문 "Exit code N"에서만 얻는다).
+    codex는 완료된 `command_execution`의 `exit_code`, agy는 명령 매개변수(`CommandLine`·`command`)가 있는 tool 단계의 DONE·ERROR다.
+    읽을 수 없거나 모양이 다른 줄은 건너뛴다. 로그는 몇 MB일 수 있어 한 줄씩 읽고 limit개만 쥔다. 못 읽으면 ([], 0).
+    """
+    kept: deque[dict] = deque(maxlen=max(limit, 0))
+    pending: dict[str, dict] = {}  # claude: tool_use id → 항목(결과를 기다림)
+    total = 0
+    try:
+        with Path(log).open(encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(ev, dict):
+                    continue
+                for entry, result_for in _commands_of(ev):
+                    if result_for is not None:
+                        _settle(pending.pop(result_for, None), entry)
+                        continue
+                    total += 1
+                    kept.append(entry)
+                    if entry.get("_id"):
+                        pending[entry["_id"]] = entry
+    except OSError:
+        return [], 0
+    out = [{k: v for k, v in e.items() if k != "_id"} for e in kept]
+    return out, total - len(out)
+
+
+def _commands_of(ev: dict) -> list[tuple[dict, str | None]]:
+    """이벤트 하나가 주는 (항목, 결과를 받을 tool_use id)들. id가 None이면 새 명령 항목, 있으면 그 명령의 결과다."""
+    kind = ev.get("type")
+    if ev.get("event") == "step_update":
+        su = ev.get("step_update")
+        if not isinstance(su, dict) or su.get("step_type") != "tool" or su.get("state") not in ("DONE", "ERROR"):
+            return []
+        info = su.get("tool_info") if isinstance(su.get("tool_info"), dict) else {}
+        params = info.get("parameters")
+        cmd = next((params[k] for k in ("CommandLine", "command") if isinstance(params, dict)
+                    and isinstance(params.get(k), str) and params[k].strip()), None)
+        if cmd is None:
+            return []
+        err = info.get("error") if isinstance(info.get("error"), dict) else {}
+        failed = su.get("state") == "ERROR"
+        return [(_entry(cmd, not failed, _short(err.get("message")) if failed and err.get("message") else
+                        "ERROR" if failed else "DONE"), None)]
+    if kind == "item.completed":
+        item = ev.get("item")
+        if not isinstance(item, dict) or item.get("type") != "command_execution" or not isinstance(item.get("command"), str):
+            return []
+        code = item.get("exit_code")
+        ok = code == 0 if isinstance(code, int) and not isinstance(code, bool) else None
+        return [(_entry(item["command"], ok, f"종료 {code}" if ok is not None else "종료 코드 없음"), None)]
+    blocks = (ev.get("message") or {}).get("content") if isinstance(ev.get("message"), dict) else None
+    if not isinstance(blocks, list):
+        return []
+    found: list[tuple[dict, str | None]] = []
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        if kind == "assistant" and b.get("type") == "tool_use" and b.get("name") == "Bash":
+            inp = b.get("input")
+            cmd = inp.get("command") if isinstance(inp, dict) else None
+            if isinstance(cmd, str) and cmd.strip():
+                entry = _entry(cmd, None, "결과 없음")
+                entry["_id"] = b.get("id") if isinstance(b.get("id"), str) else ""
+                found.append((entry, None))
+        elif kind == "user" and b.get("type") == "tool_result" and isinstance(b.get("tool_use_id"), str):
+            failed = b.get("is_error") is True
+            text = _result_text(b.get("content"))
+            code = re.match(r"Exit code (\d+)", text)
+            detail = (f"종료 {code.group(1)}" if code else "오류") if failed else "오류 표시 없음"
+            if failed and text:
+                detail += f": {_short(text, 100)}"
+            found.append((_entry("", not failed, detail), b["tool_use_id"]))
+    return found
+
+
+def _entry(command: str, ok: bool | None, detail: str) -> dict:
+    return {"command": _short(command, COMMAND_CHARS), "ok": ok, "detail": detail}
+
+
+def _settle(entry: dict | None, result: dict) -> None:
+    if entry is not None:
+        entry["ok"], entry["detail"] = result["ok"], result["detail"]
+
+
+def _result_text(content) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return "\n".join(c["text"] for c in content if isinstance(c, dict) and isinstance(c.get("text"), str)).strip()
+    return ""
 
 
 def main() -> None:

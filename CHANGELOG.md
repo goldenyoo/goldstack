@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.2.8 — 2026-11-08
+
+### goldstack-v24
+
+- 리뷰어가 worker의 실행 명령·종료 기록(`worker-commands.txt`, claude·codex·agy 로그에서 뽑음)을 받아, worker가 못 돌렸다고 보고한 단계의 사유를 기록과 대조한다(issue #36 ①).
+- 재시도·수정·수리 worker의 brief에 같은 티켓의 앞 시도에서 성공한 명령을 믿을 수 없는 자료로 전달한다(issue #36 ③).
+- grill 템플릿 §5 등급 설명에 코드+skill 글 티켓 한 줄을 더했다.
+- `docs/internals.md`의 리뷰·재시도 설명을 맞췄다.
+- 버전을 `0.2.8`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.7 — 2026-11-08
 
 ### goldstack-v23
