@@ -285,6 +285,72 @@ class OvernightTest(unittest.TestCase):
             path.write_text(broken)
             self.assertWindow(session)
 
+    # ---- 낡은 프로세스 목록
+    def stale_setup(self, *sessions):
+        """주어진 (pid, started)의 표시를 쓰고 `_live_markers`가 지울 수 있는 경로 {pid: Path}를 돌려준다."""
+        for pid, started in sessions:
+            overnight._write_marker(self.repo, overnight.Session(pid, started))
+        return {pid: overnight._marker(self.repo, pid) for pid, _ in sessions}
+
+    @staticmethod
+    def ps_rows(*sessions):
+        return {pid: overnight.Process(1, started, "claude") for pid, started in sessions}
+
+    def live_pids(self, table, fresh=None, error=None):
+        """`ps` 다시 읽기를 가짜로 바꿔 `_live_markers`를 부른다. (살아 있는 pid들, 다시 읽은 횟수)."""
+        read = mock.Mock(side_effect=error) if error else mock.Mock(return_value=fresh)
+        with mock.patch("gs.overnight.processes", read):
+            live = overnight._live_markers(self.repo, table)
+        return [m.pid for m in live], read.call_count
+
+    def test_marker_missing_from_the_first_list_but_in_the_fresh_one_stays(self):
+        paths = self.stale_setup((501, 1000), (502, 2000))
+        pids, reads = self.live_pids(self.ps_rows((501, 1000)), fresh=self.ps_rows((501, 1000), (502, 2000)))
+        self.assertEqual((pids, reads), ([501, 502], 1))
+        self.assertTrue(paths[501].exists() and paths[502].exists())
+
+    def test_marker_gone_from_both_lists_is_removed(self):
+        paths = self.stale_setup((501, 1000), (502, 2000))
+        pids, reads = self.live_pids(self.ps_rows((501, 1000)), fresh=self.ps_rows((501, 1000)))
+        self.assertEqual((pids, reads), ([501], 1))
+        self.assertTrue(paths[501].exists())
+        self.assertFalse(paths[502].exists())
+
+    def test_marker_with_a_reused_pid_is_removed_after_the_second_read(self):
+        paths = self.stale_setup((501, 1000))
+        pids, reads = self.live_pids(self.ps_rows((501, 5000)), fresh=self.ps_rows((501, 5000)))
+        self.assertEqual((pids, reads), ([], 1))
+        self.assertFalse(paths[501].exists())
+
+    def test_unreadable_marker_is_removed_without_reading_ps_again(self):
+        paths = self.stale_setup((501, 1000))
+        broken = paths[501].with_name("502.json")
+        broken.write_text("not json")
+        misnamed = paths[501].with_name("503.json")
+        misnamed.write_text(json.dumps({"pid": 504, "started": 1000}))
+        pids, reads = self.live_pids(self.ps_rows((501, 1000), (503, 1000), (504, 1000)))
+        self.assertEqual((pids, reads), ([501], 0))
+        self.assertTrue(paths[501].exists())
+        self.assertFalse(broken.exists() or misnamed.exists())
+
+    def test_all_live_markers_do_not_read_ps_again(self):
+        paths = self.stale_setup((501, 1000), (502, 2000))
+        pids, reads = self.live_pids(self.ps_rows((501, 1000), (502, 2001)))
+        self.assertEqual((pids, reads), ([501, 502], 0))
+        self.assertTrue(all(path.exists() for path in paths.values()))
+
+    def test_no_markers_do_not_read_ps_again(self):
+        self.assertEqual(self.live_pids(self.ps_rows((501, 1000))), ([], 0))
+
+    def test_failed_second_read_keeps_the_marker_but_the_result_leaves_it_out(self):
+        for error in (OSError("ps 안 됨"), subprocess.TimeoutExpired("ps", 1)):
+            with self.subTest(error=type(error).__name__):
+                paths = self.stale_setup((501, 1000), (502, 2000))
+                pids, reads = self.live_pids(self.ps_rows((501, 1000)), error=error)
+                self.assertEqual((pids, reads), ([501], 1))
+                self.assertTrue(paths[501].exists() and paths[502].exists())
+                paths[502].unlink()
+
     # ---- 끄기
     def test_disarm_turns_only_this_session_off(self):
         first, second = FakeClaude(self), FakeClaude(self)
