@@ -217,6 +217,31 @@ class HookTest(unittest.TestCase):
                 self.assertIsNone(self.bash(cmd, env), (env, cmd))
             self.assertIsNone(hook.decide(self.payload("Write", file_path="/etc/hosts", content=""), env))
 
+    # ---- zsh의 `=` 확장: 따옴표 없는 `==`가 "== not found"로 명령 묶음을 끊는다(zsh 5.9 실측)
+    def test_unquoted_equals_word_blocked(self):
+        for cmd in ["echo ===", "echo =====", "x ==", "[ a == a ]", "test a == a", "x=$(echo ==)",
+                    'echo "$(echo ==)"', "echo hi && echo === && echo done", "echo =ls", 'echo ="ls"',
+                    "echo `echo ==`", "(echo ==)", "echo $'a' ==", "[[ a == a ]]; echo ==",
+                    "cat <<EOF\nx\nEOF\necho ==", "echo a >=="]:
+            reason = self.bash(cmd)
+            self.assertIsNotNone(reason, cmd)
+            self.assertIn("따옴표", reason, cmd)
+
+    def test_quoted_or_inner_equals_allowed(self):
+        for cmd in ["echo =", "[ a = a ]", "test a = a", "FOO=bar true", "echo a=b", "export X==1",
+                    "git log --format==", 'echo "==="', "echo '==='", "echo \\===", "echo $'=='", "echo a\"==\"",
+                    "[[ a == a ]]", "if [[ a == a ]]; then echo ok; fi", "[[ $x == a && $y == b ]]",
+                    "cat <<EOF\n===\nEOF", "cat <<'EOF'\n== x\nEOF", "echo hi # ===", "echo hi #==",
+                    "echo =(true)", "echo '=' \"=\"", 'echo "$(echo "==")"', "sh -c 'echo =='"]:
+            self.assertAllowed(cmd)
+
+    def test_unquoted_equals_word_passes_without_worker_role(self):
+        for env in [{}, {"GS_ROLE": ""}, {"GS_ROLE": "reviewer"}]:
+            self.assertIsNone(self.bash("echo ===", env), env)
+        code, err = self.run_hook(self.payload("Bash", command="echo ==="), self.env)
+        self.assertEqual(code, 2)
+        self.assertIn("따옴표", err)
+
     # ---- 진입점: stdin JSON → 종료 코드와 메시지
     def run_hook(self, payload, env):
         err = io.StringIO()

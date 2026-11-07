@@ -11,6 +11,8 @@
 - worktree 밖 쓰기(임시 디렉터리와 /dev는 통과)
 - 비밀 파일 읽기(`~/.ssh`, `.env` 등)
 - 이름으로 프로세스를 끄는 `pkill`·`killall`(기계 전체의 같은 이름 프로세스를 끄니 다른 티켓의 검증도 죽는다). `kill <PID>`와 `pgrep`은 통과한다
+- 따옴표 없이 `=`로 시작하는 두 글자 이상 단어(`echo ===`). zsh의 `=` 확장이 `== not found`로 명령 묶음을 끊고, 뒤 명령이 돌지 않았는데 돈 것처럼 읽힌다.
+  `echo "==="`·`[ a = a ]`·`[[ a == a ]]`·heredoc 본문·주석은 통과한다(`equals_word`)
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
@@ -492,6 +494,11 @@ def check_bash(command: str, ctx: Ctx, depth: int = 0) -> str | None:
     if depth > 3:
         return None
     text, subs = scan(command.replace("\\\n", " "))
+    if depth == 0:  # 맨 바깥 셸만 zsh다. `sh -c` 속은 다른 셸이라 `=` 확장이 없다
+        word = equals_word(text)
+        if word:
+            return (f"따옴표 없는 `{word}`는 zsh의 `=` 확장이라 `{word[1:]} not found`로 명령이 끊긴다. "
+                    f"뒤 명령은 돌지 않는다. 따옴표로 감싼다(`\"{word}\"`)")
     ctx = replace(ctx, located=(*ctx.located, *_git_locations(text, ctx.xargs_fill)))
     for inner in subs:  # $(...)와 `...`도 명령이다(큰따옴표 안이어도 돈다. 작은따옴표 안은 글자일 뿐)
         reason = check_bash(inner, ctx, depth + 1)
@@ -502,6 +509,82 @@ def check_bash(command: str, ctx: Ctx, depth: int = 0) -> str | None:
         reason = check_segment(argv, redirects, seg_cwd, ctx, depth)
         if reason:
             return reason
+    return None
+
+
+def equals_word(text: str) -> str | None:
+    """`scan`이 돌려준 글에서 zsh가 `=` 확장으로 읽는 단어(따옴표 밖, `=`로 시작, 두 글자 이상)를 찾는다. 없으면 None.
+
+    따옴표를 따라가야 하니 `shlex`로 나누기 전에 본다(나누면 `"==="`와 `===`가 같아진다).
+    `$(...)`·`` `...` ``·`( )` 속은 명령 자리라 본다. `[[ ... ]]` 속은 `=` 확장이 없다(`[[ a == a ]]`).
+    한 글자 `=`(`[ a = a ]`), 중간의 `=`(`a=b`, `X==1`, `--format==`)는 단어 처음이 아니라 통과한다.
+    """
+    stack = ["top"]
+    n = len(text)
+    i = 0
+    cond = 0  # 열린 `[[` 수
+    while i < n:
+        c = text[i]
+        ctx = stack[-1]
+        if ctx == "'":
+            if c == "'":
+                stack.pop()
+            i += 1
+            continue
+        if ctx == "$'":  # ANSI-C 인용은 `\'`를 건너뛴다
+            if c == "\\":
+                i += 2
+                continue
+            if c == "'":
+                stack.pop()
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c == "$" and text.startswith("$(", i):
+            stack.append("$(")
+            i += 2
+            continue
+        if c == "`":
+            if ctx == "`":
+                stack.pop()
+            else:
+                stack.append("`")
+            i += 1
+            continue
+        if ctx == '"':
+            if c == '"':
+                stack.pop()
+            i += 1
+            continue
+        if c == "'":
+            stack.append("$'" if i > 0 and text[i - 1] == "$" else "'")
+            i += 1
+            continue
+        if c == '"':
+            stack.append('"')
+            i += 1
+            continue
+        if c == "(":
+            stack.append("(")
+            i += 1
+            continue
+        if c == ")" and ctx in ("(", "$("):
+            stack.pop()
+            i += 1
+            continue
+        if i == 0 or text[i - 1] in WORD_START + "<>":
+            m = re.compile(r"[^ \t\n;&|()<>]+").match(text, i)
+            if m:
+                word = m.group(0)
+                if word == "[[":
+                    cond += 1
+                elif word == "]]" and cond:
+                    cond -= 1
+                elif word[0] == "=" and len(word) >= 2 and not cond:
+                    return word
+        i += 1
     return None
 
 
