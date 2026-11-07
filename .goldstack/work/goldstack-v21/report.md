@@ -33,7 +33,7 @@
 5. **원인 미확인:** `test_revert_landed_through_side_pr`의 `git clone` 오류는 원인을 밝히지 못했고, 시험 파일도 이번 diff에서 바뀌지 않았습니다. 티켓 11은 다음 실패 때 stderr를 남길 뿐 이 오류를 고치지 않습니다.
 6. **측정 안 한 환경:** 리눅스 xargs의 신호 문구와, Claude Code Bash 도구에서의 `setopt noequals` 효과는 재지 않았습니다.
 
-마무리: preparing · 병합 전 · 남은 high 1(보고만 1)
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/43 병합 · main 검증 통과 · 남은 high 1(보고만 1)
 리뷰 지적: 수정됨 12 · 보고만 8
 
 ## Evidence
@@ -150,21 +150,22 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 12 | main | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 74d26da1e2bc39840704ec8c699730519f9b958e | - | 549.735974 | failed |
 | 13 | ticket-11 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | fe1367e38a544ea1b5727189d5b5504f670bedc5 | 27ceefaa838f362be753c398377530b69687f215 | 468.959391 | passed |
 | 14 | integration | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | d0b91c7e39d70e1610f945f6246015300224f97e | - | 469.099165 | passed |
+| 15 | main | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 9480118ec30a4a8878c39a08438254aac4f8b0df | - | 470.114433 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 1737.481 |
-| verify | 1631.201 |
+| total | 2226.481 |
+| verify | 2101.368 |
 | summary | 70.839 |
-| report | 0.227 |
-| push | 7.165 |
-| publish | 3.224 |
-| merge-pr | 3.697 |
-| confirm-merge | 0.008 |
-| postmerge | 553.03 |
-| restore-reverts | 0.351 |
+| report | 0.319 |
+| push | 8.854 |
+| publish | 6.993 |
+| merge-pr | 7.391 |
+| confirm-merge | 0.018 |
+| postmerge | 1024.427 |
+| restore-reverts | 0.459 |
 | report-to-base | 2.618 |
 | sync-integration | 4.173 |
 
@@ -505,22 +506,24 @@ agy 사용: 0/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/43
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `9480118ec30a4a8878c39a08438254aac4f8b0df`
 
 main가 이 feature의 병합 `74d26da1e2bc39840704ec8c699730519f9b958e`을 되돌렸다(revert `a7aff299839f3d32d25058cb82bd92305278f0b3`). integration에서 그 revert를 다시 되돌렸다(`bff02eaf8721adbc32bd03c8ef3fe7a543b6cf60`). main로 가는 다음 PR이 feature 코드를 다시 들인다.
 
 ### issue
 
-- #32 다시 엶: `a7aff299839f3d32d25058cb82bd92305278f0b3`에서 되돌림
-- #33 다시 엶: `a7aff299839f3d32d25058cb82bd92305278f0b3`에서 되돌림
-- #34 다시 엶: `a7aff299839f3d32d25058cb82bd92305278f0b3`에서 되돌림
-- #35 다시 엶: `a7aff299839f3d32d25058cb82bd92305278f0b3`에서 되돌림
+- #32 닫음: `9480118ec30a4a8878c39a08438254aac4f8b0df`에 반영
+- #33 닫음: `9480118ec30a4a8878c39a08438254aac4f8b0df`에 반영
+- #34 닫음: `9480118ec30a4a8878c39a08438254aac4f8b0df`에 반영
+- #35 닫음: `9480118ec30a4a8878c39a08438254aac4f8b0df`에 반영
 
 ### 되돌리는 법
 
@@ -530,7 +533,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 9480118ec30a4a8878c39a08438254aac4f8b0df
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v21/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
