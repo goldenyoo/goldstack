@@ -300,6 +300,21 @@ class RetryTest(Unit):
         under_old = next(n for n in owners if owners[n] == "demo 리뷰 A_1" and "밑줄 옛" in backlog.read_idea(self.idea(n)).summary)
         self.assertEqual(statuses[under_old], "dropped")
 
+    def test_other_feature_with_same_prefix_is_not_closed(self):
+        """feature demo-a의 티켓 1과 feature demo의 티켓 A_1은 파일 prefix(demo-a-1-)가 같다. source로 가른다."""
+        self.r.order = ["A_1"]
+        self.r.st.tickets.pop("01")
+        self.r.st.ticket("A_1").status = state.MERGED
+        foreign = self.idea("a-1-1")
+        foreign.parent.mkdir(parents=True, exist_ok=True)
+        foreign.write_text('---\ndate: "2026-11-05"\nseverity: "high"\nsource: "demo-a 리뷰 1"\nstatus: "open"\n'
+                           'feature: ""\n---\n다른 feature의 지적\n', encoding="utf-8")
+        sh(self.repo, "git", "add", "-A")
+        sh(self.repo, "git", "commit", "-qm", "다른 feature의 파일")
+        before = foreign.read_bytes()
+        self.assertEqual(self.write(), [])
+        self.assertEqual(foreign.read_bytes(), before)
+
     def test_close_failure_only_warns_and_restores(self):
         self.retry()
         before = self.raw("01-1")

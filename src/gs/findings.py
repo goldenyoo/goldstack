@@ -16,7 +16,8 @@ slug가 같아지는 티켓(A_1, A-1)은 파일 이름을 나눠 쓰므로 state
 `status: open`인 것은 `status: dropped`로 바꾸고 본문 끝에 재시도로 대체됐다는 한 줄을 붙인다(write, base는 copy_to_base).
 판단 모델은 부르지 않고 문장도 비교하지 않는다. 같은 시도 안의 비슷한 지적은 합치지 않는다. 다른 파일은 바이트까지 그대로다:
 `taken`·`dropped`, 지금 state에 번호가 있는 파일(같은 slug를 쓰는 티켓의 번호 포함), 병합되지 않았거나 범위 밖인 티켓의 파일.
-slug가 같은 티켓(A_1, A-1)의 파일은 frontmatter `source`가 그 티켓을 가리킬 때만 그 티켓의 것으로 본다.
+후보 파일은 모두 frontmatter `source`가 그 티켓을 가리킬 때만 그 티켓의 것으로 본다(slug가 같은 티켓 A_1·A-1,
+prefix가 같은 다른 feature의 파일을 거른다).
 이미 닫은 파일은 `open`이 아니므로 재개로 다시 돌아도 결과가 같다.
 
 파일은 최선이다. 못 쓰거나 못 닫으면 경고만 남기고 worktree를 더럽히지 않는다(더러우면 integration 검증이 실패한다).
@@ -173,12 +174,13 @@ def _stale(r, directory: Path) -> list[str]:
             tail = path.stem[len(prefix):]
             if not tail.isdecimal() or int(tail) in used:
                 continue
-            if len(sharing) > 1:  # A_1과 A-1은 파일 이름을 나눠 쓴다. source가 이 티켓을 가리켜야 이 티켓의 파일이다
-                try:
-                    if frontmatter.split(path.read_text(encoding="utf-8"))[0].get("source") != _source(r, tid):
-                        continue
-                except (OSError, ValueError):
+            # slug가 같은 티켓(A_1, A-1)뿐 아니라 feature(demo-a/1, demo/A_1)도 prefix를 나눠 쓴다.
+            # source가 이 티켓을 가리켜야 이 티켓의 파일이다
+            try:
+                if frontmatter.split(path.read_text(encoding="utf-8"))[0].get("source") != _source(r, tid):
                     continue
+            except (OSError, ValueError):
+                pass  # 읽지 못하면 소유를 알 수 없다. 건드리지 못하고 _close가 경고만 남긴다
             found.append(f"{IDEAS}/{path.name}")
     return found
 
