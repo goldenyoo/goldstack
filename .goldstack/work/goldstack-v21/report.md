@@ -36,7 +36,7 @@ v21은 0.2.5에 들어갈 작은 개선 묶음으로, 끊긴 검증의 오진·�
 
 **후속으로 정할 것:** 위 지적 중 먼저 볼 것은 04 [high]이며, 후속 티켓으로 다룰지 정해야 한다.
 
-마무리: preparing · 병합 전 · 남은 high 1(보고만 1)
+마무리: reverted · main 검증 실패 → revert a7aff299 · 남은 high 1(보고만 1)
 리뷰 지적: 수정됨 12 · 보고만 7
 
 ## Evidence
@@ -144,15 +144,22 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 9 | ticket-04 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | afe79401f58c249e70fead7982cef72093416f34 | 7d8869f540ede9ae1456949b9279ae7f65310d4e | 625.66654 | passed |
 | 10 | ticket-10 | 1 | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 4f6dc1581c083a2e8ce94d5efb2ebc64bd17a839 | f4b56f0746ef0d3c5e9cb44e3e52c64cf6c89908 | 623.326876 | passed |
 | 11 | integration | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 0f89be69cdb7e7425efd49d7fb834793b3989d4c | - | 612.11118 | passed |
+| 12 | main | - | 1 | uv run python -m unittest discover -s tests -p test_skills.py && uv run python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 uv run python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 74d26da1e2bc39840704ec8c699730519f9b958e | - | 549.735974 | failed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 642.0 |
-| verify | 612.181 |
+| total | 1214.0 |
+| verify | 1162.054 |
 | summary | 30.019 |
-| report | 0 |
+| report | 0.139 |
+| push | 2.053 |
+| publish | 3.224 |
+| merge-pr | 3.697 |
+| confirm-merge | 0.008 |
+| postmerge | 553.03 |
+| restore-reverts | 0.267 |
 
 ### 티켓별 결과
 
@@ -744,6 +751,29 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 0.63ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/gs-main-553qq4_5/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/gs-main-553qq4_5/base
+Prepared 1 package in 216ms
+Installed 1 package in 1ms
+ + goldstack==0.2.5 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/gs-main-553qq4_5/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 14377자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/finish/integration-verify.log`
@@ -767,18 +797,80 @@ No digest: .venv/bin/python3 is not a regular file
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+앞 13389자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v21/run/finish/main-verify.log`
+
+```text
+.................
+----------------------------------------------------------------------
+Ran 15 tests in 53.536s
+
+OK
+.............................
+----------------------------------------------------------------------
+Ran 20 tests in 5.396s
+
+OK
+......
+----------------------------------------------------------------------
+Ran 4 tests in 1.199s
+
+OK
+.
+----------------------------------------------------------------------
+Ran 28 tests in 51.768s
+
+OK
+.........
+----------------------------------------------------------------------
+Ran 13 tests in 32.319s
+
+OK
+.........................................
+----------------------------------------------------------------------
+Ran 70 tests in 35.469s
+
+OK
+................................................................
+----------------------------------------------------------------------
+Ran 77 tests in 187.162s
+
+OK
+........................
+----------------------------------------------------------------------
+Ran 67 tests in 160.547s
+
+OK
+
+종료 코드: 1
+```
+
 
 agy 사용: 5/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: main 검증 실패 → revert a7aff299839f3d32d25058cb82bd92305278f0b3를 main에 push함
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/42
 
 integration verify: True
 
-main verify: 미실행
+main verify: False
+
+병합 커밋: `74d26da1e2bc39840704ec8c699730519f9b958e`
+
+revert 커밋: `a7aff299839f3d32d25058cb82bd92305278f0b3` (main에 일반 push, force push 없음)
+
+main가 이 feature의 병합 `74d26da1e2bc39840704ec8c699730519f9b958e`을 되돌렸다(revert `a7aff299839f3d32d25058cb82bd92305278f0b3`). integration에서 그 revert를 다시 되돌렸다(`bff02eaf8721adbc32bd03c8ef3fe7a543b6cf60`). main로 가는 다음 PR이 feature 코드를 다시 들인다.
+
+### issue
+
+- #32 다시 엶: `a7aff299839f3d32d25058cb82bd92305278f0b3`에서 되돌림
+- #33 다시 엶: `a7aff299839f3d32d25058cb82bd92305278f0b3`에서 되돌림
+- #34 다시 엶: `a7aff299839f3d32d25058cb82bd92305278f0b3`에서 되돌림
+- #35 다시 엶: `a7aff299839f3d32d25058cb82bd92305278f0b3`에서 되돌림
 
 ### 되돌리는 법
 
@@ -788,7 +880,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 74d26da1e2bc39840704ec8c699730519f9b958e
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v21/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
