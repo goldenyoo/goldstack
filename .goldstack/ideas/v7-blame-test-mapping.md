@@ -2,8 +2,8 @@
 date: "2026-11-04"
 severity: "low"
 source: "2026-11-04 Gemini 리뷰(Claude가 v7 티켓 대조)"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v22"
 ---
 v7 티켓 05의 원인 후보 찾기는 파일 이름 겹침만 봐서, 소스만 고친 티켓이 낸 회귀에 `후보 없음`을 낼 수 있다.
 

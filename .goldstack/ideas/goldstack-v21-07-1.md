@@ -2,8 +2,8 @@
 date: "2026-11-07"
 severity: "medium"
 source: "goldstack-v21 리뷰 07"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v23"
 ---
 숫자나 공백을 포함한 종료자를 쓰는 heredoc 본문을 명령으로 오인해 차단한다.
 

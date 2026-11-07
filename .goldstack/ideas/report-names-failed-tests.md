@@ -2,9 +2,9 @@
 date: "2026-11-07"
 severity: "high"
 source: "/retro goldstack-v21"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v22"
 ---
 보고서에 실패한 시험 이름이 없다. 병렬 출력에 실패가 묻혀 끝부분만 실으면 전부 `OK`로 보인다.
 

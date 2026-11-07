@@ -2,7 +2,7 @@
 date: "2026-11-05"
 severity: "low"
 source: "/retro goldstack-v11"
-status: "open"
+status: "dropped"
 feature: ""
 ---
 범위 밖 `async-verify`를 다시 볼 근거가 하나 늘었다. 검증이 리뷰 결과 처리를 막은 사례다.
@@ -14,3 +14,5 @@ feature: ""
 **다음**: 티켓이 동시에 도는 다음 실행의 `결과 대기(초)`를 보고 `async-verify`를 꺼낼지 grill에서 정한다.
 
 - 2026-11-06 동시에 도는 실행의 측정이 나왔다. 리뷰 결과 대기 + worker 처리 대기 합(티켓별 합이라 전체 지연과 같지 않다): v12 34분(115분 실행), v13 0분(85분, 동시 1), v14 22분(141분), v15 26분(154분). 최대는 v12 01의 약 12분으로 다른 티켓의 검증(22:16:55–22:29:29)과 겹친다. (출처: /retro goldstack-v12, v13, v14, v15)
+
+닫은 이유(goldstack-v22 grill 1-2, 2026-11-07): 근거를 범위 밖 `async-verify`로 옮겼다.

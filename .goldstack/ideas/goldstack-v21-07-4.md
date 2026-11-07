@@ -2,8 +2,8 @@
 date: "2026-11-07"
 severity: "medium"
 source: "goldstack-v21 리뷰 07"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v23"
 ---
 직전 원문 문자만으로 단어 경계를 판단하여 실제 확장을 놓치고 정상 인자도 차단한다.
 

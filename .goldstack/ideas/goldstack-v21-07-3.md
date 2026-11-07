@@ -2,8 +2,8 @@
 date: "2026-11-07"
 severity: "medium"
 source: "goldstack-v21 리뷰 07"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v23"
 ---
 재귀 깊이가 증가하면 검사를 생략하여 같은 zsh에서 실행되는 eval과 명시적 zsh -c를 통과시킨다.
 

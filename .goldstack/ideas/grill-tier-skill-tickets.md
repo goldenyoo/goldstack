@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "low"
 source: "/retro goldstack-v11"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v24"
 ---
 코드와 상한 있는 skill 글을 함께 고치는 티켓을 `small`로 잡으면 실제 비용과 크게 어긋난다.
 

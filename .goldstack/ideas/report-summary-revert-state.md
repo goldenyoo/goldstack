@@ -2,9 +2,9 @@
 date: "2026-11-07"
 severity: "medium"
 source: "/retro goldstack-v21"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v22"
 ---
 보고서 Summary가 병합 전에 쓰여 revert와 다시 넣는 방법을 싣지 않는다.
 

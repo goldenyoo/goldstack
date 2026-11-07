@@ -2,9 +2,9 @@
 date: "2026-11-07"
 severity: "medium"
 source: "/retro goldstack-v21"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v22"
 ---
 goldstack-v21 티켓 04의 끊김 판정은 이 레포의 `verify`를 잡지 못하는데, 보고서는 끊긴 검증을 다시 돌린다고만 쓴다.
 

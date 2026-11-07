@@ -2,8 +2,8 @@
 date: "2026-11-07"
 severity: "high"
 source: "goldstack-v21 리뷰 04"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v22"
 ---
 gs만 SIGKILL로 종료되면 재검증 프로세스가 살아남으며, 다음 gs go는 이를 정리하지 않고 같은 integration에서 새 검증을 시작한다. 이전 검증이 파일·index·로그를 계속 변경할 수 있어 재개 결과를 신뢰할 수 없다.
 

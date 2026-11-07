@@ -2,9 +2,9 @@
 date: "2026-11-07"
 severity: "high"
 source: "/retro goldstack-v21"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v22"
 ---
 검증을 통과한 트리와 코드가 같아도 main 검증이 한 번 실패하면 다시 돌리지 않고 revert한다.
 
