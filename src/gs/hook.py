@@ -701,17 +701,25 @@ WORD_START = " \t\n;&|()"  # 이 글자 뒤에서 셸의 새 단어가 시작한
 FD_NUMBER = re.compile(r"[0-9]+(?=[<>])")
 # 숫자로 시작하는 끝말은 따옴표가 있을 때만 읽는다
 HEREDOC_OPEN = re.compile(r"""<<-?\s*(?:(['"])([\w.-]+)\1|([A-Za-z_][\w.-]*))""")
-MATH_PAREN = re.compile(r"""\\.|'[^']*'|"(?:\\.|[^"\\])*"|[()]""", re.S)
+MATH_PAREN = re.compile(r"""\\.|'[^']*'|"(?:\\.|[^"\\])*"|\$\{|[()}]""", re.S)
 NO_HEREDOC = ("((", "$[", "${")  # 이 틀 속의 `<<`는 리다이렉션이 아니다
 
 
 def _closes_as_math(text: str, i: int) -> bool:
-    """`text[i:]`의 `((`가 산술식인가. zsh는 안쪽 `(`의 짝 바로 뒤가 `)`일 때만 산술식으로 읽고, 아니면 겹친 subshell로 읽는다(`((a) | b)`)."""
-    depth = 0
+    """`text[i:]`의 `((`가 산술식인가. zsh는 안쪽 `(`의 짝 바로 뒤가 `)`일 때만 산술식으로 읽고, 아니면 겹친 subshell로 읽는다(`((a) | b)`).
+    `${ }` 속 괄호는 세지 않는다(`(( ${x#[(]} ))`)."""
+    depth = braces = 0
     for m in MATH_PAREN.finditer(text, i + 1):
-        if m.group(0) == "(":
+        tok = m.group(0)
+        if tok == "${":
+            braces += 1
+        elif tok == "}":
+            braces = max(braces - 1, 0)
+        elif braces:
+            continue
+        elif tok == "(":
             depth += 1
-        elif m.group(0) == ")":
+        elif tok == ")":
             depth -= 1
             if depth == 0:
                 return text.startswith(")", m.end())
@@ -807,7 +815,7 @@ def scan(text: str) -> tuple[str, list[str]]:
             stack.append("$[")
         elif (c == "]" and ctx == "$[") or (c == "}" and ctx == "${"):
             stack.pop()
-        elif c == "(":
+        elif c == "(" and ctx != "${":  # zsh는 `${ }` 속 괄호를 세지 않는다(`${x#[(]}`)
             math = (i == 0 or text[i - 1] in WORD_START + "`") and text.startswith("((", i) and _closes_as_math(text, i)
             stack.append("((" if math else "(")
         elif c == ")" and ctx in ("(", "((", "$("):

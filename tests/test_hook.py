@@ -318,6 +318,32 @@ class HookTest(unittest.TestCase):
                         f"let x=1<<\"2\"\n{body}\n2", f"typeset -i x=1<<\"2\"\n{body}\n2"]:
                 self.assertAllowed(cmd)
 
+    def test_paren_inside_parameter_expansion_is_not_a_frame(self):
+        """zsh는 `${ }` 속 괄호를 세지 않는다. `${x#[(]}`가 닫힌 뒤의 `<<`는 진짜 heredoc이고, zsh는 본문을 돌리지 않는다."""
+        for body in ["===", "git push"]:
+            for cmd in [f"x='('; echo ${{x#[(]}}; cat <<'EOF'\n{body}\nEOF", f"x='('; echo ${{x#[(]}}; cat <<'2'\n{body}\n2",
+                        f"x='('; echo ${{x%[(]}}; cat <<EOF\n{body}\nEOF", f"x='a(b'; echo ${{x//[(]/y}}; cat <<'EOF'\n{body}\nEOF",
+                        f"x='a'; echo ${{x:-(}}; cat <<'EOF'\n{body}\nEOF", f"x='('; echo ${{x#[(]}}\ncat <<'EOF'\n{body}\nEOF",
+                        f"(x='('; echo ${{x#[(]}}; cat <<'EOF'\n{body}\nEOF\n)", f"x='('; echo $(echo ${{x#[(]}}; cat <<'EOF'\n{body}\nEOF\n)",
+                        f"x='('; echo `echo ${{x#[(]}}; cat <<'EOF'\n{body}\nEOF\n`", f"x='('; ((echo ${{x#[(]}}) | cat <<'2'\n{body}\n2\n)",
+                        f"x='('; (( ${{#${{x#[(]}}}} ))\ncat <<'EOF'\n{body}\nEOF", f"x='('; echo $(( ${{#${{x#[(]}}}} ))\ncat <<'EOF'\n{body}\nEOF"]:
+                self.assertAllowed(cmd)
+        # 틀이 닫힌 뒤는 다시 명령이다. 틀 속 `<<`는 괄호 뒤에서도 heredoc이 아니다
+        for cmd in ["x='('; echo ${x#[(]}; echo ===", "x='('; echo ${x#[(]}; cat <<'EOF'\n===\nEOF\necho ===",
+                    'x=\'(\'; echo ${x#[(]<<"2"}\necho ===\n2', "x='a'; echo ${x:-(<<y}\necho ===\ny"]:
+            self.assertEqualsBlocked(cmd)
+        self.assertBlocked("x='('; echo ${x#[(]}; cat <<'EOF'\nx\nEOF\ngit push")
+
+    def test_paren_inside_parameter_expansion_does_not_hide_arithmetic(self):
+        """`((` 판정도 `${ }` 속 괄호를 세지 않는다. 세면 산술식을 subshell로 읽어 `<<`를 heredoc으로 삼고 사이 줄을 보지 않는다."""
+        for opener in ["x='('; (( ${#${x#[(]}} << \"2\" ))", "x='a'; (( ${#${x:-)}} << \"2\" ))", "x='('; (( 1 + ${#${x#[(]}} << \"2\" ))",
+                       "x='('; echo $(( ${#${x#[(]}} << \"2\" ))", "x='a'; echo $(( ${#${x:-)}} << \"2\" ))",
+                       "x='('; echo \"$(( ${#${x#[(]}} << \"2\" ))\""]:
+            self.assertBlocked(f"{opener}\ngit push\n2")
+        # `equals_word`는 산술식 속 `(`를 따로 센다. `===`는 `)`만 든 입력으로 잰다
+        for opener in ["x='a'; (( ${#${x:-)}} << \"2\" ))", "x='a'; echo $(( ${#${x:-)}} << \"2\" ))"]:
+            self.assertEqualsBlocked(f"{opener}\necho ===\n2")
+
     def test_equals_body_checked_in_same_zsh(self):
         for cmd in ["eval 'echo ===; echo done'", 'eval "echo ===; echo done"', "eval echo '==='", "eval sh -c 'echo ==='",
                     "eval 'echo $(echo ===)'", "eval 'eval \"echo ===\"'", "eval 'echo \"\"==='",
