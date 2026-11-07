@@ -2,8 +2,8 @@
 date: "2026-11-05"
 severity: "medium"
 source: "goldstack-v9 07 리뷰(codex) 보고만, goldstack-v10 grill에서 뺌"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v21"
 ---
 사람이 첫 줄이나 위치를 고친 아이디어 파일은 티켓 재시도 때 같은 지적이 새 `open` 파일로 또 생길 수 있다.
 

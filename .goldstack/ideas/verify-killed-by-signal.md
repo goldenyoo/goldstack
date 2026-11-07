@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "medium"
 source: "/retro goldstack-v17"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v21"
 ---
 신호로 죽은 검증을 일반 실패로 처리해 수리 worker를 띄운다. 로그에는 종료 코드도 남지 않는다.
 

@@ -2,9 +2,9 @@
 date: "2026-11-06"
 severity: "medium"
 source: "/retro goldstack-v18"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v21"
 ---
 좁은 `verify` 티켓이 전체 시험을 깨고 병합되어 뒤 티켓이 연쇄로 실패한다. `gs check`가 설정 파일을 고치는 티켓의 좁은 검증에 경고한다.
 

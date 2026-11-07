@@ -2,8 +2,8 @@
 date: "2026-11-06"
 severity: "medium"
 source: "goldstack-v20 리뷰 01"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v21"
 ---
 다른 세션의 arm과 겹치면, 오래된 프로세스 목록을 근거로 살아 있는 세션의 표시를 삭제할 수 있다.
 
