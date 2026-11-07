@@ -105,6 +105,10 @@ class GrillBreakdownTest(unittest.TestCase):
                      "좁은 verify에 `test_skills.py`를 넣는다"):
             self.assertIn(text, comment)
 
+    def test_ticket_template_asks_for_tests_that_fail_without_the_behavior(self):
+        text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
+        self.assertIn("완료 조건의 동작을 지우면 실패하는", text)
+
     def test_ticket_template_keys(self):
         ticket = fill((TEMPLATES / "ticket.md").read_text(encoding="utf-8"), NN="01")
         data, _ = frontmatter.split(ticket)
