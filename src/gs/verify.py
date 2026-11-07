@@ -1,4 +1,4 @@
-"""spec의 verify 명령 실행. 티켓 병합 전, integration, integration-final, main·main-recheck가 모두 이것을 쓴다.
+"""spec의 verify 명령 실행. 티켓 병합 전, integration, integration-final, main·main-retry·main-recheck가 모두 이것을 쓴다.
 
 명령은 새 프로세스 그룹(`start_new_session`)에서 `bash -c '<verify>' gs-verify:<로그 경로>`로 돈다(verify 뒤에 KEEP_BASH가 붙는다). 시간 = `GS_VERIFY_TIMEOUT`(초, 시험 seam)이
 있으면 그것, 없으면 spec `verify_minutes` × 60. 넘기면 그룹 전체에 SIGTERM, GRACE초 뒤 남았으면 SIGKILL을 보낸다.
