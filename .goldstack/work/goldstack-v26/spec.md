@@ -23,12 +23,13 @@ worker가 전체 시험을 돌려 티켓 시간을 늘리는 일을 hook으로 �
 | 1-6 | main 검증 건너뛰기 | base 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가 보고서·이 feature의 아이디어 파일뿐이면 main 검증을 건너뛴다(`_verify_final`과 같은 기준). `main-verify.log`에 "integration과 같은 코드(`<sha>`), 건너뜀"을 남기고 `verified`로 둔다. base가 움직였으면 지금처럼 검증한다 |
 | 2-1 | 규칙 전달 | gs가 worker를 띄울 때 config 값을 worker 환경 변수로 넘기고 hook은 그것만 읽는다. worker가 worktree의 config를 고쳐도 그 실행의 규칙은 바뀌지 않는다 |
 | 2-2 | `runner` 조건 | `[hook.worker_tests]`에 `runner` 정규식을 더한다. 파일 수는 `runner`에 맞는 명령에서만 센다(시험 파일 여러 개를 `git add`하는 명령은 통과) |
+| 3-1 | codex 검토 반영 | 02: 건너뛰기는 `next_step`이 `VERIFY_MAIN`을 고른 자리에서만(실패·재시도·revert 상태를 덮지 않음). 01: config→어댑터→`write_script`→hook 전달을 실제 코드로 시험, 빈 config는 물려받은 값을 덮어씀, `-p 'test_*.py'`·`-p` 없는 `unittest discover`도 이 레포 `deny`에, 원문 정규식 한계를 머리말에. 01 touches에 `go.py`·`worker.py` |
 | 1-7 | 마지막 티켓 | 문서(`guide.md`, `internals.md`, CHANGELOG)와 버전 0.2.10을 한 티켓, 좁은 verify |
 
 ## 5. 티켓 그래프
 | id | 제목 | blocked_by(이유) | wave | tier(이유) | 예상 | 구현 | 수정 | 수리 | 첫 리뷰 | 재리뷰 | touches | verify |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01 | worker의 전체 시험을 hook으로 막는다 | – | 1 | large(차단 hook) | 53분 | claude opus/xhigh | claude opus/xhigh | claude opus/xhigh | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-high | `src/gs/config.py`, `src/gs/adapters.py`, `src/gs/hook.py`, `.goldstack/config.toml`, `tests/test_hook_worker_tests.py`, `tests/test_config.py` | 전체 |
+| 01 | worker의 전체 시험을 hook으로 막는다 | – | 1 | large(차단 hook) | 53분 | claude opus/xhigh | claude opus/xhigh | claude opus/xhigh | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-high | `src/gs/config.py`, `src/gs/adapters.py`, `src/gs/go.py`, `src/gs/worker.py`, `src/gs/hook.py`, `.goldstack/config.toml`, `tests/test_hook_worker_tests.py`, `tests/test_config.py` | 전체 |
 | 02 | 같은 코드면 main 검증 건너뛰기 | – | 1 | large(마무리 상태 전이) | 53분 | claude opus/xhigh | claude opus/xhigh | claude opus/xhigh | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-high | `src/gs/finish.py`, `src/gs/revert_decision.py`, `tests/test_postmerge_skip.py`, `tests/test_revert_decision.py` | 전체 |
 | 03 | v26 문서와 버전 0.2.10 | 01·02 앞 결과 필요 | 2 | small(문서와 버전) | 16분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `docs/guide.md`, `docs/internals.md`, `CHANGELOG.md`, `pyproject.toml`, `uv.lock`, `.claude-plugin/plugin.json`, `tests/test_version.py` | `uv sync --locked -q` + `test_version*.py` + `test_docs_missing.py` + `claude plugin validate .` |
 
@@ -60,3 +61,9 @@ worker가 전체 시험을 돌려 티켓 시간을 늘리는 일을 hook으로 �
 1. 규칙 전달: A worker 환경 변수 / B hook이 worktree config를 읽음 — 추천 A(worker가 config를 고쳐 차단을 풀 수 없다) → 확정 A
 2. `runner` 조건: 파일 수는 `runner`에 맞는 명령에서만 센다 — 추천 더함(`git add` 오차단 방지) → 확정
 3. 티켓 3장 표, 새 범위 밖 없음: 추천 그대로 → 확정
+
+### codex 검토 반영 (2026-11-08)
+codex(read-only, gpt 기본·high)가 v26~v28 spec·티켓을 코드와 대조했다. 세 feature 모두 "그대로 돌리면 안 됨". 핵심 지적은 이 세션이 코드·실측으로 확인했다.
+1. 02 건너뛰기 우선순위(high): `main_retry`·`main_failed`에서도 건너뛸 조건이 참일 수 있다 → `VERIFY_MAIN` 자리로 제한(`revert_decision.next_step` 읽어 확인) → 반영
+2. 01 전달 경로 시험(medium): hook 판정만 시험하면 config→어댑터 연결이 빠져도 통과 → 반영
+3. 01 흔한 전체 실행 형태(medium): `-p 'test_*.py'`가 빠짐 → 반영. heredoc 속 글자 오차단은 한계로 적음
