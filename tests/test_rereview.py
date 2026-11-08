@@ -338,10 +338,10 @@ class SecondFixTest(Base):
         self.answer("codex", 1, [(1, "unresolved", "그대로다")])
         brief = review.fix_brief
 
-        def boom(found, nth=1, touches=None):
+        def boom(found, nth=1, touches=None, merged=None):
             if nth == 2:
                 raise RuntimeError("brief 쓰기 실패")
-            return brief(found, nth, touches)
+            return brief(found, nth, touches, merged)
 
         with mock.patch.object(review, "fix_brief", side_effect=boom):
             code, out, err = self.go("--only", "01")

@@ -1,6 +1,8 @@
 """고치지 않기로 한 리뷰 지적을 `.goldstack/ideas/` 파일로 넘긴다(spec 1-8, §4).
 
-대상은 상태가 "보고만"(report.finding_status)인 high·medium 지적이다. low와 나머지 상태는 보고서에만 남는다.
+대상은 상태가 "보고만"(report.finding_status)인 high·medium 지적과, 상태가 "재현된 미수리"(report.DEFERRED, 판정 defer)인 모든 지적이다.
+defer 지적은 리뷰어가 재현했지만 고칠 수 있는 파일 밖이라 고치지 않은 결함이라 원래 심각도와 상관없이 severity high 파일로 남기고
+본문에 원래 심각도를 적는다(goldstack-v27 01). 그 밖의 지적(보고만 low, 나머지 상태)은 보고서에만 남는다.
 파일은 보고서 커밋에 함께 들어간다: integration에는 write, base의 보고서 커밋에는 copy_to_base(finish._report_commit).
 
 번호는 지적의 `idea_number`(state)에 남겨 고정한다. 처음 정할 때 그 티켓 지적의 순번(review 다음 second_review, 두 기록의
@@ -35,6 +37,7 @@ from .feature import WORK
 IDEAS = ".goldstack/ideas"
 SEVERITIES = ("high", "medium")
 REPORT_ONLY = "보고만"  # report.finding_status의 값
+DEFERRED = report.DEFERRED  # report.finding_status의 값. 심각도와 상관없이 대상이고 high로 쓴다
 NUMBER = "idea_number"
 EVIDENCE_LIMIT = 500  # 근거 길이 제한(자). 전체는 보고서에 있다
 DROPPED = "dropped"
@@ -42,7 +45,8 @@ REPLACED_NOTE = "재시도가 병합돼 이 지적을 낸 시도의 코드는 �
 
 
 def _target(finding: dict) -> bool:
-    return finding.get("severity") in SEVERITIES and report.finding_status(finding) == REPORT_ONLY
+    status = report.finding_status(finding)
+    return status == DEFERRED or (finding.get("severity") in SEVERITIES and status == REPORT_ONLY)
 
 
 def _slug(text: str) -> str:
@@ -77,7 +81,8 @@ def _run_date(r) -> str:
 
 
 def _render(r, tid: str, finding: dict) -> str:
-    fields = {"date": _run_date(r), "severity": finding["severity"], "source": f"{r.name} 리뷰 {tid}",
+    deferred = report.finding_status(finding) == DEFERRED
+    fields = {"date": _run_date(r), "severity": "high" if deferred else finding["severity"], "source": f"{r.name} 리뷰 {tid}",
               "status": "open", "feature": ""}
     header = "\n".join(f"{key}: {json.dumps(value, ensure_ascii=False)}" for key, value in fields.items())
     evidence = _line(finding.get("evidence")) or "없음"
@@ -86,7 +91,9 @@ def _render(r, tid: str, finding: dict) -> str:
     return (f"---\n{header}\n---\n{_head(finding)}"
             f"근거: {evidence}\n"
             f"판단: {_line(finding.get('why')) or '기록 없음'}\n"
-            f"보고서: {WORK}/{r.name}/report.md\n")
+            + (f"재현된 미수리 결함(defer): 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않았다. 원래 심각도: {finding['severity']}\n"
+               if deferred else "")
+            + f"보고서: {WORK}/{r.name}/report.md\n")
 
 
 def _bodies(directory: Path, prefix: str) -> dict[int, str]:
@@ -240,7 +247,8 @@ def write(r) -> list[str]:
         return []
     written = []
     for tid in r.order:
-        for finding in _findings(r.st.tickets[tid]):
+        # 같은 지적은 번호(파일)를 나눠 쓰고 먼저 만든 파일이 남는다. defer를 먼저 만들어 high 파일이 남게 한다
+        for finding in sorted(_findings(r.st.tickets[tid]), key=lambda f: report.finding_status(f) != DEFERRED):
             if NUMBER not in finding or not _target(finding):
                 continue
             rel = _rel(r.name, tid, finding[NUMBER])
