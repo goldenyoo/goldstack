@@ -4,6 +4,11 @@
 - prepare: 띄우기 전 준비와 확인. 차단 장치를 걸 수 없으면 AdapterError로 거부한다.
 - env: worker 환경. 모든 어댑터가 `GS_ROLE=worker`를 넣는다(09 hook이 이 값을 본다). config `[hook.worker_tests]`도
   `GS_WORKER_TESTS`로 넣는다(hook은 worktree의 config가 아니라 이 값을 읽는다). 비었으면 빈 값으로 덮어쓴다.
+  zsh `=` 확장 끄기(shellenv.py, goldstack-v28 01): 실측 통과 CLI(`shellenv.NOEQUALS_CLIS`)면 실행 디렉터리(worktree 밖)에
+  전달 폴더 `zdotdir/`를 만들고 `ZDOTDIR=<그 폴더>`와 `GS_NOEQUALS=1`을 넣는다. 폴더의 `.zshenv`가 `ZDOTDIR`을 원래 값으로
+  되돌리고 원래 `.zshenv`를 읽은 뒤 `setopt noequals`를 켠다. 목록 밖 CLI이거나 폴더를 준비하지 못하면 둘 다 넣지 않는다
+  (`ZDOTDIR`은 바꾸지 않고, run.sh가 gs를 띄운 셸의 `GS_NOEQUALS`를 지운다). hook은 `GS_NOEQUALS=1`을 이 worker의 셸이
+  noequals라는 표식으로 본다. 근거와 CLI별 실측: docs/research/worker-noequals.md.
 - command: worktree에서 돌릴 셸 명령. 실행 스크립트(worker.write_script)가 이것을 감싸 로그와 exit 파일을 남긴다.
 - outcome: 프로세스 종료 코드와 로그로 최종 종료 코드를 정한다. agy는 종료 0이 성공이 아니다(docs/research/agy.md §3.1).
 - transient_reason: 로그에서 일시 오류 이유를 찾는다. 없으면 빈 문자열이며 outcome과는 별개다.
@@ -22,7 +27,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, git, transient
+from . import config, git, shellenv, transient
 
 q = shlex.quote
 
@@ -36,6 +41,11 @@ class WorkerInput:
     brief: Path
     worktree: Path
     log: Path
+
+    @property
+    def rundir(self) -> Path:
+        """실행 디렉터리(worktree 밖). worker.Job이 brief를 `<rundir>/brief.md`에 둔다."""
+        return self.brief.parent
 
 
 def worker_selection(family: str, models: config.ModelsConfig,
@@ -69,7 +79,7 @@ class Adapter:
 
     def env(self, inp: WorkerInput) -> dict[str, str]:
         return {"GS_ROLE": "worker", "GS_BRIEF": str(inp.brief), "GS_WORKTREE": str(inp.worktree),
-                config.WORKER_TESTS_ENV: self.worker_tests.env_value()}
+                config.WORKER_TESTS_ENV: self.worker_tests.env_value(), **shellenv.worker_env(self.name, inp.rundir)}
 
     def command(self, inp: WorkerInput) -> str:
         raise NotImplementedError
