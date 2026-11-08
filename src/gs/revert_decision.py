@@ -14,6 +14,11 @@ base가 그대로면 그 PR을 기다리고, base가 움직였으면 옛 revert�
 첫 검증이 실패했고 코드가 같으면(`code_same`) revert 전에 한 번 다시 돌린다. `MARK_RETRY`가 phase `main_retry`("첫 실패, 재시도가 남음")를 남기고, 그 phase가 곧 "이미
 재시도를 썼다"는 표시다: 재시도와 재검증의 실패는 다시 묻지 않고 revert로 간다. 끊긴 실행을 잇는 다음 `gs go`도 같은 줄을 지나므로 남이 한 revert를 먼저 보고 revert를 두 번 만들지 않는다.
 실패 뒤 base가 움직였으면 같은 코드의 재시도가 아니라 재검증이고, 통과해도 flaky로 적지 않는다.
+
+첫 검증(`VERIFY_MAIN`)을 고를 자리에서 받아 온 base 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가 보고서·이 feature의
+아이디어 파일뿐이면(`same_as_verified`) 검증하지 않고 `SKIP_MAIN`으로 integration의 통과를 그대로 쓴다. 이 자리에서만이다: 재시도·재검증,
+phase `main_failed`·`main_retry`·`revert_pending`, revert가 있거나 브랜치를 올린 상태, 외부 revert는 위 줄이 먼저 답하거나 이 줄에 오지 않는다.
+이미 확인한 실패를 덮지 않는다. `.goldstack/` 전체를 보는 `code_same`(재시도 판단)과 다른 기준이다.
 """
 from __future__ import annotations
 
@@ -37,6 +42,7 @@ OPEN_REVERT_PR = "open_revert_pr"  # 만들어 둔 revert를 PR로 올린다
 RECORD_UNVERIFIED = "record_unverified"  # setup 실패: base_unverified, revert하지 않는다
 KEEP_RETRY = "keep_retry"  # 재시도의 setup 실패: phase main_retry를 그대로 두고 revert하지 않는다
 VERIFY_MAIN = "verify_main"  # 검증 로그 main
+SKIP_MAIN = "skip_main"  # integration에서 검증한 코드 그대로: 검증하지 않고 로그 main에 건너뜀을 남긴 뒤 verified
 RETRY_MAIN = "retry_main"  # 검증 로그 main-retry
 RECHECK_MAIN = "recheck_main"  # 검증 로그 main-recheck
 MARK_RETRY = "mark_retry"  # 코드가 같은 첫 실패: phase main_retry를 남기고 worktree를 치운 뒤 처음부터 다시 읽는다
@@ -62,6 +68,9 @@ class Facts:
     revert_pushed: bool = False  # revert_head가 있다: revert 브랜치를 올린 적이 있어 그 PR이 남았을 수 있다
     revert_pr_merged: bool | None = None  # 그 PR이 이미 병합됐다
     code_same: bool = False  # 마지막으로 통과한 integration 커밋과 병합 커밋의 차이가 `.goldstack/`뿐이다. 모르면(옛 state, 못 읽음) 지금처럼 revert한다
+    # 받아 온 base 끝이 병합 커밋 그대로이고 마지막으로 통과한 integration 커밋(`verified_head`)과 병합 커밋의 차이가 보고서·이 feature의
+    # 아이디어 파일뿐이다. 모르면(옛 state, 못 읽음) 지금처럼 검증한다
+    same_as_verified: bool = False
 
 
 def next_step(f: Facts) -> str:
@@ -107,6 +116,9 @@ def next_step(f: Facts) -> str:
         if f.phase == "main_retry" and not f.base_moved:
             return RETRY_MAIN
         if f.phase not in ("main_failed", "main_retry") and not f.revert_pushed:
+            # integration에서 검증한 코드를 다시 돌리지 않는다. 실패를 확인한 적 없는 phase이고 revert도 없을 때만이다.
+            if f.same_as_verified and f.phase in ("merged", "base_unverified") and not f.has_revert:
+                return SKIP_MAIN
             return VERIFY_MAIN
         # 실패 뒤 base가 움직였다(사람이 고쳤거나 그사이 push로 revert push가 거부됐다). 그대로면 지난 실패를 믿고 아래로 간다.
         if f.base_moved:
