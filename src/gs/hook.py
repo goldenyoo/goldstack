@@ -13,7 +13,15 @@
 - 이름으로 프로세스를 끄는 `pkill`·`killall`(기계 전체의 같은 이름 프로세스를 끄니 다른 티켓의 검증도 죽는다). `kill <PID>`와 `pgrep`은 통과한다
 - 따옴표 없이 `=`로 시작하는 두 글자 이상 단어(`echo ===`). zsh의 `=` 확장이 `== not found`로 명령 묶음을 끊고, 뒤 명령이 돌지 않았는데 돈 것처럼 읽힌다.
   `echo "==="`·`[ a = a ]`·`[[ a == a ]]`·heredoc 본문·주석은 통과한다(`equals_word`). 같은 zsh에서 도는 `eval`·`zsh -c` 본문과 치환 속도 본다.
-  `bash -c`·`sh -c` 속은 `=` 확장이 없어 보지 않는다(`Ctx.zsh`)
+  `bash -c`·`sh -c` 속은 `=` 확장이 없어 보지 않는다(`Ctx.zsh`).
+  환경에 `GS_NOEQUALS=1`이 있는 worker(gs가 전달 폴더로 셸에 `setopt noequals`를 켠 worker, `shellenv`)에서는
+  맨 바깥 셸과 그 셸이 그대로 읽는 `eval` 본문·치환·`( )` 속의 `=` 단어를 보지 않는다(`Ctx.noequals`). 그 셸에서는 끊기지 않는다.
+  새 zsh 프로세스의 본문(`zsh -c`, `zsh -f -c`, `zsh -o equals -c`, 치환·`eval`·`bash -c` 속에서 띄운 것도)은 계속 본다.
+  `-f`는 시작 파일을 읽지 않고, `-f`가 없어도 전달 `.zshenv`가 `ZDOTDIR`을 원래 값으로 되돌려 사용자 설정에 `noequals`가 없으면 끊긴다.
+  이 판정에 남는 알려진 오차단(zsh는 끊기지 않는데 막음): `zsh -f -c "echo \\$(echo a)==="`(shlex가 큰따옴표 속 `\\$`를 남겨
+  `( )`로 읽는다), `echo ';' zsh -c 'echo ==='`(따옴표 속 `;`를 명령 구분으로 읽는다). 같은 셸에서는 건너뛰어 없어진
+  놓침(`eval "[[ \\$(echo ===) == a ]]"`, `""! [[ a == a ]]`)과 오차단(`> ""/dev/null [[ a == a ]]`)도 새 zsh 본문 안에 쓰면 남는다.
+  `GS_NOEQUALS`가 없거나 `1`이 아니면 위 판정을 모두 그대로 한다
 - 대상 레포가 config `[hook.worker_tests]`에 적은 고비용 시험 실행(`check_worker_tests`). 명령 원문이 `deny` 정규식 하나에 맞거나,
   `runner`에 맞으면서 `file`에 맞는 서로 다른 이름이 `max_files`개를 넘으면 막는다(`runner`에 맞지 않는 `git add` 등은 파일 수와 상관없이 통과).
   config에 절이 없거나 값이 비면 꺼진다(코드에 시험 러너 기본 규칙은 없다). gs가 worker를 띄울 때 config 값을 환경 변수
@@ -45,6 +53,8 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
+
+from .shellenv import NOEQUALS_ENV
 
 FOOTER = "이 일은 `gs`가 한다(push·PR·병합·인증). worker는 worktree 안에서 커밋까지만 한다."
 TESTS_ADVICE = "전체 검증은 gs가 병합 전에 돌린다. 고친 곳에 닿는 좁은 시험만 돌린다"
@@ -130,6 +140,9 @@ class Ctx:
     located: tuple[str, ...] = ()  # 명령 글에서 git이 볼 곳을 바꾸는 말의 값(`_git_locations`)
     xargs_fill: tuple[str, ...] = ()  # 바깥 xargs가 입력으로 바꿔 넣을 글자들(`_xargs_fill`). `sh -c` 안까지 듣는다
     zsh: bool = True  # 이 글을 읽는 셸이 zsh인가. 맨 바깥과 `zsh -c`는 zsh, `bash -c`·`sh -c`는 아니다. `eval`과 치환은 물려받는다
+    # 이 글을 읽는 셸이 gs가 `setopt noequals`를 켠 셸인가. 맨 바깥은 `GS_NOEQUALS=1`일 때, `eval`과 치환은 물려받고,
+    # 새 셸 프로세스(`zsh -c`, `bash -c`)는 아니다. 참이면 `=` 단어 판정만 건너뛴다
+    noequals: bool = False
 
 
 # ---------------------------------------------------------------- 진입점
@@ -474,7 +487,7 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
         return None
     cwd = payload.get("cwd") or env.get("GS_WORKTREE") or os.getcwd()
     worktree = os.path.realpath(env.get("GS_WORKTREE") or cwd)
-    ctx = Ctx(worktree=worktree, cwd=str(cwd), env=env)
+    ctx = Ctx(worktree=worktree, cwd=str(cwd), env=env, noequals=env.get(NOEQUALS_ENV) == "1")
 
     if tool == "Bash":
         command = str(inp.get("command") or "")
@@ -535,11 +548,12 @@ def check_worker_tests(command: str, env: Mapping[str, str]) -> str | None:
 
 def check_bash(command: str, ctx: Ctx, depth: int = 0, substitution: bool = False) -> str | None:
     """`substitution`: 바깥 글에서 떼어 낸 치환 속이다. `equals_word`가 바깥 글에서 이미 봤다.
-    그 속의 `eval`·`zsh -c` 본문은 새 글이라 다시 본다."""
+    그 속의 `eval`·`zsh -c` 본문은 새 글이라 다시 본다.
+    `ctx.noequals`이면 이 글의 `=` 단어 판정만 건너뛴다(다른 판정과 `zsh -c` 본문의 판정은 그대로다)."""
     if depth > 3:
         return None
     text, subs = scan(command.replace("\\\n", " "))
-    if ctx.zsh and not substitution:
+    if ctx.zsh and not ctx.noequals and not substitution:
         word = equals_word(text)
         if word:
             return (f"따옴표 없는 `{word}`는 zsh의 `=` 확장이라 `{word[1:]} not found`로 명령이 끊긴다. "
@@ -1049,8 +1063,8 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
 
     if name in ("bash", "sh", "zsh", "dash"):
         script = shell_c_script(args)
-        if script is not None:
-            return check_bash(_as_script(script), replace(seg, zsh=name == "zsh"), depth + 1)
+        if script is not None:  # 새 셸 프로세스: 시작 파일을 읽지 않을 수 있어(`-f`) noequals를 물려받지 않는다
+            return check_bash(_as_script(script), replace(seg, zsh=name == "zsh", noequals=False), depth + 1)
     if name == "eval":
         return check_bash(_as_script(" ".join(args)), seg, depth + 1)
 
