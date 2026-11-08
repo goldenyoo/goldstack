@@ -204,13 +204,15 @@ worker가 성공하면 병합 전에 티켓의 `reviewer`(있으면 `second_revi
 - agy 수정 worker: 띄우지 않고 지금 브랜치의 구현을 병합·검증한다(1차면 수정 전 구현, 2차면 1차 수정까지. 티켓 실패 아님). 대상 지적에 `fix_reason = 한도`를 남겨 보고서 `수정 못 함(한도)`, 1차 재리뷰의 `unresolved`는 `미해결`이다.
 `gs check`는 이 상한을 실행 전에 어림한다: 티켓마다 첫 호출(구현·리뷰·두 번째 리뷰)만 센다. 재시도·수정·재리뷰는 일어날지 몰라 미리 세지 않으므로, 경고가 없어도 실행 중 상한에 닿을 수 있다. 보고서 Evidence 끝에 `agy 사용: <agy_calls>/<상한>`(`report.agy_usage`).
 
-계열 표가 없을 때 reviewer 명령(모두 읽기 전용, worker와 같은 push·gh 차단 환경):
+계열 표가 없을 때 reviewer 명령(리뷰 대상 worktree는 모두 읽기 전용, worker와 같은 push·gh 차단 환경):
 
 | reviewer | 명령 |
 |---|---|
 | claude | `claude -p --model <models.claude_review> --output-format json --permission-mode bypassPermissions --tools Read,Grep,Glob` (stdin = 프롬프트) |
-| codex | `codex exec --json [--model <models.codex>] -s read-only --skip-git-repo-check -C <wt> --output-last-message <review.txt> -` |
+| codex | `codex exec --json [--model <models.codex>] -s workspace-write -c sandbox_workspace_write.network_access=false --skip-git-repo-check -C <빈 임시 폴더> --output-last-message <review.txt> -` |
 | agy | `agy -p <프롬프트> --sandbox --dangerously-skip-permissions --disable-slash-commands --settings '<deny 규칙>' --model <models.agy>` |
+
+codex 리뷰어는 `-C`가 worktree가 아니라 호출마다(끊겨서 다시 부를 때도) `tempfile.mkdtemp(prefix="gs-review-")`로 새로 만든 빈 임시 폴더다(`review._ask_reviewer`). 호출이 끝나면 실패여도 지운다. 그래서 시험 재현에 필요한 임시 파일을 그 폴더와 TMPDIR에 쓸 수 있고, worktree는 읽기만 되며 네트워크는 꺼져 있다(실측 `docs/research/codex-review-sandbox.md`). 프롬프트가 worktree 절대 경로와 "시험은 그 경로에서 돌리되 쓰기는 임시 폴더·TMPDIR에만"을 알린다. 임시 폴더는 `GS_REVIEWER_CMD`를 쓰면 만들지 않는다.
 
 ## 네트워크 끊김
 

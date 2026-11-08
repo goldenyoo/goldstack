@@ -62,19 +62,25 @@ class ReviewTiersTest(unittest.TestCase):
             self.assertEqual(argv[argv.index('--model') + 1], model)
         else:
             self.assertNotIn('--model', argv)
+        configs = [argv[i + 1] for i, a in enumerate(argv) if a == '-c']  # codex 리뷰는 네트워크 끔 `-c`가 항상 붙는다
+        efforts = [c for c in configs if c.startswith('model_reasoning_effort=')]
         if effort and family == 'codex':
-            self.assertEqual(argv[argv.index('-c') + 1], 'model_reasoning_effort=' + effort)
+            self.assertEqual(efforts, ['model_reasoning_effort=' + effort])
             self.assertNotIn('--effort', argv)
         elif effort:
             self.assertEqual(argv[argv.index('--effort') + 1], effort)
-            self.assertNotIn('-c', argv)
+            self.assertEqual(efforts, [])
+            if family != 'codex':
+                self.assertNotIn('-c', argv)
         else:
             self.assertNotIn('--effort', argv)
-            self.assertNotIn('-c', argv)
+            self.assertEqual(efforts, [])
+            if family != 'codex':
+                self.assertNotIn('-c', argv)
         if family == 'claude':
             self.assertEqual(argv[argv.index('--tools') + 1], 'Read,Grep,Glob')
         elif family == 'codex':
-            self.assertEqual(argv[argv.index('-s') + 1], 'read-only')
+            self.assertEqual(argv[argv.index('-s') + 1], 'workspace-write')
         else:
             self.assertIn('--sandbox', argv)
 
