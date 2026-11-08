@@ -458,6 +458,45 @@ class OldStateTest(Unit):
         self.assertEqual(self.write(), [])
 
 
+class DeferTest(Unit):
+    """goldstack-v27 01: defer(재현된 미수리) 지적은 원래 심각도와 상관없이 high 파일이고, 본문에 원래 심각도를 적는다."""
+
+    def test_defer_of_any_severity_is_a_high_idea_with_original_severity(self):
+        self.ts.review = {"findings": [
+            finding("high defer", action=review.DEFER),
+            finding("medium defer", "medium", "b.py:1", 2, action=review.DEFER),
+            finding("low defer", "low", "c.py:1", 3, action=review.DEFER, why="c.py는 고칠 수 있는 파일 밖이다"),
+            finding("low 보고만", "low", "d.py:1", 4),
+        ]}
+        self.assertEqual(self.write(), [IDEA.format(f"01-{n}") for n in (1, 2, 3)])
+        self.assertEqual(self.idea("01-3").read_text(encoding="utf-8"), (
+            '---\ndate: "2026-11-05"\nseverity: "high"\nsource: "demo 리뷰 01"\nstatus: "open"\nfeature: ""\n---\n'
+            'low defer\n\n위치: c.py:1\n근거: 근거\n판단: c.py는 고칠 수 있는 파일 밖이다\n'
+            '재현된 미수리 결함(defer): 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않았다. 원래 심각도: low\n'
+            f'보고서: {REPORT}\n'))
+        for n, original in ((1, "high"), (2, "medium"), (3, "low")):
+            idea = backlog.read_idea(self.idea(f"01-{n}"))
+            self.assertEqual((idea.severity, idea.status), ("high", "open"))
+            self.assertIn(f"원래 심각도: {original}\n", self.idea(f"01-{n}").read_text(encoding="utf-8"))
+
+    def test_same_finding_as_report_then_defer_is_one_high_file(self):
+        """두 리뷰어의 같은 지적(첫 줄·위치)이 한 파일을 나눠 쓴다. 앞 기록이 medium 보고만이어도 defer의 high 파일이 남는다."""
+        self.ts.review = {"findings": [finding("같은 지적", "medium")]}
+        self.ts.second_review = {"findings": [finding("같은 지적", "medium", action=review.DEFER)]}
+        self.assertEqual(self.write(), [IDEA.format("01-1")])
+        self.assertEqual(self.names(), ["demo-01-1"])
+        idea = backlog.read_idea(self.idea("01-1"))
+        self.assertEqual((idea.severity, idea.status), ("high", "open"))
+        self.assertIn("원래 심각도: medium\n", self.idea("01-1").read_text(encoding="utf-8"))
+
+    def test_report_only_file_has_no_defer_line(self):
+        self.ts.review = {"findings": [finding("보고만 medium", "medium")]}
+        self.write()
+        text = self.idea("01-1").read_text(encoding="utf-8")
+        self.assertIn('severity: "medium"', text)
+        self.assertNotIn("재현된 미수리", text)
+
+
 class VerifyFinalTest(Unit):
     def setUp(self):
         super().setUp()

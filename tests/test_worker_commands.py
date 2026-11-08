@@ -138,6 +138,19 @@ class CommandsTest(Base):
         self.assertEqual(detail("", 2), "종료 2")  # 출력이 없으면 종료 코드만
         self.assertEqual(detail("fine output", 0), "종료 0")  # 성공한 명령은 출력을 싣지 않는다
 
+    def test_codex_failed_command_detail_keeps_whitespace_visible(self):
+        def detail(output):
+            found, _ = streamfmt.commands(self.log(lines(codex("make", 1, output=output))))
+            return found[0]["detail"]
+
+        self.assertNotEqual(detail("a b"), detail("a  b"))  # 공백만 달라도 detail이 다르다
+        tail = detail("HEAD" + "\n" * 200 + "TAIL")
+        self.assertNotIn("HEAD", tail)  # 원본 끝 200자를 먼저 자른다
+        self.assertTrue(tail.endswith("TAIL"))
+        self.assertIn("\\n", detail("x\ny"))  # 줄바꿈이 \n 두 글자로 보인다
+        self.assertNotIn("\n", detail("x\ny"))
+        self.assertEqual(detail("a\tb\rc\\d"), "종료 1: a\\tb\\rc\\\\d")
+
     def test_unreadable_logs_give_nothing(self):
         self.assertEqual(streamfmt.commands(self.dir / "none.log"), ([], 0))
         self.assertEqual(streamfmt.commands(self.log("plain text\n[1]\n\"s\"\n{broken\n")), ([], 0))

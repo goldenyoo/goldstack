@@ -57,14 +57,14 @@ telegram = false
                     self.assert_model(shlex.split(worker.command(self.inp)), expected)
             for family, expected in (("claude", cfg.models.claude_review), ("agy", cfg.models.agy),
                                      ("codex", cfg.models.codex)):
-                argv, _, _ = review.reviewer_argv(family, self.repo, "prompt", self.repo / "out", cfg.models)
+                argv, _, _ = review.reviewer_argv(family, self.repo, "prompt", self.repo / "out", cfg.models, scratch=self.repo / "scratch")
                 self.assert_model(argv, expected)
 
     def test_empty_codex_model_omits_flag_for_worker_and_reviewer(self):
         cfg = self.configured(1, codex="")
         with mock.patch.object(adapters.Codex, "writable_dirs", return_value=[]):
             self.assertNotIn("--model", shlex.split(adapters.for_model("codex", cfg.models).command(self.inp)))
-        argv, _, _ = review.reviewer_argv("codex", self.repo, "prompt", self.repo / "out", cfg.models)
+        argv, _, _ = review.reviewer_argv("codex", self.repo, "prompt", self.repo / "out", cfg.models, scratch=self.repo / "scratch")
         self.assertNotIn("--model", argv)
 
     def test_review_and_classification_use_configured_models_and_timeouts(self):

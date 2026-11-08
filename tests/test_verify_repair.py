@@ -8,6 +8,9 @@ goldstack-v21 04: 끊긴 검증은 수리 없이 한 번 다시 돈다(Interrupt
 goldstack-v22 01: gs만 SIGKILL로 죽어 살아 남은 검증을 다음 gs go가 끝낸다(StaleResumeTest, InterruptedResumeTest의 다시 검증).
 
 goldstack-v25 03: 커밋 없이 끝났거나 실패해 버린 수리는 같은 head를 다시 검증하지 않고 시도가 실패한다. 마지막 메시지의 `브랜치 밖 원인:` 줄은 재시도 없는 실패다(NoCommitTest).
+
+goldstack-v27 03: 그 줄은 수리 worker가 실패로 끝나도 재시도 없는 실패다. 다시 띄우지 못한 수리 worker 자리는 앞 실행의 마지막 메시지를 "(앞 실행)" 표시로 싣고,
+그 메시지의 줄은 재시도 판단에 쓰지 않는다(EndAndResumeTest, AgyLimitTest).
 """
 import json
 import os
@@ -387,7 +390,7 @@ class NoCommitTest(Base):
 
     def test_failed_repair_is_discarded_and_the_attempt_fails_without_verifying_again(self):
         self.flaky_verify()
-        # 실패한 수리 worker는 `브랜치 밖 원인:` 줄이 있어도 일반 실패다: 줄은 커밋 없이 끝난 수리 worker에서만 읽는다
+        # 커밋을 남기고 실패한 수리 worker는 `브랜치 밖 원인:` 줄이 있어도 일반 실패다: 줄은 커밋 없이 끝난 수리 worker에서만 읽는다(goldstack-v27 03부터 종료 코드와 상관없이)
         self.worker(GOOD, 'echo bad > bad_fix; git add -A; git commit -qm "bad fix"; '
                     + said(f"{review.OUT_OF_BRANCH} {OUTSIDE}") + "; exit 3")
         code, out, err = self.go("--only", "01")
@@ -490,6 +493,164 @@ class NoCommitTest(Base):
         self.assertEqual(self.calls(), ["01", "01"])  # 수리 worker를 다시 띄우지 않는다
         self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01-repair", "passed")])
         self.assertEqual(state.repair_summary(ts), "수리: 시도 1 커밋 없음 → 다시 검증 통과")
+
+
+class EndAndResumeTest(Base):
+    """goldstack-v27 03: 실패로 끝난 수리 worker의 `브랜치 밖 원인:` 줄과, 다시 띄우지 못한 수리 worker 자리의 앞 실행 메시지.
+
+    앞 실행 메시지는 gs가 수리 worker의 끝을 보기 전에 멈춘 뒤(stop_before_end) 다음 gs go가 그 worker를 다시 띄우지 못하게 해서 만든다.
+    """
+
+    def repair_dir(self, name="repair"):
+        return self.rundir / "01/1" / name
+
+    def prior_file(self, name="repair"):
+        """다시 띄우지 못한 자리(repair_dir(name))가 남기는 앞 실행 메시지 파일의 첫 줄. 앞 실행은 처음 수리 worker의 디렉터리다."""
+        return f"{go.PRIOR_RUN} {self.repair_dir() / 'worker.log'}의 마지막 메시지다. 이번 실행에서는 수리 worker를 시작하지 않았다.\n"
+
+    def stop_before_end(self):
+        """수리 worker가 끝난 것을 보기 전에 gs가 멈춘다. 표시는 아직 돈다고 말한다: 다음 gs go가 처음 수리 디렉터리를 앞 실행으로 보고 다시 띄운다."""
+        with mock.patch("gs.go._end_repair", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        mark = self.ts().network_resume
+        self.assertEqual((mark["repair"], mark["done"], Path(mark["rundir"])), (go.REPAIR_RUN, False, self.repair_dir()))
+
+    def no_new_dir(self):
+        """다시 띄울 수리 worker의 새 디렉터리(repair-net<n>)를 만들지 못한다. 대신 세운 자리는 앞 실행의 디렉터리를 그대로 쓰고, 거기에 앞 worker의 로그가 있다."""
+        real = Path.mkdir
+
+        def mkdir(path, *args, **kwargs):
+            if path.name.startswith("repair-net"):
+                raise OSError("disk full")
+            return real(path, *args, **kwargs)
+
+        return mock.patch.object(Path, "mkdir", mkdir)
+
+    def no_brief(self):
+        """새 디렉터리(repair-net<n>)는 만들었지만 brief를 쓰지 못한다. 대신 세운 자리의 디렉터리에는 로그가 없다."""
+        real = worker.write_brief
+
+        def write(job, *args, **kwargs):
+            if job.rundir.name.startswith("repair-net"):
+                raise OSError("disk full")
+            return real(job, *args, **kwargs)
+
+        return mock.patch("gs.worker.write_brief", side_effect=write)
+
+    def test_out_of_branch_line_of_a_failed_worker_fails_the_ticket_without_a_retry(self):
+        self.worker(BREAKS, said(f"integration을 확인했다.\n{review.OUT_OF_BRANCH} {OUTSIDE}") + "; exit 1", retry=GOOD)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.network_resume), ("failed", 1, 1, {}))
+        self.assertEqual(self.calls(), ["01", "01"])  # 구현 + 수리. 새 시도가 없다
+        self.assertFalse((self.rundir / "01/2").exists())
+        last = self.repair_dir() / review.WORKER_LAST
+        first = f"검증 실패(로그 {self.rundir / '01/1/verify.log'})"
+        self.assertEqual(ts.reason, f"{first} → 수리 수리 worker 실패(종료 코드 1), 수리 버림, {review.OUT_OF_BRANCH} {OUTSIDE} "
+                                    f"(재시도하지 않는다. 수리 worker 마지막 메시지 `{last}`)")
+        self.assertEqual((ts.repairs[0]["result"], ts.repairs[0]["detail"]), (state.REPAIR_FAILED, ts.reason))
+        self.assertIn("브랜치 밖 원인이라 재시도하지 않고 사람에게 넘긴다", out)
+        self.assertNotIn("한 번 재시도", out)
+        self.assertEqual(ts.failure_summary, "")
+        self.assertNotIn(go.PRIOR_RUN, last.read_text())  # 이번 실행에서 띄운 worker의 메시지다
+
+    def test_failed_worker_without_the_line_is_retried_as_before(self):
+        self.flaky_verify()
+        self.worker(GOOD, said(NO_FIX) + "; exit 1")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertEqual(self.calls(), ["01", "01", "01"])  # 구현 + 수리 + 새 시도의 구현
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01", "passed")])
+        last = self.repair_dir() / review.WORKER_LAST
+        self.assertEqual(last.read_text(), NO_FIX + "\n")
+        self.assertEqual(ts.repairs[0]["detail"],
+                         f"검증 실패(로그 {self.rundir / '01/1/verify.log'}) → 수리 수리 worker 실패(종료 코드 1), 수리 버림: "
+                         f"같은 head를 다시 검증하지 않는다. 수리 worker 마지막 메시지 `{last}`: "
+                         "고칠 곳을 찾지 못했다. 이 티켓과 무관하게 불안정한 시험으로 보인다.")
+        self.assertIn("한 번 재시도", out)
+        self.assertIn(f"{failure.LAST_MESSAGE}: `{last}`", (self.rundir / "01/2/brief.md").read_text())
+
+    def test_resume_failing_before_a_new_directory_carries_the_prior_message(self):
+        self.flaky_verify()
+        self.worker(GOOD, said(NO_FIX))
+        self.stop_before_end()
+        with self.no_new_dir():
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("[01] 수리 worker를 다시 띄우지 못했다: worker를 다시 띄우지 못했다: OSError: disk full", out)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))  # 재시도는 그대로다
+        self.assertEqual(self.calls(), ["01", "01", "01"])  # 구현 + 수리 + 새 시도의 구현. 수리를 다시 띄우지 않았다
+        self.assertFalse(self.repair_dir("repair-net1").exists())
+        # 대신 세운 자리는 앞 실행의 디렉터리다. 앞 worker의 로그가 거기 있어도 이번 실행에서 띄운 worker로 보지 않는다
+        last = self.repair_dir() / review.WORKER_LAST
+        self.assertEqual(last.read_text(), self.prior_file() + NO_FIX + "\n")
+        self.assertTrue(ts.repairs[0]["detail"].endswith(
+            f"수리 버림: 같은 head를 다시 검증하지 않는다. 수리 worker 마지막 메시지{go.PRIOR_RUN} `{last}`: "
+            "고칠 곳을 찾지 못했다. 이 티켓과 무관하게 불안정한 시험으로 보인다."), ts.repairs[0])
+        self.assertIn("한 번 재시도", out)
+        self.assertIn(f"## {last} (", (self.repair_dir() / "failure.log").read_text())
+        self.assertIn(f"{failure.LAST_MESSAGE}: `{last}`", (self.rundir / "01/2/brief.md").read_text())
+
+    def test_out_of_branch_line_in_the_prior_message_keeps_the_retry(self):
+        self.worker(BREAKS, said(f"{review.OUT_OF_BRANCH} {OUTSIDE}"), retry=GOOD)
+        self.stop_before_end()
+        with self.no_new_dir():
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))  # 끊긴 실행의 표식이라 재시도한다
+        self.assertEqual(self.calls(), ["01", "01", "01"])
+        last = self.repair_dir() / review.WORKER_LAST
+        detail = ts.repairs[0]["detail"]
+        self.assertTrue(detail.endswith(f"같은 head를 다시 검증하지 않는다. 수리 worker 마지막 메시지{go.PRIOR_RUN} `{last}`: "
+                                        f"{review.OUT_OF_BRANCH} {OUTSIDE}"), detail)
+        self.assertNotIn("재시도하지 않는다", detail)
+        self.assertNotIn("브랜치 밖 원인이라", out)
+        self.assertIn("한 번 재시도", out)
+        self.assertEqual(last.read_text(), self.prior_file() + f"{review.OUT_OF_BRANCH} {OUTSIDE}\n")
+
+    def test_two_failed_resumes_in_a_row_carry_the_message_of_the_last_worker_that_ran(self):
+        self.flaky_verify()
+        self.worker(GOOD, said(NO_FIX))
+        self.stop_before_end()
+        # 첫 다시 띄우기는 새 디렉터리를 만들고 실패한다. 그 끝을 보기 전에 gs가 또 멈춘다
+        with self.no_brief(), mock.patch("gs.go._end_repair", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        self.assertTrue(self.repair_dir("repair-net1").is_dir())
+        self.assertFalse((self.repair_dir("repair-net1") / "worker.log").exists())
+        mark = self.ts().network_resume
+        self.assertEqual((mark["repair"], mark["done"], Path(mark["rundir"])), (go.REPAIR_RUN, False, self.repair_dir()))
+        with self.no_brief():
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertEqual(self.calls(), ["01", "01", "01"])
+        # 메시지는 마지막으로 돈 처음 수리 worker의 것이다. 파일은 대신 세운 자리(repair-net2)에 failure.log와 함께 있다
+        last = self.repair_dir("repair-net2") / review.WORKER_LAST
+        self.assertEqual(last.read_text(), self.prior_file() + NO_FIX + "\n")
+        self.assertFalse((self.repair_dir() / review.WORKER_LAST).exists())
+        self.assertIn(f"수리 worker 마지막 메시지{go.PRIOR_RUN} `{last}`: 고칠 곳을 찾지 못했다.", ts.repairs[0]["detail"])
+        self.assertIn(f"## {last} (", (self.repair_dir("repair-net2") / "failure.log").read_text())
+        self.assertIn(f"{failure.LAST_MESSAGE}: `{last}`", (self.rundir / "01/2/brief.md").read_text())
+
+    def test_no_prior_message_says_so(self):
+        self.flaky_verify()
+        self.worker(GOOD, "echo not-json")
+        self.stop_before_end()
+        with self.no_new_dir():
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertTrue(ts.repairs[0]["detail"].endswith("같은 head를 다시 검증하지 않는다. 수리 worker 마지막 메시지 없음"), ts.repairs[0])
+        self.assertNotIn(go.PRIOR_RUN, ts.repairs[0]["detail"])
+        self.assertFalse((self.repair_dir() / review.WORKER_LAST).exists())
+        self.assertNotIn(f"{failure.LAST_MESSAGE}: `", (self.rundir / "01/2/brief.md").read_text())
 
 
 class FailAgainTest(Base):
@@ -1308,6 +1469,26 @@ class AgyLimitTest(Base):
         self.assertIn("수리 버림", ts.repairs[0]["worker"])
         self.assertEqual(ts.repairs[0]["result"], state.REPAIR_FAILED)
         self.assertIn("agy 한도", ts.reason)
+
+    def test_limit_on_resume_carries_the_prior_message_and_keeps_the_retry(self):
+        # agy 한도면 새 디렉터리를 만들기 전에 그만둔다: 대신 세운 자리가 앞 실행 디렉터리라 앞 worker의 로그가 있다. 이번 실행에서 띄운 worker로 보지 않는다
+        self.flaky_verify()
+        self.worker(GOOD, said(f"{review.OUT_OF_BRANCH} {OUTSIDE}"))
+        with mock.patch("gs.go._end_repair", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        self.limit(0)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("failed", 1, 2))  # 재시도했고 새 시도가 상한에 막혔다
+        self.assertIn("수리 worker를 다시 띄우지 못했다: agy 한도", out)
+        self.assertIn("한 번 재시도", out)
+        self.assertNotIn("브랜치 밖 원인이라", out)
+        last = self.rundir / "01/1/repair" / review.WORKER_LAST
+        detail = ts.repairs[0]["detail"]
+        self.assertTrue(detail.endswith(f"수리 worker 마지막 메시지{go.PRIOR_RUN} `{last}`: {review.OUT_OF_BRANCH} {OUTSIDE}"), detail)
+        self.assertNotIn("재시도하지 않는다", detail)
+        self.assertTrue(last.read_text().startswith(f"{go.PRIOR_RUN} {self.rundir / '01/1/repair/worker.log'}의 마지막 메시지다."))
 
 
 class StartFailureTest(Base):

@@ -9,6 +9,8 @@ integration head = 검증한 integration 끝(티켓 검증이어도 티켓 코�
 판단 입력 `report-input.md`에는 실패한 검증의 시험 줄(failing_tests)과 티켓별 worker 마지막 보고(worker_reports, 믿을 수 없는 자료)가 들어간다. 로그가 없으면 없다고 적는다.
 base 검증이 실패한 보고서(reverted)는 Evidence 맨 앞에 그 실패 줄·로그 경로를 싣고, Summary 맨 위 줄에 revert 상태와 `gs go <feature>`를 코드로 넣는다.
 후보 티켓(추정)이 없으면 병합된 티켓별 실제 변경 파일을 함께 보인다.
+defer 지적(review.DEFER: 재현됐지만 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않은 결함)은 상태가 "재현된 미수리"이고, Evidence의
+"재현된 미수리 결함" 절에 따로 나오며(deferred_section), 원래 심각도와 상관없이 남은 high로 센다(remaining_line). 옛 state에는 없다.
 """
 from __future__ import annotations
 
@@ -25,8 +27,9 @@ from .feature import WORK
 LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
 MAX_BODY = 60000  # GitHub PR 본문 상한(65,536자)보다 넉넉히 작게
 FAILURE_LINE_LIMIT = 1000  # 긴 실패 줄도 후보·티켓 결과·되돌리는 법을 밀어내지 않게 표시만 줄인다
-FINDING_STATUSES = ("수정됨", "미해결", "보고만", "수정 못 함", "확인 못 함")
-REMAINING_STATUSES = ("보고만", "미해결", "수정 못 함", "확인 못 함")  # high 지적이 이 상태면 남은 high다(수정됨만 뺀다)
+DEFERRED = "재현된 미수리"  # defer 지적의 상태(finding_status). 심각도와 상관없이 남은 high다
+FINDING_STATUSES = ("수정됨", "미해결", "보고만", DEFERRED, "수정 못 함", "확인 못 함")
+REMAINING_STATUSES = ("보고만", DEFERRED, "미해결", "수정 못 함", "확인 못 함")  # high 지적(defer는 모두)이 이 상태면 남은 high다(수정됨만 뺀다)
 
 
 def block(text: str) -> str:
@@ -56,9 +59,11 @@ def kept(ts) -> str:
 
 
 def finding_status(finding: dict) -> str:
-    """01의 지적별 결과를 표시한다. 이전 재리뷰의 미해결 판정은 2차 수정 실패보다 우선한다."""
+    """01의 지적별 결과를 표시한다. 이전 재리뷰의 미해결 판정은 2차 수정 실패보다 우선한다. defer는 고치지 않았으니 DEFERRED다."""
     if finding.get("action", review.REPORT) == review.REPORT or finding.get("found_round") == 2:
         return "보고만"
+    if finding.get("action") == review.DEFER:
+        return DEFERRED
     result = finding.get("rereview")
     if result == review.RESOLVED:
         return "수정됨(재리뷰 확인)"
@@ -88,6 +93,7 @@ def remaining_line(r) -> str:
     """끝 출력·보고서 마무리 줄의 `남은 high N(상태 n · …) · 건너뛴 리뷰: 티켓`. 둘 다 없으면 빈 문자열.
 
     판정·종료 코드는 바꾸지 않고 보이기만 한다(spec 2-2). 건너뛴 리뷰는 note가 `건너뜀(한도)`로 시작하는 리뷰 기록이다.
+    defer 지적(DEFERRED)은 원래 심각도와 상관없이 high로 센다: 재현된 결함인데 고치지 않았다.
     옛 state에 심각도·상태·note가 없어도 오류 없이 센다(없는 심각도는 high가 아니다).
     """
     counts, skipped = Counter(), []
@@ -96,8 +102,11 @@ def remaining_line(r) -> str:
             if str(rec.get("note") or "").startswith(review.LIMIT) and tid not in skipped:
                 skipped.append(tid)
             for f in rec.get("findings") or []:
-                if isinstance(f, dict) and f.get("severity") == "high":
-                    counts[finding_status(f).partition("(")[0]] += 1
+                if not isinstance(f, dict):
+                    continue
+                status = finding_status(f).partition("(")[0]
+                if f.get("severity") == "high" or status == DEFERRED:
+                    counts[status] += 1
     parts = []
     if total := sum(counts[label] for label in REMAINING_STATUSES):
         detail = " · ".join(f"{label} {counts[label]}" for label in REMAINING_STATUSES if counts[label])
@@ -105,6 +114,25 @@ def remaining_line(r) -> str:
     if skipped:
         parts.append("건너뛴 리뷰: " + " ".join(skipped))
     return " · ".join(parts)
+
+
+def deferred_section(r) -> str:
+    """defer 지적(상태 DEFERRED)을 티켓·리뷰어·원래 심각도와 함께 보인다. 없으면 빈 문자열.
+
+    남은 high 집계(remaining_line)는 이 지적을 심각도와 상관없이 high로 센다. 아이디어 파일도 high로 남는다(findings.py).
+    """
+    lines = []
+    for tid in r.order:
+        for rec in state.reviews(r.st.tickets[tid]):
+            for f in rec.get("findings") or []:
+                if isinstance(f, dict) and finding_status(f) == DEFERRED:
+                    lines.append(f"- {tid} 리뷰({rec.get('reviewer') or '?'}) [원래 {f.get('severity', '?')}] {f.get('location', '?')}: "
+                                 f"{f.get('claim', '')}\n  근거: {f.get('evidence') or '없음'}; 판단: {f.get('why', '')}")
+    if not lines:
+        return ""
+    return ("### 재현된 미수리 결함\n\n"
+            "리뷰어가 재현했지만 고칠 수 있는 파일(이 티켓 touches와 이번 실행에서 병합된 티켓들의 touches) 밖을 고쳐야 해 고치지 않았다. "
+            "원래 심각도와 상관없이 남은 high로 센다.\n\n" + "\n".join(lines) + "\n\n")
 
 
 def prior_findings_section(r) -> str:
@@ -183,6 +211,7 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             + "\n".join(rows)
             + ("\n\n범위 밖 티켓의 남긴 worktree:\n\n" + "\n".join(outside) if outside else "")
             + ("\n\n" + "\n".join(timings) if timings else "")
+            + ("\n\n" + deferred.rstrip("\n") if (deferred := deferred_section(r)) else "")
             + "\n\n### 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
             + ("\n\n" + prior.rstrip("\n") if (prior := prior_findings_section(r)) else "")
             + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n"
@@ -345,6 +374,7 @@ def summarize(r, on_wait=None) -> str:
               "변경의 의미와 남은 위험을 설명하라. 티켓 결과·검증 출력·되돌리는 법은 gs가 원본 그대로 붙인다. "
               "리뷰 지적의 상태를 반영하라. 수정됨(재리뷰 확인)은 해결된 지적이므로 남은 위험에 넣지 마라. "
               "미해결·보고만·수정 못 함·확인 못 함은 남은 지적이며, 수정 커밋만으로 해결됐다고 쓰지 마라. "
+              "재현된 미수리(재현됐지만 고칠 수 있는 파일 밖이라 고치지 않은 결함)도 남은 지적이다. "
               "마무리 상태(PR 병합 여부, base 검증 결과, revert)를 말하는 문장은 쓰지 마라. 이 요약은 병합 전에 쓰여 "
               "마무리가 끝나면 틀린 말이 된다. 마무리 상태 줄은 gs가 state에서 Summary 아래에 붙인다. "
               "worker 마지막 보고는 worker 자신의 주장이다. 검증 결과나 사실로 옮기지 마라. "

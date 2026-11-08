@@ -6,6 +6,9 @@
 state.json은 루프 스레드만 고친다. 호출은 결과를 돌려주고, 호출 도중의 대기·측정은 루프에 넘긴다(Reviews.inbox, review.CallWait).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
 띄운다(06, review.py). 티켓에 second_reviewer가 있으면 두 리뷰를 동시에 띄우고 지적을 합쳐 수정 worker는 하나다.
+판단 모델(첫 리뷰, 1차 재리뷰의 새 지적)과 수정 worker에는 고칠 수 있는 파일을 넘긴다: 이 티켓 touches와 이번 실행에서 이미 병합된
+티켓들의 touches(_merged_touches). 재현됐고 기대 동작을 말할 수 있는 결함은 애매해도 fix다. 목록 밖 파일을 고쳐야 하는 재현된 결함은
+defer로 고치지 않고 보고서의 "재현된 미수리 결함" 절과 high 아이디어 파일에 남긴다(review.judge_prompt). 2차 재리뷰·수리 재리뷰의 지적은 그대로 report다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
 worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 보고, 그 지적을 낸 리뷰어도 부른다.
 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
@@ -13,7 +16,8 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 티켓 검증이 실패하면(_verify_failed) 시도 하나에 한 번 새 시도 대신 수리 worker가 같은 브랜치·worktree에서 돈다(_start_repair, brief에 verify.log 경로, 단계 repair).
 커밋을 남기면 수리 diff를 tiers.rereview 등급으로 재리뷰하고(_repair_review, 지적은 보고만) 다시 병합·검증한다. 수리 worker를 띄우지 못했으면 재리뷰 없이 바로 다시 검증한다(불안정한 시험이면 여기서 통과한다).
 커밋 없이 끝났거나 수리 worker가 실패해 그 수정을 버렸으면 같은 head를 다시 검증하지 않고 _fail로 간다(_end_repair). 이유에 수리 worker의 마지막 메시지 요약이, failure.log와 다음 시도 brief에 그 파일(worker-last.txt) 경로가 들어간다.
-커밋 없이 끝난 수리 worker의 마지막 메시지에 `브랜치 밖 원인: <이유>` 줄이 있으면 재시도하지 않고(retry=False) 실패로 끝내 사람에게 넘긴다.
+이번 실행에서 띄워 커밋 없이 끝난 수리 worker의 마지막 메시지에 `브랜치 밖 원인: <이유>` 줄이 있으면 종료 코드와 상관없이 재시도하지 않고(retry=False) 실패로 끝내 사람에게 넘긴다.
+끊긴 수리 worker를 다시 띄우지 못했으면 앞 실행 로그의 마지막 메시지를 "(앞 실행)" 표시로 같은 자리(이유, worker-last.txt, 다음 시도 brief)에 싣는다. 끊긴 실행의 메시지라 그 표식은 재시도 판단에 쓰지 않는다.
 다시 검증도 실패하면 그때 _fail로 간다: 실패는 시도마다 한 번만 센다. 병합 충돌, 검증 시간 초과, 검증하는 동안 integration이 바뀐 것은 수리하지 않고 바로 _fail이다.
 수리는 검증 실패부터 다시 검증까지 network_resume의 repair(REPAIR_*)로 이어 간다: 어디서 gs가 죽거나 끊겨도 다음 gs go가 그 지점부터 같은 worktree에서 잇는다. 옛 state에는 이 값이 없고 수리하지 않은 티켓처럼 읽는다.
 티켓 검증이 끊기면(verify.Result.interrupted: 신호로 죽은 것처럼 보인다) 코드 결함으로 보지 않고 수리 worker 없이 같은 트리로 한 번 다시 검증한다(_verify_interrupted). 수리 뒤의 검증이 끊겨도 같다.
@@ -723,6 +727,11 @@ class Active:
     reviewed_again: bool = False
     review_done: bool = False  # 지난 실행에서 리뷰까지 끝나고 수정 worker 자리나 끊김을 기다리다 멈췄다. 리뷰를 다시 하지 않는다(_finish)
     repair: str = ""  # 이 시도의 수리가 어디까지 왔나(REPAIR_*). 비어 있으면 아직 수리하지 않았다. 수리 worker의 자리는 fix가 0이다
+    # 이번 실행에서 이 worker를 실제로 띄웠나. 띄우지 않고 결과만 정해 둔 자리(worker.Finished: _resume의 stand_in, 수리를 건너뛴 _start_repair)는 False다.
+    # 로그 파일이 있는지로 가리지 않는다: 다시 띄우지 못한 자리가 앞 실행의 디렉터리를 그대로 쓰면 거기에 앞 worker의 로그가 있다
+    launched: bool = True
+    # 마지막 메시지의 출처가 앞 실행일 때 그 실행 디렉터리(_resume의 stand_in이 network_resume의 rundir를 넘긴다). launched면 비어 있고 출처는 이 자리의 디렉터리다(_repair_last)
+    prior: Path | None = None
     # 병합할 SHA: 리뷰 단계가 마지막으로 대상으로 삼은 head. 리뷰어를 부르지 못했어도(한도, 트리 실패) 옮긴다. 실패는 기록의 note가 말한다(그때는 verify만으로 병합한다).
     # catch-up이 합친 커밋으로 옮겨 간다(_merge_stage). 재개 표시에 남는다(network_resume의 target). 비어 있으면 옛 state라 대조할 것이 없다
     target: str = ""
@@ -1342,10 +1351,13 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     worker가 끝나 있으면(done) 프로세스 없이 리뷰부터 잇는다. 새 시도 디렉터리를 쓰므로 지난 로그는 남고 base는 처음 그대로라
     앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정으로 처리한다(수정 전 구현을 병합·검증한다).
     수리(repair)도 수정과 같다: 도중이면 같은 worktree에 다시 띄우고, 띄우지 못하면 실패한 수리로 처리한다(수리를 버리고 다시 검증 없이 이 시도가 실패한다, _end_repair). 시도 수를 올리지 않는다.
+    worker를 다시 띄우지 않은 자리(stand_in)는 이번 실행에서 시작하지 않았다고 남기고(launched=False) 앞 실행 디렉터리(mark의 rundir)를 마지막 메시지의 출처로 넘긴다(prior).
+    로그 파일로 가리지 않는 것은 새 디렉터리를 만들기 전에 실패하면(agy 한도 포함) 그 자리가 앞 실행 디렉터리라 앞 worker의 로그가 있기 때문이다.
+    표시는 바꾸지 않으므로 다시 띄우기가 연달아 실패해도 출처는 마지막으로 돈 worker의 디렉터리다.
     수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish). 끊긴 검증의 다시 검증 차례(verify_again)도 그렇다.
     옛 gs가 커밋 없는 수리 뒤에 남긴 REPAIR_VERIFY도 같다: 그 다시 검증은 한 번 돈다.
     대조의 한 번 더를 썼으면(reviewed_again) 그대로 잇는다: 옛 state의 표시에는 없고 False다. 끝나지 않은 대조는 _finish가 잇는다.
-    다시 띄우는 수정 worker의 brief도 처음과 같이 지적에 티켓 touches와 설명 확인 문장(review.fix_brief)을 붙인다.
+    다시 띄우는 수정 worker의 brief도 처음과 같이 지적에 티켓 touches, 고칠 수 있는 파일(_merged_touches), 설명 확인 문장(review.fix_brief)을 붙인다.
     다시 띄우지 못한 수정·수리의 자리는 새 실행 디렉터리를 쓴다: 결함 수집은 실패 이유를 옆의 worker.log와 함께 읽는데, 지난 디렉터리의 로그는 이 대기를 일으킨 일시 오류라 이유까지 걸러 낸다.
     """
     ts = r.st.ticket(t.id)
@@ -1358,7 +1370,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         _set(r, t.id, status=state.RUNNING, branch=branch, worktree=str(wt), pane="", reason="", ended_at="",
              started_at=state.now(), log=str(rundir / "worker.log"))
         return Active(t, worker.Finished(worker.Job(t, wt, rundir), code, note), branch, wt, base, fix=nth, repair=repair, target=target,
-                      reviewed_again=again)
+                      reviewed_again=again, launched=False, prior=last)
 
     def give_up(why: str, *, retry: bool = True, rundir: Path = last) -> Active | None:
         if nth or repair:
@@ -1402,7 +1414,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True)
         if nth or repair:
             with job.brief.open("a", encoding="utf-8") as f:
-                f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth, t.touches))
+                f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth, t.touches, _merged_touches(r, t)))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
@@ -1845,9 +1857,10 @@ def _plan_review(r: Run, a: Active) -> ReviewPlan:
     head = a.target = git.sha(r.repo, a.branch)
     wait = _review_wait(r, t.id)
     # branch에 커밋을 준다: 트리와 diff가 같은 head를 본다
+    merged = _merged_touches(r, t)  # 고칠 수 있는 파일(판단 모델): 이 티켓 touches + 이미 병합된 티켓들의 touches
     jobs = [dict(repo=r.repo, rdir=rdir, base=r.ihead, branch=head, ticket=t.path.resolve(),
                  spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg, on_wait=wait,
-                 worker_log=_attempt_dir(a) / "worker.log")
+                 worker_log=_attempt_dir(a) / "worker.log", touches=list(t.touches), merged=merged)
             for _, who, rdir in launch]
     return ReviewPlan(slots, launch, recs, head, jobs)
 
@@ -2050,6 +2063,16 @@ def _todo(r: Run, t: Ticket, nth: int) -> list[dict]:
     return review.fix_targets(recs[0], nth) if len(recs) == 1 else review.labeled_fixes(recs, nth)
 
 
+def _merged_touches(r: Run, t: Ticket) -> dict[str, list[str]]:
+    """이번 실행에서 이미 integration에 병합된 다른 티켓들의 {티켓: touches}(state merged). 이 티켓 touches와 함께 고칠 수 있는 파일이다
+    (review.fixable_files: 판단 모델 judge_prompt, 수정 worker fix_brief). 이 실행 전의 gs go가 병합한 티켓도 integration에 있으니 든다.
+
+    아직 병합되지 않은 티켓의 touches는 넣지 않는다: 그 티켓이 같은 파일을 동시에 고치고 있을 수 있다. touches가 빈 티켓은 뺀다.
+    """
+    return {tid: list(ticket.touches) for tid, ticket in r.feat.tickets.items()
+            if tid != t.id and ticket.touches and (ts := r.st.tickets.get(tid)) is not None and ts.status == state.MERGED}
+
+
 def _targets(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
     """(리뷰 기록, 그 기록 안의 nth번째 수정 대상 지적). 대상이 없는 리뷰는 뺀다."""
     pairs = [(rec, review.fix_targets(rec, nth)) for rec in state.reviews(r.st.ticket(t.id))]
@@ -2087,7 +2110,8 @@ def _attempt_dir(a: Active) -> Path:
 
 
 def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Active | None:
-    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적과 티켓 touches·그중 시험 파일을 돌리라는 문장 첨부). 띄우지 못하면 None.
+    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적과 티켓 touches·그중 시험 파일을 돌리라는 문장,
+    고칠 수 있는 파일(_merged_touches)과 그 밖은 고치지 않는다는 문장 첨부). 띄우지 못하면 None.
 
     띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 리뷰한 구현을 병합·검증한다.
     수정의 기준은 지금 리뷰 대상이다. 브랜치가 그 위로 움직였으면(못 본 늦은 커밋, _note_unseen) 수정이 그 위에 쌓이니 재리뷰 diff에 함께 든다. 수정이 실패하면 함께 버린다(_end_fix).
@@ -2106,7 +2130,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         job.rundir.mkdir(parents=True)
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
-            f.write(review.fix_brief(todo, nth, t.touches))
+            f.write(review.fix_brief(todo, nth, t.touches, _merged_touches(r, t)))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
@@ -2252,7 +2276,7 @@ def _start_repair(r: Run, a: Active, runner) -> Active:
         job.rundir.mkdir(parents=True, exist_ok=True)
         _set(r, t.id, log=str(job.log), pane="")
         say(f"[{t.id}] 수리 {why}: 재리뷰 없이 바로 다시 검증한다")
-        nxt = Active(t, worker.Finished(job), a.branch, a.wt, a.base, review_done=True, repair=REPAIR_VERIFY, target=a.base)
+        nxt = Active(t, worker.Finished(job), a.branch, a.wt, a.base, review_done=True, repair=REPAIR_VERIFY, target=a.base, launched=False)
         _mark_resume(r, nxt, done=True)
         return nxt
 
@@ -2291,8 +2315,12 @@ def _end_repair(r: Run, a: Active, code: int | None, commits: int, error: str) -
     방금 검증에 떨어진 것과 같으니 다시 검증하지 않는다: 결과가 뻔한 검증을 돌리는 대신 이 시도를 실패로 끝내고 _fail의 재시도로 간다.
     수리 worker의 마지막 메시지를 그 실행 디렉터리의 worker-last.txt로 남긴다(_repair_last). 실패 이유에 그 요약과 경로를 넣고,
     failure.log에 그 파일과 첫 검증 실패의 로그를 실으며, 다음 시도 brief의 실패 요약 끝에 그 경로를 적는다(_fail의 last).
-    커밋 없이 끝난(실패가 아닌) 수리 worker의 마지막 메시지에 `브랜치 밖 원인: <이유>`로 시작하는 줄이 있으면(review.out_of_branch) 재시도하지 않는다(retry=False):
-    새 worktree에서 다시 해도 브랜치 밖의 원인은 그대로다. 그 이유는 실패 이유에 남아 보고서와 `gs status`에 나온다. 줄이 없으면 일반 실패처럼 한 번 재시도한다.
+    이번 실행에서 띄워(a.launched) 커밋 없이 끝난 수리 worker의 마지막 메시지에 `브랜치 밖 원인: <이유>`로 시작하는 줄이 있으면(review.out_of_branch)
+    종료 코드와 상관없이(실패로 끝나도) 재시도하지 않는다(retry=False): 새 worktree에서 다시 해도 브랜치 밖의 원인은 그대로다.
+    그 이유는 실패 이유에 남아 보고서와 `gs status`에 나온다. 줄이 없거나 커밋을 남기고 실패했으면 일반 실패처럼 한 번 재시도한다.
+    이번 실행에서 띄우지 않은 자리(_resume이 다시 띄우지 못해 대신 세운 자리. 새 디렉터리를 만들기 전 실패와 agy 한도면 앞 실행의 디렉터리를 그대로 쓴다)면
+    worker가 남긴 메시지는 앞 실행(a.prior)의 것이다. 실패 이유와 worker-last.txt에 PRIOR_RUN 표시와 함께 싣고 다음 시도에 그 경로를 넘기지만,
+    그 메시지의 `브랜치 밖 원인:` 줄은 재시도 판단에 쓰지 않는다: 끊긴 실행의 메시지다. 앞 실행에도 메시지가 없으면 "마지막 메시지 없음"이다.
     되돌리기 자체가 git 오류면 어느 트리를 병합할지 모르니 그 오류는 올린다(_loop가 티켓 실패로 처리해 다시 한다). 돌고 있던 worker는 _check_worker가 이미 끝냈다.
     커밋 없음은 결함 수집에도 이유로 남긴다: ref 잠금으로 커밋하지 못한 worker도 이렇게 끝난다. 결함인지는 수집이 로그까지 보고 가린다.
     """
@@ -2320,8 +2348,10 @@ def _end_repair(r: Run, a: Active, code: int | None, commits: int, error: str) -
         say(f"[{t.id}] 수리 {done}: 재리뷰로 확인한다")
         return True
     last, message = _repair_last(a)
-    where = f"수리 worker 마지막 메시지 `{last}`" if last else "수리 worker 마지막 메시지 없음"
-    outside = "" if failed else review.out_of_branch(message)
+    label = f"수리 worker 마지막 메시지{'' if a.launched else PRIOR_RUN}"  # 메시지가 있으면 파일을 못 썼어도 출처를 단다
+    where = f"{label} `{last}`" if last else label if message else "수리 worker 마지막 메시지 없음"
+    # 표식은 이번 실행에서 띄운 worker가 커밋 없이 남겼을 때만 읽는다. 앞 실행의 메시지는 끊긴 실행의 것이다
+    outside = review.out_of_branch(message) if a.launched and not commits else ""
     first = rec.get("reason") or "검증 실패"
     if outside:
         reason = f"{first} → 수리 {done}, {review.OUT_OF_BRANCH} {_clip(outside, OUT_OF_BRANCH_CHARS)} (재시도하지 않는다. {where})"
@@ -2335,16 +2365,30 @@ def _end_repair(r: Run, a: Active, code: int | None, commits: int, error: str) -
 
 LAST_MESSAGE_CHARS = 300  # 실패 이유에 싣는 수리 worker 마지막 메시지 요약의 자 수. 전체는 worker-last.txt에 있다
 OUT_OF_BRANCH_CHARS = 500  # 실패 이유에 싣는 `브랜치 밖 원인:` 이유의 자 수
+PRIOR_RUN = "(앞 실행)"  # 이번 실행에서 띄우지 않은 수리 worker 자리가 싣는 앞 실행의 마지막 메시지 표시(_repair_last, _end_repair)
 
 
 def _repair_last(a: Active) -> tuple[Path | None, str]:
-    """수리 worker의 마지막 메시지를 실행 디렉터리의 worker-last.txt로 남긴다(review.write_worker_last). (파일 경로, 메시지 전체)다.
+    """수리 worker의 마지막 메시지를 이 자리의 실행 디렉터리에 worker-last.txt로 남긴다(review.write_worker_last). (파일 경로, 메시지 전체)다.
 
-    로그가 없거나(띄우지 못한 자리) 메시지가 없으면 (None, "")다. `브랜치 밖 원인:` 줄은 메시지 전체에서 찾는다: 파일은 길이 상한으로 앞을 자를 수 있다.
+    출처는 a가 정한다. 이번 실행에서 띄운 worker(launched)면 이 자리의 로그다. 띄우지 않은 자리면 앞 실행 디렉터리(prior)의 로그이고,
+    파일 첫 줄에 PRIOR_RUN과 그 로그 경로를 적는다. 파일은 어느 쪽이든 이 자리의 디렉터리에 둔다: _fail이 failure.log와 요약을 거기(ts.log의 디렉터리)
+    쓰고, 요약을 다시 만들 때도 그 옆에서 찾는다(_failure_summary).
+    읽을 로그가 없거나 메시지가 없으면 (None, "")다. `브랜치 밖 원인:` 줄은 메시지 전체에서 찾는다: 파일은 길이 상한으로 앞을 자를 수 있다.
     """
-    log = a.proc.job.log
-    message = (streamfmt.last_message(log) or "") if log.is_file() else ""
-    return (review.write_worker_last(a.proc.job.rundir, log) if message else None), message
+    src = a.proc.job.rundir if a.launched else a.prior
+    log = src / "worker.log" if src else None
+    message = (streamfmt.last_message(log) or "") if log and log.is_file() else ""
+    if not message:
+        return None, ""
+    path = review.write_worker_last(a.proc.job.rundir, log)
+    if path and not a.launched:
+        try:
+            path.write_text(f"{PRIOR_RUN} {log}의 마지막 메시지다. 이번 실행에서는 수리 worker를 시작하지 않았다.\n"
+                            + path.read_text(encoding="utf-8"), encoding="utf-8")
+        except OSError:  # 표시 없는 파일을 이번 실행의 메시지처럼 넘기지 않는다
+            return None, message
+    return path, message
 
 
 def _clip(text: str, limit: int) -> str:
@@ -2571,9 +2615,10 @@ def _plan_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]],
     say(f"[{t.id}] 재리뷰 {nth}차: {names}")
     wait = _review_wait(r, t.id)
     # found는 사본이다: 호출이 읽는 지적과 반영이 고치는 state의 지적이 섞이지 않게
+    merged = _merged_touches(r, t)  # 1차 재리뷰의 새 지적을 나눌 판단 모델의 고칠 수 있는 파일(_plan_review와 같다)
     jobs = [dict(repo=r.repo, rdir=_rereview_dir(a, rec, nth), base=a.base, head=head, found=[dict(f) for f in found],
                  ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), reviewer=rec["reviewer"], cfg=r.cfg, nth=nth,
-                 on_wait=wait, worker_log=a.proc.job.log) for rec, found in launch]
+                 on_wait=wait, worker_log=a.proc.job.log, touches=list(t.touches), merged=merged) for rec, found in launch]
     return launch, jobs
 
 
