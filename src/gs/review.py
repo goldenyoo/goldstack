@@ -135,14 +135,23 @@ def require_other_family(model: str, reviewer: str) -> None:
 # ---------------------------------------------------------------- 형식
 
 def _repair_escapes(text: str) -> str:
-    r"""`\'`의 역슬래시를 뗀다. 모델이 셸 코드를 인용하다 낸다. 다른 이스케이프는 그대로 둔다: 키가 바뀌어 판정이 뒤집히면 안 된다(`statu\s`)."""
-    return re.sub(r"\\(.)", lambda m: "'" if m.group(1) == "'" else m.group(0), text, flags=re.S)
+    r"""JSON이 허용하지 않는 이스케이프를 읽히게 고친다. 모델이 셸 코드를 인용하다 낸다.
+
+    `\'`는 역슬래시를 뗀다. 그 밖에 `"\/bfnrtu`가 아닌 `\X`(`\$`, `\x5d`…)는 역슬래시를 두 번 써서 글자를 보존한다.
+    허용되는 이스케이프는 그대로 둔다: 키가 바뀌어 판정이 뒤집히면 안 된다(`statu\s`는 `status`가 되지 않고 `statu\\s` 키로 읽힌다).
+    """
+    def fix(m: re.Match) -> str:
+        c = m.group(1)
+        if c == "'":
+            return "'"
+        return m.group(0) if c in '"\\/bfnrtu' else "\\" + m.group(0)
+    return re.sub(r"\\(.)", fix, text, flags=re.S)
 
 
 def extract_json(text: str) -> dict:
     """답에서 JSON 객체 하나를 꺼낸다: 전체 → 마지막 ```json 블록부터 → 첫 `{`부터 마지막 `}`까지.
 
-    그대로 읽히는 후보가 없을 때만 `\\'`를 고쳐 다시 읽는다(_repair_escapes). 인용 하나 때문에 답 전체를 "리뷰 없음"으로 버리지 않는다.
+    그대로 읽히는 후보가 없을 때만 허용되지 않는 이스케이프를 고쳐 다시 읽는다(_repair_escapes). 이스케이프 하나 때문에 답 전체를 "리뷰 없음"으로 버리지 않는다.
     """
     text = text.strip()
     candidates = [text, *reversed(re.findall(r"```(?:json)?[ \t]*\n(.*?)```", text, re.S))]
@@ -806,20 +815,29 @@ def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket:
 
 
 def _ask_reviewer(reviewer: str, worktree: Path, prompt: str, rdir: Path, timeout: int, cfg: config.Config, on_wait,
-                  selection: config.ModelEffort) -> str:
-    """reviewer를 부르고 답을 rdir/review.txt에도 남긴다. 끊기면 기다렸다 다시 부른다(call_waiting)."""
+                  selection: config.ModelEffort, parse=None) -> str:
+    """reviewer를 부르고 답을 rdir/review.txt에도 남긴다. 끊기면 기다렸다 다시 부른다(call_waiting).
+
+    parse는 호출자가 답을 읽는 함수다. 호출 안에서 먼저 불러 ReviewError면 그 호출의 측정 결과를 format-error로 적고 올린다(재호출하지 않는다)."""
     out = rdir / "review.txt"
     argv, stdin, to_file = reviewer_argv(reviewer, worktree, prompt, out.resolve(), cfg.models, selection, on_wait=on_wait)
     env = {**_env(worktree), "GS_REVIEWER": reviewer}
 
     def once() -> str:
-        with metrics.review_call(on_wait, reviewer, selection, rdir):
+        with metrics.review_call(on_wait, reviewer, selection, rdir) as call:
             out.unlink(missing_ok=True)  # 앞 시도·지난 실행의 답을 이번 답으로 읽지 않게
             text = _call(argv, prompt=stdin, cwd=worktree, env=env, log=rdir / "reviewer.log", timeout=timeout, family=reviewer,
                          model=selection.model if reviewer == "agy" else "", cancel=getattr(on_wait, "cancel", None))
             if to_file:
-                return out.read_text(encoding="utf-8") if out.exists() else ""
-            out.write_text(text, encoding="utf-8")
+                text = out.read_text(encoding="utf-8") if out.exists() else ""
+            else:
+                out.write_text(text, encoding="utf-8")
+            if parse is not None:
+                try:
+                    parse(text)
+                except ReviewError:
+                    call.format_error()
+                    raise
             return text
     return call_waiting(once, cfg, on_wait, reviewer)
 
@@ -849,7 +867,8 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
     tier, selection = reviewer_selection(reviewer, cfg)
     rec.update(tier=tier, actual_model=selection.model, effort=selection.effort)
     try:
-        text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.review_minutes * 60, cfg, on_wait, selection)
+        text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.review_minutes * 60, cfg, on_wait, selection,
+                             parse=parse_findings)
         findings = parse_findings(text)
         if (checked := parse_checked(text)) is not None:
             rec["checked"] = checked
@@ -894,7 +913,8 @@ def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, fo
     tier, selection = reviewer_selection(reviewer, cfg, rereview=True)
     res.update(tier=tier, actual_model=selection.model, effort=selection.effort)
     try:
-        text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.rereview_minutes * 60, cfg, on_wait, selection)
+        text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.rereview_minutes * 60, cfg, on_wait, selection,
+                             parse=lambda t: (parse_verdicts(t), parse_findings(t)))
         res["verdicts"] = parse_verdicts(text)
         new = parse_findings(text)
         if (checked := parse_checked(text)) is not None:
@@ -929,7 +949,8 @@ def repair_review(*, repo: Path, worktree: Path, rdir: Path, base: str, head: st
     tier, selection = reviewer_selection(reviewer, cfg, rereview=True)
     res.update(tier=tier, actual_model=selection.model, effort=selection.effort)
     try:
-        text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.rereview_minutes * 60, cfg, on_wait, selection)
+        text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.rereview_minutes * 60, cfg, on_wait, selection,
+                             parse=parse_findings)
         new = parse_findings(text)
         if (checked := parse_checked(text)) is not None:
             res["checked"] = checked

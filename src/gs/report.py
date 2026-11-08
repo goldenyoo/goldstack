@@ -219,6 +219,14 @@ def measurements(r) -> str:
     # 중단된 호출도 버리지 않는다. 아래 호출 시간에는 판단 모델·네트워크 대기가 들어가지 않는다.
     table("리뷰 호출별 시간(재호출 포함)", ["리뷰어", "티켓", "모델/effort", "소요(초)", "결과"], [
         (x['reviewer'], x['ticket'], model(x), x.get('seconds'), x['result']) for x in data.get('review_calls', [])])
+    # 답을 끝내 못 읽은 호출. 답 원문은 믿을 수 없는 글이라 옮기지 않고 파일 경로와 크기만 적는다.
+    broken = [x for x in data.get('review_calls', []) if x.get('result') == 'format-error']
+    if broken:
+        lines.extend(["", "형식 오류로 읽지 못한 리뷰 답(원문은 옮기지 않는다. 파일을 직접 열어 본다):", ""])
+        for x in broken:
+            size = x.get('review_bytes')
+            lines.append(f"- {cell(x['reviewer'])} · {cell(x['ticket'])}: `{cell(x.get('review_file') or '기록 없음')}` · "
+                         + ("파일 없음" if size is None else f"{size}바이트"))
     table("gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티켓 worker 시도, 재시도는 한 검증 안의 번호)",
           ["순번", "라벨", "티켓 시도", "재시도", "명령", "integration head", "티켓 head", "소요(초)", "결과"],
           [(n, *validation_row(x)) for n, x in enumerate(data.get('validations', []), 1)])
