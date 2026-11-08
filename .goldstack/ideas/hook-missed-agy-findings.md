@@ -2,9 +2,9 @@
 date: "2026-11-08"
 severity: "high"
 source: "/retro goldstack-v23"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v28"
 ---
 버려진 agy 리뷰의 hook 지적이 실제 결함이었고, 아무도 보지 못했다.
 

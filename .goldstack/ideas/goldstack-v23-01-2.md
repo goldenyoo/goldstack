@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v23 리뷰 01"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v28"
 ---
 실행되지 않는 출력 인자 속 `eval`·`zsh -c`까지 본문으로 검사하여 정상 명령을 새로 차단한다.
 
