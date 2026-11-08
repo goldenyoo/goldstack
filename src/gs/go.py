@@ -452,10 +452,11 @@ def _phase(r: Run, tid: str, phase: str, model: str, *, attempt: int | None = No
 
 
 def _worker_adapter(r: Run, t: Ticket) -> adapters.Adapter:
-    """구현·수정·일시 오류 재시작에 같은 선택 규칙을 쓰고 실행마다 실제 옵션을 보존한다."""
+    """구현·수정·수리·재개·일시 오류 재시작에 같은 선택 규칙을 쓰고 실행마다 실제 옵션을 보존한다.
+    hook의 시험 규칙(config `[hook.worker_tests]`)도 여기서 어댑터에 실어 worker 환경 변수로 넘긴다."""
     ts = r.st.ticket(t.id)
     tier, selection = r.cfg.tiers.worker(t.model, t.tier, failures=ts.failures)
-    adapter = adapters.for_model(t.model, r.cfg.models, selection)
+    adapter = adapters.for_model(t.model, r.cfg.models, selection, worker_tests=r.cfg.hook.worker_tests)
     # model은 진행·계열별 소요 통계가 쓰므로 계열로 유지한다. 빈 값은 CLI 사용자 기본값이다.
     chosen = getattr(adapter, "selection", None)
     metrics.worker_selection(ts, tier, chosen)

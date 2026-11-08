@@ -2,7 +2,8 @@
 
 입력은 모두 같다(WorkerInput: brief 경로, worktree, 로그 경로). 어댑터가 하는 일은 다섯이다.
 - prepare: 띄우기 전 준비와 확인. 차단 장치를 걸 수 없으면 AdapterError로 거부한다.
-- env: worker 환경. 모든 어댑터가 `GS_ROLE=worker`를 넣는다(09 hook이 이 값을 본다).
+- env: worker 환경. 모든 어댑터가 `GS_ROLE=worker`를 넣는다(09 hook이 이 값을 본다). config `[hook.worker_tests]`도
+  `GS_WORKER_TESTS`로 넣는다(hook은 worktree의 config가 아니라 이 값을 읽는다). 비었으면 빈 값으로 덮어쓴다.
 - command: worktree에서 돌릴 셸 명령. 실행 스크립트(worker.write_script)가 이것을 감싸 로그와 exit 파일을 남긴다.
 - outcome: 프로세스 종료 코드와 로그로 최종 종료 코드를 정한다. agy는 종료 0이 성공이 아니다(docs/research/agy.md §3.1).
 - transient_reason: 로그에서 일시 오류 이유를 찾는다. 없으면 빈 문자열이며 outcome과는 별개다.
@@ -48,9 +49,11 @@ class Adapter:
     name = ""
     isolation_warning = ""
 
-    def __init__(self, models: config.ModelsConfig, selection: config.ModelEffort | None = None):
+    def __init__(self, models: config.ModelsConfig, selection: config.ModelEffort | None = None,
+                 worker_tests: config.WorkerTestsConfig = config.WorkerTestsConfig()):
         self.models = models
         self.selection = worker_selection(self.name, models, selection)
+        self.worker_tests = worker_tests
 
     def model_options(self) -> str:
         options = f"--model {q(self.selection.model)} " if self.selection.model else ""
@@ -65,7 +68,8 @@ class Adapter:
         pass
 
     def env(self, inp: WorkerInput) -> dict[str, str]:
-        return {"GS_ROLE": "worker", "GS_BRIEF": str(inp.brief), "GS_WORKTREE": str(inp.worktree)}
+        return {"GS_ROLE": "worker", "GS_BRIEF": str(inp.brief), "GS_WORKTREE": str(inp.worktree),
+                config.WORKER_TESTS_ENV: self.worker_tests.env_value()}
 
     def command(self, inp: WorkerInput) -> str:
         raise NotImplementedError
@@ -411,8 +415,9 @@ class Custom(Adapter):
     """`GS_WORKER_CMD`로 바꿔 끼운 명령(시험 seam). 준비·판정 없이 그대로 돌린다."""
     name = "custom"
 
-    def __init__(self, cmd: str):
+    def __init__(self, cmd: str, worker_tests: config.WorkerTestsConfig = config.WorkerTestsConfig()):
         self.cmd = cmd
+        self.worker_tests = worker_tests
 
     def command(self, inp: WorkerInput) -> str:
         return self.cmd
@@ -421,11 +426,13 @@ class Custom(Adapter):
 ADAPTERS: dict[str, type[Adapter]] = {"claude": Claude, "codex": Codex, "agy": Agy}
 
 
-def for_model(model: str, models: config.ModelsConfig, selection: config.ModelEffort | None = None) -> Adapter:
+def for_model(model: str, models: config.ModelsConfig, selection: config.ModelEffort | None = None, *,
+              worker_tests: config.WorkerTestsConfig = config.WorkerTestsConfig()) -> Adapter:
+    """worker_tests: config `[hook.worker_tests]`. worker를 띄우는 곳(go._worker_adapter)이 넘긴다."""
     override = os.environ.get("GS_WORKER_CMD")
     if override:
-        return Custom(override)
+        return Custom(override, worker_tests)
     try:
-        return ADAPTERS[model](models, selection)
+        return ADAPTERS[model](models, selection, worker_tests)
     except KeyError:
         raise AdapterError(f"model `{model}` 어댑터가 없다({'|'.join(ADAPTERS)})") from None

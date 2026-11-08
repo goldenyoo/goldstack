@@ -45,3 +45,17 @@ max_calls_per_run = 24
 
 [overnight]
 autonomy = "record"
+
+# worker의 고비용 시험 실행을 hook이 막는다(goldstack-v26 01). 정규식은 명령 원문에 Python re.search로 맞춘다.
+# deny: 시험 폴더를 `ls tests | … | xargs`로 순회(v25 03), `-p` 없는 `unittest discover`(시험 전체),
+# `-p 'test_*.py'`처럼 glob으로 시험 전체를 고르는 `discover`.
+# runner·file·max_files: 시험 러너 명령에 시험 파일 이름이 10개 넘게 나오면 막는다(v25 02·03의 printf 목록).
+[hook.worker_tests]
+deny = [
+  '''\bls(\s+-\w+)*\s+(\./)?tests/?\s*\|.*\bxargs\b''',
+  '''\bunittest\s+discover\b(?![^\n;&|]*\s(-p|--pattern))''',
+  '''\bunittest\s+discover\b[^\n;&|]*\s(-p|--pattern)[\s=]*['"]?(test_?)?\*(\.py)?['"]?(?=[\s;&|)]|$)''',
+]
+runner = 'unittest|pytest'
+file = 'test_\w+\.py'
+max_files = 10
