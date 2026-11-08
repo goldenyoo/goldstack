@@ -6,6 +6,9 @@
 state.json은 루프 스레드만 고친다. 호출은 결과를 돌려주고, 호출 도중의 대기·측정은 루프에 넘긴다(Reviews.inbox, review.CallWait).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
 띄운다(06, review.py). 티켓에 second_reviewer가 있으면 두 리뷰를 동시에 띄우고 지적을 합쳐 수정 worker는 하나다.
+판단 모델(첫 리뷰, 1차 재리뷰의 새 지적)과 수정 worker에는 고칠 수 있는 파일을 넘긴다: 이 티켓 touches와 이번 실행에서 이미 병합된
+티켓들의 touches(_merged_touches). 재현됐고 기대 동작을 말할 수 있는 결함은 애매해도 fix다. 목록 밖 파일을 고쳐야 하는 재현된 결함은
+defer로 고치지 않고 보고서의 "재현된 미수리 결함" 절과 high 아이디어 파일에 남긴다(review.judge_prompt). 2차 재리뷰·수리 재리뷰의 지적은 그대로 report다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
 worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 보고, 그 지적을 낸 리뷰어도 부른다.
 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
@@ -1345,7 +1348,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
     수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish). 끊긴 검증의 다시 검증 차례(verify_again)도 그렇다.
     옛 gs가 커밋 없는 수리 뒤에 남긴 REPAIR_VERIFY도 같다: 그 다시 검증은 한 번 돈다.
     대조의 한 번 더를 썼으면(reviewed_again) 그대로 잇는다: 옛 state의 표시에는 없고 False다. 끝나지 않은 대조는 _finish가 잇는다.
-    다시 띄우는 수정 worker의 brief도 처음과 같이 지적에 티켓 touches와 설명 확인 문장(review.fix_brief)을 붙인다.
+    다시 띄우는 수정 worker의 brief도 처음과 같이 지적에 티켓 touches, 고칠 수 있는 파일(_merged_touches), 설명 확인 문장(review.fix_brief)을 붙인다.
     다시 띄우지 못한 수정·수리의 자리는 새 실행 디렉터리를 쓴다: 결함 수집은 실패 이유를 옆의 worker.log와 함께 읽는데, 지난 디렉터리의 로그는 이 대기를 일으킨 일시 오류라 이유까지 걸러 낸다.
     """
     ts = r.st.ticket(t.id)
@@ -1402,7 +1405,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True)
         if nth or repair:
             with job.brief.open("a", encoding="utf-8") as f:
-                f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth, t.touches))
+                f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth, t.touches, _merged_touches(r, t)))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
@@ -1845,9 +1848,10 @@ def _plan_review(r: Run, a: Active) -> ReviewPlan:
     head = a.target = git.sha(r.repo, a.branch)
     wait = _review_wait(r, t.id)
     # branch에 커밋을 준다: 트리와 diff가 같은 head를 본다
+    merged = _merged_touches(r, t)  # 고칠 수 있는 파일(판단 모델): 이 티켓 touches + 이미 병합된 티켓들의 touches
     jobs = [dict(repo=r.repo, rdir=rdir, base=r.ihead, branch=head, ticket=t.path.resolve(),
                  spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg, on_wait=wait,
-                 worker_log=_attempt_dir(a) / "worker.log")
+                 worker_log=_attempt_dir(a) / "worker.log", touches=list(t.touches), merged=merged)
             for _, who, rdir in launch]
     return ReviewPlan(slots, launch, recs, head, jobs)
 
@@ -2050,6 +2054,16 @@ def _todo(r: Run, t: Ticket, nth: int) -> list[dict]:
     return review.fix_targets(recs[0], nth) if len(recs) == 1 else review.labeled_fixes(recs, nth)
 
 
+def _merged_touches(r: Run, t: Ticket) -> dict[str, list[str]]:
+    """이번 실행에서 이미 integration에 병합된 다른 티켓들의 {티켓: touches}(state merged). 이 티켓 touches와 함께 고칠 수 있는 파일이다
+    (review.fixable_files: 판단 모델 judge_prompt, 수정 worker fix_brief). 이 실행 전의 gs go가 병합한 티켓도 integration에 있으니 든다.
+
+    아직 병합되지 않은 티켓의 touches는 넣지 않는다: 그 티켓이 같은 파일을 동시에 고치고 있을 수 있다. touches가 빈 티켓은 뺀다.
+    """
+    return {tid: list(ticket.touches) for tid, ticket in r.feat.tickets.items()
+            if tid != t.id and ticket.touches and (ts := r.st.tickets.get(tid)) is not None and ts.status == state.MERGED}
+
+
 def _targets(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
     """(리뷰 기록, 그 기록 안의 nth번째 수정 대상 지적). 대상이 없는 리뷰는 뺀다."""
     pairs = [(rec, review.fix_targets(rec, nth)) for rec in state.reviews(r.st.ticket(t.id))]
@@ -2087,7 +2101,8 @@ def _attempt_dir(a: Active) -> Path:
 
 
 def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Active | None:
-    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적과 티켓 touches·그중 시험 파일을 돌리라는 문장 첨부). 띄우지 못하면 None.
+    """같은 구현 모델로 nth번째 수정 worker를 띄운다(같은 브랜치·worktree, 지적과 티켓 touches·그중 시험 파일을 돌리라는 문장,
+    고칠 수 있는 파일(_merged_touches)과 그 밖은 고치지 않는다는 문장 첨부). 띄우지 못하면 None.
 
     띄우지 못해도 티켓은 실패가 아니다: 지적을 고치지 못한 채 남기고 리뷰한 구현을 병합·검증한다.
     수정의 기준은 지금 리뷰 대상이다. 브랜치가 그 위로 움직였으면(못 본 늦은 커밋, _note_unseen) 수정이 그 위에 쌓이니 재리뷰 diff에 함께 든다. 수정이 실패하면 함께 버린다(_end_fix).
@@ -2106,7 +2121,7 @@ def _start_fix(r: Run, a: Active, todo: list[dict], runner, nth: int = 1) -> Act
         job.rundir.mkdir(parents=True)
         worker.write_brief(job, r.feat.spec, r.name, a.branch)
         with job.brief.open("a", encoding="utf-8") as f:
-            f.write(review.fix_brief(todo, nth, t.touches))
+            f.write(review.fix_brief(todo, nth, t.touches, _merged_touches(r, t)))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)
         worker.write_script(job, adapter)
@@ -2571,9 +2586,10 @@ def _plan_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]],
     say(f"[{t.id}] 재리뷰 {nth}차: {names}")
     wait = _review_wait(r, t.id)
     # found는 사본이다: 호출이 읽는 지적과 반영이 고치는 state의 지적이 섞이지 않게
+    merged = _merged_touches(r, t)  # 1차 재리뷰의 새 지적을 나눌 판단 모델의 고칠 수 있는 파일(_plan_review와 같다)
     jobs = [dict(repo=r.repo, rdir=_rereview_dir(a, rec, nth), base=a.base, head=head, found=[dict(f) for f in found],
                  ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), reviewer=rec["reviewer"], cfg=r.cfg, nth=nth,
-                 on_wait=wait, worker_log=a.proc.job.log) for rec, found in launch]
+                 on_wait=wait, worker_log=a.proc.job.log, touches=list(t.touches), merged=merged) for rec, found in launch]
     return launch, jobs
 
 
