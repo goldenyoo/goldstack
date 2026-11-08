@@ -378,6 +378,12 @@ gs는 base에 아무것도 push하지 않는다. base로 갈 gs 커밋(revert, �
 
 gs만 SIGKILL로 죽으면 돌던 검증은 새 세션에서 살아 남아 다음 `gs go`의 검증과 같은 트리를 함께 바꾼다. 검증은 `bash -c '<verify>' gs-verify:<로그 경로>`로 떠서 명령줄에 표지가 남는다. 번호는 저장하지 않는다. 다음 `gs go`는 잠금을 잡자마자 `ps`에서 이 run 디렉터리 아래 표지를 찾아 그 프로세스 그룹을 SIGTERM, 안 끝나면 SIGKILL로 끝낸다(`go.py`가 새 worker보다 먼저 부른다). 같은 run의 다른 검증(티켓·integration)도 함께 끝낸다. 한 feature에 `gs go`는 하나이고 검증은 한 번에 하나라 잠금을 잡은 때 살아 있는 검증은 모두 옛 것이다. 다른 feature의 run 표지는 건드리지 않고, 못 찾거나 못 끝내도 경고 줄만 낸다. 못 찾는 것: 검증이 `exec`로 bash를 대신한 경우, bash만 먼저 죽고 자식이 남은 그룹.
 
+### main 검증 건너뛰기 (`SKIP_MAIN`)
+
+첫 main 검증 차례(`revert_decision.next_step`이 `VERIFY_MAIN`을 고른 자리)에서만 `finish._same_as_verified`를 본다. 받아 온 base 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가 `_report_paths`(보고서와 `findings.paths`)뿐이면 `next_step`이 `SKIP_MAIN`을 답한다(`_verify_final`과 같은 기준이며 `.goldstack/` 전체를 허용하는 `_code_same`보다 좁다). 이때 `_read_and_step`은 검증하지 않고 `main-verify.log`에 "integration과 같은 코드(<sha>), 건너뜀"을 쓴 뒤 `main_ok`·`main_head`·phase `verified`를 통과 때와 같이 저장한다.
+- `main_failed`·`main_retry`, revert가 있거나 올린 상태, 외부 revert에는 적용하지 않는다(이미 확인한 실패를 덮지 않는다). 지난 검증 결과(`main_head`)가 남았으면(`checked_before`) 준비 실패로 phase가 `base_unverified`가 된 뒤에도 건너뛰지 않는다.
+- `verified_head`가 없거나(옛 state) diff를 못 읽으면 건너뛰지 않고 검증한다.
+
 ### main 재검증 (`main-retry`)
 
 base(main) 검증이 처음 실패했고 마지막으로 통과한 integration 커밋(`verified_head`)과 병합 커밋의 차이가 `.goldstack/`뿐이면 코드가 같다. 이때만 revert 전에 한 번 다시 돌린다(`revert_decision.MARK_RETRY`). phase `main_retry`를 남기고 임시 worktree를 치운 뒤 처음부터 다시 읽는다. 끊긴 실행을 잇는 다음 `gs go`도 같은 길이다.
@@ -549,6 +555,8 @@ worktree는 설정과 ref를 주 레포와 공유해서 이 둘을 막는다. �
 비밀 읽기 검사는 직접 지정한 경로 외에 파일 이름 glob(`cat .goldstack/local.e*`, `cat .goldstack/*.env`, `head .goldstack/local.?nv`)과 알려진 재귀 검색(`grep -r`·`grep -R`·`rg`·`find`)의 시작점도 본다. 시작점 아래에 비밀 파일이 있으면 검색을 막는다(내용은 읽지 않고 경로를 검사한다). Grep·Glob 도구도 `path` 아래에 비밀이 있으면 막으며, 시작점을 생략하면 현재 디렉터리를 검사한다. 이 규칙은 `gh/hosts.yml` 등 다른 비밀 경로에도 같다. 검색 필터가 비밀 파일을 제외해도 시작점이 비밀을 품으면 막는다.
 
 worker worktree는 주 레포의 `.goldstack/work/<f>/run/wt/` 아래에 있지만, 조상에 `.goldstack`이 있다는 이유로 막지는 않는다. 검색 시작점의 자손만 검사하므로 worktree 안에 비밀이 없으면 `rg foo`, `grep -r foo src`, Grep·Glob 검색은 통과하고, `.goldstack/work/<f>/spec.md`도 읽을 수 있다. 반대로 주 레포나 주 레포의 `.goldstack`에서 시작한 재귀 검색은 그 아래 `local.env`가 있으면 막는다.
+
+**시험 규칙(config `[hook.worker_tests]`)** — worker의 전체 시험 실행을 막는 규칙은 config에서 gs가 읽어 worker 환경 변수 `GS_WORKER_TESTS`(JSON: `deny`, `runner`, `file`, `max_files`)로 넘긴다. `go`가 `adapters.for_model(…, worker_tests=)`로 어댑터에 싣고, 어댑터 `env()`가 worker 환경에 넣고, `worker.py`가 어댑터가 넣지 않았어도 빈 값으로 내보내 gs를 띄운 셸의 값이 새지 않게 한다(규칙이 꺼졌으면 값은 빈 문자열). 판정은 `hook.check_worker_tests`가 한다. 이 환경 변수만 읽고 config 파일은 읽지 않으니 worker가 worktree의 config를 고쳐도 그 실행의 규칙은 그대로다. `check_bash` 뒤에 불려 `deny` 정규식이 명령 원문에 맞거나, `runner`에 맞는 명령의 `file` 이름이 `max_files`개를 넘으면 막고 `TESTS_ADVICE`를 돌려준다. 원문 정규식이라 heredoc·따옴표 속 글자에도 맞는다. 값을 해석하지 못하면 경고만 하고 규칙을 건너뛴다. claude(plugin hook)와 agy(`gs hook agy-pretooluse`)에 적용하고 codex는 hook이 fail-open이라 제외한다. 값 검사와 오류는 `config.worker_tests`·`_load_hook`이 맡는다(정규식이 깨졌으면 config 오류).
 
 막으면 이유와 "이 일은 `gs`가 한다"를 돌려준다. worker에서 hook 입력을 해석하지 못하면 막는다(fail closed). **hook은 안전띠이며 비밀을 격리하는 보안 경계가 아니다.** `python -c "open(...)"`처럼 코드 안에서 파일을 여는 일, 다른 인터프리터·스크립트 본문의 읽기, 셸에서 동적으로 만든 경로는 모두 해석하지 못한다. 심볼릭 링크 대상도 비밀 읽기 판정에서 보장하지 않으며, 디렉터리 재귀 검사에서는 링크를 따라가지 않는다. 검사 후 파일이 바뀌는 경우도 막지 못한다. 따라서 **값어치 낮은 비밀만 `local.env`에 둔다.** claude worker 명령의 도구 차단 옵션과 push·gh 차단 환경을 함께 두고(여러 겹), codex는 sandbox, agy는 deny 규칙과 `gs hook agy-pretooluse`를 쓴다. **codex worker에는 이 hook이 없다.** sandbox는 쓰기와 네트워크만 막고 비밀 파일 읽기는 막지 못하며, 읽기를 hook으로 막는 일은 범위 밖 `codex-secret-hook`이다.
 
