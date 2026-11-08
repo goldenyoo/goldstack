@@ -366,7 +366,8 @@ class SummaryPromptTest(unittest.TestCase):
             with mock.patch.object(review, "_call", return_value="요약") as called:
                 failure.summarize(repo, log, cfg)
             prompt = called.call_args.kwargs["prompt"]
-        self.assertIn("integration의 병합 트리에서 도는 것이 정상", prompt)
+        self.assertIn("integration의 병합 트리에서 도는 것 자체는 정상", prompt)
+        self.assertIn("환경 차이(setup을 돌린 시각, 설치 메타데이터 같은 것)는 원인 후보로 확인하라", prompt)
         self.assertIn("추측하지 말고, 모른다고 적어라", prompt)
 
 

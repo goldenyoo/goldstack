@@ -321,6 +321,57 @@ class MetricsTest(unittest.TestCase):
         self.assertEqual([x['result'] for x in rows], ['error', 'passed'])
         self.assertTrue(all((x['actual_model'], x['effort']) == ('actual', 'high') for x in rows))
 
+    def _review_run(self, answer):
+        """review.run을 가짜 reviewer 답 하나로 돌리고 그 호출의 측정 줄을 돌려준다."""
+        wait = review.CallWait(self.st, self.run.save, '01')
+        cfg = SimpleNamespace(models=SimpleNamespace(claude_review='m', agy='m', codex='m'), timeouts=config.TimeoutsConfig(30, 10, 60))
+        rdir = self.root / 'review'
+        with mock.patch.object(review, '_call', return_value=answer), \
+                mock.patch.object(review, '_env', return_value={}), \
+                mock.patch.object(review, 'write_diff', return_value=('base', False)), \
+                mock.patch.object(review, 'classify', return_value=''), \
+                mock.patch.object(review, 'reviewer_argv', return_value=(['fake'], 'prompt', False)):
+            rec = review.run(repo=self.root, worktree=self.root, rdir=rdir, base='main', branch='b',
+                             ticket=self.root / 't.md', spec=self.root / 's.md', model='codex', reviewer='claude',
+                             cfg=cfg, on_wait=wait)
+        [call] = state.load(self.root, 'demo').metrics['review_calls']
+        return rec, call, rdir
+
+    def test_unreadable_review_is_format_error_and_repaired_one_is_passed(self):
+        rec, call, rdir = self._review_run('이건 JSON이 아니다')
+        self.assertEqual(call['result'], 'format-error')
+        self.assertEqual(rec['findings'], [])
+        self.assertIn('리뷰 실패', rec['note'])
+        self.assertEqual((call['review_file'], call['review_bytes']),
+                         (str(rdir / 'review.txt'), len('이건 JSON이 아니다'.encode())))
+
+    def test_review_read_after_escape_repair_is_passed(self):
+        answer = r'{"findings": [{"severity": "low", "location": "a", "claim": "\$(x)", "evidence": "e"}]}'
+        rec, call, _ = self._review_run(answer)
+        self.assertEqual(call['result'], 'passed')
+        self.assertNotIn('review_file', call)
+        self.assertEqual([f['claim'] for f in rec['findings']], [r'\$(x)'])
+
+    def test_call_that_fails_is_still_error_not_format_error(self):
+        wait = review.CallWait(self.st, self.run.save, '01')
+        cfg = SimpleNamespace(models=None, timeouts=config.TimeoutsConfig(30, 10, 60))
+        with mock.patch.object(review, '_call', side_effect=review.ReviewError('exit 1')), \
+                mock.patch.object(review, '_env', return_value={}), \
+                mock.patch.object(review, 'reviewer_argv', return_value=(['fake'], 'prompt', False)):
+            with self.assertRaises(review.ReviewError):
+                review._ask_reviewer('claude', self.root, 'prompt', self.root, 60, cfg, wait,
+                                     config.ModelEffort('actual', 'high'), parse=review.parse_findings)
+        [call] = state.load(self.root, 'demo').metrics['review_calls']
+        self.assertEqual(call['result'], 'error')
+
+    def test_report_lists_format_error_file_and_size_without_the_answer(self):
+        self._review_run('SECRET-ANSWER 이건 JSON이 아니다')
+        text = report.measurements(SimpleNamespace(st=self.st, order=['01']))
+        self.assertIn('| format-error |', text)
+        self.assertIn(f"`{self.root / 'review' / 'review.txt'}`", text)
+        self.assertIn(f"{len('SECRET-ANSWER 이건 JSON이 아니다'.encode())}바이트", text)
+        self.assertNotIn('SECRET-ANSWER', text)
+
     def test_aborted_review_call_keeps_its_model_and_time(self):
         wait = review.CallWait(self.st, self.run.save, '01')
         cfg = SimpleNamespace(models=None, timeouts=config.TimeoutsConfig(30, 10, 60, network_wait_minutes=0))

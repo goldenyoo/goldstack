@@ -1,8 +1,14 @@
-"""gs가 worker hook 밖에서 실행하는 worktree 준비 명령."""
+"""gs가 worker hook 밖에서 실행하는 worktree 준비 명령.
+
+준비에 성공하면 산출물과 함께 그때의 HEAD를 git 관리 디렉터리에 남긴다(remember). config `[worktree] setup_when`이
+있으면 integration은 그 커밋과 검증할 트리를 대조해(stale) 걸리는 파일이 다르면 준비를 다시 한다(go._merge_stage).
+"""
 from __future__ import annotations
 
+import fnmatch
 import json
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 from . import git, verify
@@ -45,10 +51,49 @@ def marker(wt: Path) -> Path:
     return Path(git.out(wt, "rev-parse", "--absolute-git-dir")) / "gs-setup-done"
 
 
+def _prepared(wt: Path) -> Path:
+    """마지막으로 준비에 성공한 커밋. 표지 옆에 따로 둔다: 옛 gs의 표지는 그대로 읽힌다."""
+    return marker(wt).with_name("gs-setup-head")
+
+
 def remember(wt: Path) -> None:
-    """준비 성공과 산출물을 함께 저장한다. gitignore에 없는 설치 파일도 clean으로 지우지 않는다."""
+    """준비 성공과 산출물을 함께 저장한다. gitignore에 없는 설치 파일도 clean으로 지우지 않는다. 준비한 커밋(HEAD)도 남긴다."""
     paths = git.run(wt, "ls-files", "--others", "--exclude-standard", "-z").stdout.split("\0")
     marker(wt).write_text(json.dumps([p for p in paths if p]), encoding="utf-8")
+    _prepared(wt).write_text(git.out(wt, "rev-parse", "HEAD"), encoding="utf-8")
+
+
+def matches(globs: Sequence[str], path: str) -> bool:
+    """레포 루트 기준 경로가 glob 하나에라도 걸리나. `*`·`?`·`[...]`는 `/`를 넘지 않고, `**` 한 칸은 0단계 이상이다."""
+    parts = path.split("/")
+    return any(_match(glob.split("/"), parts) for glob in globs)
+
+
+def _match(pattern: list[str], parts: list[str]) -> bool:
+    if not pattern:
+        return not parts
+    if pattern[0] == "**":
+        return any(_match(pattern[1:], parts[i:]) for i in range(len(parts) + 1))
+    return bool(parts) and fnmatch.fnmatchcase(parts[0], pattern[0]) and _match(pattern[1:], parts[1:])
+
+
+def stale(wt: Path, globs: Sequence[str], tree: str) -> str:
+    """마지막 준비 뒤 tree까지 globs에 걸리는 파일이 바뀌었으면 그 이유(걸린 파일), 그대로면 빈 문자열. globs가 비면 늘 빈 문자열이다.
+
+    준비한 커밋의 기록이 없거나(옛 gs가 준비했다, 준비가 실패했거나 중간에 끝났다) 그 커밋을 읽지 못하면 환경이 tree에 맞는지 모른다. 그것도 이유다.
+    """
+    if not globs:
+        return ""
+    try:
+        head = _prepared(wt).read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        head = ""
+    if not head:
+        return "준비한 커밋 기록 없음"
+    res = git.run(wt, "diff-tree", "-r", "--no-renames", "--name-only", "-z", head, tree, check=False)
+    if res.returncode:
+        return f"준비한 커밋 {head[:8]}을 읽지 못함"
+    return ", ".join(path for path in res.stdout.split("\0") if path and matches(globs, path))
 
 
 def _artifacts(wt: Path) -> list[str]:
@@ -82,14 +127,21 @@ def is_clean(wt: Path, *, staged_ok: bool = False) -> bool:
                for entry in entries)
 
 
-def run(cfg, wt: Path, log: Path) -> verify.Result:
-    """bash -c로 준비하고 verify와 같은 방식으로 시간 초과·중단 시 자손까지 끝낸다."""
+def run(cfg, wt: Path, log: Path, *, note: str = "") -> verify.Result:
+    """bash -c로 준비하고 verify와 같은 방식으로 시간 초과·중단 시 자손까지 끝낸다.
+
+    note가 있으면 log를 덮지 않고 그 줄로 시작해 이어 쓴다: 같은 시도 디렉터리의 앞 준비 기록(티켓 worktree의 준비)을 남긴다.
+    명령이 뜨면 준비한 커밋의 기록을 지운다. 성공해 remember가 다시 쓰기 전에는 환경이 어느 커밋의 것인지 모른다(stale).
+    """
     seconds = cfg.timeouts.setup_minutes * 60
     limit = verify.minutes(seconds)
     if not cfg.worktree.setup.strip():
         return verify.Result(0, False, limit)
     log.parent.mkdir(parents=True, exist_ok=True)
-    with log.open("w", encoding="utf-8") as stream:
+    with log.open("a" if note else "w", encoding="utf-8") as stream:
+        if note:
+            stream.write(f"\n{note}\n")
+            stream.flush()  # 준비 명령이 같은 파일에 이어 쓴다
         try:
             p = subprocess.Popen(["bash", "-c", cfg.worktree.setup], cwd=wt, stdin=subprocess.DEVNULL,
                                  stdout=stream, stderr=subprocess.STDOUT, env=verify.env(), start_new_session=True)
@@ -97,6 +149,7 @@ def run(cfg, wt: Path, log: Path) -> verify.Result:
             stream.write(f"준비 명령 실행 실패: {e}\n")
             return verify.Result(1, False, limit)
         try:
+            _prepared(wt).unlink(missing_ok=True)
             result = verify.Result(p.wait(timeout=seconds), False, limit)
         except subprocess.TimeoutExpired:
             result = verify.Result(verify.stop(p), True, limit)

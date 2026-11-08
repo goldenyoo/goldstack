@@ -1120,6 +1120,11 @@ class RealStepWorkerTest(RealGoTest):
         ts = self.ts()
         self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
 
+    def assert_merged_on_the_retry(self):
+        """커밋 없이 끝났거나 실패한 수리 뒤에는 다시 검증하지 않고 시도가 실패한다(goldstack-v25 03). 새 시도가 병합된다."""
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+
     def test_fix_worker_that_fails_on_a_ref_lock(self):
         self.worker(fix=f"{self.LOCKED}; exit 1")
         code, out, err = self.go_with_a_finding()
@@ -1166,7 +1171,7 @@ class RealStepWorkerTest(RealGoTest):
         self.worker(repair=self.LOCKED)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        self.assert_merged_without_a_failure()
+        self.assert_merged_on_the_retry()
         self.assertEqual(self.record("repair"), "실패 이유: 커밋 없음\n")
         self.assertEqual(self.titles(), ["codex-cannot-lock-ref"])
 
@@ -1175,7 +1180,7 @@ class RealStepWorkerTest(RealGoTest):
         self.worker(repair="echo 'flaky test'")
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        self.assert_merged_without_a_failure()
+        self.assert_merged_on_the_retry()
         self.assertEqual(self.drafts(), [])
 
     def test_repair_worker_that_ends_without_a_result_event(self):
@@ -1188,7 +1193,7 @@ class RealStepWorkerTest(RealGoTest):
         with mock.patch.object(adapters.Adapter, "outcome", outcome):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        self.assert_merged_without_a_failure()
+        self.assert_merged_on_the_retry()
         self.assertEqual(self.record("repair"), f"실패 이유: {NO_RESULT}\n")
         self.assertEqual(self.titles(), ["agy-no-result"])
 
@@ -1268,11 +1273,12 @@ class RealStepWorkerTest(RealGoTest):
         with self.cut_then(self.launch_fails("repair-net1", OSError("boom"))):
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        self.assert_merged_without_a_failure()
+        self.assert_merged_on_the_retry()
         self.assertEqual(self.ts().transient_errors, 1)
         self.assertEqual(self.record("repair-net1"), "실패 이유: worker를 다시 띄우지 못했다: OSError: boom\n")
         self.assertFalse((self.rundir / "01/1/repair" / feedback.WORKER_FAILURE).exists())
-        self.assertTrue((self.rundir / "01/1/repair-net1/verify.log").exists())
+        self.assertFalse((self.rundir / "01/1/repair-net1/verify.log").exists())  # 버린 수리 뒤에 다시 검증하지 않는다
+        self.assertTrue((self.rundir / "01/1/repair-net1/failure.log").exists())
         self.assertEqual(self.titles(), ["unknown"])
 
     def test_restart_refused_by_the_os_is_not_reported(self):

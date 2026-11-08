@@ -4,6 +4,7 @@ base = "main"
 
 [worktree]
 setup = "uv sync --locked"
+setup_when = ["uv.lock", "pyproject.toml"]
 
 [models]
 judge = "opus"

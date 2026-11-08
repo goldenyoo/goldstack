@@ -25,9 +25,9 @@ def got(tid, content, is_error=None):
     return {"type": "user", "message": {"role": "user", "content": [block]}}
 
 
-def codex(command, exit_code, status="completed", kind="item.completed"):
+def codex(command, exit_code, status="completed", kind="item.completed", output=""):
     return {"type": kind, "item": {"id": "item_1", "type": "command_execution", "command": command,
-                                   "aggregated_output": "", "exit_code": exit_code, "status": status}}
+                                   "aggregated_output": output, "exit_code": exit_code, "status": status}}
 
 
 def agy(state, name="run_command", params=None, error=None):
@@ -111,6 +111,32 @@ class CommandsTest(Base):
         found, _ = streamfmt.commands(self.log(lines(codex("echo " + "x" * 2000 + "\nsecond", 0))))
         self.assertLessEqual(len(found[0]["command"]), streamfmt.COMMAND_CHARS + 1)
         self.assertNotIn("\n", found[0]["command"])
+
+    def test_entry_keeps_raw_command_apart_from_display_summary(self):
+        raw = "python - <<'EOF'\nprint(  'a   b'  )\nEOF\n" + "x" * 500
+        found, _ = streamfmt.commands(self.log(lines(codex(raw, 0), use("t1", raw), got("t1", "ok"))))
+        for c in found:
+            self.assertEqual(c["raw"], raw)  # 공백 정리·자르기 없음
+            self.assertNotEqual(c["command"], raw)  # 표시용은 따로 줄인다
+            self.assertNotIn("\n", c["command"])
+            self.assertLessEqual(len(c["command"]), streamfmt.COMMAND_CHARS + 1)
+        self.assertEqual(len(found), 2)
+
+    def test_codex_failed_command_detail_has_exit_code_and_output_tail(self):
+        def detail(output, code=1):
+            found, _ = streamfmt.commands(self.log(lines(codex("make", code, output=output))))
+            return found[0]["detail"]
+
+        a, b = detail("compile error: foo.c:3\nundefined symbol A"), detail("compile error: foo.c:3\nundefined symbol B")
+        self.assertNotEqual(a, b)  # 종료 코드가 같아도 출력이 다르면 detail이 다르다
+        self.assertTrue(a.startswith("종료 1"))
+        self.assertIn("undefined symbol A", a)
+        long = detail("head-marker " + "y" * 500 + " tail-marker")
+        self.assertIn("tail-marker", long)
+        self.assertNotIn("head-marker", long)
+        self.assertLessEqual(len(long), len("종료 1: …") + streamfmt.OUTPUT_TAIL_CHARS)
+        self.assertEqual(detail("", 2), "종료 2")  # 출력이 없으면 종료 코드만
+        self.assertEqual(detail("fine output", 0), "종료 0")  # 성공한 명령은 출력을 싣지 않는다
 
     def test_unreadable_logs_give_nothing(self):
         self.assertEqual(streamfmt.commands(self.dir / "none.log"), ([], 0))
