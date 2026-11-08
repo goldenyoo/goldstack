@@ -147,7 +147,10 @@ TABLE = [
     *[("처음 검증, integration과 같은 코드: 건너뛴다", ready(phase=phase, same_as_verified=True), rd.SKIP_MAIN)
       for phase in ("merged", "base_unverified")],
     ("보호된 base도 건너뛴다", ready(same_as_verified=True, direct_push=False), rd.SKIP_MAIN),
-    ("지난 main_head와 같아도 건너뛴다", ready(same_as_verified=True, base_moved=False), rd.SKIP_MAIN),
+    # main_head가 남았으면 지난 실행이 검증해 실패했다. main_failed에서 준비가 실패하면 phase는 base_unverified가 되지만 main_head는 남는다.
+    *[("같은 코드여도 지난 검증 결과(main_head)가 남았으면 검증", ready(phase=phase, same_as_verified=True, base_moved=moved,
+                                                         checked_before=True), rd.VERIFY_MAIN)
+      for phase in ("merged", "base_unverified") for moved in (False, True)],
     ("같은 코드여도 base부터 읽는다", facts(same_as_verified=True), rd.READ_BASE),
     ("같은 코드여도 준비가 먼저다", facts(**BASE_READ, same_as_verified=True), rd.PREPARE_BASE),
     ("같은 코드여도 준비 실패는 미검증", ready(base_ready=False, same_as_verified=True), rd.RECORD_UNVERIFIED),
@@ -255,11 +258,12 @@ class NextStepTest(unittest.TestCase):
     def test_invariants_over_every_combination(self):
         unread = (None, False, True)
         for (phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok, branch, pr_merged, same,
-             verified_same) in itertools.product(
+             verified_same, checked) in itertools.product(
                 (*OPEN_PHASES, "main_retry", "revert_closing", "verified", "reverted"), (False, True), (False, True), (False, True),
-                unread, unread, unread, unread, (False, True), unread, (False, True), unread, (False, True), (False, True)):
+                unread, unread, unread, unread, (False, True), unread, (False, True), unread, (False, True), (False, True),
+                (False, True)):
             given = Facts(phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok, branch, pr_merged, same,
-                          verified_same)
+                          verified_same, checked)
             step = next_step(given)
             self.assertIn(step, all_steps(), given)
             finished = phase in ("verified", "reverted")
@@ -280,7 +284,10 @@ class NextStepTest(unittest.TestCase):
                 self.assertNotIn(step, (rd.VERIFY_MAIN, rd.RETRY_MAIN, rd.RECHECK_MAIN, rd.SKIP_MAIN), given)
             if step == rd.SKIP_MAIN:  # integration과 같은 코드의 첫 검증에만. 실패·재시도·revert·외부 revert를 덮지 않는다
                 self.assertTrue(verified_same and phase in ("merged", "base_unverified") and base_ready is True and ok is None
-                                and not has and not branch and not external, given)
+                                and not has and not branch and not external and not checked, given)
+            if checked:  # 지난 검증 결과는 건너뛰기만 막는다. 다른 답은 그대로다
+                plain = next_step(replace(given, checked_before=False))
+                self.assertEqual(rd.VERIFY_MAIN if plain == rd.SKIP_MAIN else plain, step, given)
             if verified_same:  # 그 사실은 첫 검증(VERIFY_MAIN)만 건너뛰기로 바꾼다. 다른 답은 그대로다
                 plain = next_step(replace(given, same_as_verified=False))
                 self.assertEqual(rd.VERIFY_MAIN if step == rd.SKIP_MAIN else step, plain, given)
@@ -625,6 +632,18 @@ class PostmergeTest(unittest.TestCase):
         self.assertEqual(self.verified_labels(), [])
         self.assertEqual(self.fake.count("revert"), 0)
         self.remove.assert_called_once()
+
+    def test_setup_failure_after_main_failed_does_not_skip_on_resume(self):
+        # integration과 같은 코드여도 지난 실패를 확인했다. 준비 실패가 phase를 base_unverified로 바꿔도 다음 실행이 건너뛰지 않는다.
+        (self.rundir / "finish").mkdir()  # 건너뛰면 main-verify.log를 쓰는 곳
+        with mock.patch("gs.finish._same_as_verified", return_value=True):
+            self.assertFalse(self.postmerge(phase="main_failed", main_ok=False, main_head=TIP, verified_head=OLD_TIP,
+                                            setup_cmd="make", setup_ok=False))
+            self.assertEqual((self.stored["phase"], self.stored["main_ok"], self.stored["main_head"]), ("base_unverified", None, TIP))
+            self.assertTrue(self.postmerge(setup_cmd="make", verify_ok=True, **self.stored))
+        self.assertEqual(self.verified_labels(), ["main"])
+        self.assertEqual(self.stored["phase"], "verified")
+        self.assertFalse((self.rundir / "finish" / "main-verify.log").exists())
 
     def test_base_head_is_read_after_setup(self):
         # setup이 HEAD를 옮기면 받아 온 끝이 아니라 실제로 검증하는 커밋을 main_head로 비교하고 남긴다.

@@ -25,7 +25,8 @@ phase `main_retry`를 남기고 임시 worktree를 치운 뒤 처음부터 다�
 보고서와 이 feature의 아이디어 파일(`findings.paths`)뿐이면 base 검증을 돌리지 않는다(`_same_as_verified`, `_verify_final`과 같은 기준).
 `main-verify.log`에 "integration과 같은 코드(<verified_head>), 건너뜀"을 쓰고 검증을 통과했을 때와 같이 verified로 남긴다. base 끝이 움직였거나,
 그 밖의 파일(다른 `.goldstack/` 파일, config 포함)이 다르거나, `verified_head`가 없으면(옛 state) 지금처럼 검증한다. 재시도·재검증,
-`main_failed`·`main_retry`, revert가 있거나 올린 상태, 외부 revert에는 적용하지 않는다(이미 확인한 실패를 덮지 않는다). 끊긴 뒤 다음 `gs go`도 같은 길을 지난다.
+`main_failed`·`main_retry`, revert가 있거나 올린 상태, 외부 revert에는 적용하지 않는다(이미 확인한 실패를 덮지 않는다). 지난 검증 결과(`main_head`)가
+남았으면 준비 실패로 phase가 `base_unverified`가 된 뒤에도 마찬가지다. 끊긴 뒤 다음 `gs go`도 같은 길을 지난다.
 
 verified·reverted의 마무리 순서: integration에 보고서 커밋 → base에 보고서 커밋(직접 push·보고서 PR) → base를
 integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base판과 같다. 그래서 다음 PR이 report.md에서 충돌하지 않는다.
@@ -934,7 +935,8 @@ def _read_and_step(r) -> bool | None:
     f = r.st.finish
     sha, pushed = f.get("revert_sha"), f.get("revert_head")
     facts = revert_decision.Facts(phase=f["phase"], direct_push=r.cfg.git.direct_push, has_revert=bool(sha),
-                                  revert_head_matches=pushed == sha, revert_pushed=bool(pushed))
+                                  revert_head_matches=pushed == sha, revert_pushed=bool(pushed),
+                                  checked_before=bool(f.get("main_head")))
     step = revert_decision.next_step(facts)
     if step == revert_decision.ALREADY_VERIFIED:
         return True

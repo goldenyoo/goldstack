@@ -203,6 +203,18 @@ class SameCodeTest(unittest.TestCase):
         self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), self.f["revert_sha"])
         self.assertFalse(self.log().exists())
 
+    def test_main_failed_setup_failure_still_verifies_on_resume(self):
+        # 준비가 실패하면 phase는 base_unverified가 되지만 남은 main_head가 지난 실패를 알린다. 재개해도 건너뛰지 않는다.
+        merge = self.merge(phase="main_failed", main_ok=False)
+        self.f["main_head"] = merge
+        self.assert_skip_condition()
+        self.assertFalse(self.postmerge(verify_ok=True, _prepare_base=mock.Mock(return_value=None)))
+        self.assertEqual((self.f["phase"], self.f["main_ok"], self.f["main_head"]), ("base_unverified", None, merge))
+        self.assertTrue(self.postmerge(verify_ok=True))
+        self.assertEqual(self.labels, ["main"])
+        self.assertEqual(self.f["phase"], "verified")
+        self.assertFalse(self.log().exists())
+
     def test_unpushed_revert_is_pushed(self):
         merge = self.merge(phase="main_failed", main_ok=False)
         self.f.update(main_head=merge, revert_sha=self.revert_commit())

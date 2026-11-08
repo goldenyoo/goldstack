@@ -18,6 +18,7 @@ base가 그대로면 그 PR을 기다리고, base가 움직였으면 옛 revert�
 첫 검증(`VERIFY_MAIN`)을 고를 자리에서 받아 온 base 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가 보고서·이 feature의
 아이디어 파일뿐이면(`same_as_verified`) 검증하지 않고 `SKIP_MAIN`으로 integration의 통과를 그대로 쓴다. 이 자리에서만이다: 재시도·재검증,
 phase `main_failed`·`main_retry`·`revert_pending`, revert가 있거나 브랜치를 올린 상태, 외부 revert는 위 줄이 먼저 답하거나 이 줄에 오지 않는다.
+`main_failed`에서 준비가 실패해 phase가 `base_unverified`로 바뀌었어도 남은 `main_head`(`checked_before`)로 알아보고 건너뛰지 않는다.
 이미 확인한 실패를 덮지 않는다. `.goldstack/` 전체를 보는 `code_same`(재시도 판단)과 다른 기준이다.
 """
 from __future__ import annotations
@@ -71,6 +72,9 @@ class Facts:
     # 받아 온 base 끝이 병합 커밋 그대로이고 마지막으로 통과한 integration 커밋(`verified_head`)과 병합 커밋의 차이가 보고서·이 feature의
     # 아이디어 파일뿐이다. 모르면(옛 state, 못 읽음) 지금처럼 검증한다
     same_as_verified: bool = False
+    # 지난 실행이 base 검증 결과를 남겼다(state에 main_head가 있다). 건너뛸 수 있는 phase에서는 곧 확인한 실패다: 통과는 verified·revert_closing으로
+    # 가고, 준비 실패(`RECORD_UNVERIFIED`)는 phase를 base_unverified로 바꾸지만 main_head는 지우지 않는다
+    checked_before: bool = False
 
 
 def next_step(f: Facts) -> str:
@@ -116,8 +120,9 @@ def next_step(f: Facts) -> str:
         if f.phase == "main_retry" and not f.base_moved:
             return RETRY_MAIN
         if f.phase not in ("main_failed", "main_retry") and not f.revert_pushed:
-            # integration에서 검증한 코드를 다시 돌리지 않는다. 실패를 확인한 적 없는 phase이고 revert도 없을 때만이다.
-            if f.same_as_verified and f.phase in ("merged", "base_unverified") and not f.has_revert:
+            # integration에서 검증한 코드를 다시 돌리지 않는다. 실패를 확인한 적 없고(준비 실패로 phase가 바뀐 지난 실패 포함) revert도 없을 때만이다.
+            if (f.same_as_verified and f.phase in ("merged", "base_unverified") and not f.has_revert
+                    and not f.checked_before):
                 return SKIP_MAIN
             return VERIFY_MAIN
         # 실패 뒤 base가 움직였다(사람이 고쳤거나 그사이 push로 revert push가 거부됐다). 그대로면 지난 실패를 믿고 아래로 간다.
