@@ -212,6 +212,8 @@ PR #8을 승인하고 한 번 더 치면 끝난다(종료 0):
 ```
 종료 코드는 1이고(`reverted`로 끝나도 같다) 텔레그램에도 `남은 티켓 1개 → 다음 gs go`가 붙는다. 같은 명령을 한 번 더 치면 main(최종 보고서 포함)을 합친 integration에서 남은 티켓을 돌리고 새 PR을 연다. 그래서 새 PR이 report.md에서 충돌하지 않는다. 승인이 아직이면 티켓도 시작하지 않고 그대로 기다린다.
 
+**integration에서 검증한 코드면 main 검증을 건너뛴다** — 병합 직후 첫 main 검증 차례에 받아 온 main 끝이 병합 커밋 그대로이고, 마지막으로 통과한 integration 커밋과 병합 커밋의 차이가 보고서와 이 feature의 아이디어 파일뿐이면 같은 코드를 다시 돌리는 것이라 건너뛴다. `main-verify.log`에 `integration과 같은 코드(<sha>), 건너뜀`이 남고 결과는 검증을 통과했을 때와 같이 `verified`다. main이 그 사이 움직였거나, 차이에 다른 파일(config 같은 다른 `.goldstack/` 파일 포함)이 있으면 지금처럼 검증한다. 실패한 main 검증의 재시도·재검증, revert는 건너뛰지 않는다.
+
 **main 검증이 실패하면** — revert도 PR(`gs/csv-export/revert`)이다. 승인이 필요하면 **되돌리기 전에 멈추므로 깨진 코드가 main에 남아 있다.** 알림을 보면 바로 승인한다:
 ```
 ■ main 검증: npm test
@@ -673,6 +675,32 @@ worker의 Bash 명령에 따옴표 없이 `=`로 시작하는 두 글자 이상 
 setopt noequals
 ```
 `.zshenv`는 대화형이 아닌 `zsh -c`도 읽으므로 명령 묶음에도 적용된다. 이 머신의 `zsh -c 'echo ==='`는 이 설정으로 정상 출력했다(spec 작성 때 `ZDOTDIR`의 `.zshenv`에 두고 1회 쟀다). 부작용: `=cmd` 확장(`=ls`, `=python`으로 경로 얻기)을 더 쓸 수 없다. `echo =ls`는 `=ls` 그대로 나온다. 그 확장에 기대는 스크립트가 있으면 같이 깨지니 먼저 `grep -rn '=[a-z]' ~/.zshrc`처럼 확인한다. **Claude Code Bash 도구에서 이 설정이 통하는지는 재지 않았다.** Bash 도구가 쓰는 셸 환경(스냅샷)이 `.zshenv`를 읽는지는 확인하지 않았으니, 효과를 보려면 새 세션에서 `echo ===`로 직접 확인한다.
+
+### worker의 전체 시험을 막기(`[hook.worker_tests]`)
+
+worker가 전체 시험을 돌리면 티켓 시간이 몇 분씩 늘어난다. 전체 검증은 gs가 병합 전에 돌리므로 worker는 고친 곳에 닿는 시험만 돌리면 된다. config의 `[hook.worker_tests]`에 규칙을 적으면 worker hook이 그 명령을 막고 "좁은 시험만 돌린다"고 안내한다. **기본은 꺼짐**이다(절이 없으면 지금 동작 그대로). gs는 시험 러너를 가정하지 않으니 값은 레포가 적는다.
+
+| 키 | 뜻 |
+|---|---|
+| `deny` | 정규식 목록. worker의 Bash 명령 원문이 하나라도 맞으면 막는다 |
+| `runner` | 정규식. 이 명령에서만 시험 파일 수를 센다. 시험 파일 여러 개를 `git add`하는 명령은 러너가 아니라 통과한다 |
+| `file` | 시험 파일 이름의 정규식. 명령에 나온 서로 다른 이름을 센다 |
+| `max_files` | 한 명령에 허용하는 시험 파일 수. 넘으면 막는다. `runner`와 `file`이 둘 다 있어야 켜진다 |
+
+```toml
+[hook.worker_tests]
+deny = [
+  '''\bls(\s+-\w+)*\s+(\./)?tests/?\s*\|.*\bxargs\b''',        # 시험 폴더를 순회
+  '''\bunittest\s+discover\b(?![^\n;&|]*\s(-p|--pattern))''',     # -p 없는 discover(시험 전체)
+]
+runner = 'unittest|pytest'
+file = 'test_\w+\.py'
+max_files = 10
+```
+
+- 정규식은 Python `re.search`로 명령 원문에 맞춘다. 셸 문법을 풀지 않으므로 heredoc이나 따옴표 속 글자에도 맞아 막을 수 있다. 정규식을 해석하지 못하면 config 오류로 알린다.
+- claude worker(첫·수정·수리 역할 모두)와 agy worker에 적용한다. codex worker는 hook이 fail-open이라 적용하지 않고 sandbox에 맡긴다.
+- gs가 worker를 띄울 때 규칙을 실행에 고정한다. worker가 worktree의 config를 고쳐도 그 실행의 규칙은 바뀌지 않는다.
 
 ## 실행 중 보기
 
