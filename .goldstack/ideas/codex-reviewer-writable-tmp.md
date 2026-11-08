@@ -2,9 +2,9 @@
 date: "2026-11-08"
 severity: "medium"
 source: "/retro goldstack-v25"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v27"
 ---
 codex 리뷰어가 읽기 전용 sandbox라 임시 디렉터리를 못 만들어 시험으로 재현하지 못한다.
 

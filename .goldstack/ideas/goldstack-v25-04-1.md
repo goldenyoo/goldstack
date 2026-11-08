@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v25 리뷰 04"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v27"
 ---
 실패 출력을 공백 정리한 뒤 자르므로, 공백 차이가 실패 원인인 메시지가 변형되고 서로 다른 실패가 같은 detail로 기록된다. 원본 aggregated_output의 끝 200자를 먼저 보존해야 한다.
 

@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v25 리뷰 03"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v27"
 ---
 끊긴 수리 worker를 다시 띄우다가 실패하면, 앞 실행에 남아 있는 마지막 메시지를 잃습니다. 실패 사유에는 메시지가 없다고 기록하고 다음 시도 요약에도 메시지 파일 경로를 전달하지 않습니다.
 

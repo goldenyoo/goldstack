@@ -2,9 +2,9 @@
 date: "2026-11-08"
 severity: "high"
 source: "/retro goldstack-v24"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v27"
 ---
 앞 티켓 코드의 결함이 뒤 티켓 리뷰에서 나오면 고칠 티켓이 없어, 재현된 결함도 보고만으로 남는다.
 

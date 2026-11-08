@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v25 리뷰 03"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v27"
 ---
 커밋 없이 종료한 수리 worker가 `브랜치 밖 원인:`을 남겨도 종료 코드가 0이 아니면 표식을 무시하고 재시도합니다. 명세에 없는 정상 종료 조건을 추가해 브랜치 밖 원인에서 불필요한 새 시도가 발생합니다.
 
