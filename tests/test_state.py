@@ -49,6 +49,32 @@ class StateTest(unittest.TestCase):
         self.assertEqual(state.load(self.rundir, "f").tickets["01"].status, "merged")
         self.assertEqual(state.load(self.rundir, "f").tickets["01"].kept_worktrees, [])
 
+    def test_old_state_without_prior_findings_reads_as_empty(self):
+        self.rundir.mkdir()
+        state.path(self.rundir).write_text(json.dumps({"feature": "f", "tickets": {"01": {"status": "failed"}}}))
+        self.assertEqual(state.load(self.rundir, "f").tickets["01"].prior_findings, [])
+
+    def test_keep_prior_findings_moves_findings_with_attempt_reviewer_and_head(self):
+        ts = state.TicketState(attempts=3)
+        state.begin_phase(ts, "worker", "claude", attempt=3)
+        found = {"severity": "medium", "location": "a.py:1", "claim": "지적", "evidence": "e", "idea_number": 2}
+        ts.review = {"reviewer": "codex", "reviewed_head": "abc123", "findings": [found]}
+        ts.second_review = {"reviewer": "agy", "reviewed_head": "def456", "findings": [{**found, "severity": "low"}]}
+        state.keep_prior_findings(ts)
+        self.assertEqual([(e["attempt"], e["reviewer"], e["reviewed_head"], [f["severity"] for f in e["findings"]])
+                          for e in ts.prior_findings],
+                         [(3, "codex", "abc123", ["medium"]), (3, "agy", "def456", ["low"])])
+        self.assertNotIn("idea_number", ts.prior_findings[0]["findings"][0])
+        state.save(self.rundir, state.State(feature="f", tickets={"01": ts}))
+        self.assertEqual(state.load(self.rundir, "f").tickets["01"].prior_findings, ts.prior_findings)
+
+    def test_keep_prior_findings_skips_records_without_findings(self):
+        ts = state.TicketState(attempts=1)
+        ts.review = {"reviewer": "codex", "findings": []}
+        ts.second_review = {"reviewer": "agy", "note": "건너뜀(한도)"}
+        state.keep_prior_findings(ts)
+        self.assertEqual(ts.prior_findings, [])
+
     def test_lock(self):
         self.assertIsNone(state.running_pid(self.rundir))
         with state.Lock(self.rundir):
