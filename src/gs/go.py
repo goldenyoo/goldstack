@@ -1635,9 +1635,12 @@ def _merge_stage(r: Run, a: Active) -> None:
     msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
     commit = ""  # 검증 전에 만든 병합 커밋(setup을 다시 돌렸을 때만). 통과하면 integration을 이 커밋으로 옮긴다
     if all(merged) and (why := _setup_stale(r, merged[3])):
-        commit, setup_log = _setup_merge(r, a, merged, msg, why)
+        commit, setup_log, setup_moved = _setup_merge(r, a, merged, msg, why)
         if not commit:
             _reset_integration(r, r.ihead)
+            if setup_moved:
+                return _fail_worker(r, a, f"setup하는 동안 integration이 바뀌었다(되돌림, 로그 {setup_log}): "
+                                          "검증할 것과 병합 커밋이 다르다")
             return _verify_failed(r, a, f"integration setup 실패(로그 {setup_log})", setup_log)
     checked = _merge_state(r)  # 검증이 보는 상태: 미완 병합, 또는 병합 커밋의 분리 HEAD
     res, log, changed = _verify(r, t)
@@ -1683,9 +1686,11 @@ def _merge_stage(r: Run, a: Active) -> None:
     _cleanup_merged(r, t.id)
 
 
-def _setup_merge(r: Run, a: Active, merged: tuple[str, str, str, str], msg: str, why: str) -> tuple[str, Path]:
+def _setup_merge(r: Run, a: Active, merged: tuple[str, str, str, str], msg: str, why: str) -> tuple[str, Path, bool]:
     """미완 병합이 setup_when에 걸리는 파일을 바꾼다(why). 병합을 커밋하고 그 커밋(분리 HEAD)에서 setup을 다시 돌린다.
-    (커밋, setup 로그)를 돌려준다. setup이 실패하면 커밋은 빈 문자열이다.
+    (커밋, setup 로그, setup하는 동안 integration이 바뀌었나)를 돌려준다. setup이 실패하거나 integration이 바뀌었으면 커밋은 빈 문자열이다.
+    setup이 성공해도 HEAD·병합 상태·index 트리가 그 커밋의 것이 아니면(setup 명령이나 다른 프로세스가 커밋하거나 checkout했다) 바뀐 것이다:
+    검증할 트리가 병합 커밋과 다르다. 준비한 커밋은 기록하지 않는다(다음 검증 전에 다시 준비한다).
 
     미완 병합에서는 돌리지 않는다: setup 뒤의 복구(setup._restore_tracked)가 HEAD와 다른 추적 파일, 곧 병합한 파일을 되돌린다.
     브랜치는 옮기지 않는다. 검증이 통과해야 _merge_stage가 이 커밋으로 옮긴다. 그 전에 gs가 끝나면 다음 gs go가 브랜치로 되돌린다(_prepare_integration).
@@ -1701,9 +1706,11 @@ def _setup_merge(r: Run, a: Active, merged: tuple[str, str, str, str], msg: str,
     res = setup.run(r.cfg, r.iwt, log, note=f"--- integration에서 다시 준비: 병합 커밋 {commit} (setup_when: {why}) ---")
     _phase(r, t.id, "verify", t.model)
     if not res.ok:
-        return "", log
+        return "", log, False
+    if _merge_state(r) != (commit, "", "", merged[3]):
+        return "", log, True
     setup.remember(r.iwt)
-    return commit, log
+    return commit, log, False
 
 
 def _old_target(r: Run, a: Active, head: str) -> str:

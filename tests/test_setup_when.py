@@ -235,5 +235,29 @@ class SetupWhenTest(unittest.TestCase):
         self.assertEqual(self.setups(), [("integration", "v1"), ("01", "v1"), ("integration", "v1"), ("base", "v1")])
 
 
+    def test_setup_that_moves_head_fails_ticket_before_verify(self):
+        """다시 돈 setup이 integration에 커밋하면 검증할 트리가 병합 커밋과 다르다. 검증하지 않고 티켓 실패로 되돌린다."""
+        moved = self.bin / "moved"
+        self.configure('cat uv.lock > installed; case "$PWD" in */wt/integration) '
+                       f'if grep -q v2 uv.lock && [ ! -f "{moved}" ]; then touch "{moved}"; echo x > extra; git add extra; '
+                       'git -c user.name=t -c user.email=t@t commit -qm extra; fi;; esac', ENV_MATCHES)
+        self.worker("01", 'echo v2 > uv.lock; git add -A; git commit -qm "lock $(date +%s%N)"')
+        with mock.patch.object(gs_go, "_verify", wraps=gs_go._verify) as verify:
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue(moved.exists(), "setup이 커밋하지 않았다")
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual((ts.status, ts.attempts, ts.failures), (state.MERGED, 2, 1), out)
+        failure = (self.rundir / "01/1/failure.log").read_text()
+        self.assertIn(f"setup하는 동안 integration이 바뀌었다(되돌림, 로그 {self.rundir / '01/1/setup.log'})", failure)
+        self.assertEqual(ts.repairs, [], "브랜치의 결함이 아니니 수리하지 않는다")
+        self.assertEqual(verify.call_count, 1, "setup이 HEAD를 옮긴 시도는 검증하지 않는다")
+        # 실패한 준비 뒤의 환경은 믿지 않는다: 두 번째 시도의 병합에서 다시 준비한다
+        self.assertEqual([s for s in self.setups() if s[0] == "integration"],
+                         [("integration", "v1"), ("integration", "v2"), ("integration", "v2")])
+        self.assertEqual(self.integration("show", "gs/demo/integration:uv.lock"), "v2")
+        self.assertNotIn("extra", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+
+
 if __name__ == "__main__":
     unittest.main()
