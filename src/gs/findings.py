@@ -247,7 +247,8 @@ def write(r) -> list[str]:
         return []
     written = []
     for tid in r.order:
-        for finding in _findings(r.st.tickets[tid]):
+        # 같은 지적은 번호(파일)를 나눠 쓰고 먼저 만든 파일이 남는다. defer를 먼저 만들어 high 파일이 남게 한다
+        for finding in sorted(_findings(r.st.tickets[tid]), key=lambda f: report.finding_status(f) != DEFERRED):
             if NUMBER not in finding or not _target(finding):
                 continue
             rel = _rel(r.name, tid, finding[NUMBER])
