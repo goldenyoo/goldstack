@@ -323,9 +323,17 @@ def sh(cwd, *args):
 class GoTest(unittest.TestCase):
     """시험 메서드 없이 준비·정리와 도우미만 제공한다."""
     BASE, REMOTE = "main", "origin"  # .goldstack/config.toml [git]. TrunkUpstreamTest가 바꾼다
+    # 병합 뒤 첫 base 검증 건너뛰기(finish._same_as_verified). 가짜 gh는 base를 옮기지 않고 병합해 병합 커밋이 늘 integration과 같은
+    # 코드다. 켜 두면 main에서만 실패하게 만든 시험(분리 HEAD·병합 커밋 제목으로 가른다)이 검증 없이 verified가 되어 실패·revert·재시도를
+    # 보지 못한다. 그래서 기본은 끈다(건너뛰기가 없던 때와 같다). 건너뛰기는 test_postmerge_skip이 켜고 본다.
+    POSTMERGE_SKIP = False
 
     def setUp(self):
         isolate_git_env(self)
+        if not getattr(self, "POSTMERGE_SKIP", False):  # G = support.GoTest로 메서드만 빌려 쓰는 시험도 끈다
+            same = mock.patch("gs.finish._same_as_verified", return_value=False)
+            same.start()
+            self.addCleanup(same.stop)
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name).resolve()
         self.bin = root / "bin"

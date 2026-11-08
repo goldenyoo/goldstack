@@ -21,6 +21,13 @@ revert PR을 기다리는 동안 base가 움직였으면 옛 revert를 병합하
 base 검증이 처음 실패했고 마지막으로 통과한 integration 커밋(`verified_head`)과 병합 커밋의 차이가 `.goldstack/`뿐이면 revert 전에 한 번 다시 검증한다(`main-retry`).
 phase `main_retry`를 남기고 임시 worktree를 치운 뒤 처음부터 다시 읽으니 끊겨서 다음 `gs go`가 잇는 길과 같다. 통과하면 verified이고 outcome에 flaky를 적으며, 실패하면 revert한다.
 
+첫 base 검증 차례(`next_step`이 `VERIFY_MAIN`을 고른 자리)에 받아 온 base 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가
+보고서와 이 feature의 아이디어 파일(`findings.paths`)뿐이면 base 검증을 돌리지 않는다(`_same_as_verified`, `_verify_final`과 같은 기준).
+`main-verify.log`에 "integration과 같은 코드(<verified_head>), 건너뜀"을 쓰고 검증을 통과했을 때와 같이 verified로 남긴다. base 끝이 움직였거나,
+그 밖의 파일(다른 `.goldstack/` 파일, config 포함)이 다르거나, `verified_head`가 없으면(옛 state) 지금처럼 검증한다. 재시도·재검증,
+`main_failed`·`main_retry`, revert가 있거나 올린 상태, 외부 revert에는 적용하지 않는다(이미 확인한 실패를 덮지 않는다). 지난 검증 결과(`main_head`)가
+남았으면 준비 실패로 phase가 `base_unverified`가 된 뒤에도 마찬가지다. 끊긴 뒤 다음 `gs go`도 같은 길을 지난다.
+
 verified·reverted의 마무리 순서: integration에 보고서 커밋 → base에 보고서 커밋(직접 push·보고서 PR) → base를
 integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base판과 같다. 그래서 다음 PR이 report.md에서 충돌하지 않는다.
 
@@ -380,7 +387,8 @@ def _verify(r, wt: Path, label: str) -> bool:
     """명령과 실제 출력·종료 코드를 보존한다. 검증이 worktree를 바꾸면 통과로 인정하지 않는다.
     종료 코드 줄은 verify.run이 쓴다. 시간을 넘기면 그 줄 바로 앞이 `시간 초과: <N>분` 줄이고 실패다. 끊김(Result.interrupted)도 여느 실패와 같다: 끊겼다고 다시 돌리는 것은 티켓 검증뿐이다.
     지난 gs가 남긴 검증은 이번 gs go가 시작할 때 이미 끝냈다(verify.stop_stale). 로그 경로가 그 표지다.
-    integration worktree에서 통과하면 그 커밋을 `verified_head`로 남긴다. base 검증이 실패했을 때 `_code_same`이 병합 커밋과 비교한다."""
+    integration worktree에서 통과하면 그 커밋을 `verified_head`로 남긴다. 첫 base 검증 전에 `_same_as_verified`가, base 검증이 실패했을 때
+    `_code_same`이 병합 커밋과 비교한다."""
     log = r.rundir / "finish" / f"{label}-verify.log"
     head = git.sha(wt, "HEAD")
     branch = git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout
@@ -405,11 +413,15 @@ def _verify(r, wt: Path, label: str) -> bool:
     return ok
 
 
+def _report_paths(r) -> set[str]:
+    """검증을 다시 돌리지 않아도 되는 차이: 이 feature의 보고서와 아이디어 파일. `_verify_final`과 `_same_as_verified`가 함께 쓴다."""
+    return {f"{WORK}/{r.name}/report.md", *findings.paths(r)}
+
+
 def _verify_final(r, verified_head: str) -> bool:
     """통과한 integration과 보고서·이 feature의 아이디어 파일만 다르면 최종 검증 결과를 재사용한다."""
     changed = git.run(r.iwt, "diff", "--no-renames", "--name-only", "-z", verified_head, "HEAD").stdout
-    report_path = f"{WORK}/{r.name}/report.md"
-    if set(changed.split("\0")) - {""} <= {report_path, *findings.paths(r)} and setup.is_clean(r.iwt):
+    if set(changed.split("\0")) - {""} <= _report_paths(r) and setup.is_clean(r.iwt):
         message = "integration-final: 보고서만 바뀜, 건너뜀"
         (r.rundir / "finish" / "integration-final-verify.log").write_text(message + "\n", encoding="utf-8")
         print(f"■ {message}", flush=True)
@@ -894,12 +906,26 @@ def _code_same(r) -> bool:
     return res.returncode == 0 and all(path.startswith(".goldstack/") for path in res.stdout.split("\0") if path)
 
 
+def _same_as_verified(r, tip: str) -> bool:
+    """받아 온 base 끝 tip이 병합 커밋 그대로이고, 마지막으로 통과한 integration 커밋과 병합 커밋의 차이가 보고서·이 feature의 아이디어 파일뿐인가.
+
+    그러면 첫 base 검증은 integration에서 통과한 코드를 다시 돌리는 것이다(`revert_decision.SKIP_MAIN`). `.goldstack/` 전체를 허용하는
+    `_code_same`보다 좁다: config 같은 다른 `.goldstack/` 파일이 달라도 검증한다. 그 커밋을 모르거나(옛 state) 못 읽으면 아니라고 본다."""
+    f = r.st.finish
+    passed, merge = f.get("verified_head"), f["merge_sha"]
+    if not passed or tip != merge:
+        return False
+    res = git.run(r.repo, "diff", "--no-renames", "--name-only", "-z", passed, merge, check=False)
+    return res.returncode == 0 and set(res.stdout.split("\0")) - {""} <= _report_paths(r)
+
+
 @metrics.stage("postmerge")
 def _postmerge(r) -> bool:
     """사실을 읽어 `revert_decision.next_step`에 묻고 답한 단계를 실행한다. 판단 규칙은 그 함수에 있다.
 
     재시도를 남겼으면(`MARK_RETRY`) 처음부터 한 번 더 읽는다. 다음 `gs go`가 잇는 길과 같아 같은 준비 절차로 돌고, 첫 검증이 도는 동안 움직인 base와 남이 한 revert도 본다.
-    `next_step`은 phase `main_retry`에서 다시 `MARK_RETRY`를 답하지 않는다."""
+    `next_step`은 phase `main_retry`에서 다시 `MARK_RETRY`를 답하지 않는다.
+    첫 검증 차례에 base가 integration에서 통과한 코드 그대로면(`SKIP_MAIN`) 검증하지 않고 `main-verify.log`에 건너뜀을 남긴 뒤 verified다."""
     done = _read_and_step(r)
     return _read_and_step(r) if done is None else done
 
@@ -909,7 +935,8 @@ def _read_and_step(r) -> bool | None:
     f = r.st.finish
     sha, pushed = f.get("revert_sha"), f.get("revert_head")
     facts = revert_decision.Facts(phase=f["phase"], direct_push=r.cfg.git.direct_push, has_revert=bool(sha),
-                                  revert_head_matches=pushed == sha, revert_pushed=bool(pushed))
+                                  revert_head_matches=pushed == sha, revert_pushed=bool(pushed),
+                                  checked_before=bool(f.get("main_head")))
     step = revert_decision.next_step(facts)
     if step == revert_decision.ALREADY_VERIFIED:
         return True
@@ -923,7 +950,7 @@ def _read_and_step(r) -> bool | None:
     tip = git.sha(r.repo, r.base_ref)
     theirs = _revert_of(r.repo, merge, f"{merge}..{r.base_ref}")
     facts = replace(facts, revert_in_base=bool(sha) and _ancestor(r.repo, sha, r.base_ref), external_revert=bool(theirs),
-                    base_moved=f.get("main_head") != tip)
+                    base_moved=f.get("main_head") != tip, same_as_verified=_same_as_verified(r, tip))
     step = revert_decision.next_step(facts)
     view = {}
     if step == revert_decision.READ_REVERT_PR:
@@ -969,6 +996,13 @@ def _read_and_step(r) -> bool | None:
             if step == revert_decision.RECORD_UNVERIFIED:
                 _save(r, phase="base_unverified", main_ok=None, outcome="base 미검증(준비 실패)")
                 return False
+            if step == revert_decision.SKIP_MAIN:
+                # 통과한 integration과 같은 코드다. 검증한 것처럼 남긴다(main_ok·main_head·outcome이 통과 때와 같다).
+                message = f"integration과 같은 코드({f['verified_head']}), 건너뜀"
+                (r.rundir / "finish" / "main-verify.log").write_text(message + "\n", encoding="utf-8")
+                print(f"■ main 검증: {message}", flush=True)
+                _save(r, main_ok=True, main_head=main_head, phase="verified", outcome=f"integration·{r.base} 검증 통과, PR 병합 완료")
+                return True
             label = {revert_decision.VERIFY_MAIN: "main", revert_decision.RETRY_MAIN: "main-retry",
                      revert_decision.RECHECK_MAIN: "main-recheck"}.get(step)
             ok = bool(label) and _verify(r, wt, label)
