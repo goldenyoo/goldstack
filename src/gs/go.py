@@ -11,7 +11,9 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 병합을 막지 않는다.
 순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(통과할 때 한 번, 실패하면 아래 수리 뒤 한 번 더, 끊기면 바로 한 번 더) → 병합.
 티켓 검증이 실패하면(_verify_failed) 시도 하나에 한 번 새 시도 대신 수리 worker가 같은 브랜치·worktree에서 돈다(_start_repair, brief에 verify.log 경로, 단계 repair).
-커밋을 남기면 수리 diff를 tiers.rereview 등급으로 재리뷰하고(_repair_review, 지적은 보고만) 다시 병합·검증한다. 커밋이 없거나, 수리 worker가 실패해 그 수정을 버렸거나, 띄우지 못했으면 재리뷰 없이 바로 다시 검증한다(불안정한 시험이면 여기서 통과한다).
+커밋을 남기면 수리 diff를 tiers.rereview 등급으로 재리뷰하고(_repair_review, 지적은 보고만) 다시 병합·검증한다. 수리 worker를 띄우지 못했으면 재리뷰 없이 바로 다시 검증한다(불안정한 시험이면 여기서 통과한다).
+커밋 없이 끝났거나 수리 worker가 실패해 그 수정을 버렸으면 같은 head를 다시 검증하지 않고 _fail로 간다(_end_repair). 이유에 수리 worker의 마지막 메시지 요약이, failure.log와 다음 시도 brief에 그 파일(worker-last.txt) 경로가 들어간다.
+커밋 없이 끝난 수리 worker의 마지막 메시지에 `브랜치 밖 원인: <이유>` 줄이 있으면 재시도하지 않고(retry=False) 실패로 끝내 사람에게 넘긴다.
 다시 검증도 실패하면 그때 _fail로 간다: 실패는 시도마다 한 번만 센다. 병합 충돌, 검증 시간 초과, 검증하는 동안 integration이 바뀐 것은 수리하지 않고 바로 _fail이다.
 수리는 검증 실패부터 다시 검증까지 network_resume의 repair(REPAIR_*)로 이어 간다: 어디서 gs가 죽거나 끊겨도 다음 gs go가 그 지점부터 같은 worktree에서 잇는다. 옛 state에는 이 값이 없고 수리하지 않은 티켓처럼 읽는다.
 티켓 검증이 끊기면(verify.Result.interrupted: 신호로 죽은 것처럼 보인다) 코드 결함으로 보지 않고 수리 worker 없이 같은 트리로 한 번 다시 검증한다(_verify_interrupted). 수리 뒤의 검증이 끊겨도 같다.
@@ -19,7 +21,7 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 다시 검증은 network_resume의 verify_again으로 이어 간다: 어디서 gs가 죽어도 다음 gs go가 다시 검증부터 하고, 그 검증이 끊기면 실패다. 옛 state에는 이 값이 없고 끊기지 않은 것으로 읽는다.
 gs만 SIGKILL로 죽으면 돌던 검증은 살아 남는다. 다음 gs go가 잠금을 잡자마자 표지로 찾아 끝낸다(verify.stop_stale).
 로그는 첫 검증의 verify.log에 이어 쓴다. `gs go` 출력과 티켓 결과의 이유에 `검증 끊김`이 나오고, 보고서의 검증별 측정 표에는 끊긴 검증의 라벨이 `-끊김`으로 끝난다.
-수리 worker의 agy 상한은 수정 worker와 같다: 닿으면 띄우지 않고 티켓을 실패시키지 않고 다음 단계(다시 검증)로 간다.
+수리 worker의 agy 상한은 수정 worker와 같다: 닿으면 띄우지 않고 티켓을 실패시키지 않고 다음 단계(다시 검증)로 간다. 끊긴 수리 worker를 상한 때문에 다시 띄우지 못하면 실패한 수리다.
 config `[worktree] setup_when`(glob 목록)에 걸리는 파일이 integration 환경을 준비한 커밋과 병합 트리 사이에서 바뀌었으면 병합을 먼저 커밋하고
 그 커밋의 분리 HEAD에서 setup을 다시 돌린 뒤 검증한다(_setup_merge). 미완 병합에서는 setup을 돌리지 않고, 브랜치는 검증이 통과해야 옮긴다.
 다시 돈 setup이 실패하면 검증 실패처럼 수리로 간다. 병합을 취소하면 환경은 그 커밋의 것으로 남는다: 다음 티켓 검증, 마무리 전, 다음 gs go 시작에서 대조해 다시 맞춘다(_setup_integration).
@@ -52,7 +54,7 @@ worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 �
 돌던 worker와 리뷰어를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴 network_resume으로 다음 `gs go`가 같은 worktree에서 잇는다. 합계는 그때 새로 센다.
 어떻게 루프를 떠나든(중단, Ctrl-C·SIGTERM·SIGHUP, 뜻밖의 오류) 돌던 리뷰어의 프로세스 그룹을 끝낸다(_stop_reviews). 리뷰 단계의 티켓은 network_resume이 있어 다음 `gs go`가 리뷰를 다시 한다.
 수리 worker가 끊기면 수정 worker처럼 같은 worktree에 새 실행 디렉터리(repair-net<n>)로 다시 띄운다. 수리 재리뷰의 끊김도 리뷰와 같다.
-수정·수리 worker의 실패는 티켓 실패가 아니라 _fail을 지나지 않는다. 이유는 그 실행 디렉터리에 따로 남겨 결함 수집이 읽는다(feedback.note_worker_failure).
+수정 worker의 실패는 티켓 실패가 아니라 _fail을 지나지 않는다. 수리 worker의 실패는 그 시도의 실패다(_end_repair). 어느 쪽이든 이유는 그 실행 디렉터리에 따로 남겨 결함 수집이 읽는다(feedback.note_worker_failure).
 """
 from __future__ import annotations
 
@@ -69,7 +71,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import adapters, clean, config, failure, feedback, finish, git, graph, herdr, metrics, notify, report, review, setup, state, transient, verify, worker
+from . import adapters, clean, config, failure, feedback, finish, git, graph, herdr, metrics, notify, report, review, setup, state, streamfmt, transient, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -89,7 +91,7 @@ REVIEW_WAIT, FIX_WAIT, REPAIR_WAIT = "review_wait", "fix_wait", "repair_wait"  #
 REPAIR_SEAT = "seat"  # 검증이 실패했고 수리 worker 자리를 기다린다
 REPAIR_RUN = "run"  # 수리 worker를 띄웠다
 REPAIR_REVIEW = "review"  # 수리 worker가 커밋을 남겼고 재리뷰 중이다. 늦은 커밋을 보러 돌아갈 때도 이 값이다(_late_commit)
-REPAIR_VERIFY = "verify"  # 재리뷰가 끝났거나 할 것이 없다. 다시 병합·검증한다
+REPAIR_VERIFY = "verify"  # 수리 커밋의 재리뷰가 끝났거나 수리 worker를 띄우지 못했다. 다시 병합·검증한다. 옛 gs는 커밋 없는 수리 뒤에도 남겼다(그대로 다시 검증한다)
 # 리뷰 단계: 루프 스레드에서 돌다가 루프 밖에서 부를 호출을 내고 멈춘다. 호출의 결과를 받아 잇고, 끝에 고칠 지적을 돌려준다.
 ReviewFlow = Generator[Callable[[], list], list, list[dict]]
 
@@ -1312,12 +1314,16 @@ def _wait_any(r: Run, active: dict[str, Active], runner, *, once: bool = False) 
 
 
 def _failure_summary(r: Run, ts: state.TicketState) -> str:
-    """지난 실패의 요약(재시도 brief에 붙인다). 없으면 빈 문자열."""
+    """지난 실패의 요약(재시도 brief에 붙인다). 없으면 빈 문자열.
+
+    수리 worker가 커밋 없이 끝난 실패는 그 실행 디렉터리에 요약과 마지막 메시지 파일이 함께 있다(_end_repair). 새로 요약해도 그 경로를 잃지 않는다.
+    """
     if not ts.failure_summary:
         return ""
     path = Path(ts.failure_summary)
     if not path.exists():  # 요약 호출 중 코디네이터가 죽었으면 새 호출로 마무리한다
-        failure.summarize(r.repo, path.with_name("failure.log"), r.cfg, _call_wait(r, ""))
+        last = path.with_name(review.WORKER_LAST)
+        failure.summarize(r.repo, path.with_name("failure.log"), r.cfg, _call_wait(r, ""), last if last.is_file() else None)
     return path.read_text(encoding="utf-8")
 
 
@@ -1334,8 +1340,9 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
 
     worker가 끝나 있으면(done) 프로세스 없이 리뷰부터 잇는다. 새 시도 디렉터리를 쓰므로 지난 로그는 남고 base는 처음 그대로라
     앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정으로 처리한다(수정 전 구현을 병합·검증한다).
-    수리(repair)도 수정과 같다: 도중이면 같은 worktree에 다시 띄우고, 띄우지 못하면 실패한 수리로 처리한다(수리 전 브랜치를 다시 검증한다). 시도 수를 올리지 않는다.
+    수리(repair)도 수정과 같다: 도중이면 같은 worktree에 다시 띄우고, 띄우지 못하면 실패한 수리로 처리한다(수리를 버리고 다시 검증 없이 이 시도가 실패한다, _end_repair). 시도 수를 올리지 않는다.
     수리 자리를 기다렸거나(REPAIR_SEAT) 다시 검증 차례였으면(REPAIR_VERIFY) worker도 리뷰도 다시 보지 않고 그 자리로 돌아간다(_finish). 끊긴 검증의 다시 검증 차례(verify_again)도 그렇다.
+    옛 gs가 커밋 없는 수리 뒤에 남긴 REPAIR_VERIFY도 같다: 그 다시 검증은 한 번 돈다.
     대조의 한 번 더를 썼으면(reviewed_again) 그대로 잇는다: 옛 state의 표시에는 없고 False다. 끝나지 않은 대조는 _finish가 잇는다.
     다시 띄우는 수정 worker의 brief도 처음과 같이 지적에 티켓 touches와 설명 확인 문장(review.fix_brief)을 붙인다.
     다시 띄우지 못한 수정·수리의 자리는 새 실행 디렉터리를 쓴다: 결함 수집은 실패 이유를 옆의 worker.log와 함께 읽는데, 지난 디렉터리의 로그는 이 대기를 일으킨 일시 오류라 이유까지 걸러 낸다.
@@ -1493,7 +1500,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
     그 뒤는 _review_tick이 맡는다: 리뷰(재리뷰)가 티켓 head까지 닿으면(_review_to_head, 병합 전 대조가 거기 있다. 기다린 뒤의 대조는 _leave_review, 병합 직전의 대조는 _merge_stage) 고칠 지적이 있으면 수정 worker(최대 2회), 없으면 병합·검증이다.
     지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review). 빈 diff에서 판정을 유지한 재리뷰(_verdict_kept)처럼 수정을 더 띄우지 않던 티켓은 여기서도 띄우지 않는다.
     대조의 한 번 더가 끝나기 전에 멈춘 티켓(reviewed_again)은 worker 결과를 다시 보지 않고 그 한 번을 잇는다(_review_again): 합쳐 한 번이고 끝나면 대조 기록이 남는다. 새로 띄운 worker의 Active는 이 값이 False다.
-    수리 worker도 여기로 온다: 커밋을 남겼으면 재리뷰, 아니면 바로 다시 병합·검증이다(_end_repair). 수리 자리를 기다리던 티켓과 다시 검증 차례인 티켓(수리 뒤, 끊긴 검증 뒤)은 그 자리로 돌아간다(_resume, _start_repair).
+    수리 worker도 여기로 온다: 커밋을 남겼으면 재리뷰, 아니면 다시 검증하지 않고 이 시도가 실패한다(_end_repair). 수리 자리를 기다리던 티켓과 다시 검증 차례인 티켓(수리 재리뷰 뒤, 수리 worker를 띄우지 못한 뒤, 끊긴 검증 뒤)은 그 자리로 돌아간다(_resume, _start_repair).
     오류는 _loop가 처리한다.
     """
     if a.review_done:
@@ -1514,16 +1521,16 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
         _merge_stage(r, a)
 
 
-def _fail_worker(r: Run, a: Active, reason: str) -> None:
-    """이 worker의 자리를 실패로 닫고 티켓 실패를 적는다."""
+def _fail_worker(r: Run, a: Active, reason: str, **kw) -> None:
+    """이 worker의 자리를 실패로 닫고 티켓 실패를 적는다. kw는 _fail에 그대로 넘긴다(retry, evidence, last)."""
     a.proc.finish(False)
-    _fail(r, a.t, reason)
+    _fail(r, a.t, reason, **kw)
 
 
 def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error: str) -> str | None:
     """1단계: 끝난 worker의 결과를 확인한다. 다음 단계(TO_REVIEW | TO_MERGE)를 돌려준다. 여기서 티켓을 처리했으면 None(실패, 네트워크 대기, 리뷰 미룸).
 
-    실패한 수정 worker는 그 수정을 버리고 재리뷰 없이 병합·검증으로 간다(_end_fix). 수리 worker도 같고 커밋이 없을 때도 그렇다(_end_repair).
+    실패한 수정 worker는 그 수정을 버리고 재리뷰 없이 병합·검증으로 간다(_end_fix). 수리 worker는 다르다: 실패했거나 커밋이 없으면 다시 검증하지 않고 이 시도가 실패한다(_end_repair, None).
     """
     metrics.worker_finished(r, a.proc.job)
     t, wt, branch = a.t, a.wt, a.branch
@@ -1553,7 +1560,7 @@ def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error:
     if a.repair:  # 표시는 _end_repair까지 둔다: 수리는 다시 검증까지 그것으로 잇는다
         if not error and code == 0 and commits and _net_park(r, a):  # 커밋을 남긴 수리 worker는 재리뷰로 간다
             return None
-        return TO_REVIEW if _end_repair(r, a, code, commits, error) else TO_MERGE
+        return TO_REVIEW if _end_repair(r, a, code, commits, error) else None
     if r.st.ticket(t.id).network_resume:  # 이 worker는 끊기지 않고 끝났다
         _set(r, t.id, network_resume={})
     if a.fix:
@@ -2276,11 +2283,16 @@ def _start_repair(r: Run, a: Active, runner) -> Active:
 
 
 def _end_repair(r: Run, a: Active, code: int | None, commits: int, error: str) -> bool:
-    """수리 worker가 끝났다. 커밋을 남겼으면 True다(재리뷰로 간다). 아니면 표시를 다시 검증으로 바꾸고 False다(재리뷰 없이 바로 간다).
+    """수리 worker가 끝났다. 커밋을 남겼으면 True다(재리뷰로 간다). 아니면 이 시도를 실패시키고(_fail) False다.
 
-    실패(종료 코드, 시간 초과, 이전 커밋을 지움)면 수리 커밋을 버리고 수리 전 head로 되돌린다. 실패해도 티켓은 실패가 아니다: 다시 검증이 판정한다.
+    실패(종료 코드, 시간 초과, 이전 커밋을 지움)면 수리 커밋을 버리고 수리 전 head로 되돌린다. 커밋 없이 끝났거나 수리를 버렸으면 병합할 head가
+    방금 검증에 떨어진 것과 같으니 다시 검증하지 않는다: 결과가 뻔한 검증을 돌리는 대신 이 시도를 실패로 끝내고 _fail의 재시도로 간다.
+    수리 worker의 마지막 메시지를 그 실행 디렉터리의 worker-last.txt로 남긴다(_repair_last). 실패 이유에 그 요약과 경로를 넣고,
+    failure.log에 그 파일과 첫 검증 실패의 로그를 실으며, 다음 시도 brief의 실패 요약 끝에 그 경로를 적는다(_fail의 last).
+    커밋 없이 끝난(실패가 아닌) 수리 worker의 마지막 메시지에 `브랜치 밖 원인: <이유>`로 시작하는 줄이 있으면(review.out_of_branch) 재시도하지 않는다(retry=False):
+    새 worktree에서 다시 해도 브랜치 밖의 원인은 그대로다. 그 이유는 실패 이유에 남아 보고서와 `gs status`에 나온다. 줄이 없으면 일반 실패처럼 한 번 재시도한다.
     되돌리기 자체가 git 오류면 어느 트리를 병합할지 모르니 그 오류는 올린다(_loop가 티켓 실패로 처리해 다시 한다). 돌고 있던 worker는 _check_worker가 이미 끝냈다.
-    커밋 없음은 실패가 아니어도(불안정한 시험이면 고칠 것이 없다) 이유로 남긴다: ref 잠금으로 커밋하지 못한 worker도 이렇게 끝난다. 결함인지는 수집이 로그까지 보고 가린다.
+    커밋 없음은 결함 수집에도 이유로 남긴다: ref 잠금으로 커밋하지 못한 worker도 이렇게 끝난다. 결함인지는 수집이 로그까지 보고 가린다.
     """
     t, wt, branch = a.t, a.wt, a.branch
     ts = r.st.ticket(t.id)
@@ -2299,15 +2311,44 @@ def _end_repair(r: Run, a: Active, code: int | None, commits: int, error: str) -
         if not setup.is_clean(wt):
             say(f"[{t.id}] 경고: 수리 worker가 커밋 안 된 변경을 남겼다(병합에 들어가지 않는다)")
         done = f"커밋 {commits}개" if commits else "커밋 없음"
-    ts.repairs[-1]["worker"] = done
+    rec = ts.repairs[-1]
+    rec["worker"] = done
     if commits and not failed:
         a.repair = REPAIR_REVIEW
         say(f"[{t.id}] 수리 {done}: 재리뷰로 확인한다")
         return True
-    a.repair = REPAIR_VERIFY
-    _mark_resume(r, a, done=True)
-    say(f"[{t.id}] 수리 {done}: 재리뷰 없이 바로 다시 검증한다")
+    last, message = _repair_last(a)
+    where = f"수리 worker 마지막 메시지 `{last}`" if last else "수리 worker 마지막 메시지 없음"
+    outside = "" if failed else review.out_of_branch(message)
+    first = rec.get("reason") or "검증 실패"
+    if outside:
+        reason = f"{first} → 수리 {done}, {review.OUT_OF_BRANCH} {_clip(outside, OUT_OF_BRANCH_CHARS)} (재시도하지 않는다. {where})"
+    else:
+        reason = f"{first} → 수리 {done}: 같은 head를 다시 검증하지 않는다. {where}" + (f": {_clip(message, LAST_MESSAGE_CHARS)}" if message else "")
+    say(f"[{t.id}] 수리 {done}: " + ("브랜치 밖 원인이라 재시도하지 않고 사람에게 넘긴다" if outside else "같은 head를 다시 검증하지 않고 이 시도를 실패로 끝낸다"))
+    verify_log = rec.get("verify_log")
+    _fail_worker(r, a, reason, retry=not outside, evidence=(Path(verify_log),) if verify_log else (), last=last)
     return False
+
+
+LAST_MESSAGE_CHARS = 300  # 실패 이유에 싣는 수리 worker 마지막 메시지 요약의 자 수. 전체는 worker-last.txt에 있다
+OUT_OF_BRANCH_CHARS = 500  # 실패 이유에 싣는 `브랜치 밖 원인:` 이유의 자 수
+
+
+def _repair_last(a: Active) -> tuple[Path | None, str]:
+    """수리 worker의 마지막 메시지를 실행 디렉터리의 worker-last.txt로 남긴다(review.write_worker_last). (파일 경로, 메시지 전체)다.
+
+    로그가 없거나(띄우지 못한 자리) 메시지가 없으면 (None, "")다. `브랜치 밖 원인:` 줄은 메시지 전체에서 찾는다: 파일은 길이 상한으로 앞을 자를 수 있다.
+    """
+    log = a.proc.job.log
+    message = (streamfmt.last_message(log) or "") if log.is_file() else ""
+    return (review.write_worker_last(a.proc.job.rundir, log) if message else None), message
+
+
+def _clip(text: str, limit: int) -> str:
+    """공백을 한 칸으로 합치고 limit자에서 자른다(실패 이유는 한 줄이다)."""
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit] + "…"
 
 
 def _repair_review(r: Run, a: Active) -> ReviewFlow:
@@ -2602,8 +2643,11 @@ def _is_catch_up(r: Run, target: str, head: str) -> bool:
     return head == r.ihead and git.run(r.repo, "merge-base", "--is-ancestor", target, head, check=False).returncode == 0
 
 
-def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
-    """티켓 실패를 적는다. 첫 실패는 재시도한다. retry=False(다시 해도 같은 이유로 막힌다: agy 한도)면 바로 실패다."""
+def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True, evidence: tuple[Path, ...] = (), last: Path | None = None) -> bool:
+    """티켓 실패를 적는다. 첫 실패는 재시도한다. retry=False(다시 해도 같은 이유로 막힌다: agy 한도, 수리 worker가 짚은 브랜치 밖 원인)면 바로 실패다.
+
+    evidence는 failure.log에 함께 실을 파일, last는 수리 worker의 마지막 메시지 파일이다(_end_repair). last도 failure.log에 싣고, 재시도면 요약 끝에 그 경로를 적는다.
+    """
     ts = r.st.ticket(t.id)
     paths = list(ts.failed_worktrees)
     if ts.worktree and Path(ts.worktree).exists() and ts.worktree not in paths:
@@ -2614,7 +2658,7 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
     directory = Path(ts.log).parent if ts.log and ts.status == state.RUNNING else worker.attempt_dir(r.rundir / t.id)
     directory.mkdir(parents=True, exist_ok=True)
     log = failure.record(directory, reason, [directory / "setup.log", directory / "worker.log",
-                                            directory / "verify.log", directory / "merge.log"])
+                                            directory / "verify.log", directory / "merge.log", *evidence, *([last] if last else [])])
     retry = retry and failures < 2
     summary = str(log.with_name("failure-summary.md")) if retry else ts.failure_summary
     state.close_repair(ts, state.REPAIR_FAILED, reason)
@@ -2622,7 +2666,7 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
     _set(r, t.id, status=state.PENDING if retry else state.FAILED, reason=reason, ended_at=state.now(),
          failures=failures, failed_worktrees=paths, failure_summary=summary, network_resume={})
     if retry:
-        failure.summarize(r.repo, log, r.cfg, _call_wait(r, t.id))
+        failure.summarize(r.repo, log, r.cfg, _call_wait(r, t.id), last)
     say(f"[{t.id}] 실패: {reason}")
     if retry:
         say(f"[{t.id}] 같은 계열({t.model})로 최신 integration에서 한 번 재시도한다")

@@ -165,8 +165,13 @@ class TicketVerifyRunTest(support.GoTest):
 
     # --- 검증이 트리를 바꾸면 실패 ---
     def assert_left_files_are_repaired(self, change):
-        """첫 검증만 파일을 남긴다. 병합 상태는 그대로라 브랜치의 결함일 수 있어 수리로 간다. 다시 검증은 깨끗한 integration에서 통과한다."""
+        """첫 검증만 파일을 남긴다. 병합 상태는 그대로라 브랜치의 결함일 수 있어 수리로 간다. 다시 검증은 깨끗한 integration에서 통과한다.
+
+        수리 worker는 커밋을 남긴다: 커밋 없는 수리 뒤에는 다시 검증하지 않고 시도가 실패한다(goldstack-v25 03).
+        """
         once = self.bin / "changed"
+        (self.bin / "worker.sh").write_text('if grep -q "^## 검증 실패(고칠 것)" "$GS_BRIEF"; then\n'
+                                            '  echo r > repaired; git add -A; git commit -qm repair; exit $?\nfi\n' + support.FAKE_WORKER)
         self.configure("true", verify_ticket=f"if [ ! -f {once} ]; then touch {once}; {change}; fi")
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
