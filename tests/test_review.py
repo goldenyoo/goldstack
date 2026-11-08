@@ -178,7 +178,7 @@ class CheckedAndStdoutTest(unittest.TestCase):
         for prompt in prompts:
             self.assertIn("명령을 실행하거나 재현하지 못하니", prompt)
             self.assertIn("코드 추적", prompt)
-        for family in ("", "codex", "agy"):  # 계열을 모르거나 claude가 아니면 지금 요구 그대로
+        for family in ("", "agy"):  # 계열을 모르거나 claude·codex가 아니면 지금 요구 그대로(codex는 임시 폴더 안내가 붙는다: test_review_codex_sandbox)
             self.assertEqual(review.review_prompt(p, p, p, p), review.review_prompt(p, p, p, p, family=family))
             self.assertEqual(review.rereview_prompt(p, p, p, p, p), review.rereview_prompt(p, p, p, p, p, family=family))
 
