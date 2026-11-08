@@ -20,7 +20,7 @@ v28은 worker가 쓰는 zsh에서 `=` 확장을 끈다. 그래서 `echo ===` 같
 - **티켓 01이 정해진 파일 밖을 고쳤다.** touches 목록에 없는 `src/gs/worker.py`가 5줄 바뀌었다. worker는 run.sh의 `unset` 줄에 `GS_NOEQUALS`를 더한 것이라고 설명했다. 리뷰 기록에는 이 변경을 따로 짚은 항목이 없다.
 - **`/bin/zsh`가 없는 환경에서는 zsh 실측 시험이 건너뛰어진다.** CI가 ubuntu라면 이 부분은 실제로 검증되지 않는다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/51 병합 · main 검증 통과
 
 ## Evidence
 
@@ -73,10 +73,16 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 564.0 |
+| total | 576.0 |
 | verify | 541.707 |
 | summary | 22.852 |
-| report | 0 |
+| report | 0.072 |
+| push | 1.922 |
+| publish | 2.823 |
+| merge-pr | 3.244 |
+| confirm-merge | 0.003 |
+| postmerge | 1.17 |
+| restore-reverts | 0.093 |
 
 ### 티켓별 결과
 
@@ -474,6 +480,29 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 0.52ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v28/run/gs-main-8xi3p8gd/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v28/run/gs-main-8xi3p8gd/base
+Prepared 1 package in 178ms
+Installed 1 package in 1ms
+ + goldstack==0.2.12 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v28/run/gs-main-8xi3p8gd/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 12510자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v28/run/finish/integration-verify.log`
@@ -569,18 +598,26 @@ No digest: .venv/bin/python3 is not a regular file
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+```text
+integration과 같은 코드(07ee8b20d03ef7cfd6ff9031379575d33e20fd21), 건너뜀
+```
+
 
 agy 사용: 2/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/51
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `df7a2c1db563c1d9ff861643e20461c3a7741b94`
 
 ### 되돌리는 법
 
@@ -590,7 +627,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 df7a2c1db563c1d9ff861643e20461c3a7741b94
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v28/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
