@@ -162,6 +162,29 @@ class ConfigTest(unittest.TestCase):
         this_repo, problems = config.load(Path(__file__).resolve().parents[1])
         self.assertEqual((problems, this_repo.overnight.autonomy), ([], "record"))
 
+    def test_setup_when_is_optional_glob_list_and_init_keeps_it_out(self):
+        """값 없는 옛 config와 `gs init` config는 빈 목록(지금 동작)이다. 이 레포는 lockfile과 pyproject를 둔다."""
+        self.assertEqual(config.load(self.repo)[0].worktree.setup_when, ())
+        self.path.write_text(CONFIG + '[worktree]\nsetup = "true"\n')
+        cfg, problems = config.load(self.repo)
+        self.assertEqual((problems, cfg.worktree), ([], config.WorktreeConfig("true", ())))
+        self.path.write_text(CONFIG + '[worktree]\nsetup = "true"\nsetup_when = ["uv.lock", "**/package-lock.json"]\n')
+        cfg, problems = config.load(self.repo)
+        self.assertEqual((problems, cfg.worktree.setup_when), ([], ("uv.lock", "**/package-lock.json")))
+        for bad in ('"uv.lock"', "[1]", '[""]', '["/uv.lock"]', "true"):
+            with self.subTest(bad):
+                self.path.write_text(CONFIG + f"[worktree]\nsetup_when = {bad}\n")
+                cfg, problems = config.load(self.repo)
+                self.assertIsNone(cfg)
+                self.assertEqual([(p.level, "worktree.setup_when" in p.message) for p in problems], [("오류", True)])
+        self.assertNotIn("setup_when", config.DEFAULT_CONFIG)
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+            subprocess.run(["git", "init", "-q", tmp], check=True)
+            cli.main(["--repo", tmp, "init"])
+            self.assertEqual(config.load(Path(tmp))[0].worktree, config.WorktreeConfig(""))
+        this_repo, problems = config.load(Path(__file__).resolve().parents[1])
+        self.assertEqual((problems, this_repo.worktree.setup_when), ([], ("uv.lock", "pyproject.toml")))
+
     def test_missing_config_stops_check_and_go_before_any_work(self):
         self.path.unlink()
         expected = "오류: .goldstack/config.toml이 없다. gs init을 먼저 실행하라"
