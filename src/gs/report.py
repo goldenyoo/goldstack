@@ -107,6 +107,22 @@ def remaining_line(r) -> str:
     return " · ".join(parts)
 
 
+def prior_findings_section(r) -> str:
+    """버려진 시도의 지적(state `prior_findings`). 시도 번호·리뷰어·severity·지적 한 줄만 보인다. 없으면 빈 문자열.
+
+    남은 high 집계(remaining_line)·지적 집계(finding_counts)·아이디어 파일(findings.py)은 이 목록을 읽지 않는다.
+    """
+    lines = []
+    for tid in r.order:
+        for entry in r.st.tickets[tid].prior_findings:
+            head = str(entry.get("reviewed_head") or "")[:12]
+            who = f"{tid} 시도 {entry.get('attempt', '?')} 리뷰({entry.get('reviewer') or '?'}{', ' + head if head else ''})"
+            for f in entry.get("findings", []):
+                if isinstance(f, dict):
+                    lines.append(f"- {who} [{f.get('severity', '?')}] {f.get('location', '?')}: {f.get('claim', '')}")
+    return "### 버려진 시도의 지적\n\n" + "\n".join(lines) + "\n\n" if lines else ""
+
+
 def evidence(r, tail: int = LOG_TAIL) -> str:
     """티켓·integration의 최신 준비 로그와 verify·base 준비 로그의 끝부분 tail자씩 붙인다."""
     rows, notes, timings = [], [], []
@@ -168,6 +184,7 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             + ("\n\n범위 밖 티켓의 남긴 worktree:\n\n" + "\n".join(outside) if outside else "")
             + ("\n\n" + "\n".join(timings) if timings else "")
             + "\n\n### 리뷰 지적\n\n" + ("\n".join(notes) or "없음")
+            + ("\n\n" + prior.rstrip("\n") if (prior := prior_findings_section(r)) else "")
             + f"\n\n### verify 출력\n\n명령: `{r.feat.spec.verify}`\n\n"
             + f"티켓마다 가장 최근 로그만 붙인다. 지난 시도까지 전체 로그: `{r.rundir.resolve()}/<티켓>/`\n\n")
     text += ticket_commands(r)

@@ -1457,11 +1457,12 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
         job = worker.Job(ticket=t, worktree=wt.resolve(), rundir=rundir)
         started = state.now()
         preparing = bool(r.cfg.worktree.setup.strip())
+        state.keep_prior_findings(ts)  # 아래에서 리뷰 기록을 비우기 전에, begin_phase가 시도 번호를 바꾸기 전에
         state.begin_phase(ts, "setup" if preparing else "worker", "" if preparing else t.model,
                           attempt=int(rundir.name), at=started)
         _set(r, t.id, status=state.RUNNING, attempts=r.st.ticket(t.id).attempts + 1, branch=branch, pane="",
              worktree=str(job.worktree), log=str(job.log), started_at=started, ended_at="", reason="",
-             review={}, second_review={})
+             review={}, second_review={}, prior_findings=ts.prior_findings)
         git.ensure_worktree(r.repo, wt, branch, start=base)
         if preparing:
             say(f"[{t.id}] 준비 중")

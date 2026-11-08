@@ -95,6 +95,10 @@ class TicketState:
     # attempt(시도 번호), verify_log(수리 worker가 받은 실패 로그), reason(첫 검증 실패 이유), base(수리 전 head),
     # worker(수리 worker의 결과. 비면 아직 안 끝났다), result("" 진행 중 | REPAIR_PASSED | REPAIR_FAILED), detail(실패 이유).
     repairs: list[dict] = field(default_factory=list)
+    # 버려진 시도의 리뷰 지적. 새 시도가 review·second_review를 비우기 전에 지적이 있으면 옮긴다(keep_prior_findings). 옛 state에는 없다.
+    # 항목 하나 = 리뷰 기록 하나: attempt(그 리뷰를 낸 worker 시도 번호), reviewer, reviewed_head(리뷰 대상 SHA, 기록에 없으면 빈 문자열),
+    # findings(그 기록의 지적 사본. idea_number는 뺀다). 남은 high 집계와 아이디어 파일에는 들어가지 않고 보고서에만 따로 보인다.
+    prior_findings: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -130,6 +134,20 @@ class State:
 def reviews(ts: TicketState) -> list[dict]:
     """티켓의 리뷰 기록들: 첫 리뷰, 있으면 두 번째 리뷰. 빈 기록은 뺀다."""
     return [rec for rec in (ts.review, ts.second_review) if rec]
+
+
+def keep_prior_findings(ts: TicketState) -> None:
+    """새 시도가 리뷰 기록을 비우기 전에 지적이 있는 기록을 prior_findings로 옮긴다. 지적이 없는 기록은 옮기지 않는다.
+
+    시도 번호는 마지막 단계의 attempt다(새 시도의 begin_phase 전에 불러야 한다). 단계가 없는 옛 state는 attempts다.
+    """
+    attempt = ts.phases[-1]["attempt"] if ts.phases else ts.attempts
+    for rec in reviews(ts):
+        found = [{k: v for k, v in f.items() if k != "idea_number"}
+                 for f in rec.get("findings") or [] if isinstance(f, dict)]
+        if found:
+            ts.prior_findings.append({"attempt": attempt, "reviewer": rec.get("reviewer") or "",
+                                      "reviewed_head": rec.get("reviewed_head") or "", "findings": found})
 
 
 def reviewed_heads(ts: TicketState) -> set[str]:

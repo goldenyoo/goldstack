@@ -118,6 +118,23 @@ class FindingStatusTest(unittest.TestCase):
         ts.second_review = {}
         self.assertEqual(report.remaining_line(self.r), "")
 
+    def test_prior_findings_show_in_their_own_section_and_not_in_counts(self):
+        ts = self.r.st.ticket("01")
+        self.assertEqual(report.prior_findings_section(self.r), "")
+        self.assertNotIn("버려진 시도의 지적", report.evidence(self.r))
+        ts.prior_findings = [{"attempt": 1, "reviewer": "codex", "reviewed_head": "0123456789abcdef0123",
+                              "findings": [{**finding("버려진 높은 지적"), "action": review.REPORT},
+                                           {**finding("버려진 낮은 지적"), "severity": "low"}]}]
+        text = report.evidence(self.r)
+        section = text.split("### 버려진 시도의 지적\n\n", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(section.splitlines(), [
+            "- 01 시도 1 리뷰(codex, 0123456789ab) [high] a.py:1: 버려진 높은 지적",
+            "- 01 시도 1 리뷰(codex, 0123456789ab) [low] a.py:1: 버려진 낮은 지적"])
+        self.assertLess(text.index("### 리뷰 지적"), text.index("### 버려진 시도의 지적"))
+        # 집계에는 들어가지 않는다
+        self.assertEqual(report.remaining_line(self.r), "")
+        self.assertEqual(report.finding_counts(self.r), "")
+
     def test_remaining_line_lists_skipped_reviews_alone_or_with_high(self):
         st = self.r.st
         st.ticket("01").second_review = review.record("agy", f"{review.LIMIT}: 이번 실행의 agy 호출이 상한 1/1에 닿았다")

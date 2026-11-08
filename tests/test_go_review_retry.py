@@ -311,6 +311,29 @@ class GoReviewRetryTest(support.GoTest):
         self.assertTrue((self.rundir / "wt/01/BROKEN").exists())
         self.assertNotIn("BROKEN", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
 
+    def test_retry_keeps_the_abandoned_attempts_findings_apart(self):
+        (self.bin / "worker.sh").write_text(textwrap.dedent('''\
+            here="$(dirname "$0")"
+            if [ ! -f "$here/first" ]; then
+              touch "$here/first" BROKEN
+            fi
+            echo done > file_01; git add -A; git commit -qm done
+        '''))
+        with self.review_with([{"severity": "high", "location": "file_01:1", "claim": "보고만 높은 지적", "evidence": ""}]):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual((ts.status, ts.attempts), ("merged", 2))
+        self.assertEqual(len(ts.review["findings"]), 1)  # 새 시도의 기록은 비워진 뒤 새로 쌓인다
+        self.assertEqual([(e["attempt"], e["reviewer"], [f["claim"] for f in e["findings"]]) for e in ts.prior_findings],
+                         [(1, "codex", ["보고만 높은 지적"])])
+        self.assertRegex(ts.prior_findings[0]["reviewed_head"], "^[0-9a-f]{40}$")
+        report = self.final_report()
+        self.assertIn("### 버려진 시도의 지적", report)
+        self.assertIn("01 시도 1 리뷰(codex, ", report)
+        self.assertIn("남은 high 1(보고만 1)", report)  # 새 시도의 지적 하나만 센다
+        self.assertEqual(self.integration("ls-tree", "--name-only", "gs/demo/integration", ".goldstack/ideas/").count("demo-01-"), 1)
+
     def test_judge_failure_still_retries_with_evidence_path(self):
         with mock.patch.dict(os.environ, {"GS_JUDGE": "/does/not/exist"}):
             code, out, err = self.go("--only", "06")
