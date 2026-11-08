@@ -18,7 +18,7 @@ import test_verify_repair
 from test_second_review import finding
 from test_verify_repair import BREAKS, GOOD, IS_REPAIR, REPAIRS, USELESS
 
-from gs import config, go, review, state
+from gs import config, go, review, state, worker
 
 WORKER = """\
 here="$(dirname "$0")"
@@ -1198,10 +1198,21 @@ class RepairMergeShaTest(test_verify_repair.Base):
         self.assertEqual(merged_sha(self), ts.review["reviewed_head"])
         self.assertIn("late", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
 
+    def repair_cannot_start(self):
+        """수리 worker를 띄우지 못한다(brief를 쓰다 실패). 수리 커밋 없이 같은 head를 다시 검증하는 길은 이것뿐이다:
+        커밋 없이 끝난 수리 worker 뒤에는 다시 검증하지 않는다(goldstack-v25 03)."""
+        real = worker.write_brief
+
+        def write(job, *args, **kwargs):
+            if job.rundir.name == "repair":
+                raise OSError("disk full")
+            return real(job, *args, **kwargs)
+        return mock.patch("gs.worker.write_brief", side_effect=write)
+
     def test_commit_after_a_repair_without_a_commit_is_reviewed(self):
         self.worker(GOOD, "exit 0")
         self.flaky_verify()
-        with at_call("_merge_stage", None, late_commit("late")):
+        with self.repair_cannot_start(), at_call("_merge_stage", None, late_commit("late")):
             self.run_ok()
         ts = self.ts()
         self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
@@ -1210,7 +1221,7 @@ class RepairMergeShaTest(test_verify_repair.Base):
         self.assertEqual(self.subject(merged_sha(self)), "late")
 
     def catch_up_then_repair_without_a_commit(self):
-        """12가 catch-up을 한 뒤 첫 검증이 떨어지고 수리 worker는 커밋 없이 끝난다."""
+        """12가 catch-up을 한 뒤 첫 검증이 떨어지고 수리 커밋 없이 다시 검증한다(수리 worker를 띄우지 못한다: repair_cannot_start)."""
         self.add_ticket("11")
         self.add_ticket("12")
         verify = self.bin / "verify.sh"
@@ -1227,7 +1238,8 @@ class RepairMergeShaTest(test_verify_repair.Base):
 
     def test_repair_without_a_commit_keeps_the_catch_up_as_its_target(self):
         self.catch_up_then_repair_without_a_commit()
-        out = self.run_ok("--only", "11,12")
+        with self.repair_cannot_start():
+            out = self.run_ok("--only", "11,12")
         ts = self.ts("12")
         self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
         self.assertEqual(self.reviewers(), ["codex", "codex"])  # catch-up은 늦은 커밋이 아니다: 다시 리뷰하지 않는다
@@ -1279,7 +1291,7 @@ class RepairMergeShaTest(test_verify_repair.Base):
 
     def test_old_mark_keeps_the_catch_up_of_a_repair_without_a_commit(self):
         self.catch_up_then_repair_without_a_commit()
-        with at_call("_verify", None, None, stop), self.assertRaises(KeyboardInterrupt):  # 11, 12의 첫 검증, 12의 다시 검증
+        with self.repair_cannot_start(), at_call("_verify", None, None, stop), self.assertRaises(KeyboardInterrupt):  # 11, 12의 첫 검증, 12의 다시 검증
             self.go("--only", "11,12")
         self.drop_target("12")
         out = self.run_ok("--only", "11,12")
@@ -1308,15 +1320,27 @@ class RepairMergeShaTest(test_verify_repair.Base):
         self.assertIn("경고: 병합 전 대조", out)
         self.assertEqual(state.repair_summary(ts), "수리: 시도 1 커밋 1개 → 다시 검증 통과")  # 늦은 커밋은 수리의 결과가 아니다
 
-    def test_failed_repair_merges_the_verified_sha(self):
+    def test_repair_that_cannot_start_merges_the_verified_sha(self):
+        self.worker(GOOD, f"{USELESS}; exit 3")
+        self.flaky_verify()
+        with self.repair_cannot_start():  # 실패한 수리 worker 뒤에는 다시 검증하지 않는다(goldstack-v25 03). 다시 검증하는 길은 띄우지 못한 수리다
+            self.run_ok()
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        self.assertEqual(self.reviewers(), ["codex"])  # 띄우지 못한 수리는 재리뷰하지 않는다
+        self.assertEqual(self.subject(merged_sha(self)), "t01")
+        self.assertEqual(self.phases(), ["worker", "review", "verify", "repair", "verify", "finish"])
+
+    def test_failed_repair_is_neither_merged_nor_verified_again(self):
         self.worker(GOOD, f"{USELESS}; exit 3")
         self.flaky_verify()
         self.run_ok()
         ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
-        self.assertEqual(self.reviewers(), ["codex"])  # 버린 수리는 재리뷰하지 않는다
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))  # 버린 수리 뒤 시도가 실패하고 새 시도가 병합된다
+        self.assertEqual(self.reviewers(), ["codex", "codex"])  # 버린 수리는 재리뷰하지 않는다. 둘째는 새 시도의 첫 리뷰다
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01", "passed")])
         self.assertEqual(self.subject(merged_sha(self)), "t01")
-        self.assertEqual(self.phases(), ["worker", "review", "verify", "repair", "verify", "finish"])
+        self.assertNotIn("repair_01", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
 
 
 class IsCatchUpTest(support.GoTest):

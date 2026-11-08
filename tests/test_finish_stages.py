@@ -207,14 +207,14 @@ class StageOrderTest(test_review_target.Base):
         self.assertEqual(sorted((order(events, "11"), order(events, "12")), key=len), [win, lose + win])  # 진 쪽은 재시도한다
         self.assertEqual(self.merged(), ["11", "12"])
 
-    def test_verify_failure_is_repaired_and_fails_the_ticket_on_the_second_verify(self):
+    def test_verify_failure_is_repaired_and_a_repair_without_a_commit_fails_the_ticket(self):
         (self.repo / ".goldstack/work/demo/spec.md").write_text("---\nfeature: demo\nverify: 'false'\nmax_workers: 1\n---\n")
         self.commit("verify false")
         steps, code, log = self.run_go()
         self.assertEqual(code, 1, log)
-        no_commit = ["_check_worker", "_end_repair", "_mark_resume", "/_check_worker"]  # 수리 worker가 고칠 것이 없다
-        fail = ["_merge_stage", "_catch_up", "_verify", "_fail", "/_merge_stage"]
-        self.assertEqual(steps, (CHECK + REVIEW + NO_FIX + VERIFY_FAILED + TO_REPAIR + no_commit + fail) * 2)
+        # 수리 worker가 고칠 것이 없다. 같은 head를 다시 병합·검증하지 않고 바로 실패한다(goldstack-v25 03)
+        no_commit = ["_check_worker", "_end_repair", "_fail", "/_check_worker"]
+        self.assertEqual(steps, (CHECK + REVIEW + NO_FIX + VERIFY_FAILED + TO_REPAIR + no_commit) * 2)
 
     def test_repair_commit_comes_back_through_the_stages(self):
         (self.bin / "worker.sh").write_text(textwrap.dedent('''\

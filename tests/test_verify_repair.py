@@ -1,14 +1,17 @@
 """goldstack-v12 02: 티켓 검증 실패를 새 시도 대신 같은 브랜치·worktree에서 수리한다.
 
-가짜 worker는 brief로 수리 worker를 알아본다(`## 검증 실패(고칠 것)`). 수리 뒤 통과, 커밋 없는 재검증, 수리 뒤 실패의 새 시도,
+가짜 worker는 brief로 수리 worker를 알아본다(`## 검증 실패(고칠 것)`). 수리 뒤 통과, 커밋 없는 수리의 실패, 수리 뒤 실패의 새 시도,
 수리 중 재개(gs가 죽음, 네트워크), 수리하지 않는 실패, agy 상한, 옛 state를 끝까지 돌려 본다. 시간에 기대지 않고 파일 신호로 순서를 잡는다.
 
 goldstack-v21 04: 끊긴 검증은 수리 없이 한 번 다시 돈다(InterruptedTest, InterruptedResumeTest). 검증 스크립트가 실제 신호로 죽는다.
 
 goldstack-v22 01: gs만 SIGKILL로 죽어 살아 남은 검증을 다음 gs go가 끝낸다(StaleResumeTest, InterruptedResumeTest의 다시 검증).
+
+goldstack-v25 03: 커밋 없이 끝났거나 실패해 버린 수리는 같은 head를 다시 검증하지 않고 시도가 실패한다. 마지막 메시지의 `브랜치 밖 원인:` 줄은 재시도 없는 실패다(NoCommitTest).
 """
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -22,7 +25,7 @@ import support
 import test_network_wait
 from support import alive, group_alive, kill_group_quietly, kill_quietly, sh
 
-from gs import config, go, report, retrolog, review, state, transient, verify, worker
+from gs import config, failure, go, report, retrolog, review, state, transient, verify, worker
 
 IS_REPAIR = 'grep -q "^## 검증 실패(고칠 것)" "$GS_BRIEF"'
 BREAKS = 'touch BROKEN; echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"'
@@ -38,6 +41,15 @@ XARGS = "sh -c 'kill -TERM $$'; echo 'xargs: sleep: terminated with signal 15; a
 NOTHING = ":"  # 이 검증은 끊기지 않는다: BROKEN이 있으면 실패, 없으면 통과다
 HANG = 'echo $$ > "$here/verify.pid"; touch "$here/in_verify"; while :; do sleep 0.05; done'  # gs가 죽어도 돌아간다(gs_killed_in_verify)
 STALE_LINE = "지난 실행의 검증이 아직 돌고 있어 끝냈다"
+
+
+def said(text):
+    """수리 worker가 text를 마지막 메시지로 남기는 셸 명령(claude의 result 이벤트 한 줄. streamfmt.last_message가 읽는다)."""
+    return "echo " + shlex.quote(json.dumps({"type": "result", "result": text}, ensure_ascii=False))
+
+
+NO_FIX = "고칠 곳을 찾지 못했다.\n이 티켓과 무관하게 불안정한 시험으로 보인다."  # 커밋 없이 끝난 수리 worker의 마지막 메시지
+OUTSIDE = "integration .venv가 낡았다. uv sync --locked로 고쳐진다"  # 수리 worker가 짚은 브랜치 밖 원인
 
 
 class Base(support.GoTest):
@@ -212,37 +224,13 @@ class RepairTest(Base):
         patch = Path(ts.review["rereviews"][0]["dir"]) / "repair.patch"
         self.assertNotIn("file_11", patch.read_text())
 
-    def test_no_commit_reverifies_at_once_without_review(self):
-        self.flaky_verify()
-        self.worker(GOOD, 'echo "불안정한 시험이다"')
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
-        self.assertEqual(self.reviewers(), ["codex"])  # 첫 리뷰뿐이다
-        self.assertEqual(self.phases(), ["worker", "review", "verify", "repair", "verify", "finish"])
-        self.assertNotIn("rereviews", ts.review)
-        self.assertIn("수리: 시도 1 커밋 없음 → 다시 검증 통과", self.status("demo")[1])
-        self.assertIn("재리뷰 없이 바로 다시 검증한다", out)
-        self.assertTrue((self.rundir / "01/1/repair/verify.log").exists())
-
-    def test_failed_repair_is_discarded_and_verified_without_review(self):
-        self.flaky_verify()
-        self.worker(GOOD, 'echo bad > bad_fix; git add -A; git commit -qm "bad fix"; exit 3')
-        code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
-        self.assertEqual(self.reviewers(), ["codex"])
-        self.assertNotIn("bad_fix", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
-        self.assertIn("시도 1 수리 worker 실패(종료 코드 3), 수리 버림 → 다시 검증 통과", state.repair_summary(ts))
-
     def test_repair_that_rewrites_earlier_commits_is_discarded(self):
         self.flaky_verify()
         self.worker(GOOD, 'git reset -q --hard HEAD~1; echo other > other; git add -A; git commit -qm "rewrote"')
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.reviewers(), ["codex"])
+        self.assertEqual(self.reviewers(), ["codex", "codex"])  # 수리 재리뷰는 없다. 둘째는 새 시도의 첫 리뷰다
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01", "passed")])  # 버린 수리 뒤에 다시 검증하지 않는다
         names = self.integration("ls-tree", "--name-only", "gs/demo/integration").split()
         self.assertIn("file_01", names)
         self.assertNotIn("other", names)
@@ -252,7 +240,7 @@ class RepairTest(Base):
         # 검증은 통과했지만 파일을 남겼다: 통과를 믿을 수 없는 검증 실패다
         (self.bin / "verify.sh").write_text(f'[ -f "{self.bin}/verified" ] && exit 0\ntouch "{self.bin}/verified" junk\n')
         self.parallel(1, verify=f"bash {self.bin / 'verify.sh'}")
-        self.worker(GOOD, 'echo "고칠 것이 없다"')
+        self.worker(GOOD, USELESS)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         ts = self.ts()
@@ -352,6 +340,156 @@ class RepairReviewTest(Base):
         self.assertEqual(ts.review["rereviews"][0]["round"], review.REPAIR_ROUND)
         self.assertEqual(ts.second_review["rereviews"][0]["round"], review.REPAIR_ROUND)
         self.assertEqual(state.load(self.rundir, "demo").agy_calls, 2)  # 첫 리뷰 1 + 수리 재리뷰 1
+
+
+class NoCommitTest(Base):
+    """goldstack-v25 03: 커밋 없이 끝났거나 실패해 버린 수리는 같은 head를 다시 검증하지 않고 _fail로 간다. `브랜치 밖 원인:` 줄이면 재시도도 없다.
+
+    검증은 첫 번만 떨어진다(flaky_verify): 같은 head를 다시 검증하면 통과해 버리니, 다시 검증하지 않았다는 것이 시도 수와 측정에 드러난다.
+    """
+
+    def last_file(self, attempt=1):
+        return self.rundir / f"01/{attempt}/repair" / review.WORKER_LAST
+
+    def test_no_commit_fails_the_attempt_without_verifying_the_same_head_again(self):
+        self.flaky_verify()
+        self.worker(GOOD, said(NO_FIX))
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))  # 실패·재시도 한 번
+        self.assertEqual(self.calls(), ["01", "01", "01"])  # 구현 + 수리 + 새 시도의 구현
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01", "passed")])  # ticket-01-repair가 없다
+        self.assertEqual(self.reviewers(), ["codex", "codex"])  # 수리 재리뷰는 없다
+        self.assertEqual(self.phases()[:5], ["worker", "review", "verify", "repair", "worker"])
+        self.assertFalse((self.rundir / "01/1/repair/verify.log").exists())
+        # 이유: 첫 검증 실패, 수리 결과, 마지막 메시지 경로와 요약(한 줄)
+        last = self.last_file()
+        self.assertEqual(last.read_text(), NO_FIX + "\n")
+        [rec] = ts.repairs
+        first = f"검증 실패(로그 {self.rundir / '01/1/verify.log'})"
+        reason = (f"{first} → 수리 커밋 없음: 같은 head를 다시 검증하지 않는다. 수리 worker 마지막 메시지 `{last}`: "
+                  "고칠 곳을 찾지 못했다. 이 티켓과 무관하게 불안정한 시험으로 보인다.")
+        self.assertEqual((rec["worker"], rec["result"], rec["detail"]), ("커밋 없음", state.REPAIR_FAILED, reason))
+        self.assertIn(f"[01] 실패: {reason}", out)
+        self.assertIn("같은 head를 다시 검증하지 않고 이 시도를 실패로 끝낸다", out)
+        self.assertIn("한 번 재시도", out)
+        self.assertIn(f"수리: 시도 1 커밋 없음 → 실패: {reason}", self.status("demo")[1])
+        # 실패 요약 입력(failure.log)에 마지막 메시지 파일과 첫 검증 로그가 실린다
+        log = (self.rundir / "01/1/repair/failure.log").read_text()
+        self.assertIn(f"## {last} (", log)
+        self.assertIn(f"## {self.rundir / '01/1/verify.log'} (", log)
+        self.assertEqual(Path((self.bin / "failure-judge.input").read_text().splitlines()[-1]), self.rundir / "01/1/repair/failure.log")
+        # 다음 시도의 brief에 마지막 메시지 파일 경로가 들어간다
+        brief = (self.rundir / "01/2/brief.md").read_text()
+        self.assertIn("## 지난 시도 실패 요약", brief)
+        self.assertIn(f"{failure.LAST_MESSAGE}: `{last}`", brief)
+
+    def test_failed_repair_is_discarded_and_the_attempt_fails_without_verifying_again(self):
+        self.flaky_verify()
+        # 실패한 수리 worker는 `브랜치 밖 원인:` 줄이 있어도 일반 실패다: 줄은 커밋 없이 끝난 수리 worker에서만 읽는다
+        self.worker(GOOD, 'echo bad > bad_fix; git add -A; git commit -qm "bad fix"; '
+                    + said(f"{review.OUT_OF_BRANCH} {OUTSIDE}") + "; exit 3")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01", "passed")])
+        self.assertEqual(self.reviewers(), ["codex", "codex"])
+        self.assertNotIn("bad_fix", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+        [rec] = ts.repairs
+        self.assertEqual(rec["worker"], "수리 worker 실패(종료 코드 3), 수리 버림")
+        self.assertIn("수리 worker 실패(종료 코드 3), 수리 버림: 같은 head를 다시 검증하지 않는다", rec["detail"])
+        self.assertIn(f"수리 worker 마지막 메시지 `{self.last_file()}`", rec["detail"])
+        self.assertIn(f"{failure.LAST_MESSAGE}: `{self.last_file()}`", (self.rundir / "01/2/brief.md").read_text())
+
+    def test_no_message_says_so(self):
+        self.flaky_verify()
+        self.worker(GOOD, "echo not-json")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertTrue(ts.repairs[0]["detail"].endswith("같은 head를 다시 검증하지 않는다. 수리 worker 마지막 메시지 없음"), ts.repairs[0])
+        self.assertFalse(self.last_file().exists())
+        self.assertNotIn(f"{failure.LAST_MESSAGE}: `", (self.rundir / "01/2/brief.md").read_text())
+
+    def test_long_message_is_cut_in_the_reason_but_kept_in_the_file(self):
+        self.flaky_verify()
+        text = "가" * 1000
+        self.worker(GOOD, said(text))
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        detail = self.ts().repairs[0]["detail"]
+        self.assertTrue(detail.endswith(": " + "가" * go.LAST_MESSAGE_CHARS + "…"), detail)
+        self.assertIn(text, self.last_file().read_text())
+
+    def test_out_of_branch_line_fails_the_ticket_without_a_retry(self):
+        self.worker(BREAKS, said(f"integration을 확인했다.\n{review.OUT_OF_BRANCH} {OUTSIDE}\n커밋하지 않는다."), retry=GOOD)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 1, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.network_resume), ("failed", 1, 1, {}))
+        self.assertEqual(self.calls(), ["01", "01"])  # 구현 + 수리. 새 시도가 없다
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed")])
+        self.assertFalse((self.rundir / "01/2").exists())
+        why = f"{review.OUT_OF_BRANCH} {OUTSIDE}"
+        last = self.last_file()
+        first = f"검증 실패(로그 {self.rundir / '01/1/verify.log'})"
+        self.assertEqual(ts.reason, f"{first} → 수리 커밋 없음, {why} (재시도하지 않는다. 수리 worker 마지막 메시지 `{last}`)")
+        self.assertEqual((ts.repairs[0]["result"], ts.repairs[0]["detail"]), (state.REPAIR_FAILED, ts.reason))
+        self.assertIn(f"[01] 실패: {ts.reason}", out)
+        self.assertIn("브랜치 밖 원인이라 재시도하지 않고 사람에게 넘긴다", out)
+        self.assertNotIn("한 번 재시도", out)
+        self.assertEqual(ts.failure_summary, "")  # 재시도가 없으니 요약도 없다
+        self.assertIn(f"## {last} (", (self.rundir / "01/1/repair/failure.log").read_text())
+        self.assertIn(why, self.status("demo")[1])
+        self.assertIn(f"| failed | {report.cell(ts.reason)}", self.final_report())  # 보고서의 티켓별 결과
+
+    def test_out_of_branch_line_with_a_commit_is_rereviewed_as_before(self):
+        self.worker(BREAKS, said(f"{review.OUT_OF_BRANCH} {OUTSIDE}") + "; " + REPAIRS)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        self.assertEqual(self.phases(), ["worker", "review", "verify", "repair", "rereview", "verify", "finish"])
+        self.assertEqual(state.repair_summary(ts), "수리: 시도 1 커밋 1개 → 다시 검증 통과")
+        self.assertFalse(self.last_file().exists())  # 커밋한 수리는 마지막 메시지를 실패 이유로 옮기지 않는다
+
+    def test_summary_lost_with_gs_is_made_again_with_the_last_message_path(self):
+        self.flaky_verify()
+        self.worker(GOOD, said(NO_FIX))
+        with mock.patch("gs.failure.summarize", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")  # 실패를 적은 뒤 요약 호출 중에 gs가 멈춘다
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.failures), ("pending", 1))
+        self.assertFalse(Path(ts.failure_summary).exists())
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual((self.ts().status, self.ts().attempts), ("merged", 2))
+        self.assertIn(f"{failure.LAST_MESSAGE}: `{self.last_file()}`", (self.rundir / "01/2/brief.md").read_text())
+
+    def test_old_state_with_the_verify_mark_after_a_no_commit_repair_is_read(self):
+        # 옛 gs는 커밋 없는 수리 뒤 표시를 REPAIR_VERIFY로 바꾸고 다시 검증했다. 그 사이에 죽은 state를 새 gs가 잇는다
+        self.flaky_verify()
+        self.worker(GOOD, said(NO_FIX))
+        with mock.patch("gs.go._end_repair", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        path = state.path(self.rundir)
+        raw = json.loads(path.read_text())
+        ticket_state = raw["tickets"]["01"]
+        self.assertEqual(ticket_state["network_resume"]["repair"], go.REPAIR_RUN)
+        ticket_state["network_resume"].update(repair=go.REPAIR_VERIFY, done=True)
+        ticket_state["repairs"][-1]["worker"] = "커밋 없음"
+        path.write_text(json.dumps(raw, ensure_ascii=False))
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("지난 수리를 같은 worktree에서 잇는다: 다시 검증부터", out)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.network_resume), ("merged", 1, 0, {}))
+        self.assertEqual(self.calls(), ["01", "01"])  # 수리 worker를 다시 띄우지 않는다
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01-repair", "passed")])
+        self.assertEqual(state.repair_summary(ts), "수리: 시도 1 커밋 없음 → 다시 검증 통과")
 
 
 class FailAgainTest(Base):
@@ -1158,14 +1296,18 @@ class AgyLimitTest(Base):
         self.assertEqual((self.ts().network_resume["repair"], self.ts().network_resume["done"]), (go.REPAIR_RUN, False))
         self.limit(0)
         code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
+        self.assertEqual(code, 1, out + err)
         ts = self.ts()
-        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        # 버린 수리 뒤에는 다시 검증하지 않고 시도가 실패한다. 새 시도도 상한에 막힌다
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("failed", 1, 2))
         self.assertIn("수리 worker를 다시 띄우지 못했다: agy 한도", out)
         self.assertEqual(self.calls(), ["01", "01"])
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed")])
         self.assertNotIn("bad_fix", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
         self.assertIn("수리 worker 실패", ts.repairs[0]["worker"])
         self.assertIn("수리 버림", ts.repairs[0]["worker"])
+        self.assertEqual(ts.repairs[0]["result"], state.REPAIR_FAILED)
+        self.assertIn("agy 한도", ts.reason)
 
 
 class StartFailureTest(Base):
@@ -1210,8 +1352,31 @@ class SummaryTest(unittest.TestCase):
         brief = review.repair_brief("/x/verify.log")
         self.assertIn("## 검증 실패(고칠 것)", brief)
         self.assertIn("`/x/verify.log`", brief)
-        self.assertIn("커밋이 없어도 실패가 아니다", brief)
+        self.assertIn("커밋 없이 끝나면 gs는 같은 head를 다시 검증하지 않는다", brief)
         self.assertIn("처음부터 다시 하지 말고", brief)
+
+    def test_brief_lets_environment_differences_be_a_cause_and_asks_for_the_out_of_branch_line(self):
+        brief = review.repair_brief("/x/verify.log")
+        self.assertNotIn("그 위치를 원인으로 보지 마라", brief)
+        self.assertIn("integration의 병합 트리에서 도는 것 자체는 정상이다", brief)
+        self.assertIn("환경 차이(setup을 돌린 시각, 설치 메타데이터 같은 것)는 원인 후보로 확인한다", brief)
+        self.assertIn("브랜치 안에서 고칠 수 없으면", brief)
+        self.assertIn(f"커밋하지 말고\n마지막 메시지에 `{review.OUT_OF_BRANCH} <이유>`로 시작하는 줄을 쓴다", brief)
+        self.assertIn("재시도 없이 사람에게 넘긴다", brief)
+
+    def test_summary_rules_let_environment_differences_be_a_cause(self):
+        self.assertNotIn("그 위치를 원인으로 지목하지 마라", failure.SUMMARY_RULES)
+        self.assertIn("integration의 병합 트리에서 도는 것 자체는 정상이다", failure.SUMMARY_RULES)
+        self.assertIn("환경 차이(setup을 돌린 시각, 설치 메타데이터 같은 것)는 원인 후보로 확인하라", failure.SUMMARY_RULES)
+        self.assertIn("모른다고 적어라", failure.SUMMARY_RULES)
+
+    def test_out_of_branch_line(self):
+        self.assertEqual(review.out_of_branch("확인했다.\n브랜치 밖 원인: .venv가 낡았다\n끝"), ".venv가 낡았다")
+        self.assertEqual(review.out_of_branch("  브랜치 밖 원인:  앞뒤 공백  "), "앞뒤 공백")
+        self.assertEqual(review.out_of_branch("브랜치 밖 원인: 첫째\n브랜치 밖 원인: 둘째"), "첫째")
+        for text in (None, "", "브랜치 밖 원인:", "브랜치 밖 원인:   ", "원인은 브랜치 밖 원인: 아님", "- 브랜치 밖 원인: 글머리표"):
+            with self.subTest(text=text):
+                self.assertEqual(review.out_of_branch(text), "")
 
 
 class RetroLogTest(Base):
