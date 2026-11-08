@@ -96,6 +96,14 @@ class GrillBreakdownTest(unittest.TestCase):
         comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
         self.assertIn("`.goldstack/config.toml`을 고치는 티켓은 문서·설정 티켓이어도 `전체`", comment)
 
+    def test_spec_template_docs_version_ticket_narrows_verify(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        self.assertIn("문서·버전 티켓은 레포에서 확인한 환경 동기화·버전 시험·plugin 검사로 좁힌다", comment)
+
+    def test_ticket_template_checks_done_against_goal(self):
+        text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
+        self.assertIn("목표의 동사마다 완료 조건이 하나씩 있는지, 표시용 값과 원본 데이터를 구분했는지", text)
+
     def test_second_reviewer_criteria_match_guide(self):
         comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
         guide = (REPO / "docs" / "guide.md").read_text(encoding="utf-8")
