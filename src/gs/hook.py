@@ -3,7 +3,7 @@
 `gs hook pretooluse`가 stdin으로 hook 입력 JSON을 받아 판정한다. `GS_ROLE=worker`일 때만 판정하고,
 그 밖에는 입력을 읽지도 않고 통과시킨다(일반 세션에 영향 없음).
 
-막는 것은 되돌릴 수 없는 일뿐이다(ORIGINS 실패 10: 분류기가 정상 작업을 막음).
+막는 것은 되돌릴 수 없는 일뿐이다(ORIGINS 실패 10: 분류기가 정상 작업을 막음). 예외는 대상 레포가 config로 켠 시험 규칙(맨 끝 항목) 하나다.
 - `git push`(모든 형태), force 계열(`--force`, `--force-with-lease`)
 - 공용 git 설정 쓰기(`git remote` 변경, `git config` 쓰기), 자기 브랜치 밖의 ref를 옮기는 `update-ref`·`branch -f`·`symbolic-ref`.
   worktree는 설정과 ref를 주 레포와 공유한다. 임시 디렉터리의 버리는 레포는 공유하지 않아 통과한다(`--global`·`--system` 제외)
@@ -14,6 +14,12 @@
 - 따옴표 없이 `=`로 시작하는 두 글자 이상 단어(`echo ===`). zsh의 `=` 확장이 `== not found`로 명령 묶음을 끊고, 뒤 명령이 돌지 않았는데 돈 것처럼 읽힌다.
   `echo "==="`·`[ a = a ]`·`[[ a == a ]]`·heredoc 본문·주석은 통과한다(`equals_word`). 같은 zsh에서 도는 `eval`·`zsh -c` 본문과 치환 속도 본다.
   `bash -c`·`sh -c` 속은 `=` 확장이 없어 보지 않는다(`Ctx.zsh`)
+- 대상 레포가 config `[hook.worker_tests]`에 적은 고비용 시험 실행(`check_worker_tests`). 명령 원문이 `deny` 정규식 하나에 맞거나,
+  `runner`에 맞으면서 `file`에 맞는 서로 다른 이름이 `max_files`개를 넘으면 막는다(`runner`에 맞지 않는 `git add` 등은 파일 수와 상관없이 통과).
+  config에 절이 없거나 값이 비면 꺼진다(코드에 시험 러너 기본 규칙은 없다). gs가 worker를 띄울 때 config 값을 환경 변수
+  `GS_WORKER_TESTS`로 넘기고 hook은 그것만 읽는다. worker가 worktree의 config를 고쳐도 그 실행의 규칙은 그대로다.
+  값을 해석하지 못하면 이 규칙만 건너뛰고 stderr에 경고한다(다른 판정은 그대로).
+  판정은 명령 원문 정규식이라 heredoc 본문·따옴표 속 글자도 본다. 데이터로 적은 금지 명령(커밋 메시지, heredoc으로 쓰는 파일 내용)도 막힐 수 있다
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
@@ -41,6 +47,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 
 FOOTER = "이 일은 `gs`가 한다(push·PR·병합·인증). worker는 worktree 안에서 커밋까지만 한다."
+TESTS_ADVICE = "전체 검증은 gs가 병합 전에 돌린다. 고친 곳에 닿는 좁은 시험만 돌린다"
 
 # 거부 기록에 남기는 이름의 모양. 이 모양이 아니면 인자가 섞였을 수 있어 적지 않는다
 TOOL_NAME = re.compile(r"[\w.:+-]{1,80}")
@@ -470,7 +477,8 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
     ctx = Ctx(worktree=worktree, cwd=str(cwd), env=env)
 
     if tool == "Bash":
-        return check_bash(str(inp.get("command") or ""), ctx)
+        command = str(inp.get("command") or "")
+        return check_bash(command, ctx) or check_worker_tests(command, env)
     if tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"):
         path = str(inp.get("file_path") or inp.get("notebook_path") or "")
         if tool != "Write" and is_secret(path, ctx):
@@ -487,6 +495,39 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
                 return f"비밀 파일 `{path}`을 읽는다"
         if tool in ("Grep", "Glob") and not inp.get("path") and secret_read(".", ctx, recursive=True):
             return f"검색 시작점 `{ctx.cwd}`이 비밀 파일을 품는다"
+    return None
+
+
+# ---------------------------------------------------------------- 시험 규칙(config `[hook.worker_tests]`)
+
+def worker_tests(env: Mapping[str, str]) -> config.WorkerTestsConfig | None:  # noqa: F821  config는 아래에서 늦게 읽는다
+    """환경 변수의 시험 규칙(`config.WorkerTestsConfig`). 없거나 꺼졌으면 None.
+    해석하지 못하면 stderr에 경고하고 None이다(이 규칙만 건너뛴다)."""
+    from . import config
+
+    try:
+        rules = config.WorkerTestsConfig.from_env(env.get(config.WORKER_TESTS_ENV) or "")
+    except ValueError as e:
+        print(f"gs hook 경고: 환경 변수 `{config.WORKER_TESTS_ENV}`를 해석하지 못해 시험 규칙을 건너뛴다({e})",
+              file=sys.stderr)
+        return None
+    return rules if rules.enabled else None
+
+
+def check_worker_tests(command: str, env: Mapping[str, str]) -> str | None:
+    """명령 원문을 정규식으로 본다. 셸 문법을 풀지 않으니 heredoc·따옴표 속 글자도 맞는다(머리말의 한계)."""
+    rules = worker_tests(env)
+    if rules is None:
+        return None
+    for pattern in rules.deny:
+        if re.search(pattern, command):
+            return (f"시험을 넓게 도는 명령이다(config `[hook.worker_tests]`의 deny `{pattern}`에 맞음). "
+                    f"{TESTS_ADVICE}")
+    if rules.counts and re.search(rules.runner, command):
+        names = {m.group(0) for m in re.finditer(rules.file, command) if m.group(0)}
+        if len(names) > rules.max_files:
+            return (f"한 명령에서 시험 파일 {len(names)}개를 돈다(config `[hook.worker_tests]`의 max_files "
+                    f"{rules.max_files}개를 넘음). {TESTS_ADVICE}")
     return None
 
 
