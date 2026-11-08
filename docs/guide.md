@@ -666,12 +666,17 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 - integration·main 마무리 검증은 이 규칙이 없다. 끊겨도 여느 실패와 같다.
 - `uv run`처럼 자식의 신호를 종료 코드로 옮기는 명령을 xargs가 띄우면 줄이 남지 않아 끊김으로 판정되지 않고 일반 실패로 보인다(실측). 이럴 때는 `.venv/bin/python`처럼 가상환경의 실행 파일을 직접 부른다.
 
-### worker hook이 막는 `=` 단어와 zsh 구분선
+### worker의 zsh `=` 확장과 hook
 
-worker의 Bash 명령에 따옴표 없이 `=`로 시작하는 두 글자 이상 단어가 있으면 worker hook이 막는다. 예: `echo ===`. zsh는 `=cmd`를 `cmd`의 경로로 바꾸는데(`=ls` → `/bin/ls`), 그런 명령이 없으면 `zsh: == not found`로 명령 묶음 전체를 끊는다. 뒤 명령은 돌지 않았는데 돈 것처럼 읽히는 것이 문제다. 막히면 따옴표로 감싼다(`echo "==="`).
-- 통과하는 것: `echo "==="`, `echo '==='`, `[ a = a ]`(한 글자 `=`), `[[ a == a ]]`, `(( x == 1 ))`, `X==1`·`--format==`처럼 단어 중간의 `=`, heredoc 본문, 주석, `sh -c '…'` 안쪽(다른 셸이라 `=` 확장이 없다).
-- 맨 바깥 셸과, 같은 zsh에서 도는 `eval`·`zsh -c` 본문을 본다. `$(…)`·백틱·`( )` 속은 명령 자리라 본다.
-- worker에서만 막는다. 일반 대화 세션은 막지 않는다(`hooks.json`이 `GS_ROLE=worker`가 아니면 `gs`를 부르지 않고 끝낸다).
+zsh는 `=cmd`를 `cmd`의 경로로 바꾼다(`=ls` → `/bin/ls`). 따옴표 없는 `=` 단어(`echo ===`)는 그런 명령이 없어 `zsh: == not found`로 명령 묶음 전체를 끊는다. 뒤 명령은 돌지 않았는데 돈 것처럼 읽히는 것이 문제다.
+
+**gs가 원인을 없앤다.** gs는 worker를 띄울 때 실행 디렉터리(worktree 밖)에 전달 폴더 `zdotdir/`를 만들고 worker 환경의 `ZDOTDIR`을 그 폴더로 둔다. 폴더의 `.zshenv`는 `ZDOTDIR`을 원래 값으로 되돌리고 원래 `.zshenv`를 읽은 뒤 `setopt noequals`를 켠다. `.zprofile`·`.zshrc`·`.zlogin`은 zsh가 원래 위치에서 읽으므로 사용자 PATH·별칭은 그대로다. 사용자 파일은 고치지 않는다. 환경 변수 `GS_NOEQUALS=1`은 hook에 "이 worker의 셸은 noequals"라고 알리는 표식이다.
+- 적용하는 CLI는 실측을 통과한 `claude`와 `agy`다. `codex`는 `shell_snapshot` 때문에 `ZDOTDIR`이 명령 셸에 닿지 않아 실패했으므로 `ZDOTDIR`도 `GS_NOEQUALS`도 넣지 않는다. 폴더를 준비하지 못한 worker도 같다. 실측 표는 [research/worker-noequals.md](research/worker-noequals.md).
+- `GS_NOEQUALS` worker에서 hook은 **같은 셸**(맨 바깥, 그 셸이 그대로 읽는 `eval`·치환·`( )`)의 `=` 단어 판정을 건너뛴다. `echo ===`가 통과한다.
+- **새 zsh 프로세스의 본문은 계속 막는다**: `zsh -c`, `zsh -f -c`(`-f`는 시작 파일을 읽지 않아 `noequals`가 닿지 않는다). 이 안의 따옴표 없는 `=` 단어는 막히니 따옴표로 감싼다(`"==="`). `bash -c`·`sh -c` 속은 `=` 확장이 없어 보지 않는다.
+- `GS_NOEQUALS`가 없는 worker(codex, 준비 실패)는 예전 판정을 모두 그대로 받는다: 따옴표 없는 `=`로 시작하는 두 글자 이상 단어(`echo ===`)를 막고 `echo "==="`로 안내한다. 한 글자 `=`(`[ a = a ]`), `[[ a == a ]]`, `X==1`, heredoc 본문, 주석은 통과한다.
+- 남는 오차단 2건(zsh는 끊기지 않는데 새 zsh 본문 판정이 막는다): `zsh -f -c "echo \$(echo a)==="`, `echo ';' zsh -c 'echo ==='`. 원인은 `docs/internals.md`에 있다. 막히면 따옴표로 감싼다. 같은 셸 안의 오차단·놓침은 판정을 건너뛰어 없어졌다.
+- 대화 세션은 막지 않는다(`hooks.json`이 `GS_ROLE=worker`가 아니면 `gs`를 부르지 않고 끝낸다).
 
 **대화 세션에서 같은 오류를 만났다면** — zsh의 `=` 확장을 끄면 된다. `~/.zshenv`에 한 줄 둔다:
 ```zsh
