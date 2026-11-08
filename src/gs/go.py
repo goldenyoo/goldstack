@@ -20,6 +20,9 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 gs만 SIGKILL로 죽으면 돌던 검증은 살아 남는다. 다음 gs go가 잠금을 잡자마자 표지로 찾아 끝낸다(verify.stop_stale).
 로그는 첫 검증의 verify.log에 이어 쓴다. `gs go` 출력과 티켓 결과의 이유에 `검증 끊김`이 나오고, 보고서의 검증별 측정 표에는 끊긴 검증의 라벨이 `-끊김`으로 끝난다.
 수리 worker의 agy 상한은 수정 worker와 같다: 닿으면 띄우지 않고 티켓을 실패시키지 않고 다음 단계(다시 검증)로 간다.
+config `[worktree] setup_when`(glob 목록)에 걸리는 파일이 integration 환경을 준비한 커밋과 병합 트리 사이에서 바뀌었으면 병합을 먼저 커밋하고
+그 커밋의 분리 HEAD에서 setup을 다시 돌린 뒤 검증한다(_setup_merge). 미완 병합에서는 setup을 돌리지 않고, 브랜치는 검증이 통과해야 옮긴다.
+다시 돈 setup이 실패하면 검증 실패처럼 수리로 간다. 병합을 취소하면 환경은 그 커밋의 것으로 남는다: 다음 티켓 검증, 마무리 전, 다음 gs go 시작에서 대조해 다시 맞춘다(_setup_integration).
 끝난 worker 처리는 단계로 나뉜다: 결과 확인(_finish, _check_worker) → 리뷰(_review_stage)와 수정 worker 판단(_next_fix) → catch-up·병합·검증(_merge_stage).
 리뷰 단계는 제너레이터다: 루프 스레드에서 돌다가 호출에서 멈추고, 호출이 끝나면 _review_tick이 결과를 넣어 잇는다.
 끊김 중에는 끝난 호출의 결과도 받지 않고(_review_step) 끊김이 끝난 뒤 받는다: 두 번째 리뷰 준비가 최신 head를 보게. 결과를 받지 않은 호출이 있는 동안 새 티켓은 미룬다(Reviews.fix_waiting).
@@ -325,6 +328,8 @@ def _merged_after_finish(r: Run) -> bool:
 
 
 def _finish_run(r: Run, *, cleanup: bool = True) -> tuple[str | None, bool]:
+    if not _setup_integration(r):  # 마지막 티켓이 검증 전에 준비한 병합을 취소했으면 환경이 integration 끝과 다르다
+        return r.st.finish.get("url"), False
     r.st.phase = "finish"
     r.save()
     try:
@@ -507,6 +512,9 @@ def _prepare_integration(r: Run) -> bool:
     if r.st.finish.get("phase") in finish.BASE_REPORT_PHASES and head:
         if git.run(r.repo, "cat-file", "-e", f"{head}^{{commit}}", check=False).returncode == 0:
             start = head
+    if r.iwt.exists() and git.worktrees(r.repo).get(r.iwt.resolve(), branch) is None:
+        # 분리 HEAD: 검증 전에 만든 병합 커밋(_setup_merge)에서 지난 gs가 끝났다. 브랜치에 그 병합은 없다
+        git.run(r.iwt, "checkout", "-q", "--force", branch)
     git.ensure_worktree(r.repo, r.iwt, branch, start=start)
     if _reset_integration(r):
         say("■ integration worktree에 남은 병합·변경을 버렸다(지난 실행이 중간에 끝난 흔적)")
@@ -514,12 +522,23 @@ def _prepare_integration(r: Run) -> bool:
     # base가 이 feature의 병합을 revert했으면 그 revert를 되돌린 커밋까지 합친다(feature 코드를 잃지 않는다).
     finish.merge_base(r)
     say(f"■ integration: {branch} @ {git.sha(r.iwt, 'HEAD')[:8]} ({r.iwt})")
-    if r.cfg.worktree.setup.strip() and not setup.marker(r.iwt).exists():
+    return _setup_integration(r)
+
+
+def _setup_integration(r: Run) -> bool:
+    """integration 환경을 HEAD에 맞춘다. 실패하면 보고서를 쓰고 False.
+
+    처음(표지 없음)이면 준비한다. 표지가 있어도 config `setup_when`에 걸리는 파일이 마지막 준비 뒤 바뀌었으면 다시 한다(_setup_stale):
+    지난 실행이 그 뒤에 끝났거나, 검증 전에 준비한 병합을 취소했다(_setup_merge). 시작할 때와 마무리 검증 전에 부른다.
+    """
+    first = bool(r.cfg.worktree.setup.strip()) and not setup.marker(r.iwt).exists()
+    again = "" if first else _setup_stale(r, "HEAD")
+    if first or again:
         directory = worker.attempt_dir(r.rundir / "integration")
         r.st.phase = "setup"
         r.save()
         try:
-            say("■ integration 준비 중")
+            say("■ integration 준비 중" if first else f"■ integration 준비 다시(setup_when: {again})")
             res = setup.run(r.cfg, r.iwt, directory / "setup.log")
         finally:
             r.st.phase = ""
@@ -535,6 +554,14 @@ def _prepare_integration(r: Run) -> bool:
             return False
         setup.remember(r.iwt)
     return True
+
+
+def _setup_stale(r: Run, tree: str) -> str:
+    """integration 환경을 tree에 맞추려면 setup을 다시 돌려야 하나. 이유(걸린 파일 등), 아니면 빈 문자열.
+    setup이나 config `setup_when`이 비면 늘 빈 문자열이다: integration은 처음 한 번만 준비한다."""
+    if not r.cfg.worktree.setup.strip():
+        return ""
+    return setup.stale(r.iwt, r.cfg.worktree.setup_when, tree)
 
 
 def _graph(r: Run) -> dict[str, list[str]]:
@@ -1605,13 +1632,24 @@ def _merge_stage(r: Run, a: Active) -> None:
         _reset_integration(r, r.ihead)
         return _fail_worker(r, a, "integration 병합 충돌")
     merged = _merge_state(r)  # 검증할 것: 병합 결과 트리
+    msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
+    commit = ""  # 검증 전에 만든 병합 커밋(setup을 다시 돌렸을 때만). 통과하면 integration을 이 커밋으로 옮긴다
+    if all(merged) and (why := _setup_stale(r, merged[3])):
+        commit, setup_log, setup_moved = _setup_merge(r, a, merged, msg, why)
+        if not commit:
+            _reset_integration(r, r.ihead)
+            if setup_moved:
+                return _fail_worker(r, a, f"setup하는 동안 integration이 바뀌었다(되돌림, 로그 {setup_log}): "
+                                          "검증할 것과 병합 커밋이 다르다")
+            return _verify_failed(r, a, f"integration setup 실패(로그 {setup_log})", setup_log)
+    checked = _merge_state(r)  # 검증이 보는 상태: 미완 병합, 또는 병합 커밋의 분리 HEAD
     res, log, changed = _verify(r, t)
     if res.timed_out:
         _reset_integration(r, r.ihead)
         return _fail_worker(r, a, f"검증 시간 초과({res.minutes}분, 로그 {log})")
     # 검증하는 동안 다른 worker가 integration(index, HEAD, 병합 상태)을 바꿨으면 검증한 것과 커밋할 것이 다르다
     expected = (r.ihead, f"refs/heads/{integration_branch(r.name)}")
-    moved = _merge_state(r) != merged or merged[:2] != expected or not all(merged)
+    moved = _merge_state(r) != checked or merged[:2] != expected or not all(merged)
     if not res.ok:
         _reset_integration(r, r.ihead)
         reason = f"검증 실패(로그 {log})"
@@ -1629,12 +1667,13 @@ def _merge_stage(r: Run, a: Active) -> None:
         return
     # 커밋은 검증한 트리로 직접 만들고, 브랜치는 r.ihead에 있을 때만 옮긴다(그 사이 바뀌어도 섞이지 않게)
     _phase(r, t.id, "finish", t.model)
-    msg = f"Merge {t.id}: {t.title}\n\n{trailer(r.name, t.id)}\n"
-    new = git.out(r.iwt, "commit-tree", merged[3], "-p", r.ihead, "-p", merged[2], "-m", msg)
+    new = commit or git.out(r.iwt, "commit-tree", merged[3], "-p", r.ihead, "-p", merged[2], "-m", msg)
     moved = git.run(r.iwt, "update-ref", "-m", f"gs: merge {t.id}", merged[1], new, r.ihead, check=False)
     if moved.returncode:
         _reset_integration(r, r.ihead)
         return _fail_worker(r, a, "검증하는 동안 integration이 바뀌었다(되돌림): 브랜치가 움직였다")
+    if commit:  # 분리 HEAD를 방금 옮긴 브랜치에 다시 붙인다. 가리키는 커밋이 같아 파일은 그대로다
+        git.run(r.iwt, "symbolic-ref", "HEAD", merged[1])
     git.run(r.iwt, "reset", "-q", "--hard", new)  # 병합 상태를 끝내고 worktree를 새 커밋에 맞춘다
     setup.clean(r.iwt, "-q", "-fd")
     r.ihead = new
@@ -1645,6 +1684,33 @@ def _merge_stage(r: Run, a: Active) -> None:
     _set(r, t.id, status=state.MERGED, ended_at=state.now(), reason=passed, network_resume={})
     say(f"[{t.id}] 검증 통과 → integration 병합")
     _cleanup_merged(r, t.id)
+
+
+def _setup_merge(r: Run, a: Active, merged: tuple[str, str, str, str], msg: str, why: str) -> tuple[str, Path, bool]:
+    """미완 병합이 setup_when에 걸리는 파일을 바꾼다(why). 병합을 커밋하고 그 커밋(분리 HEAD)에서 setup을 다시 돌린다.
+    (커밋, setup 로그, setup하는 동안 integration이 바뀌었나)를 돌려준다. setup이 실패하거나 integration이 바뀌었으면 커밋은 빈 문자열이다.
+    setup이 성공해도 HEAD·병합 상태·index 트리가 그 커밋의 것이 아니면(setup 명령이나 다른 프로세스가 커밋하거나 checkout했다) 바뀐 것이다:
+    검증할 트리가 병합 커밋과 다르다. 준비한 커밋은 기록하지 않는다(다음 검증 전에 다시 준비한다).
+
+    미완 병합에서는 돌리지 않는다: setup 뒤의 복구(setup._restore_tracked)가 HEAD와 다른 추적 파일, 곧 병합한 파일을 되돌린다.
+    브랜치는 옮기지 않는다. 검증이 통과해야 _merge_stage가 이 커밋으로 옮긴다. 그 전에 gs가 끝나면 다음 gs go가 브랜치로 되돌린다(_prepare_integration).
+    병합을 취소하면 환경은 이 커밋의 것으로 남는다. 다음 검증과 마무리 검증 전에 마지막으로 준비한 커밋과 대조해 다시 맞춘다(setup.stale).
+    로그는 시도 디렉터리의 setup.log에 이어 쓴다. 앞에는 티켓 worktree의 준비 기록이 있다.
+    """
+    t = a.t
+    commit = git.out(r.iwt, "commit-tree", merged[3], "-p", r.ihead, "-p", merged[2], "-m", msg)
+    git.run(r.iwt, "checkout", "-q", "--detach", commit)  # 미완 병합을 끝낸다. index와 파일은 이미 이 커밋과 같다
+    log = _attempt_dir(a) / "setup.log"
+    say(f"[{t.id}] setup_when에 걸림({why}) → integration에서 병합 커밋 {commit[:8]}로 setup을 다시 돌린다")
+    _phase(r, t.id, "setup", t.model)
+    res = setup.run(r.cfg, r.iwt, log, note=f"--- integration에서 다시 준비: 병합 커밋 {commit} (setup_when: {why}) ---")
+    _phase(r, t.id, "verify", t.model)
+    if not res.ok:
+        return "", log, False
+    if _merge_state(r) != (commit, "", "", merged[3]):
+        return "", log, True
+    setup.remember(r.iwt)
+    return commit, log, False
 
 
 def _old_target(r: Run, a: Active, head: str) -> str:
@@ -2565,6 +2631,7 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
 
 def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
     """티켓 검증은 명령과 상관없이 커밋될 트리, 곧 integration의 미완 병합에서 돈다(티켓 worktree의 커밋 안 된 파일은 못 본다).
+    setup을 다시 돌린 병합은 그 병합 커밋의 분리 HEAD에서 돈다(_setup_merge). 측정에는 그 커밋의 두 부모(integration 끝, 티켓 커밋)를 남긴다.
 
     (결과, 로그, 트리가 바뀌었나). 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
     더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 수리 뒤의 다시 검증은 측정 라벨이 따로다.
@@ -2589,7 +2656,12 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
     label = f"ticket-{t.id}" + ("-repair" if state.open_repair(r.st.ticket(t.id)) else "") + ("-끊김" if res.interrupted else "")
     ts = r.st.ticket(t.id)
-    metrics.validation(r, label, command, before[0], res, changed, tree_sha=before[3], ticket_head=before[2],
+    integration_head, ticket_head = before[0], before[2]
+    if before[0] and not before[1] and not before[2]:  # 병합 커밋의 분리 HEAD: 미완 병합의 검증과 같은 값을 남긴다
+        parents = git.run(r.iwt, "rev-list", "--parents", "-n", "1", before[0], check=False).stdout.split()[1:]
+        if len(parents) == 2:
+            integration_head, ticket_head = parents
+    metrics.validation(r, label, command, integration_head, res, changed, tree_sha=before[3], ticket_head=ticket_head,
                        ticket_attempt=ts.phases[-1]["attempt"] if ts.phases else ts.attempts)
     return res, log, changed
 

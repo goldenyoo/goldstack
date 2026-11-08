@@ -97,7 +97,10 @@ class GitConfig:
 
 @dataclass(frozen=True)
 class WorktreeConfig:
+    """setup_when: 레포 루트 기준 경로 glob 목록(`*`는 `/`를 넘지 않고 `**`는 여러 단계). 티켓 병합이 이 파일을 바꾸면
+    integration에서 setup을 다시 돌린다(go._merge_stage). 비어 있으면(기본, 옛 config) setup은 integration에서 한 번만 돈다."""
     setup: str = ""
+    setup_when: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -231,6 +234,12 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
         for key, kind in fields.items():
             if key not in raw:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`가 없다"))
+            elif section == "worktree" and key == "setup_when":
+                if _globs(raw[key]):
+                    values[key] = tuple(raw[key])
+                else:
+                    problems.append(Problem("오류", CONFIG_PATH, "`worktree.setup_when`는 레포 루트 기준 경로 glob"
+                                                                 '(앞에 `/` 없이) 문자열 목록이어야 한다. 예: ["uv.lock"]'))
             elif type(raw[key]) is not kind:  # bool은 int의 하위형이지만 정수 설정으로 받지 않는다
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 {names[kind]}이어야 한다"))
             elif section == "goldstack" and key in data.get(section, {}) and not version.valid_requirement(raw[key]):
@@ -257,6 +266,12 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
     if any(p.level == "오류" for p in problems):
         return None, problems
     return Config(**sections), problems
+
+
+def _globs(value) -> bool:
+    """setup_when 값으로 받을 수 있나. 빈 문자열과 `/`로 시작하는 경로는 어느 파일에도 걸리지 않아 받지 않는다."""
+    return isinstance(value, (list, tuple)) and all(isinstance(p, str) and p.strip() and not p.startswith("/")
+                                                    for p in value)
 
 
 def _feedback_problem(key: str, value: str | int) -> str | None:
