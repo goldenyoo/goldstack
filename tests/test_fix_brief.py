@@ -288,6 +288,25 @@ class PriorCommandsBriefTest(unittest.TestCase):
         text = self.brief("1/fix")
         self.assertIn("````\necho ```\n````", text)
 
+    def test_brief_lists_raw_commands_with_spaces_and_heredoc(self):
+        quoted = "git commit -m 'fix:   two  spaces'   --allow-empty"
+        heredoc = "python - <<'EOF'\nprint(\"a   b\")\n\n    indented\nEOF"
+        self.log("1", (quoted, False), (heredoc, False), mtime=100)
+        text = self.brief("1/fix")
+        self.assertIn(quoted, text)  # 공백 정리가 없다
+        self.assertIn(heredoc, text)  # 줄바꿈과 들여쓰기가 그대로다
+
+    def test_command_over_2000_chars_is_left_out_not_cut(self):
+        long = "echo " + "z" * worker.PRIOR_COMMAND_CHARS
+        edge = "echo " + "e" * (worker.PRIOR_COMMAND_CHARS - 5)
+        self.assertGreater(len(long), worker.PRIOR_COMMAND_CHARS)
+        self.assertEqual(len(edge), worker.PRIOR_COMMAND_CHARS)
+        self.log("1", (long, False), (edge, False), ("short-one", False), mtime=100)
+        text = self.brief("1/fix")
+        self.assertIn(edge, text)
+        self.assertIn("short-one", text)
+        self.assertNotIn("zzzz", text)  # 잘린 앞부분도 남지 않는다
+
     def test_codex_log_counts_too(self):
         p = self.tdir / "1" / "worker.log"
         p.parent.mkdir(parents=True)

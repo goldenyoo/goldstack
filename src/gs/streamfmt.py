@@ -154,15 +154,17 @@ def _message_of(ev: dict) -> tuple[str, str] | None:
 
 
 COMMANDS_LIMIT = 60  # 기록에 남기는 명령 수 상한(끝에서부터). 검증은 대개 뒤쪽에서 돈다
-COMMAND_CHARS = 240  # 명령 한 줄의 글자 상한
+COMMAND_CHARS = 240  # 표시용 요약(`command`)의 글자 상한. 원본(`raw`)은 자르지 않는다
+OUTPUT_TAIL_CHARS = 200  # codex 실패 명령의 detail에 넣는 `aggregated_output` 끝 글자 수
 
 
 def commands(log: Path, limit: int = COMMANDS_LIMIT) -> tuple[list[dict], int]:
     """worker 로그에서 worker가 실행한 명령과 결과를 시간 순으로 뽑는다. (끝의 limit개, 앞에서 잘린 개수).
 
-    각 항목은 `{"command": 명령, "ok": 성공 여부 또는 None(결과를 못 찾음), "detail": 종료 코드나 오류 요약}`이다.
+    각 항목은 `{"command": 표시용 요약, "raw": 원본 명령, "ok": 성공 여부 또는 None(결과를 못 찾음), "detail": 종료 코드나 오류 요약}`이다.
+    `command`는 공백을 합치고 COMMAND_CHARS로 자른 표시용이다(리뷰어용 기록). 다시 돌릴 명령은 `raw`를 쓴다(공백 정리·자르기 없음).
     claude는 Bash `tool_use`를 `tool_result`의 `is_error`와 짝지어 읽는다(종료 코드는 오류 본문 "Exit code N"에서만 얻는다).
-    codex는 완료된 `command_execution`의 `exit_code`, agy는 명령 매개변수(`CommandLine`·`command`)가 있는 tool 단계의 DONE·ERROR다.
+    codex는 완료된 `command_execution`의 `exit_code`(실패면 detail에 `aggregated_output` 끝 OUTPUT_TAIL_CHARS자도), agy는 명령 매개변수(`CommandLine`·`command`)가 있는 tool 단계의 DONE·ERROR다.
     읽을 수 없거나 모양이 다른 줄은 건너뛴다. 로그는 몇 MB일 수 있어 한 줄씩 읽고 limit개만 쥔다. 못 읽으면 ([], 0).
     """
     kept: deque[dict] = deque(maxlen=max(limit, 0))
@@ -214,7 +216,12 @@ def _commands_of(ev: dict) -> list[tuple[dict, str | None]]:
             return []
         code = item.get("exit_code")
         ok = code == 0 if isinstance(code, int) and not isinstance(code, bool) else None
-        return [(_entry(item["command"], ok, f"종료 {code}" if ok is not None else "종료 코드 없음"), None)]
+        detail = f"종료 {code}" if ok is not None else "종료 코드 없음"
+        if ok is False:
+            tail = _output_tail(item.get("aggregated_output"))
+            if tail:
+                detail += f": {tail}"
+        return [(_entry(item["command"], ok, detail), None)]
     blocks = (ev.get("message") or {}).get("content") if isinstance(ev.get("message"), dict) else None
     if not isinstance(blocks, list):
         return []
@@ -241,7 +248,15 @@ def _commands_of(ev: dict) -> list[tuple[dict, str | None]]:
 
 
 def _entry(command: str, ok: bool | None, detail: str) -> dict:
-    return {"command": _short(command, COMMAND_CHARS), "ok": ok, "detail": detail}
+    return {"command": _short(command, COMMAND_CHARS), "raw": command, "ok": ok, "detail": detail}
+
+
+def _output_tail(output) -> str:
+    """출력의 공백을 합친 뒤 끝 OUTPUT_TAIL_CHARS자. 잘렸으면 앞에 …. 문자열이 아니거나 비면 빈 문자열."""
+    if not isinstance(output, str):
+        return ""
+    text = " ".join(output.split())
+    return text if len(text) <= OUTPUT_TAIL_CHARS else "…" + text[-OUTPUT_TAIL_CHARS:]
 
 
 def _settle(entry: dict | None, result: dict) -> None:
