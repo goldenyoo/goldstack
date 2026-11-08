@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.2.10 — 2026-11-08
+
+### goldstack-v26
+
+- config `[hook.worker_tests]`(`deny`, `runner`, `file`, `max_files`): worker가 Bash로 전체 시험을 돌리면 hook이 막고 좁은 시험만 돌리라고 안내한다. 기본은 꺼짐이다. claude(첫·수정·수리 worker)와 agy worker에 적용하고 codex는 sandbox에 맡긴다. gs가 규칙을 worker 환경 변수 `GS_WORKER_TESTS`로 넘기므로 worker가 worktree의 config를 고쳐도 그 실행의 규칙은 바뀌지 않는다. 이 레포 config에 값을 넣었다.
+- 병합 뒤 첫 main 검증에서 받아 온 main 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가 보고서·이 feature의 아이디어 파일뿐이면 main 검증을 건너뛴다. `main-verify.log`에 `integration과 같은 코드(<sha>), 건너뜀`이 남고 결과는 `verified`다. 실패·재시도·revert 상태는 덮지 않는다.
+- `docs/guide.md`·`docs/internals.md`를 맞췄다.
+- 버전을 `0.2.10`으로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.9 — 2026-11-08
 
 ### goldstack-v25
