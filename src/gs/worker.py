@@ -70,6 +70,7 @@ class Job:
 
 
 PRIOR_COMMANDS_LIMIT = 15  # brief에 싣는 앞 시도의 성공 명령 수 상한(최근 것부터)
+PRIOR_COMMAND_CHARS = 2000  # brief에 싣는 원본 명령 한 개의 글자 상한. 넘으면 자르지 않고 목록에서 뺀다
 PRIOR_SCAN = 1000  # 로그 하나에서 읽는 명령 수 상한(끝에서부터). 성공한 것만 거르기 전의 수다
 
 
@@ -82,6 +83,7 @@ def prior_commands(job: Job, limit: int = PRIOR_COMMANDS_LIMIT) -> list[str]:
     """같은 티켓의 앞 시도(구현·수정·수리·이어 간 worker)의 로그에서 성공한 명령을 최근 것부터 limit개 돌려준다.
 
     로그는 파일 수정 시각이 늦은 것부터 읽는다. 같은 명령은 한 번만 센다(가장 최근 것). 종료 코드가 0이거나 오류 표시가 없는 것만 성공이다.
+    명령은 원본(`raw`)이다: 공백 정리·자르기가 없어 다시 돌리면 그대로 성공한다. PRIOR_COMMAND_CHARS자를 넘는 명령은 자르지 않고 뺀다.
     실패한 명령, 결과를 모르는 명령, 이 job 자신의 로그는 뺀다. 로그가 없거나 읽을 수 없으면 빈 목록이다(brief에 이 부분이 없다).
     시험 명령만 가려내지 않는다: 시험 러너를 가정하지 않으려고 성공한 명령을 모두 준다.
     """
@@ -97,8 +99,9 @@ def prior_commands(job: Job, limit: int = PRIOR_COMMANDS_LIMIT) -> list[str]:
     for log in logs:
         found, _ = streamfmt.commands(log, PRIOR_SCAN)
         for c in reversed(found):
-            if c["ok"] is True and c["command"] not in out:
-                out.append(c["command"])
+            raw = c["raw"]
+            if c["ok"] is True and len(raw) <= PRIOR_COMMAND_CHARS and raw not in out:
+                out.append(raw)
                 if len(out) >= limit:
                     return out
     return out
