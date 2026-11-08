@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v24 리뷰 02"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v25"
 ---
 성공한 원본 명령 대신 공백·줄바꿈이 합쳐지고 240자로 잘린 표시용 요약을 brief에 전달한다. 문자열 인자나 heredoc이 변형되어, 앞서 성공한 시험 명령을 다시 실행하면 실패할 수 있다.
 

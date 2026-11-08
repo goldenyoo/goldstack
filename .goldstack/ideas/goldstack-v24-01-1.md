@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v24 리뷰 01"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v25"
 ---
 Codex 명령의 실패 출력을 버려 실패 사유를 대조할 수 없다. sandbox 권한 오류와 실제 시험 실패가 같은 종료 코드를 내면 리뷰어에게 동일한 기록이 전달되어, 실제 실패를 sandbox 탓으로 보고해도 기록으로 구분할 수 없다.
 
