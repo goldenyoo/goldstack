@@ -185,6 +185,87 @@ class ConfigTest(unittest.TestCase):
         this_repo, problems = config.load(Path(__file__).resolve().parents[1])
         self.assertEqual((problems, this_repo.worktree.setup_when), ([], ("uv.lock", "pyproject.toml")))
 
+    def test_worker_tests_section_is_off_without_values(self):
+        """`[hook.worker_tests]`가 없거나 값이 비면 꺼짐이고 환경 변수 값은 빈 문자열이다. `gs init`은 절을 쓰지 않는다."""
+        off = config.WorkerTestsConfig()
+        for extra in ("", "[hook]\n", "[hook.worker_tests]\n",
+                      '[hook.worker_tests]\ndeny = []\nrunner = ""\nfile = ""\n'):
+            with self.subTest(extra=extra):
+                self.path.write_text(CONFIG + extra)
+                cfg, problems = config.load(self.repo)
+                self.assertEqual(problems, [])
+                self.assertEqual(cfg.hook.worker_tests, off)
+                self.assertFalse(cfg.hook.worker_tests.enabled)
+                self.assertEqual(cfg.hook.worker_tests.env_value(), "")
+        self.assertNotIn("[hook", config.DEFAULT_CONFIG)
+
+    def test_worker_tests_values_and_env_round_trip(self):
+        self.path.write_text(CONFIG + "[hook.worker_tests]\n"
+                             + r"""deny = ["ls tests \\| grep '\\^test_'", '-p "\w+\.py"']""" + "\n"
+                             + r"""runner = 'unittest|pytest'""" + "\n"
+                             + r"""file = 'test_\w+\.py'""" + "\nmax_files = 10\n")
+        cfg, problems = config.load(self.repo)
+        self.assertEqual(problems, [])
+        rules = cfg.hook.worker_tests
+        self.assertEqual(rules, config.WorkerTestsConfig(
+            (r"ls tests \| grep '\^test_'", r'-p "\w+\.py"'), "unittest|pytest", r"test_\w+\.py", 10))
+        self.assertTrue(rules.enabled and rules.counts)
+        self.assertEqual(config.WorkerTestsConfig.from_env(rules.env_value()), rules)
+        only_deny = config.WorkerTestsConfig(("discover",))
+        self.assertEqual(config.WorkerTestsConfig.from_env(only_deny.env_value()), only_deny)
+        self.assertEqual(config.WorkerTestsConfig.from_env(""), config.WorkerTestsConfig())
+        for bad in ("{", "[]", '"x"', '{"deny": ["("]}', '{"deny": "x"}', '{"runner": "a", "file": "b"}',
+                    '{"runner": "a", "file": "", "max_files": 1}', '{"max_files": -1}', '{"max_files": true}'):
+            with self.subTest(env=bad), self.assertRaises(ValueError):
+                config.WorkerTestsConfig.from_env(bad)
+
+    def test_worker_tests_bad_regex_negative_and_partial_values_are_errors(self):
+        cases = {
+            'deny = ["("]': "hook.worker_tests.deny[0]",
+            'deny = ["ok", "a[b"]': "hook.worker_tests.deny[1]",
+            'deny = [""]': "hook.worker_tests.deny",
+            'deny = "x"': "hook.worker_tests.deny",
+            'deny = [1]': "hook.worker_tests.deny",
+            'runner = "("\nfile = "x"\nmax_files = 1': "hook.worker_tests.runner",
+            'runner = "x"\nfile = "+"\nmax_files = 1': "hook.worker_tests.file",
+            'runner = 1\nfile = "x"\nmax_files = 1': "hook.worker_tests.runner",
+            'runner = "x"\nfile = "y"\nmax_files = -1': "hook.worker_tests.max_files",
+            'runner = "x"\nfile = "y"\nmax_files = "3"': "hook.worker_tests.max_files",
+            'runner = "x"\nfile = "y"\nmax_files = true': "hook.worker_tests.max_files",
+            'runner = "x"\nfile = "y"': "hook.worker_tests.max_files",
+            'runner = "x"\nmax_files = 1': "hook.worker_tests.runner",
+            'file = "y"\nmax_files = 1': "hook.worker_tests.runner",
+            'max_files = -1': "hook.worker_tests.max_files",
+        }
+        for body, key in cases.items():
+            with self.subTest(body=body):
+                self.path.write_text(CONFIG + "[hook.worker_tests]\n" + body + "\n")
+                cfg, problems = config.load(self.repo)
+                self.assertIsNone(cfg)
+                self.assertEqual([(p.level, f"`{key}" in p.message) for p in problems], [("오류", True)], problems)
+        for text in ('hook = 1\n' + CONFIG, CONFIG + '[hook]\nworker_tests = 1\n'):
+            with self.subTest(text=text):
+                self.path.write_text(text)
+                cfg, problems = config.load(self.repo)
+                self.assertIsNone(cfg)
+                self.assertEqual([p.level for p in problems], ["오류"])
+
+    def test_worker_tests_unknown_keys_and_unused_max_files_are_warnings(self):
+        self.path.write_text(CONFIG + '[hook]\nother = 1\n[hook.worker_tests]\ndeny = ["x"]\nmax_files = 3\nrunners = "y"\n')
+        cfg, problems = config.load(self.repo)
+        self.assertEqual(cfg.hook.worker_tests.deny, ("x",))
+        self.assertFalse(cfg.hook.worker_tests.counts)
+        self.assertEqual([p.level for p in problems], ["경고"] * 3)
+        for key in ("`hook.other`", "`hook.worker_tests.runners`", "`hook.worker_tests.max_files`"):
+            self.assertTrue(any(key in p.message for p in problems), key)
+
+    def test_this_repo_sets_worker_tests(self):
+        this_repo, problems = config.load(Path(__file__).resolve().parents[1])
+        rules = this_repo.hook.worker_tests
+        self.assertEqual(problems, [])
+        self.assertEqual((rules.runner, rules.file, rules.max_files), ("unittest|pytest", r"test_\w+\.py", 10))
+        self.assertEqual(len(rules.deny), 3)
+
     def test_missing_config_stops_check_and_go_before_any_work(self):
         self.path.unlink()
         expected = "오류: .goldstack/config.toml이 없다. gs init을 먼저 실행하라"

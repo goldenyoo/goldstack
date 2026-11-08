@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import herdr, streamfmt
+from . import config, herdr, streamfmt
 from .adapters import Adapter, WorkerInput
 from .feature import Spec, Ticket, work_rel
 
@@ -210,9 +210,10 @@ def guard_exports(worktree: Path) -> str:
 
 def write_script(job: Job, adapter: Adapter) -> None:
     """worker를 돌리고 종료 코드를 exit 파일에 원자적으로 남기는 bash 스크립트. 명령과 환경은 어댑터가 정한다.
-    push·gh 차단은 어댑터 env 뒤에 넣는다(어댑터가 덮어쓰지 못하게)."""
+    push·gh 차단은 어댑터 env 뒤에 넣는다(어댑터가 덮어쓰지 못하게).
+    hook의 시험 규칙(`GS_WORKER_TESTS`)은 어댑터가 넣지 않았어도 빈 값으로 내보낸다. gs를 띄운 셸의 값이 worker로 새지 않게."""
     q = shlex.quote
-    env = {**adapter.env(job.input), "GS_ROLE": "worker", "GS_TICKET": job.ticket.id}
+    env = {config.WORKER_TESTS_ENV: "", **adapter.env(job.input), "GS_ROLE": "worker", "GS_TICKET": job.ticket.id}
     command = adapter.command(job.input)
     exports = "\n".join(f"export {k}={q(v)}" for k, v in env.items())
     job.script.write_text(f"""#!/bin/bash

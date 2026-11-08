@@ -16,6 +16,7 @@ IGNORE_LINES = (".goldstack/local.env", ".goldstack/work/*/run/", ".goldstack/fe
 FEEDBACK_MODES = ("off", "draft", "auto")
 FEEDBACK_DETAILS = ("errors", "minimal")
 OVERNIGHT_AUTONOMY = ("stop", "record")
+WORKER_TESTS_ENV = "GS_WORKER_TESTS"  # gs가 worker 환경에 넣는 `[hook.worker_tests]`(JSON). 빈 값이면 꺼짐. hook은 이것만 읽는다
 DEFAULT_CONFIG = '''[git]
 remote = "origin"
 base = {base}
@@ -184,6 +185,56 @@ class OvernightConfig:
 
 
 @dataclass(frozen=True)
+class WorkerTestsConfig:
+    """worker가 Bash로 도는 고비용 시험을 hook이 막는 규칙(`[hook.worker_tests]`). 모든 값이 비면 꺼짐(기본).
+
+    deny: 정규식 목록. 명령 원문이 하나에 맞으면 막는다.
+    runner·file·max_files: 명령 원문이 `runner`에 맞고 `file`에 맞는 서로 다른 이름이 `max_files`개를 넘으면 막는다.
+    `runner`와 `file`이 둘 다 있어야 켜진다. 정규식은 Python `re`다. 코드는 시험 러너를 가정하지 않는다(값은 대상 레포가 적는다).
+    """
+    deny: tuple[str, ...] = ()
+    runner: str = ""
+    file: str = ""
+    max_files: int = 0
+
+    @property
+    def counts(self) -> bool:
+        return bool(self.runner and self.file)
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.deny) or self.counts
+
+    def env_value(self) -> str:
+        """worker 환경 변수 값. 꺼졌으면 빈 문자열(바깥 셸에서 물려받은 값을 덮어쓴다)."""
+        if not self.enabled:
+            return ""
+        return json.dumps({"deny": list(self.deny), "runner": self.runner, "file": self.file,
+                           "max_files": self.max_files})
+
+    @classmethod
+    def from_env(cls, value: str) -> WorkerTestsConfig:
+        """`env_value`의 거꾸로. 빈 값은 꺼진 규칙이다. 해석하지 못하면 ValueError."""
+        if not value.strip():
+            return cls()
+        try:
+            raw = json.loads(value)
+        except ValueError as e:
+            raise ValueError(f"JSON이 아니다: {e}") from None
+        if not isinstance(raw, dict):
+            raise ValueError("JSON 객체가 아니다")
+        rules, errors = worker_tests(raw)
+        if errors:
+            raise ValueError("; ".join("`" + e for e in errors))
+        return rules
+
+
+@dataclass(frozen=True)
+class HookConfig:
+    worker_tests: WorkerTestsConfig = WorkerTestsConfig()
+
+
+@dataclass(frozen=True)
 class Config:
     git: GitConfig
     models: ModelsConfig
@@ -195,6 +246,7 @@ class Config:
     goldstack: GoldstackConfig = GoldstackConfig()
     feedback: FeedbackConfig = FeedbackConfig()
     overnight: OvernightConfig = OvernightConfig()
+    hook: HookConfig = HookConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -216,6 +268,9 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
     for section, cls in schema.items():
         if section == "tiers":
             sections[section] = _load_tiers(data.get(section, {}), problems)
+            continue
+        if section == "hook":
+            sections[section] = _load_hook(data.get(section, {}), problems)
             continue
         if section not in data and section not in ("agy", "worktree", "goldstack", "feedback", "overnight"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
@@ -330,6 +385,69 @@ def _load_tiers(raw, problems: list[Problem]) -> TiersConfig:
             parsed[tier] = ModelEffort(model, effort)
         values[family] = parsed
     return TiersConfig(**values)
+
+
+def _load_hook(raw, problems: list[Problem]) -> HookConfig:
+    """`[hook.worker_tests]`. 절이 없으면 꺼진 규칙이다."""
+    if not isinstance(raw, dict):
+        problems.append(Problem("오류", CONFIG_PATH, "`hook`는 테이블이어야 한다"))
+        return HookConfig()
+    for key in raw.keys() - {"worker_tests"}:
+        problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `hook.{key}`"))
+    table = raw.get("worker_tests", {})
+    if not isinstance(table, dict):
+        problems.append(Problem("오류", CONFIG_PATH, "`hook.worker_tests`는 테이블이어야 한다"))
+        return HookConfig()
+    for key in table.keys() - {f.name for f in dataclass_fields(WorkerTestsConfig)}:
+        problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `hook.worker_tests.{key}`"))
+    rules, errors = worker_tests(table)
+    for message in errors:
+        problems.append(Problem("오류", CONFIG_PATH, f"`hook.worker_tests.{message}"))
+    if not errors and "max_files" in table and not rules.counts:
+        problems.append(Problem("경고", CONFIG_PATH, "`hook.worker_tests.max_files`는 `runner`·`file`이 없으면 쓰이지 않는다"))
+    return HookConfig() if errors else HookConfig(rules)
+
+
+def worker_tests(raw: dict) -> tuple[WorkerTestsConfig, list[str]]:
+    """config 표와 환경 변수 JSON이 함께 쓰는 검사. 오류는 `키…` 꼴(앞에 붙일 경로 없이)이다. 모르는 키는 보지 않는다."""
+    errors: list[str] = []
+
+    def regex(key: str, value: str) -> None:
+        try:
+            re.compile(value)
+        except re.error as e:
+            errors.append(f"{key}` 정규식이 틀렸다({value!r}: {e})")
+
+    deny = raw.get("deny", [])
+    if not isinstance(deny, list) or not all(isinstance(p, str) and p for p in deny):
+        errors.append("deny`는 빈 값이 아닌 정규식 문자열 목록이어야 한다")
+        deny = []
+    for i, pattern in enumerate(deny):
+        regex(f"deny[{i}]", pattern)
+    texts: dict[str, str | None] = {}
+    for key in ("runner", "file"):
+        value = raw.get(key, "")
+        if not isinstance(value, str):
+            errors.append(f"{key}`는 정규식 문자열이어야 한다")
+            value = None
+        elif value:
+            regex(key, value)
+        texts[key] = value
+    max_files = raw.get("max_files", 0)
+    if type(max_files) is not int:  # bool은 int의 하위형이지만 정수 설정으로 받지 않는다
+        errors.append("max_files`는 정수이어야 한다")
+        max_files = 0
+    elif max_files < 0:
+        errors.append("max_files`는 0 이상이어야 한다")
+    runner, file = texts["runner"], texts["file"]
+    if runner is not None and file is not None:  # 짝은 형이 맞는 값끼리만 본다
+        if bool(runner) != bool(file):
+            errors.append("runner`와 `file`은 함께 적는다(파일 수는 `runner`에 맞는 명령에서 `file`에 맞는 이름을 센다)")
+        elif runner and "max_files" not in raw:
+            errors.append("max_files`가 없다(`runner`·`file`과 함께 적는다)")
+    if errors:
+        return WorkerTestsConfig(), errors
+    return WorkerTestsConfig(tuple(deny), runner or "", file or "", max_files), errors
 
 
 def read_local_env(repo: Path) -> dict[str, str]:
