@@ -23,7 +23,7 @@ v25는 두 가지를 막는 변경입니다. 하나는 리뷰 답 하나의 형�
 
 이번 실행은 설치된 gs 0.2.8로 돌았습니다. 위의 새 동작(setup 재실행, 커밋 없는 수리 처리, 앞 시도 지적 보존)은 시험으로만 확인했고, 실제 실행에서 거쳐 본 적은 없습니다. spec 결정대로 verify 앞의 `uv sync` 우회는 그대로 남아 있습니다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/48 병합 · main 검증 통과
 리뷰 지적: 수정됨 2 · 보고만 3
 
 ## Evidence
@@ -99,15 +99,22 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 6 | ticket-05 | 1 | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 14784a6465a9175e19086b173b3edd00b9b366fb | 44d66ccdb067a674179ee0a9d901d65bee0b8cde | 512.012609 | passed |
 | 7 | ticket-07 | 1 | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p 'test_version*.py' && .venv/bin/python -m unittest discover -s tests -p test_docs_missing.py && claude plugin validate . | 9feffe99603e1e2db2168907020aac85a01bd252 | e8821d189cf326a3b0f757b71f27be5e21677dbd | 1.076431 | passed |
 | 8 | integration | - | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 2e9d3e37949e09112be9026918a5fb0f2f62afb1 | - | 527.01825 | passed |
+| 9 | main | - | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | c9df8e47b2a80656de698ae00af6fe369be0d4b0 | - | 544.149885 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 561.0 |
-| verify | 527.074 |
+| total | 1119.0 |
+| verify | 1071.275 |
 | summary | 33.58 |
-| report | 0 |
+| report | 0.121 |
+| push | 2.317 |
+| publish | 3.989 |
+| merge-pr | 3.965 |
+| confirm-merge | 0.007 |
+| postmerge | 545.467 |
+| restore-reverts | 0.101 |
 
 ### 티켓별 결과
 
@@ -875,6 +882,29 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 0.60ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/gs-main-mtyrtsjd/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/gs-main-mtyrtsjd/base
+Prepared 1 package in 192ms
+Installed 1 package in 1ms
+ + goldstack==0.2.9 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/gs-main-mtyrtsjd/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 11835자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/finish/integration-verify.log`
@@ -970,18 +1000,114 @@ No digest: .venv/bin/python3 is not a regular file
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+앞 11866자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/finish/main-verify.log`
+
+```text
+in 17.568s
+
+OK
+.............................
+----------------------------------------------------------------------
+Ran 18 tests in 5.248s
+
+OK
+.......................................................
+----------------------------------------------------------------------
+Ran 15 tests in 55.691s
+
+OK
+..............
+----------------------------------------------------------------------
+Ran 28 tests in 50.270s
+
+OK
+......
+----------------------------------------------------------------------
+Ran 4 tests in 1.195s
+
+OK
+............
+----------------------------------------------------------------------
+Ran 20 tests in 5.162s
+
+OK
+...
+----------------------------------------------------------------------
+Ran 13 tests in 32.307s
+
+OK
+......................................................
+----------------------------------------------------------------------
+Ran 70 tests in 34.638s
+
+OK
+.....................................................
+----------------------------------------------------------------------
+Ran 78 tests in 199.788s
+
+OK
+........................................
+----------------------------------------------------------------------
+Ran 80 tests in 190.179s
+
+OK
+Validating marketplace manifest: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/gs-main-mtyrtsjd/base/.claude-plugin/marketplace.json
+
+⚠ Found 1 warning:
+
+  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
+
+Validating plugin: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/gs-main-mtyrtsjd/base/.claude-plugin/plugin.json
+
+  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
+  ❯ types ./types/index.d.ts declares state: goldstack.line
+
+Validating hooks: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/gs-main-mtyrtsjd/base/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
+  ❯ ./register.tsx state writes: goldstack.line
+  ❯ ./register.tsx state reads: goldstack.line
+
+Plugin directory checks for /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v25/run/gs-main-mtyrtsjd/base. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
+
+⚠ Found 1 plugin directory warning:
+
+  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
+    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+No digest: .venv/bin/python3 is not a regular file
+
+✔ Validation passed with warnings
+
+종료 코드: 0
+```
+
 
 agy 사용: 1/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/48
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `c9df8e47b2a80656de698ae00af6fe369be0d4b0`
 
 ### 되돌리는 법
 
@@ -991,7 +1117,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 c9df8e47b2a80656de698ae00af6fe369be0d4b0
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v25/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
