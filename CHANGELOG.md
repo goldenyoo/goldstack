@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.2.12 — 2026-11-08
+
+### goldstack-v28
+
+- worker 셸의 zsh `=` 확장을 끈다. gs가 worker를 `ZDOTDIR=<실행 디렉터리>/zdotdir`로 띄우고, 폴더의 `.zshenv`가 `ZDOTDIR`을 되돌리고 원래 `.zshenv`를 읽은 뒤 `setopt noequals`를 켠다. 환경 변수 `GS_NOEQUALS=1`이 표식이다. 실측을 통과한 claude·agy에만 적용하고 codex(`shell_snapshot`이 `ZDOTDIR`을 지움)와 준비 실패 worker는 바꾸지 않는다. 실측은 `docs/research/worker-noequals.md`.
+- hook: `GS_NOEQUALS` worker에서는 같은 셸(바깥·`eval`·치환)의 `=` 단어 판정을 건너뛰고 새 zsh 프로세스 본문(`zsh -c`, `zsh -f -c`)은 계속 막는다. 그 판정에 남는 오차단 2건은 `docs/guide.md`·`docs/internals.md`에 적었다. `GS_NOEQUALS`가 없는 worker는 예전 판정 그대로다.
+- `docs/guide.md`·`docs/internals.md`를 맞췄다.
+- 버전을 `0.2.12`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.11 — 2026-11-08
 
 ### goldstack-v27
