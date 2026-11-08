@@ -1640,7 +1640,7 @@ def _merge_stage(r: Run, a: Active) -> None:
             _reset_integration(r, r.ihead)
             return _verify_failed(r, a, f"integration setup 실패(로그 {setup_log})", setup_log)
     checked = _merge_state(r)  # 검증이 보는 상태: 미완 병합, 또는 병합 커밋의 분리 HEAD
-    res, log, changed = _verify(r, t, heads=(r.ihead, merged[2]) if commit else ())
+    res, log, changed = _verify(r, t)
     if res.timed_out:
         _reset_integration(r, r.ihead)
         return _fail_worker(r, a, f"검증 시간 초과({res.minutes}분, 로그 {log})")
@@ -2622,9 +2622,9 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True) -> bool:
     return False
 
 
-def _verify(r: Run, t: Ticket, *, heads: tuple[str, str] | tuple[()] = ()) -> tuple[verify.Result, Path, bool]:
+def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
     """티켓 검증은 명령과 상관없이 커밋될 트리, 곧 integration의 미완 병합에서 돈다(티켓 worktree의 커밋 안 된 파일은 못 본다).
-    setup을 다시 돌린 병합은 그 병합 커밋의 분리 HEAD에서 돈다(_setup_merge). 그때 heads는 측정에 남길 (integration 끝, 티켓 커밋)이다.
+    setup을 다시 돌린 병합은 그 병합 커밋의 분리 HEAD에서 돈다(_setup_merge). 측정에는 그 커밋의 두 부모(integration 끝, 티켓 커밋)를 남긴다.
 
     (결과, 로그, 트리가 바뀌었나). 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
     더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 수리 뒤의 다시 검증은 측정 라벨이 따로다.
@@ -2649,7 +2649,11 @@ def _verify(r: Run, t: Ticket, *, heads: tuple[str, str] | tuple[()] = ()) -> tu
         say(f"[{t.id}] 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다")
     label = f"ticket-{t.id}" + ("-repair" if state.open_repair(r.st.ticket(t.id)) else "") + ("-끊김" if res.interrupted else "")
     ts = r.st.ticket(t.id)
-    integration_head, ticket_head = heads or (before[0], before[2])
+    integration_head, ticket_head = before[0], before[2]
+    if before[0] and not before[1] and not before[2]:  # 병합 커밋의 분리 HEAD: 미완 병합의 검증과 같은 값을 남긴다
+        parents = git.run(r.iwt, "rev-list", "--parents", "-n", "1", before[0], check=False).stdout.split()[1:]
+        if len(parents) == 2:
+            integration_head, ticket_head = parents
     metrics.validation(r, label, command, integration_head, res, changed, tree_sha=before[3], ticket_head=ticket_head,
                        ticket_attempt=ts.phases[-1]["attempt"] if ts.phases else ts.attempts)
     return res, log, changed
