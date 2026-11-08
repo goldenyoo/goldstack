@@ -187,7 +187,8 @@ class OffTest(Base):
                     self.assertEqual(self.claude_hook(command, env), (0, ""))
 
     def test_unreadable_env_skips_only_this_rule_and_warns(self):
-        for bad in ("{", "[1]", '{"deny": ["("]}', '{"runner": "x", "file": "y"}', '{"max_files": -1}'):
+        for bad in ("{", "[1]", '{"deny": ["("]}', '{"runner": "x", "file": "y"}', '{"max_files": -1}',
+                    '{"deny": ["a{4294967295}"]}', '{"deny": ["' + "(" * 2000 + ")" * 2000 + '"]}'):
             env = {**self.env, config.WORKER_TESTS_ENV: bad}
             with self.subTest(bad=bad):
                 reason, err = self.verdict("python -m unittest discover -s tests", env)

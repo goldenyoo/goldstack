@@ -215,7 +215,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.WorkerTestsConfig.from_env(only_deny.env_value()), only_deny)
         self.assertEqual(config.WorkerTestsConfig.from_env(""), config.WorkerTestsConfig())
         for bad in ("{", "[]", '"x"', '{"deny": ["("]}', '{"deny": "x"}', '{"runner": "a", "file": "b"}',
-                    '{"runner": "a", "file": "", "max_files": 1}', '{"max_files": -1}', '{"max_files": true}'):
+                    '{"runner": "a", "file": "", "max_files": 1}', '{"max_files": -1}', '{"max_files": true}',
+                    '{"deny": ["a{4294967295}"]}', '{"deny": ["' + "(" * 2000 + ")" * 2000 + '"]}'):
             with self.subTest(env=bad), self.assertRaises(ValueError):
                 config.WorkerTestsConfig.from_env(bad)
 
@@ -223,6 +224,8 @@ class ConfigTest(unittest.TestCase):
         cases = {
             'deny = ["("]': "hook.worker_tests.deny[0]",
             'deny = ["ok", "a[b"]': "hook.worker_tests.deny[1]",
+            'deny = ["a{4294967295}"]': "hook.worker_tests.deny[0]",  # re.error가 아니라 OverflowError
+            'deny = ["' + "(" * 2000 + ")" * 2000 + '"]': "hook.worker_tests.deny[0]",  # RecursionError
             'deny = [""]': "hook.worker_tests.deny",
             'deny = "x"': "hook.worker_tests.deny",
             'deny = [1]': "hook.worker_tests.deny",

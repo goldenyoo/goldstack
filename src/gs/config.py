@@ -415,7 +415,7 @@ def worker_tests(raw: dict) -> tuple[WorkerTestsConfig, list[str]]:
     def regex(key: str, value: str) -> None:
         try:
             re.compile(value)
-        except re.error as e:
+        except (re.error, OverflowError, RecursionError) as e:  # 큰 반복 수 `a{4294967295}`, 깊은 괄호 중첩
             errors.append(f"{key}` 정규식이 틀렸다({value!r}: {e})")
 
     deny = raw.get("deny", [])
