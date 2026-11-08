@@ -290,6 +290,7 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 | `git.direct_push` | `true` | `gs go` 마무리: `false`면 revert·최종 보고서를 PR로. `gs doctor --write`가 고친다 |
 | `git.wait_checks` | `false` | `gs go` 마무리: `true`면 CI를 기다린 뒤 병합. `gs doctor --write`가 고친다 |
 | `worktree.setup` | `""` | `gs go`: worktree마다 worker·verify 전에 돌린다. 비면 안 돈다. 사람이 채운다 |
+| `worktree.setup_when` | `[]` | `gs go`: 티켓 병합이 바꾼 파일이 이 glob 중 하나에 걸리면 integration에서 `worktree.setup`을 다시 돌린다. 비면 integration은 처음 한 번만 준비한다. 레포 루트 기준 경로이고 `*`는 `/`를 넘지 않으며 `**`는 여러 단계다. 형이 틀리면 오류. [아래](#병합-뒤-setup-다시setup_when) |
 | `models.judge` | `"opus"` | 판단 모델 `claude -p --model`: 리뷰 분류(1차 재리뷰의 새 지적 포함), 보고서 요약 |
 | `models.failure_summary` | `gs init` `"haiku"`, 키가 없으면 `models.judge` | 재시도 brief용 실패 요약의 `claude -p --model` |
 | `models.claude_review` | `"opus"` | `tiers.claude` 표가 없을 때 claude reviewer(재리뷰 포함) `--model` |
@@ -314,6 +315,20 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 | `feedback.repo` | `gs init`이 `goldenyoo/goldstack`을 적는다 | issue를 올릴 저장소 |
 | `overnight.autonomy` | `stop`(절이 없거나 `gs init`이 쓴 config도 같다) | `stop` 허락 밖의 일은 멈춘다 · `record` 되돌릴 수 있으면 추천대로 진행하고 `쓴 허락`에 적는다. [밤사이 판단](#밤사이-판단overnight-autonomy) |
 | `feedback.max_per_day` | `5` | 하루에 새로 올리는 issue 최대 수 |
+
+### 병합 뒤 setup 다시(`setup_when`)
+
+의존성이나 버전 파일을 바꾸는 티켓은 병합된 뒤 integration의 설치가 옛 값으로 남아 검증이 엉뚱하게 실패할 수 있다. `.goldstack/config.toml`에 그 파일을 적어 두면 gs가 다시 설치한다.
+
+```toml
+[worktree]
+setup = "uv sync --locked"
+setup_when = ["uv.lock", "pyproject.toml"]
+```
+
+- 티켓 병합이 바꾼 파일이 glob 하나에라도 걸리면 병합 커밋을 만든 뒤, 그 티켓의 검증 전에 integration에서 `setup`을 다시 돈다. 출력에 `[03] setup_when에 걸림(uv.lock) → integration에서 병합 커밋 …로 setup을 다시 돌린다`가 나오고 로그는 `run/<티켓>/<시도>/setup.log`에 이어 쓴다. 걸리지 않으면 돌지 않는다.
+- 다시 돈 setup이 실패하면 그 티켓의 검증 실패이고 이유에 `setup.log` 경로가 있다. 검증 실패 등으로 그 병합을 취소하면 다음 검증 전에 환경을 integration head에 맞춰 다시 준비한다(`■ integration 준비 다시(setup_when: …)`).
+- 값이 없으면(기본, 옛 config) 지금까지와 같다. `gs init`은 이 키를 쓰지 않는다.
 
 검사: 형이 틀린 값, 0 이하인 `timeouts.*`(`checks_grace_seconds`만 `0`을 허용하고 음수는 오류), 음수인 `agy.max_calls_per_run`, 빈 모델 이름(`models.codex`만 빈 값 허용), `merge`·`squash` 밖의 `git.merge_method`, 등급표의 빠진 칸·틀린 형식(공백, 슬래시 둘 이상, 없는 effort), `small`·`medium`·`large` 밖의 `tiers.review`·`rereview`는 오류, 모르는 키는 경고다. effort는 `low`·`medium`·`high`·`xhigh`·`max`이고 codex는 `none`·`minimal`도 받는다. 빠진 키도 오류지만 옛 config를 위해 `git.merge_method`·`direct_push`·`wait_checks`, `models.failure_summary`, `timeouts.checks_minutes`·`setup_minutes`·`rereview_minutes`·`checks_grace_seconds`·`network_wait_minutes`, `[worktree]`, `[agy]`, `[tiers]`는 없으면 기본값으로 읽는다.
 
@@ -609,6 +624,8 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 | `수정 못 함(<이유>)` | 고칠 지적인데 수정이 들어가지 않았다. 이유: `한도`(agy 상한), `띄우지 못함: …`, `수정 worker 실패: …` | 지적이 코드에 그대로 있다고 보고 읽는다. `수정 worker 실패: 커밋 없음`이면 worker가 지적을 틀렸다고 봤을 수 있으니 `run/<NN>/<시도>/fix/worker.log`의 마지막 메시지를 본다. 한도면 `agy.max_calls_per_run`을 올린다 |
 | `확인 못 함(<이유>)` | 수정 커밋은 들어갔지만 고쳐졌는지 모른다. 이유: `한도`, `재리뷰 실패`(답 형식 오류, 판정·근거 없음 등). 옛 실행에는 `시간 초과`도 있다 | 지적과 수정 커밋을 직접 대조한다. 로그는 `run/<NN>/<시도>/rereview<회차>-<계열>/reviewer.log` |
 
+**형식 오류로 읽지 못한 리뷰** — 리뷰어 답에 JSON이 허용하지 않는 이스케이프(`\$`, `\x5d` 같은 셸 인용)가 섞여 있어도 gs가 역슬래시를 두 번 써서 글자를 살려 읽는다. 키 글자가 바뀌는 고치기는 하지 않는다. 그래도 읽지 못한 답은 지적 0건의 성공처럼 보이지 않는다. 보고서의 "리뷰 호출별 시간" 표 결과 칸이 `format-error`이고(고쳐서 읽은 호출은 `passed`), 표 아래 "형식 오류로 읽지 못한 리뷰 답"에 답을 담은 `review.txt` 경로와 바이트 수가 나온다. 답 원문은 믿을 수 없는 글이라 보고서에 옮기지 않는다. 그 리뷰의 지적은 없는 것이니 `review.txt`를 직접 열어 본다.
+
 **보고만 지적은 아이디어 파일로 남는다** — 상태가 `보고만`인 high·medium 지적마다 `.goldstack/ideas/<feature>-<티켓>-<번호>.md`가 하나씩 생기고 보고서 커밋에 함께 들어가 main에 올라간다. 다른 머신에서도 `gs backlog`에 열린 아이디어(`source: <feature> 리뷰 <티켓>`)로 보이고 다음 `/grill`의 후보가 된다. low는 보고서에만 남는다. 이미 있는 파일은 다시 쓰지 않으므로 재개해도 두 번 생기지 않고, `taken`·`dropped`와 직접 고친 내용이 남는다. 필요 없으면 지우지 말고 `status: "dropped"`로 둔다. 파일을 쓰지 못해도 마무리 결과는 바뀌지 않고 경고만 남는다.
 
 `수정됨`이 아닌 넷을 다 합친 수가 `■ 보고서: … · 남은 리뷰 지적 N`과 텔레그램의 `남은 지적 N`이다(`보고만`도 센다). 이 기능이 생기기 전에 돈 실행의 state를 읽으면 `확인 못 함(재리뷰 없음)`, `수정 못 함(수정 버림)`, `수정 못 함(수정 기록 없음)`으로 보일 수 있다.
@@ -621,8 +638,9 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 
 티켓 검증이 실패하면(검증 시간 초과는 제외, 수리 없이 바로 아래 재시도로 간다) 시도 하나에 한 번, 새 worktree로 처음부터 다시 하기 전에 **수리 worker**가 같은 브랜치·worktree에서 돈다. 구현 모델이 그대로이고, brief에 실패한 `verify.log` 경로만 더해 그 실패의 원인만 고치게 한다. 출력은 `[03] 검증 실패… → 새 시도 대신 같은 브랜치에서 수리한다`, `[03] 수리 worker 시작`이다.
 - 커밋을 남기면 구현과 다른 계열 리뷰어가 `tiers.rereview` 등급으로 수리 커밋의 diff만 본다. 지적은 보고서에만 남고 고치지 않는다. 그 뒤 gs가 다시 병합·검증한다.
-- 커밋이 없으면(불안정한 시험이라 고칠 것이 없다고 본 경우), worker가 실패했으면, 띄우지 못했으면 재리뷰 없이 바로 다시 검증한다.
-- 다시 검증이 통과하면 병합한다. 또 실패하면 그 시도가 실패로 끝나고, 이 시도는 지금처럼 다음 등급의 새 worktree에서 처음부터 다시 한다(수리는 새 시도에서 한 번 더 돈다).
+- 수리 worker를 띄우지 못했으면(agy 한도, 실행 오류) 수리가 없던 것으로 하고 재리뷰 없이 같은 head를 다시 검증한다. 티켓은 실패가 아니다. 반면 커밋이 없으면, worker가 실패했으면 **같은 head를 다시 검증하지 않는다.** 방금 떨어진 트리라 결과가 뻔하다. 그 시도를 실패로 끝내고 다음 등급의 새 worktree에서 처음부터 한 번 다시 한다(수리는 새 시도에서 한 번 더 돈다). 실패 이유에 수리 worker의 마지막 메시지 요약이 들어가고, 다음 시도의 brief와 실패 요약에 그 마지막 메시지 파일(`run/<NN>/<시도>/repair/worker-last.txt`) 경로가 붙는다.
+- 고칠 곳이 이 브랜치 밖이면 수리 worker가 커밋하지 않고 마지막 메시지에 `브랜치 밖 원인: <이유>`로 시작하는 줄을 쓴다(예: integration 환경 차이, 다른 티켓의 코드). 그러면 gs는 **재시도 없이** 그 티켓을 실패로 끝낸다. 새 worktree에서 다시 해도 같은 원인이기 때문이다. 이유는 실패 사유, 보고서, `gs status`에 남는다. 사람이 그 원인을 고친 뒤 `gs go`로 다시 돌린다. 줄이 없으면 위의 일반 경로다.
+- 수리 brief는 검증이 integration의 병합 트리에서 도는 것 자체는 정상이라고 하되, integration과 worktree의 환경 차이(setup을 돌린 시각, 설치 메타데이터)는 원인 후보로 확인하게 하고, 브랜치 안에서 고칠 수 없으면 위 줄을 쓰고 커밋하지 말라고 안내한다. 실패 요약도 같다.
 - 모든 worker의 brief는 전체 검증 대신 고친 곳에 닿는 좁은 시험만 시킨다. 첫 구현 worker(claude·codex·agy 계열 무관, 재개한 worker 포함)도 수리 worker와 [수정 worker](#리뷰와-재리뷰)와 같다. 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 하므로, 같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없앴다. 티켓 `verify`가 좁아도 같다. 뒤 실행에서 첫 검증 실패가 늘어 수리 시간이 줄어든 시간을 넘으면 되돌린다(goldstack-v20 결정 4-2). 모든 brief에는 "다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 다루고 `pkill`·`killall`로 찾아 죽이지 않는다"가 붙는다.
 - 첫·수정·수리 worker의 brief에는 "버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다"가 붙는다. worker는 복구한 뒤 커밋하고 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다. 재리뷰 지시에는 넣지 않는다.
 - 보고서 티켓별 결과의 이유 칸에 `수리: 시도 1 커밋 1개 → 다시 검증 통과` 같은 줄이 붙는다. gs가 죽거나 끊겨도 다음 `gs go`가 수리를 같은 worktree에서 잇는다.
@@ -807,6 +825,7 @@ gs go: git 오류: push 설정이 실행 시작 때와 달라 push하지 않았�
 고칠 것이 spec·티켓이면 `/grill csv-export`로 고치고(커밋까지 한다), 그 뒤 `/go csv-export`. 코드만 다시 돌리면 되면 바로 `/go csv-export`.
 - integration에 병합된 티켓은 건너뛴다(`[01] 이미 병합됨`). 실패·건너뜀 티켓은 실패 횟수를 0으로 되돌리고 다시 한다.
 - `gs go`가 죽어 `running`으로 남은 티켓은 실패로 세지 않고 새로 시작한다. 살아 남은 worker가 있으면 먼저 끝낸다.
+- 실패한 티켓을 다시 돌려도 앞 시도의 리뷰 지적이 사라지지 않는다. 새 시도가 리뷰 기록을 비우기 전에 지적이 있으면 시도 번호·리뷰어·리뷰한 SHA와 함께 state `prior_findings`로 옮기고, 보고서 "리뷰 지적" 아래 **"버려진 시도의 지적"** 절에 `- 03 시도 1 리뷰(codex, 1a2b3c4d5e6f) [high] src/x.py:12: …`처럼 시도 번호·리뷰어·severity·한 줄이 나온다. 버려진 코드의 지적이라 지금 코드에 있는지는 모른다: 읽고 참고만 한다. `남은 리뷰 지적` 집계와 아이디어 파일에는 들어가지 않고 다음 시도 brief에도 넘기지 않는다. 지적이 없었으면 절이 없다.
 - 이미 끝난 feature를 다시 실행해 '이미 끝남' 경로로 가도 issue 닫기·다시 열기가 gh 실패로 못 끝났으면 끝 출력에 `■ issue: #12 닫기 실패(gh). 다음 gs go가 다시 시도한다`가 보인다. 보고서는 다시 쓰지 않고 종료 코드·base도 그대로다.
 - 지난 마무리가 끝나지 않았으면(승인·CI 대기, main 검증 전 등) 그것만 끝내고 멈춘다. 실패·건너뜀 티켓이 있으면 `■ 남은 티켓 N개 → 다음 gs go`이니 [한 번 더 친다](#예시-보호된-main--필수-승인).
 - spec·티켓을 고치고 커밋·push하지 않았으면 `gs go`가 시작 전에 거부한다(`.goldstack/work/csv-export가 origin/main와 다르다. … 먼저 커밋하고 push하라`). `/go`가 커밋·push를 대신 해 준다.
