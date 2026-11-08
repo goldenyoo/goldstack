@@ -28,6 +28,34 @@ class ParseTest(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(review.ReviewError):
                 review.parse_findings(text)
 
+    def test_disallowed_escapes_keep_their_letters(self):
+        text = r'{"findings": [{"severity": "low", "location": "a", "claim": "`\$(` 와 \x5d", "evidence": "\'q\'"}]}'
+        [f] = review.parse_findings(text)
+        self.assertEqual((f.claim, f.evidence), (r"`\$(` 와 \x5d", "'q'"))
+        self.assertEqual(review.extract_json(r'{"a": "\\$ \n \u0041 \/"}'), {"a": "\\$ \n A /"})  # 허용된 이스케이프는 그대로
+
+    def test_escape_repair_never_changes_a_key(self):
+        for text in [r'{"findings": [], "statu\s": 1}', r'{"findings\s": []}']:
+            with self.subTest(text=text):
+                try:
+                    data = review.extract_json(text)
+                except review.ReviewError:
+                    continue
+                self.assertNotIn("status", data)
+        with self.assertRaises(review.ReviewError):
+            review.parse_findings(r'{"findings\s": []}')  # 키가 바뀌어 지적이 없는 리뷰로 읽히면 안 된다
+        self.assertEqual(review.extract_json(r'{"statu\s": 1}'), {"statu\\s": 1})
+
+    def test_real_agy_answer_with_invalid_escapes_has_two_findings(self):
+        r"""v23 01 agy 리뷰 답 원문. `\x5d`·`\$`가 들어 있어 고치기 전에는 리뷰 전체가 버려졌다."""
+        text = (Path(__file__).parent / "data" / "v23-review-agy.txt").read_text(encoding="utf-8")
+        with self.assertRaises(ValueError):
+            json.loads(text)
+        found = review.parse_findings(text)
+        self.assertEqual([f.severity for f in found], ["medium", "medium"])
+        self.assertEqual([f.location for f in found], ["src/gs/hook.py:823", "src/gs/hook.py:625"])
+        self.assertIn("\\x5d", found[1].evidence)  # 역슬래시와 글자가 남는다
+
     def test_decisions(self):
         fs = [review.Finding(i, "high", "a", "c", ev) for i, ev in [(1, "e"), (2, ""), (3, "e"), (4, "e")]]
         review.apply_decisions('{"decisions": [{"id": 1, "action": "fix", "why": "확인함"},'

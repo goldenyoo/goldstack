@@ -541,10 +541,14 @@ class ReplyEscapeTest(unittest.TestCase):
         text = '{"findings": [{"severity": "low", "location": "a", "claim": "c", "evidence": "역슬래시 \\\\\' 그대로"}]}'
         self.assertEqual(review.parse_findings(text)[0].evidence, "역슬래시 \\\' 그대로")
 
-    def test_other_invalid_escapes_stay_errors_so_a_verdict_cannot_flip(self):
+    def test_other_invalid_escapes_keep_their_letters_so_a_verdict_cannot_flip(self):
+        # `\s`는 역슬래시를 두 번 써서 글자를 보존한다. `statu\s`는 `status` 키가 되지 않으므로 진짜 `status`가 이긴다.
         text = '{"verdicts":[{"id":1,"status":"unresolved","statu\\s":"resolved","evidence":"e"}],"findings":[]}'
+        self.assertEqual(review.parse_verdicts(text), {1: {"status": "unresolved", "evidence": "e"}})
+        # `status` 자리에 `statu\s`만 있으면 판정이 없는 답이다.
+        only = '{"verdicts":[{"id":1,"statu\\s":"resolved","evidence":"e"}],"findings":[]}'
         with self.assertRaises(review.ReviewError):
-            review.parse_verdicts(text)
+            review.parse_verdicts(only)
 
     def test_not_json_is_still_an_error(self):
         for text in ("리뷰를 못 했다", '{"findings": [{"claim": "끊긴 답\\\'', ""):

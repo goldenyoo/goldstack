@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from functools import wraps
 from importlib import metadata
+from pathlib import Path
 from time import monotonic
 
 from . import state
@@ -201,9 +202,9 @@ def begin_review_call(on_wait, reviewer, selection, rdir):
 
 
 @best_effort
-def end_review_call(on_wait, rec, start, result):
+def end_review_call(on_wait, rec, start, result, extra=None):
     if on_wait is not None and hasattr(on_wait, "st"):
-        ended = dict(seconds=elapsed(start), result=result, ended_at=state.now())
+        ended = dict(seconds=elapsed(start), result=result, ended_at=state.now(), **(extra or {}))
 
         def change():
             rec.update(ended)
@@ -211,15 +212,40 @@ def end_review_call(on_wait, rec, start, result):
         on_state(on_wait, change)
 
 
+class ReviewCall:
+    """`review_call` 안에서 호출이 답을 읽지 못했음을 알린다(format_error). 호출 자체가 실패한 `error`와 구분한다."""
+
+    def __init__(self, review_file: Path):
+        self.review_file = review_file
+        self.failed_format = False
+
+    def format_error(self) -> None:
+        self.failed_format = True
+
+
 @contextmanager
 def review_call(on_wait, reviewer, selection, rdir):
+    """리뷰 호출 하나의 측정. 결과: passed(답을 읽었다. 고쳐서 읽은 답 포함) | format-error(호출은 끝났으나 답을 못 읽었다) | error(호출이 실패했다).
+
+    format-error 줄에는 답을 담은 `review.txt`의 경로와 바이트 수를 남긴다(원문은 옮기지 않는다)."""
     start, rec = clock(), begin_review_call(on_wait, reviewer, selection, rdir)
-    result = "error"
+    call = ReviewCall(Path(rdir) / "review.txt")
+    result, extra = "error", None
     try:
-        yield
+        yield call
         result = "passed"
     finally:
-        end_review_call(on_wait, rec, start, result)
+        if call.failed_format:
+            result, extra = "format-error", review_file_facts(call.review_file)
+        end_review_call(on_wait, rec, start, result, extra)
+
+
+def review_file_facts(path: Path) -> dict:
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = None  # 답 파일이 없다
+    return {"review_file": str(path), "review_bytes": size}
 
 
 def reviewed(fn):
