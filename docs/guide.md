@@ -412,7 +412,7 @@ base 브랜치에서 Claude Code를 연다. 순서는 `/grill` → `/go`이고, 
 2. 사람이 정할 결정을 라운드마다 한 메시지에 번호 붙여 묻는다. 질문마다 선택지와 그 선택지의 구체 예시(실제로 보일 명령·파일·출력), 추천과 이유가 붙고, 끝에 `yes = 추천 전부 수락. 바꿀 것만 번호로`. 열린 아이디어가 있으면 라운드 1의 첫 질문은 "이번 feature에 넣을 후보"다(아래 [아이디어 흐름](#아이디어-흐름)).
 3. 답하는 법: `yes`(추천 전부), `2. B`(2번만 B), `3. 왜 B가 아니야?`(되묻기: 답을 듣고 같은 라운드를 다시 확정한다). 짧은 답이면 Claude가 "이렇게 읽었다"를 답마다 한 줄로 보이니, 어긋나면 그때 고친다.
 4. 답은 바로 `.goldstack/work/csv-export/spec.md`의 "결정" 표와 "grill 기록"에 적힌다. `verify` 같은 frontmatter 값이면 frontmatter도 고친다(gs는 표가 아니라 frontmatter를 읽는다).
-5. 마지막 라운드는 티켓 분해다: 티켓 표(blocked_by, wave, 구현 모델, 리뷰 계열 — 서로 다른 계열이어야 한다, 건드릴 파일 `touches`)와 범위 밖 목록. 확정되면 `touches`가 티켓 frontmatter에 들어간다(아래 [티켓 선택 키](#티켓-선택-키와-agy-한도)).
+5. 마지막 라운드는 티켓 분해다. 표를 보이기 전에 교차 검토를 한다: grill 세션과 다른 계열 CLI(claude가 아닌 것, 예: `codex exec -s read-only`)가 spec·티켓 초안·관련 코드를 읽기 전용으로 대조한다. Claude가 지적을 코드·실측으로 확인한 뒤 보이고 반영하며, 결정을 바꾸는 지적은 그 결정을 다시 묻는다. 결과는 spec §7 "교차 검토"에 남는다. 돌리지 못하면(CLI 없음, 한도 등) §7에 `교차 검토 못 함: <이유>`를 적고 진행한다. `gs` 명령은 없고 skill 문장이다. 실측이 선택지를 가르면 그 안이 놓치거나 깨뜨릴 경우(반례)도 함께 잰다. 그 뒤 티켓 표(blocked_by, wave, 구현 모델, 리뷰 계열 — 서로 다른 계열이어야 한다, 건드릴 파일 `touches`)와 범위 밖 목록을 확인받는다. 확정되면 `touches`가 티켓 frontmatter에 들어간다(아래 [티켓 선택 키](#티켓-선택-키와-agy-한도)).
 6. 확정되면 `tickets/NN-slug.md`, `.goldstack/out-of-scope/<slug>.md`를 쓰고 `gs check csv-export`가 오류·경고 없이 통과할 때까지 고친다. 라운드 1에서 고른 아이디어 파일은 `status: "taken"`, `feature: "csv-export"`로 바꾼다. 그 뒤 `.goldstack/work/csv-export`, `.goldstack/out-of-scope`, `.goldstack/ideas`, `.goldstack/profile.md`만 커밋한다(없는 디렉터리는 뺀다). push는 하지 않는다.
 
 ```console
@@ -1018,6 +1018,7 @@ detail = "errors" # errors | minimal
 3. **밤사이**: 그 파일에 적힌 허락만으로 feature를 차례로 잇는다. feature 사이에는 `gs overnight next <다음>`이 base 위로 올리기(push 안 된 grill 커밋만 `git pull --rebase`), goldstack 레포면 재설치, 새 프로세스로 `gs check`를 묶어 한 번에 한다. 충돌하면 그 feature는 `미실행`이다. 앞 feature가 실패하면 시작 라운드의 독립 답대로 계속하거나 멈춘다. 허락 밖의 일을 만나면 멈추고 `아침에 물을 것`에 적는다.
 4. **깨어 있기**: 맥은 `caffeinate`, 리눅스는 `systemd-inhibit`(없으면 건너뜀). 맥북은 전원을 연결하고 덮개를 연다.
 5. **아침**: 같은 파일의 `결과` 표(feature, 상태, 다시 띄움 횟수, PR, 이유와 재개 명령)를 읽는다. 텔레그램이 켜져 있으면 요약 한 통이 온다.
+6. **끝**: 아침 보고를 쓴 뒤 `gs overnight disarm` 앞에서 `gs self-update`로 설치본을 마지막 feature에 맞춘다(멈춘 밤도). 실패해도 결과는 바뀌지 않고 `## 아침 보고`에 적는다.
 
 ### 도는 밤에 feature 더하기(`/overnight add`)
 

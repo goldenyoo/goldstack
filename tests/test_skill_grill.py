@@ -135,6 +135,43 @@ class GrillBreakdownTest(unittest.TestCase):
             self.assertIn(text, line[0])
 
 
+class GrillCrossReviewTest(unittest.TestCase):
+    """교차 검토와 실측 반례(goldstack-v29 01). 문장을 지우면 실패한다."""
+
+    def body(self):
+        return (SKILLS / "grill" / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_step1_measures_counterexamples(self):
+        step1 = steps(self.body())[1]
+        self.assertIn("실측이 선택지를 가르면 그 안이 놓치거나 깨뜨릴 경우도 함께 잰다", step1)
+
+    def test_step5_cross_reviews_before_confirmation(self):
+        step5 = steps(self.body())[5]
+        for text in ("교차 검토를 한다", "다른 계열 CLI(claude가 아닌 것", "`codex exec -s read-only`",
+                     "spec·티켓 초안·관련 코드를 읽기 전용으로 대조한다",
+                     "코드·실측으로 확인한 뒤 사람에게 보이고 반영하며",
+                     "결정을 바꾸는 지적은 그 결정을 다시 묻는다"):
+            self.assertIn(text, step5)
+        self.assertLess(step5.index("교차 검토를 한다"), step5.index("확인받고"))
+
+    def test_step5_records_when_review_cannot_run(self):
+        step5 = steps(self.body())[5]
+        self.assertIn('"교차 검토 못 함: <이유>"를 적고 진행한다', step5)
+        self.assertIn("CLI 없음, 한도", step5)
+
+    def test_step5_does_not_require_one_cli(self):
+        step5 = steps(self.body())[5]
+        self.assertIn("예: `codex exec", step5)  # 예시로만 든다
+
+    def test_spec_template_has_cross_review_record(self):
+        section = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 7. grill 기록")[2]
+        self.assertIn("### 교차 검토", section)
+        header = next(line for line in section.splitlines() if line.startswith("| # | 검토 모델"))
+        for column in ("검토 모델", "지적", "확인", "반영"):
+            self.assertIn(column, header)
+        self.assertIn("교차 검토 못 함: <이유>", section)
+
+
 class IdeaFlowTest(unittest.TestCase):
     def read(self, name):
         return (SKILLS / name / "SKILL.md").read_text(encoding="utf-8")
