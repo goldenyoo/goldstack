@@ -122,6 +122,8 @@ class OvernightSkillTest(unittest.TestCase):
         """아침 보고와 알림까지 켠 채로 간다. 멈춘 밤도 7단계로 오므로 여기서 함께 끈다."""
         self.assert_in_order(self.parts["7. 아침 보고"], "`## 아침 보고`", "`gs notify .goldstack", "`gs overnight disarm`")
         self.assertIn("멈춘 밤도", self.parts["7. 아침 보고"])
+        self.assert_in_order(self.parts["7. 아침 보고"], "`gs notify .goldstack", "`gs self-update`", "`gs overnight disarm`")
+        self.assert_in_order(self.parts["이어받기"], "`gs self-update`", "`gs overnight disarm`")
         self.assertIn("7단계로 간다", self.parts["멈출 조건"])
         self.assert_in_order(self.parts["이어받기"], "`## 아침 보고`", "`gs overnight disarm`")
 
