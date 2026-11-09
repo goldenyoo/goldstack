@@ -2,46 +2,33 @@
 
 ## Summary
 
-이번 변경은 코드 동작이 아니라 skill 글을 바꿔, 사람이 직접 하던 작업을 절차로 정해 둔 것입니다. 바뀐 점은 세 가지입니다.
+v29는 /grill에 다른 계열 모델의 읽기 전용 교차 검토와 반례 측정을 넣고, 밤샘 작업 끝에 설치본을 갱신하게 한다. 아이디어 기록에는 재현 명령 원문을 남기게 하고 버전을 0.2.13으로 올렸다. 바뀐 것은 skill 글, 템플릿, 문서, 시험뿐이고 실행 코드는 바뀌지 않았다.
 
-- **/grill 교차 검토와 반례 측정:** 티켓 표를 사람에게 보이기 전에 claude가 아닌 다른 계열 CLI가 spec·티켓·코드를 읽기 전용으로 대조합니다. 실측으로 선택지를 고를 때는 성공하는 경우만이 아니라 그 안이 놓치거나 깨뜨리는 경우도 잽니다. 교차 검토를 못 돌리면 spec §7에 이유를 적고 진행합니다. 이를 위해 grill 단어 상한을 450에서 550으로 올렸습니다.
-- **/overnight 마지막 단계:** 밤샘을 끝내는 `gs overnight disarm` 바로 앞에서 `gs self-update`로 설치본을 갱신합니다. 갱신에 실패해도 결과는 그대로 두고 아침 보고에 적습니다.
-- **아이디어 템플릿:** 근거에 재현 명령이나 입력이 있으면 줄이지 않고 원문 그대로 남깁니다. /idea와 /retro가 이 템플릿을 함께 씁니다.
+**변경의 의미**
+- **/grill:** 티켓 표를 사람에게 보이기 전에 claude가 아닌 CLI가 spec·티켓 초안·코드를 읽기 전용으로 대조한다. 지적은 grill 세션이 확인한 뒤 반영하고, 결정을 바꾸는 지적은 다시 묻는다. 돌리지 못하면 spec §7에 "교차 검토 못 함: <이유>"를 적고 진행한다. 실측이 선택지를 가를 때는 성공 경우만이 아니라 놓치거나 깨뜨리는 경우도 함께 잰다. grill 단어 상한은 450에서 550으로 올렸다.
+- **/overnight:** 7단계와 이어받기 모두 `gs overnight disarm` 바로 앞에서 `gs self-update`를 친다. 실패하면 결과는 바꾸지 않고 아침 보고에 적는다.
+- **아이디어 템플릿:** 근거의 재현 명령·입력을 줄이지 않고 원문 그대로 남긴다. /idea와 /retro가 같은 형식을 쓴다.
+- **문서·버전:** guide와 CHANGELOG를 고쳤다. pyproject, uv.lock, plugin.json의 버전을 0.2.13으로 맞췄다.
 
-문서(guide, CHANGELOG)와 버전 0.2.13도 함께 맞췄습니다. 세 티켓의 codex 리뷰는 지적이 0건입니다.
+**리뷰 지적**
+codex 리뷰 세 건 모두 지적이 0건이다. 그래서 남은 지적도 없다.
 
 **남은 위험**
+- **교차 검토는 강제되지 않는다.** 문장으로만 넣었고 `gs` 명령은 범위 밖으로 뺐다. 시험은 문장이 있는지만 확인하므로, 실제로 돌리는지는 grill 세션에 달려 있다. 이번 v29의 grill 자체도 교차 검토를 생략했다.
+- **삭제 시 실패 확인이 일부만 됐다.** worker 01은 1단계 문장과 "교차 검토 못 함" 문장을 지웠을 때 시험이 실패하는 것을 봤다고 보고했다. 5단계 문장과 템플릿 §7 기록 자리는 직접 확인하지 않았다고 했다. 리뷰어는 확인했다고 썼지만, 둘 다 gs가 검증한 증거는 아니다.
+- **통합 검증이 두 번 실패한 원인이 밝혀지지 않았다.** 같은 명령이 64cb29b와 10191d2에서 실패하고 e560601에서 통과했다. 그 사이 커밋은 보고서 커밋뿐이다. 실패 로그에서도 해당 실패 줄이 나오지 않았다. 시간이 오래 걸리는 시험에서 불안정한 실패가 있을 수 있다.
+- **diff에 실행 산출물이 섞여 있다.** `.goldstack/work/goldstack-v29/report.md` 515줄이 함께 들어간다.
+- **plugin validate 경고 2건이 남아 있다.** marketplace 설명과 아이콘이 없다는 경고다. 이번 변경으로 생긴 것은 아니다.
 
-- **통합 검증이 두 번 실패했습니다.** 실패한 시험은 `test_verify.StaleTest.test_cleanup_ends_every_verify_of_the_run` 하나이고, "부모가 죽어도 검증은 살아 있어야 한다"는 단언이 깨졌습니다. 이번 변경은 이 시험과 대상 코드를 건드리지 않아서 프로세스 그룹 타이밍 탓일 수 있지만, 원인은 확인하지 않았습니다. 두 번째 검증은 681초가 걸렸습니다. 첫 번째 실패 로그는 보고서에 실리지 않아 같은 실패였는지도 확인하지 못했습니다. 재현과 원인 분리가 필요한 남은 지적입니다.
-- **교차 검토는 글로만 정해져 있습니다.** 시험은 문장이 있는지만 확인합니다. 외부 CLI가 실제로 호출되는지, 읽기 전용으로 지켜지는지는 확인하지 않습니다. 이번 grill 자체도 교차 검토를 생략했으므로(spec 2-3), 이 절차는 다음 grill에서 처음 실제로 돌아갑니다.
-- **문장을 지웠을 때 시험이 실패하는지 일부만 확인됐습니다.** 01의 worker는 5단계 교차 검토 문장과 템플릿 §7 기록 자리는 지워 보지 않았다고 했고, 02의 worker는 새 단언을 지워 보지 않았다고 했습니다. 리뷰어는 메모리에서 지웠을 때 시험이 실패했다고 보고했지만, 이것도 리뷰어 자신의 보고입니다.
-- **diff에 보고서 파일이 들어 있습니다.** gs가 만든 `.goldstack/work/goldstack-v29/report.md`(390줄)가 포함되어 있습니다. 의도한 포함인지 확인해야 합니다.
-
-마무리: not_merged · integration 검증 실패
+마무리: preparing · 병합 전
 
 ## Evidence
-
-### 검증 실패
-
-검증: `integration` · 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/finish/integration-verify.log`
-
-```text
-FAIL: test_cleanup_ends_every_verify_of_the_run (test_verify.StaleTest.test_cleanup_ends_every_verify_of_the_run)
-FAILED (failures=1)
-```
-
-후보 티켓(추정): 후보 없음
-
-티켓별 변경 파일:
-
-- 01: `skills/grill/SKILL.md`, `skills/grill/templates/spec.md`, `tests/test_skill_grill.py`, `tests/test_skills.py`
-- 02: `skills/idea/templates/idea.md`, `skills/overnight/SKILL.md`, `tests/test_skill_idea.py`, `tests/test_skill_overnight.py`
-- 03: `.claude-plugin/plugin.json`, `CHANGELOG.md`, `docs/guide.md`, `pyproject.toml`, `tests/test_version.py`, `uv.lock`
 
 ### 실행 측정
 
 - gs 0.2.11 · 설치 commit: 5174cea9de67779e1480f4bb9902ad54a63a6673 · 시작 2026-11-09T09:18:24+09:00
 - gs 0.2.12 · 설치 commit: 26611d350ea221fe110af3156aec4bd89cb2ac7e · 시작 2026-11-09T19:26:14+09:00
+- gs 0.2.12 · 설치 commit: 26611d350ea221fe110af3156aec4bd89cb2ac7e · 시작 2026-11-09T19:52:31+09:00
 - 일시 오류 0회 · 대기 0.0초
 - 01: 일시 오류 0회 · 대기 0.0초
 - 02: 일시 오류 0회 · 대기 0.0초
@@ -80,17 +67,18 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 3 | ticket-03 | 1 | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p 'test_version*.py' && .venv/bin/python -m unittest discover -s tests -p test_docs_missing.py && claude plugin validate . | 155407b6796878ae99e628dacb1dc080922ea8b9 | 8607b01d95c9230d13905b895db1d96ed98704a4 | 0.892958 | passed |
 | 4 | integration | - | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 64cb29b453d485aab320f29a525828054027e862 | - | 7.446829 | failed |
 | 5 | integration | - | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 10191d20db1772fd08d5c5ce366c983325544fba | - | 681.63693 | failed |
+| 6 | integration | - | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | e56060164da6edca093500d12d001f0a5465cf58 | - | 744.853564 | passed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 746.743 |
-| verify | 689.206 |
+| total | 1515.536 |
+| verify | 1434.12 |
 | restore-integration | 0.245 |
-| summary | 43.203 |
-| report | 1.253 |
-| push | 5.281 |
+| summary | 63.413 |
+| report | 0.441 |
+| push | 6.898 |
 | publish | 5.616 |
 
 ### 티켓별 결과
@@ -334,156 +322,97 @@ Installed 1 package in 2ms
 
 #### finish/integration-verify.log
 
-앞 10612자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/finish/integration-verify.log`
+앞 12534자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/finish/integration-verify.log`
 
 ```text
-----------------------
-Ran 10 tests in 0.006s
+--------
+Ran 37 tests in 269.531s
 
 OK
-.
+............................
 ----------------------------------------------------------------------
-Ran 23 tests in 140.099s
+Ran 19 tests in 7.427s
 
 OK
-.........
+...........................................
 ----------------------------------------------------------------------
-Ran 9 tests in 0.217s
+Ran 15 tests in 81.001s
 
 OK
-...........
+............................
 ----------------------------------------------------------------------
-Ran 5 tests in 7.060s
+Ran 20 tests in 7.637s
 
 OK
 ..
 ----------------------------------------------------------------------
-Ran 2 tests in 0.044s
-
-OK
-...............
-----------------------------------------------------------------------
-Ran 12 tests in 2.929s
-
-OK
-.
-----------------------------------------------------------------------
-Ran 1 test in 12.149s
-
-OK
-............
-----------------------------------------------------------------------
-Ran 15 tests in 36.065s
-
-OK
-..................
-----------------------------------------------------------------------
-Ran 17 tests in 1.080s
-
-OK
-................
-----------------------------------------------------------------------
-Ran 9 tests in 4.644s
-
-OK
-....................
-----------------------------------------------------------------------
-Ran 23 tests in 1.600s
-
-OK
-...............................
-----------------------------------------------------------------------
-Ran 8 tests in 11.097s
-
-OK
-........................
-----------------------------------------------------------------------
-Ran 26 tests in 21.636s
-
-OK
-....................F....................
-======================================================================
-FAIL: test_cleanup_ends_every_verify_of_the_run (test_verify.StaleTest.test_cleanup_ends_every_verify_of_the_run)
-----------------------------------------------------------------------
-Traceback (most recent call last):
-  File "/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration/tests/test_verify.py", line 309, in test_cleanup_ends_every_verify_of_the_run
-    groups = [self.left_behind(self.run_dir / log) for log in logs]
-              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration/tests/test_verify.py", line 283, in left_behind
-    self.assertTrue(support.group_alive(group), "부모가 죽어도 검증은 살아 있어야 한다")
-AssertionError: False is not true : 부모가 죽어도 검증은 살아 있어야 한다
-
-----------------------------------------------------------------------
-Ran 35 tests in 4.498s
-
-FAILED (failures=1)
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.015s
-
-OK
-.............
-----------------------------------------------------------------------
-Ran 13 tests in 0.078s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 3 tests in 0.084s
-
-OK
-...
-----------------------------------------------------------------------
-Ran 37 tests in 245.306s
-
-OK
-.............................
-----------------------------------------------------------------------
-Ran 19 tests in 7.364s
-
-OK
-..............................................
-----------------------------------------------------------------------
-Ran 15 tests in 74.592s
-
-OK
-..................
-----------------------------------------------------------------------
-Ran 28 tests in 66.084s
+Ran 28 tests in 73.563s
 
 OK
 .....
 ----------------------------------------------------------------------
-Ran 4 tests in 1.278s
+Ran 4 tests in 1.292s
 
 OK
-..........
+............
 ----------------------------------------------------------------------
-Ran 20 tests in 6.616s
+Ran 13 tests in 46.461s
 
 OK
-.........
+.....................................................
 ----------------------------------------------------------------------
-Ran 13 tests in 43.588s
+Ran 70 tests in 48.475s
 
 OK
-......................................................
+........................................................
 ----------------------------------------------------------------------
-Ran 70 tests in 45.337s
-
-OK
-.......................................................
-----------------------------------------------------------------------
-Ran 78 tests in 260.217s
+Ran 78 tests in 262.349s
 
 OK
 ............................................
 ----------------------------------------------------------------------
-Ran 87 tests in 264.464s
+Ran 87 tests in 266.475s
 
 OK
+Validating marketplace manifest: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration/.claude-plugin/marketplace.json
 
-종료 코드: 1
+⚠ Found 1 warning:
+
+  ❯ description: No marketplace description provided. Adding a description helps users understand what this marketplace offers
+
+Validating plugin: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration/.claude-plugin/plugin.json
+
+  ❯ types ./types/index.d.ts declares on $: nothing (no EngineInterface member)
+  ❯ types ./types/index.d.ts declares state: goldstack.line
+
+Validating hooks: /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration/hooks/hooks.json
+
+  ❯ ./register.tsx hooks: session.start, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx calls: $.clock.every, $.clock.now (via pick), $.fs.exists (via findWork, pick), $.fs.list (via pick), $.fs.read (via pick), $.fs.stat (via pick), $.session.cwd (via findWork), $.state.get, $.state.set, $.ui.resolve
+  ❯ ./register.tsx state writes: goldstack.line
+  ❯ ./register.tsx state reads: goldstack.line
+
+Plugin directory checks for /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration. The plugin directory is the catalog that plugins are submitted to; this is a subset of what it runs.
+
+⚠ Found 1 plugin directory warning:
+
+  ❯ .claude-plugin/plugin.json icon: No icon (ICON_MISSING). No icon found in the plugin. The validator looked for `icon` in plugin.json and for a file at .claude-plugin/icon.png or .svg, assets/icon.png or .svg, or a similar path.
+    Fix: Add a square PNG to the plugin folder at .claude-plugin/icon.png, or set `icon` in plugin.json to the path of a square PNG or JPEG in the plugin: 512 to 2048 px on each side, under 2 MB. SVG and WebP are not accepted. That file may become the listing icon only once: the first time the plugin is saved or submitted in the developer portal. Adding or changing it later does not change the icon.
+
+About these checks:
+
+  ❯ This folder also holds a marketplace manifest. The plugin directory treats such a folder as a plugin, so these checks cover only the plugin in this folder. To check another plugin that the marketplace lists, run validate on that plugin's folder.
+  ❯ hooks/hooks.json names a hooks module (a code file listed under `modules`). The plugin directory has rules of its own for such code, and these checks apply none of them, so passing here does not mean the directory accepts the plugin. The developer portal's own validation applies those rules.
+
+These plugin directory checks do not change the result below.
+
+The directory also runs a safety scan and a policy review that this command does not.
+
+No digest: .venv/bin/python3 is not a regular file
+
+✔ Validation passed with warnings
+
+종료 코드: 0
 ```
 
 
@@ -491,11 +420,11 @@ agy 사용: 0/24
 
 ## Merge Danger
 
-결과: integration 검증 실패 → 병합 안 함
+결과: integration 검증 중
 
-PR: https://github.com/goldenyoo/goldstack/pull/52
+PR: 아직 없음
 
-integration verify: False
+integration verify: True
 
 main verify: 미실행
 
