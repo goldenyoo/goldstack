@@ -17,6 +17,7 @@ class IdeaFlowTest(unittest.TestCase):
         template = (SKILLS / "idea" / "templates" / "idea.md").read_text(encoding="utf-8")
         for key in ("date", "severity", "source", "status", "feature", "issues"):
             self.assertIn(f"{key}:", template)
+        self.assertIn("근거에 재현 명령·입력이 있으면 줄이지 않고(`…` 없이) 원문을 코드로 남긴다", template)
         self.assertNotIn("ideas/README.md", body)  # 다른 레포에는 없다
         parts = steps(body)
         self.assertIn("gs backlog", parts[1])  # 비슷한 것을 먼저 찾는다
