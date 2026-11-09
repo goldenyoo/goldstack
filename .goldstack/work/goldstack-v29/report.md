@@ -2,46 +2,29 @@
 
 ## Summary
 
-세 티켓(grill 교차 검토·실측 반례, 밤샘 끝 `gs self-update`와 재현 명령 원문 보존, v29 문서와 0.2.13 버전)은 integration에 병합됐습니다. 하지만 병합 트리의 전체 검증은 범위 밖 시험 하나에서 실패했습니다.
+이번 변경은 코드 동작이 아니라 skill 글을 바꿔, 사람이 직접 하던 작업을 절차로 정해 둔 것입니다. 바뀐 점은 세 가지입니다.
 
-**변경의 의미.** 14개 파일, +69/−11이고 바뀐 것은 모두 skill 글·문서·시험·버전입니다. 실행 코드는 바꾸지 않았습니다.
-- **grill:** 실측으로 선택지를 고를 때 성공 경우뿐 아니라 그 안이 놓치거나 깨뜨리는 경우도 함께 잽니다. 티켓 표를 사람에게 보이기 전에는 claude가 아닌 다른 계열 CLI가 spec·티켓·코드를 읽기 전용으로 대조합니다. 이 검토를 못 돌리면 spec §7에 "교차 검토 못 함: <이유>"를 적고 진행합니다. 늘어난 본문에 맞춰 grill 단어 상한을 450에서 550으로 올렸습니다.
-- **overnight:** 7단계 끝과 이어받기 모두 `gs overnight disarm` 바로 앞에 `gs self-update`를 칩니다. self-update가 실패해도 결과는 바뀌지 않고 아침 보고에만 적습니다.
-- **idea 템플릿:** 근거에 재현 명령·입력이 있으면 `…`로 줄이지 않고 원문을 코드로 남깁니다. /idea와 /retro가 이 템플릿을 같이 씁니다.
-- **문서·버전:** `docs/guide.md`와 CHANGELOG에 위 내용을 적었습니다. 버전 파일 세 곳(`pyproject.toml`, `uv.lock`, `plugin.json`)을 0.2.13으로 맞췄습니다.
+- **/grill 교차 검토와 반례 측정:** 티켓 표를 사람에게 보이기 전에 claude가 아닌 다른 계열 CLI가 spec·티켓·코드를 읽기 전용으로 대조합니다. 실측으로 선택지를 고를 때는 성공하는 경우만이 아니라 그 안이 놓치거나 깨뜨리는 경우도 잽니다. 교차 검토를 못 돌리면 spec §7에 이유를 적고 진행합니다. 이를 위해 grill 단어 상한을 450에서 550으로 올렸습니다.
+- **/overnight 마지막 단계:** 밤샘을 끝내는 `gs overnight disarm` 바로 앞에서 `gs self-update`로 설치본을 갱신합니다. 갱신에 실패해도 결과는 그대로 두고 아침 보고에 적습니다.
+- **아이디어 템플릿:** 근거에 재현 명령이나 입력이 있으면 줄이지 않고 원문 그대로 남깁니다. /idea와 /retro가 이 템플릿을 함께 씁니다.
 
-티켓별 좁은 검증은 셋 다 통과했습니다. codex 리뷰의 지적은 세 티켓 모두 0건입니다.
+문서(guide, CHANGELOG)와 버전 0.2.13도 함께 맞췄습니다. 세 티켓의 codex 리뷰는 지적이 0건입니다.
 
 **남은 위험**
-- **병합 트리 검증 실패 (HEAD `64cb29b`):** `test_feedback_format`의 `test_cli_version_keeps_the_number_only`가 실패했습니다. `feedback._cli_version("gh")`가 기대값 `'1.2.3'` 대신 `'모름'`을 돌려줬습니다.
-  - 이번 diff는 feedback 코드도, 이 시험 파일도 건드리지 않았습니다. 그래서 환경 탓일 수도 있고 원래 있던 결함일 수도 있는데, 원인은 확인하지 못했습니다.
-  - 검증 명령이 `&&`로 이어져 있어 여기서 멈췄습니다. 그 뒤의 전체 시험 병렬 실행, `claude plugin validate .`, `uv build`는 병합 트리에서 돌지 않았습니다.
-- **교차 검토는 글로만 정해져 있습니다.** 강제하는 `gs` 명령이 없어서 실제로 돌릴지는 grill 세션에 달려 있습니다. 이 명령은 범위 밖으로 따로 남겨 두었습니다(`grill-review-command`). 이번 grill에서도 교차 검토를 생략했습니다.
 
-마무리: not_merged · integration 검증 실패
+- **통합 검증이 두 번 실패했습니다.** 실패한 시험은 `test_verify.StaleTest.test_cleanup_ends_every_verify_of_the_run` 하나이고, "부모가 죽어도 검증은 살아 있어야 한다"는 단언이 깨졌습니다. 이번 변경은 이 시험과 대상 코드를 건드리지 않아서 프로세스 그룹 타이밍 탓일 수 있지만, 원인은 확인하지 않았습니다. 두 번째 검증은 681초가 걸렸습니다. 첫 번째 실패 로그는 보고서에 실리지 않아 같은 실패였는지도 확인하지 못했습니다. 재현과 원인 분리가 필요한 남은 지적입니다.
+- **교차 검토는 글로만 정해져 있습니다.** 시험은 문장이 있는지만 확인합니다. 외부 CLI가 실제로 호출되는지, 읽기 전용으로 지켜지는지는 확인하지 않습니다. 이번 grill 자체도 교차 검토를 생략했으므로(spec 2-3), 이 절차는 다음 grill에서 처음 실제로 돌아갑니다.
+- **문장을 지웠을 때 시험이 실패하는지 일부만 확인됐습니다.** 01의 worker는 5단계 교차 검토 문장과 템플릿 §7 기록 자리는 지워 보지 않았다고 했고, 02의 worker는 새 단언을 지워 보지 않았다고 했습니다. 리뷰어는 메모리에서 지웠을 때 시험이 실패했다고 보고했지만, 이것도 리뷰어 자신의 보고입니다.
+- **diff에 보고서 파일이 들어 있습니다.** gs가 만든 `.goldstack/work/goldstack-v29/report.md`(390줄)가 포함되어 있습니다. 의도한 포함인지 확인해야 합니다.
+
+마무리: preparing · 병합 전
 
 ## Evidence
-
-### 검증 실패
-
-검증: `integration` · 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/finish/integration-verify.log`
-
-```text
-FAIL: test_cli_version_keeps_the_number_only (test_feedback_format.RedactionTest.test_cli_version_keeps_the_number_only)
-FAILED (failures=1)
-```
-
-후보 티켓(추정): 후보 없음
-
-티켓별 변경 파일:
-
-- 01: `skills/grill/SKILL.md`, `skills/grill/templates/spec.md`, `tests/test_skill_grill.py`, `tests/test_skills.py`
-- 02: `skills/idea/templates/idea.md`, `skills/overnight/SKILL.md`, `tests/test_skill_idea.py`, `tests/test_skill_overnight.py`
-- 03: `.claude-plugin/plugin.json`, `CHANGELOG.md`, `docs/guide.md`, `pyproject.toml`, `tests/test_version.py`, `uv.lock`
 
 ### 실행 측정
 
 - gs 0.2.11 · 설치 commit: 5174cea9de67779e1480f4bb9902ad54a63a6673 · 시작 2026-11-09T09:18:24+09:00
+- gs 0.2.12 · 설치 commit: 26611d350ea221fe110af3156aec4bd89cb2ac7e · 시작 2026-11-09T19:26:14+09:00
 - 일시 오류 0회 · 대기 0.0초
 - 01: 일시 오류 0회 · 대기 0.0초
 - 02: 일시 오류 0회 · 대기 0.0초
@@ -79,17 +62,18 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 | 2 | ticket-01 | 1 | 1 | .venv/bin/python -m unittest discover -s tests -p test_skill_grill.py && .venv/bin/python -m unittest discover -s tests -p test_skills.py | 8a2abbe0c8ceb448dbfd5710c7dc558e492b8c33 | d2158042510601797afeda63de1ed8ecfab31634 | 0.150014 | passed |
 | 3 | ticket-03 | 1 | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p 'test_version*.py' && .venv/bin/python -m unittest discover -s tests -p test_docs_missing.py && claude plugin validate . | 155407b6796878ae99e628dacb1dc080922ea8b9 | 8607b01d95c9230d13905b895db1d96ed98704a4 | 0.892958 | passed |
 | 4 | integration | - | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 64cb29b453d485aab320f29a525828054027e862 | - | 7.446829 | failed |
+| 5 | integration | - | 1 | uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests \| grep '^test_' \| xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)" | 10191d20db1772fd08d5c5ce366c983325544fba | - | 681.63693 | failed |
 
 마무리 단계별 시간(보고서 생성 시점, 진행 중 단계는 경과·중첩 단계 포함)
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 36.0 |
-| verify | 7.496 |
-| restore-integration | 0.11 |
-| summary | 22.668 |
-| report | 1.065 |
-| push | 1.791 |
+| total | 741.743 |
+| verify | 689.206 |
+| restore-integration | 0.182 |
+| summary | 43.203 |
+| report | 0.197 |
+| push | 3.357 |
 | publish | 2.906 |
 
 ### 티켓별 결과
@@ -333,30 +317,154 @@ Installed 1 package in 2ms
 
 #### finish/integration-verify.log
 
+앞 10612자 생략. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/finish/integration-verify.log`
+
 ```text
-$ uv sync --locked -q && .venv/bin/python -m unittest discover -s tests -p test_skills.py && .venv/bin/python -m unittest discover -s tests -p test_feedback_format.py && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p && claude plugin validate . && uv build -q -o "$(mktemp -d)"
-HEAD: 64cb29b453d485aab320f29a525828054027e862
-..........
-----------------------------------------------------------------------
-Ran 10 tests in 0.003s
+----------------------
+Ran 10 tests in 0.006s
 
 OK
-....................................F.................................
+.
+----------------------------------------------------------------------
+Ran 23 tests in 140.099s
+
+OK
+.........
+----------------------------------------------------------------------
+Ran 9 tests in 0.217s
+
+OK
+...........
+----------------------------------------------------------------------
+Ran 5 tests in 7.060s
+
+OK
+..
+----------------------------------------------------------------------
+Ran 2 tests in 0.044s
+
+OK
+...............
+----------------------------------------------------------------------
+Ran 12 tests in 2.929s
+
+OK
+.
+----------------------------------------------------------------------
+Ran 1 test in 12.149s
+
+OK
+............
+----------------------------------------------------------------------
+Ran 15 tests in 36.065s
+
+OK
+..................
+----------------------------------------------------------------------
+Ran 17 tests in 1.080s
+
+OK
+................
+----------------------------------------------------------------------
+Ran 9 tests in 4.644s
+
+OK
+....................
+----------------------------------------------------------------------
+Ran 23 tests in 1.600s
+
+OK
+...............................
+----------------------------------------------------------------------
+Ran 8 tests in 11.097s
+
+OK
+........................
+----------------------------------------------------------------------
+Ran 26 tests in 21.636s
+
+OK
+....................F....................
 ======================================================================
-FAIL: test_cli_version_keeps_the_number_only (test_feedback_format.RedactionTest.test_cli_version_keeps_the_number_only)
+FAIL: test_cleanup_ends_every_verify_of_the_run (test_verify.StaleTest.test_cleanup_ends_every_verify_of_the_run)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration/tests/test_feedback_format.py", line 437, in test_cli_version_keeps_the_number_only
-    self.assertEqual(feedback._cli_version("gh"), "1.2.3")
-AssertionError: '모름' != '1.2.3'
-- 모름
-+ 1.2.3
-
+  File "/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration/tests/test_verify.py", line 309, in test_cleanup_ends_every_verify_of_the_run
+    groups = [self.left_behind(self.run_dir / log) for log in logs]
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/wt/integration/tests/test_verify.py", line 283, in left_behind
+    self.assertTrue(support.group_alive(group), "부모가 죽어도 검증은 살아 있어야 한다")
+AssertionError: False is not true : 부모가 죽어도 검증은 살아 있어야 한다
 
 ----------------------------------------------------------------------
-Ran 70 tests in 7.299s
+Ran 35 tests in 4.498s
 
 FAILED (failures=1)
+...
+----------------------------------------------------------------------
+Ran 3 tests in 0.015s
+
+OK
+.............
+----------------------------------------------------------------------
+Ran 13 tests in 0.078s
+
+OK
+...
+----------------------------------------------------------------------
+Ran 3 tests in 0.084s
+
+OK
+...
+----------------------------------------------------------------------
+Ran 37 tests in 245.306s
+
+OK
+.............................
+----------------------------------------------------------------------
+Ran 19 tests in 7.364s
+
+OK
+..............................................
+----------------------------------------------------------------------
+Ran 15 tests in 74.592s
+
+OK
+..................
+----------------------------------------------------------------------
+Ran 28 tests in 66.084s
+
+OK
+.....
+----------------------------------------------------------------------
+Ran 4 tests in 1.278s
+
+OK
+..........
+----------------------------------------------------------------------
+Ran 20 tests in 6.616s
+
+OK
+.........
+----------------------------------------------------------------------
+Ran 13 tests in 43.588s
+
+OK
+......................................................
+----------------------------------------------------------------------
+Ran 70 tests in 45.337s
+
+OK
+.......................................................
+----------------------------------------------------------------------
+Ran 78 tests in 260.217s
+
+OK
+............................................
+----------------------------------------------------------------------
+Ran 87 tests in 264.464s
+
+OK
 
 종료 코드: 1
 ```
@@ -366,9 +474,9 @@ agy 사용: 0/24
 
 ## Merge Danger
 
-결과: integration 검증 실패 → 병합 안 함
+결과: integration 검증 중
 
-PR: https://github.com/goldenyoo/goldstack/pull/52
+PR: 아직 없음
 
 integration verify: False
 
