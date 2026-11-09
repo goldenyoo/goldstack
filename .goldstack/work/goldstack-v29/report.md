@@ -17,9 +17,26 @@
 - **문장을 지웠을 때 시험이 실패하는지 일부만 확인됐습니다.** 01의 worker는 5단계 교차 검토 문장과 템플릿 §7 기록 자리는 지워 보지 않았다고 했고, 02의 worker는 새 단언을 지워 보지 않았다고 했습니다. 리뷰어는 메모리에서 지웠을 때 시험이 실패했다고 보고했지만, 이것도 리뷰어 자신의 보고입니다.
 - **diff에 보고서 파일이 들어 있습니다.** gs가 만든 `.goldstack/work/goldstack-v29/report.md`(390줄)가 포함되어 있습니다. 의도한 포함인지 확인해야 합니다.
 
-마무리: preparing · 병합 전
+마무리: not_merged · integration 검증 실패
 
 ## Evidence
+
+### 검증 실패
+
+검증: `integration` · 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/finish/integration-verify.log`
+
+```text
+FAIL: test_cleanup_ends_every_verify_of_the_run (test_verify.StaleTest.test_cleanup_ends_every_verify_of_the_run)
+FAILED (failures=1)
+```
+
+후보 티켓(추정): 후보 없음
+
+티켓별 변경 파일:
+
+- 01: `skills/grill/SKILL.md`, `skills/grill/templates/spec.md`, `tests/test_skill_grill.py`, `tests/test_skills.py`
+- 02: `skills/idea/templates/idea.md`, `skills/overnight/SKILL.md`, `tests/test_skill_idea.py`, `tests/test_skill_overnight.py`
+- 03: `.claude-plugin/plugin.json`, `CHANGELOG.md`, `docs/guide.md`, `pyproject.toml`, `tests/test_version.py`, `uv.lock`
 
 ### 실행 측정
 
@@ -68,13 +85,13 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 741.743 |
+| total | 746.743 |
 | verify | 689.206 |
-| restore-integration | 0.182 |
+| restore-integration | 0.245 |
 | summary | 43.203 |
-| report | 0.197 |
-| push | 3.357 |
-| publish | 2.906 |
+| report | 1.253 |
+| push | 5.281 |
+| publish | 5.616 |
 
 ### 티켓별 결과
 
@@ -474,9 +491,9 @@ agy 사용: 0/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration 검증 실패 → 병합 안 함
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/52
 
 integration verify: False
 
