@@ -18,9 +18,26 @@
   - 검증 명령이 `&&`로 이어져 있어 여기서 멈췄습니다. 그 뒤의 전체 시험 병렬 실행, `claude plugin validate .`, `uv build`는 병합 트리에서 돌지 않았습니다.
 - **교차 검토는 글로만 정해져 있습니다.** 강제하는 `gs` 명령이 없어서 실제로 돌릴지는 grill 세션에 달려 있습니다. 이 명령은 범위 밖으로 따로 남겨 두었습니다(`grill-review-command`). 이번 grill에서도 교차 검토를 생략했습니다.
 
-마무리: preparing · 병합 전
+마무리: not_merged · integration 검증 실패
 
 ## Evidence
+
+### 검증 실패
+
+검증: `integration` · 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v29/run/finish/integration-verify.log`
+
+```text
+FAIL: test_cli_version_keeps_the_number_only (test_feedback_format.RedactionTest.test_cli_version_keeps_the_number_only)
+FAILED (failures=1)
+```
+
+후보 티켓(추정): 후보 없음
+
+티켓별 변경 파일:
+
+- 01: `skills/grill/SKILL.md`, `skills/grill/templates/spec.md`, `tests/test_skill_grill.py`, `tests/test_skills.py`
+- 02: `skills/idea/templates/idea.md`, `skills/overnight/SKILL.md`, `tests/test_skill_idea.py`, `tests/test_skill_overnight.py`
+- 03: `.claude-plugin/plugin.json`, `CHANGELOG.md`, `docs/guide.md`, `pyproject.toml`, `tests/test_version.py`, `uv.lock`
 
 ### 실행 측정
 
@@ -67,11 +84,13 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 31.0 |
+| total | 36.0 |
 | verify | 7.496 |
-| restore-integration | 0.046 |
+| restore-integration | 0.11 |
 | summary | 22.668 |
-| report | 0 |
+| report | 1.065 |
+| push | 1.791 |
+| publish | 2.906 |
 
 ### 티켓별 결과
 
@@ -347,9 +366,9 @@ agy 사용: 0/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration 검증 실패 → 병합 안 함
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/52
 
 integration verify: False
 
