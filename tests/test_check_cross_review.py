@@ -63,6 +63,10 @@ class CrossReviewTest(unittest.TestCase):
         self.assertIn(WARNING, self.check(TABLE_HEAD + "| 1 | | | | |\n"))
         self.assertIn(WARNING, self.check(TABLE_HEAD + "| 1 | codex | 지적 | | 반영함 |\n"))
 
+    def test_escaped_pipe_is_cell_text_not_separator(self):
+        self.assertIn(WARNING, self.check(TABLE_HEAD + "| 1 | codex | a \\| b 오류 | 코드 확인 | |\n"))
+        self.assertNotIn(WARNING, self.check(TABLE_HEAD + "| 1 | codex | a \\| b 오류 | 코드 확인 | 반영함 |\n"))
+
     def test_skip_line_is_silent(self):
         self.assertNotIn(WARNING, self.check("교차 검토 못 함: codex 한도\n"))
 

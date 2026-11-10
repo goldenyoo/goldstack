@@ -210,9 +210,9 @@ def _table_cells(line: str) -> list[str] | None:
     if not line.startswith("|"):
         return None
     line = line[1:]
-    if line.endswith("|"):
+    if line.endswith("|") and not line.endswith("\\|"):
         line = line[:-1]
-    return [c.strip() for c in line.split("|")]
+    return [c.strip() for c in re.split(r"(?<!\\)\|", line)]  # `\|`는 칸 안의 글자
 
 
 def cross_review_recorded(spec_text: str) -> bool | None:
