@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 0.2.15 — 2026-11-10
+
+### goldstack-v31
+
+- `gs replay`: 시작 commit을 base 이력(`<remote>/<base>`, `<base>`)에서 먼저 찾고, 없을 때만 integration 이력을 본다. 버려진 integration의 같은 `Merge NN:`에 속지 않는다.
+- config `[verify]`(`failed_file`·`rerun`·`max_files`, 비면 꺼짐): 검증이 실패하면 실패한 시험 파일만 따로 돌려 1회성인지 가리고, 통과하면 전체 명령을 한 번 더 돌려 그 결과로 판정한다. 모든 검증 지점에 적용된다. 이 레포 config에 켰다.
+- 보고서 Summary "남은 위험"에 flaky 통과 줄이 나온다(`verify_retries` 통과 포함). integration 검증 실패는 티켓 이유와 어긋나지 않게 "티켓 검증 통과 · integration 검증 실패"처럼 나눠 쓴다.
+- `feedback._cli_version`: 시간 초과를 `모름(시간 초과)`로 구분하고 시험은 subprocess를 mock한다.
+- 옛 기록 v0–v4의 touches 없는 티켓은 받아들인다(`goldstack-v30-03-1` dropped). `gs check`가 끝난 옛 feature에서 내는 오류는 맞는 동작이다. v30 spec §6의 틀린 수(v0 10장)를 바로잡았다.
+- `docs/guide.md`·`docs/internals.md`를 맞췄다.
+- 버전을 `0.2.15`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.14 — 2026-11-10
 
 ### goldstack-v30

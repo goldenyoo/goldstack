@@ -27,6 +27,8 @@ NO_TOUCHES = object()
 
 def copy_feature_with_touches(src, dst):
     """옛 feature(v1–v3)의 기록을 dst로 복사하고, touches 없는 티켓에만 티켓마다 다른 touches를 더한다.
+    옛 기록 v0–v4에는 touches 없는 티켓이 있다(v0 11, v1 2, v2 8, v3 8, v4 10). 이 helper는 touches 밖의 옛 형식이
+    gs check를 통과하는지(호환)를 보려고 사본에만 touches를 넣는다. 기록을 채우자는 것이 아니고 동작은 그대로다.
     gs check는 touches 없는 티켓을 오류로 막는다(goldstack-v30 03). 기록 파일은 고치지 않고 복사본만 고쳐서 나머지 형식이 통과하는지 본다."""
     shutil.copytree(src, dst)
     for path in sorted((Path(dst) / "tickets").glob("*.md")):

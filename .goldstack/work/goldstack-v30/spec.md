@@ -69,6 +69,7 @@ v22–v27 리뷰가 남긴 medium 지적 셋(수리 표식과 네트워크 끊�
 - 수리 worker: `go.py` `_check_worker`가 `_transient_end`(일시 오류)를 `a.repair` 분기보다 먼저 본다. 일시 오류면 `_net_hold`로 다시 띄우고, `브랜치 밖 원인:` 표식 판정은 `_end_repair`에만 있다.
 - hook: `hook.py` `check_worker_tests`가 deny 정규식을 플래그 없이 `re.search`한다. deny 목록은 이 레포 `.goldstack/config.toml` `[hook.worker_tests]`에만 있고 `DEFAULT_CONFIG`에는 없다. 첫 규칙 `\|.*\bxargs\b`의 `.`은 줄바꿈과 맞지 않는다.
 - touches: `feature.py`는 `touches`를 선택 키로 받는다(없으면 []). `review.py` `fixable_files`·`_fixable_rows`는 빈 touches면 "이 티켓 diff가 바꾼 파일"을 이 티켓 몫으로 본다. 티켓 파일 중 touches가 없는 것은 `goldstack-v0`의 10장뿐이다.
+  - 바로잡음(goldstack-v31, 아이디어 `goldstack-v30-03-1`): 실제로는 v0 11, v1 2, v2 8, v3 8, v4 10장이고 v5 이후는 0이다. "v0의 10장뿐"은 집계 명령 출력을 `| head`로 잘라 읽은 오류였다.
 - v29 grill이 교차 검토를 생략했다(v29 보고서 17행). 그때는 교차 검토 단계를 v29가 막 넣는 중이었다.
 - 보고서 "실행 측정"은 시도별 실제 모델·effort와 소요(초)를 적는다. 토큰·한도 사용량은 적지 않는다. 지난 실행을 정한 commit에서 다시 돌리는 명령은 없다.
 - claude worker의 stream 마지막 `result` 이벤트에 `total_cost_usd`(API 환산)가 있고 `streamfmt.py`가 화면에만 쓴다. metrics에는 남지 않는다.
