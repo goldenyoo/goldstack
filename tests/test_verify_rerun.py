@@ -3,6 +3,7 @@
 전체 명령과 판별 명령은 가짜 bash 조각이다. n번째 전체 실행이 무엇을 할지는 full.sh의 case가 정하고, 판별 명령은 받은 값을 rerun.calls에 적는다.
 시간 초과와 시간 예산은 실제 시간에 기대지 않고 verify._run_once·_launch·_clock을 바꿔 본다.
 """
+import io
 import os
 import subprocess
 import tempfile
@@ -14,7 +15,7 @@ from unittest import mock
 import support
 import test_config
 import test_verify_modes
-from gs import config, metrics, state, verify
+from gs import config, metrics, replay, state, verify
 
 REPO = Path(__file__).resolve().parents[1]
 FAILED_FILE = r"^(?:FAIL|ERROR): \S+ \((test_\w+)\."
@@ -212,6 +213,35 @@ class TriageTest(Case):
         self.assertIn("\n판별 통과, 전체 검증은 다시 돌리지 않는다: 판별 중 트리가 바뀌었다\n", log)
         self.assertEqual((res.samples[0]["triage"], res.samples[0]["triage_reason"]), ("passed", "tree_changed"))
 
+    def test_changed_tree_stops_the_retries_too(self):
+        """판별이나 앞 실행이 바꾼 트리를 다음 재시도가 되돌려 통과하지 않게, 재시도 전에도 트리를 보고 바뀌었으면 더 돌리지 않는다."""
+        cases = (  # (이름, 판별 명령 실패, 확인 함수가 돌려줄 값들, 전체 실행들, 전체 실행 수, 판별 값들)
+            ("판별 전에 바뀜", False, [False, False], (fail("test_a"), "exit 0"), 1, []),
+            ("판별 통과 뒤 바뀜", False, [True, False, False], (fail("test_a"), "exit 0"), 1, ["test_a"]),
+            ("판별 실패 뒤 바뀜", True, [True, False], (fail("test_a"), "exit 0"), 1, ["test_a"]),
+            ("판별 안 한 실행 뒤 바뀜", False, [False], ("echo boom; exit 1", "exit 0"), 1, []),
+            ("전체 재실행 뒤 바뀜", False, [True, True, False], (fail("test_a"), "exit 2", "exit 0"), 2, ["test_a"]),
+        )
+        for name, rerun_fails, checks, runs, count, calls in cases:
+            with self.subTest(name):
+                for leftover in ("full.count", "rerun.calls", "rerun.fail"):
+                    (self.dir / leftover).unlink(missing_ok=True)
+                if rerun_fails:
+                    (self.dir / "rerun.fail").touch()
+                self.unchanged = mock.Mock(side_effect=checks)
+                res, log = self.run_verify(self.full(*runs), self.triage(), retries=1)
+                self.assertEqual((res.ok, res.retries, self.count(), self.calls()), (False, 0, count, calls), log)
+                self.assertIn("\n검증 재시도 안 함: 검증 중 트리가 바뀌었다\n", log)
+                self.assertNotIn("검증 재시도 1", log)
+                self.assertEqual(self.unchanged.call_count, len(checks))
+
+        with self.subTest("꺼짐"):  # 판별이 꺼져 있으면 지금처럼 확인 함수를 부르지 않고 재시도한다
+            (self.dir / "full.count").unlink()
+            self.unchanged = mock.Mock(return_value=False)
+            res, log = self.run_verify(self.full("exit 1", "exit 0"), None, retries=1)
+            self.assertEqual((res.ok, res.retries, self.count()), (True, 1, 2))
+            self.unchanged.assert_not_called()
+
     def test_without_a_tree_check_there_is_no_triage(self):
         self.unchanged = None
         res, log = self.run_verify(self.full(fail("test_a"), "exit 0"), self.triage())
@@ -282,6 +312,58 @@ if [ ! -f "$here/passed-$point" ]; then touch "$here/passed-$point"; echo "FAIL:
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "verified")
 
 
+class ReplayPointTest(unittest.TestCase):
+    """replay._verify도 실행 중인 config `[verify]`와 트리 확인 함수(_at_head)를 넘기고, 판별로 통과하면 flaky 줄을 쓴다.
+
+    트리는 커밋 하나짜리 임시 레포다. 전체 명령·횟수·판별 기록은 트리 밖에 두어 트리를 더럽히지 않는다."""
+
+    def setUp(self):
+        support.isolate_git_env(self)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.tree = self.dir / "tree"
+        self.tree.mkdir()
+        (self.tree / "tracked").write_text("original\n")
+        for args in (["init", "-q"], ["add", "tracked"],
+                     ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-qm", "init"]):
+            subprocess.run(["git", *args], cwd=self.tree, check=True, capture_output=True)
+        self.head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.tree, check=True, capture_output=True, text=True).stdout.strip()
+
+    def replay(self, full, rerun, retries=0):
+        """full은 전체 명령의 셸 조각(실행마다 full.runs에 한 줄), rerun은 판별 명령 틀. (replay 결과, 로그, 전체 실행 수, 판별 값들).
+        앞 호출이 남긴 기록과 트리 변경은 지우고 시작한다."""
+        for leftover in ("full.runs", "rerun.calls", "logs/verify.log"):
+            (self.dir / leftover).unlink(missing_ok=True)
+        subprocess.run(["git", "checkout", "-q", "--", "tracked"], cwd=self.tree, check=True)
+        (self.dir / "full.sh").write_text(f"echo run >> {self.dir}/full.runs\n{full}\n")
+        spec = SimpleNamespace(verify=f"bash {self.dir}/full.sh", verify_minutes=1, verify_retries=retries)
+        cfg = SimpleNamespace(worktree=SimpleNamespace(setup=""), verify=config.VerifyConfig(FAILED_FILE, f"echo {{file}} >> {self.dir}/rerun.calls; {rerun}", 3))
+        logdir = self.dir / "logs"
+        logdir.mkdir(exist_ok=True)
+        with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": ""}):
+            result = replay._verify(cfg, spec, self.tree, self.head, logdir, io.StringIO())
+        runs, calls = (self.dir / "full.runs", self.dir / "rerun.calls")
+        return (result, (logdir / "verify.log").read_text(), len(runs.read_text().splitlines()),
+                calls.read_text().split() if calls.exists() else [])
+
+    def test_triage_with_the_running_config_and_flaky_line(self):
+        full = f'[ -f {self.dir}/passed ] && exit 0; touch {self.dir}/passed; echo "FAIL: test_x (test_flaky.Case.test_x)"; exit 1'
+        result, log, runs, calls = self.replay(full, "true")
+        self.assertEqual((result, runs, calls), ("통과", 2, ["test_flaky"]), log)
+        self.assertIn("\nflaky: replay test_flaky 따로 돌려 통과, 전체 다시 통과\n", log)
+
+    def test_tree_changed_by_triage_is_not_reverted_by_a_retry(self):
+        """판별 명령이 tracked를 바꾸면 재시도의 전체 명령이 되돌리고 통과하더라도 받아들이면 안 된다. 판별이 통과하든 실패하든 같다."""
+        full = 'if [ "$(cat tracked)" = original ]; then echo "FAIL: test_x (test_flaky.Case.test_x)"; exit 1; fi; echo original > tracked'
+        for name, rerun in (("판별 통과", "echo changed > tracked"), ("판별 실패", "echo changed > tracked; exit 1")):
+            with self.subTest(name):
+                result, log, runs, calls = self.replay(full, rerun, retries=1)
+                self.assertEqual((result, runs, calls), ("실패(트리 바뀜)", 1, ["test_flaky"]), log)
+                self.assertIn("\n검증 재시도 안 함: 검증 중 트리가 바뀌었다\n", log)
+                self.assertEqual((self.tree / "tracked").read_text(), "changed\n")
+
+
 BAD = {
     'failed_file = "(test_\\\\w+)"': "`verify.failed_file`",  # rerun 없음
     'rerun = "run {file}"': "`verify.failed_file`",  # failed_file 없음
@@ -316,6 +398,27 @@ class ConfigTest(unittest.TestCase):
                 self.assertIsNone(cfg)
                 self.assertEqual([p.level for p in problems], ["오류"], problems)
                 self.assertIn(message, problems[0].message)
+
+    def test_wrong_types_are_errors_and_unknown_keys_warnings(self):
+        both = 'failed_file = "(test_\\\\w+)"\nrerun = "run {file}"\n'
+        cases = {
+            "verify = 1\n" + test_config.CONFIG: "`verify`는 테이블이어야 한다",
+            test_config.CONFIG + '[verify]\nfailed_file = 1\nrerun = "run {file}"\n': "`verify.failed_file`는 문자열이어야 한다",
+            test_config.CONFIG + '[verify]\nfailed_file = "(test_\\\\w+)"\nrerun = ["run {file}"]\n': "`verify.rerun`는 문자열이어야 한다",
+            **{test_config.CONFIG + "[verify]\n" + both + f"max_files = {value}\n": "`verify.max_files`는 정수이어야 한다"
+               for value in ('"3"', "true", "1.5")},
+        }
+        for text, message in cases.items():
+            with self.subTest(text=text.replace(test_config.CONFIG, "")):
+                self.path.write_text(text)
+                cfg, problems = config.load(self.repo)
+                self.assertIsNone(cfg)
+                self.assertEqual([p.level for p in problems], ["오류"], problems)
+                self.assertIn(message, problems[0].message)
+        self.path.write_text(test_config.CONFIG + "[verify]\n" + both + "extra = 1\n")
+        cfg, problems = config.load(self.repo)
+        self.assertEqual([(p.level, p.message) for p in problems], [("경고", "알 수 없는 키 `verify.extra`")])
+        self.assertEqual(cfg.verify, config.VerifyConfig(r"(test_\w+)", "run {file}", 3))
 
     @mock.patch("gs.check.shutil.which", return_value="/test/cli")
     def test_check_and_go_stop_on_each_error(self, _which):
