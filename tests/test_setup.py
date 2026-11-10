@@ -268,9 +268,9 @@ class WorktreeSetupTest(unittest.TestCase):
             events.append(("setup", wt.name))
             return real_setup(cfg, wt, log)
 
-        def validate(spec, wt, stream):
+        def validate(spec, wt, stream, *args):
             events.append(("verify", wt.name))
-            return real_verify(spec, wt, stream)
+            return real_verify(spec, wt, stream, *args)
 
         with mock.patch("gs.setup.run", side_effect=prepare), mock.patch("gs.verify.run", side_effect=validate):
             code, out, err = self.go("--only", "01")

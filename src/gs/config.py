@@ -1,4 +1,7 @@
-"""대상 레포의 설정과 비밀 파일을 읽고, `gs init`의 초기 파일을 만든다."""
+"""대상 레포의 설정과 비밀 파일을 읽고, `gs init`의 초기 파일을 만든다.
+
+`[verify]`(VerifyConfig)·`[hook.worker_tests]`처럼 대상 레포의 시험 도구에 맞춘 절은 비면 꺼짐이고 DEFAULT_CONFIG에 넣지 않는다.
+"""
 from __future__ import annotations
 
 import json
@@ -235,6 +238,24 @@ class HookConfig:
 
 
 @dataclass(frozen=True)
+class VerifyConfig:
+    """`[verify]`: 전체 검증이 실패하면 실패한 시험 파일만 따로 돌려 1회성인지 가린다(verify 머리말의 판별). 모든 값이 비면 꺼짐(기본, `gs init` 템플릿에 없다).
+
+    failed_file: Python 정규식. 실패한 전체 실행의 출력에 re.MULTILINE으로 맞춰 첫 그룹을 시험 파일 이름(의 일부)으로 모은다. 그룹이 있어야 한다.
+    rerun: 셸 명령 틀. `{file}`을 모은 값으로 바꿔 파일마다 돌린다. `{file}`이 있어야 한다.
+    max_files: 모은 값이 이보다 많으면 판별하지 않는다(기본 3, 1 이상).
+    `failed_file`과 `rerun`은 함께 적는다. 코드는 시험 도구를 가정하지 않는다(값은 대상 레포가 적는다).
+    """
+    failed_file: str = ""
+    rerun: str = ""
+    max_files: int = 3
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.failed_file and self.rerun)
+
+
+@dataclass(frozen=True)
 class Config:
     git: GitConfig
     models: ModelsConfig
@@ -247,6 +268,7 @@ class Config:
     feedback: FeedbackConfig = FeedbackConfig()
     overnight: OvernightConfig = OvernightConfig()
     hook: HookConfig = HookConfig()
+    verify: VerifyConfig = VerifyConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -271,6 +293,9 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
             continue
         if section == "hook":
             sections[section] = _load_hook(data.get(section, {}), problems)
+            continue
+        if section == "verify":
+            sections[section] = _load_verify(data.get(section, {}), problems)
             continue
         if section not in data and section not in ("agy", "worktree", "goldstack", "feedback", "overnight"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
@@ -406,6 +431,47 @@ def _load_hook(raw, problems: list[Problem]) -> HookConfig:
     if not errors and "max_files" in table and not rules.counts:
         problems.append(Problem("경고", CONFIG_PATH, "`hook.worker_tests.max_files`는 `runner`·`file`이 없으면 쓰이지 않는다"))
     return HookConfig() if errors else HookConfig(rules)
+
+
+def _load_verify(raw, problems: list[Problem]) -> VerifyConfig:
+    """`[verify]`. 절이 없거나 값이 비면 꺼진 판별이다."""
+    def error(message: str) -> None:
+        problems.append(Problem("오류", CONFIG_PATH, f"`verify.{message}"))
+
+    if not isinstance(raw, dict):
+        problems.append(Problem("오류", CONFIG_PATH, "`verify`는 테이블이어야 한다"))
+        return VerifyConfig()
+    for key in raw.keys() - {f.name for f in dataclass_fields(VerifyConfig)}:
+        problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `verify.{key}`"))
+    before = len(problems)
+    texts: dict[str, str | None] = {}
+    for key in ("failed_file", "rerun"):
+        value = raw.get(key, "")
+        if not isinstance(value, str):
+            error(f"{key}`는 문자열이어야 한다")
+            value = None
+        texts[key] = value
+    failed_file, rerun = texts["failed_file"], texts["rerun"]
+    if failed_file:
+        try:
+            groups = re.compile(failed_file).groups
+        except (re.error, OverflowError, RecursionError) as e:  # 큰 반복 수, 깊은 괄호 중첩(worker_tests와 같다)
+            error(f"failed_file` 정규식이 틀렸다({failed_file!r}: {e})")
+        else:
+            if not groups:
+                error("failed_file`에 그룹이 없다(첫 그룹이 시험 파일 이름이다)")
+    if rerun and "{file}" not in rerun:
+        error("rerun`에 `{file}`이 없다(시험 파일 값을 넣을 자리)")
+    if failed_file is not None and rerun is not None and bool(failed_file) != bool(rerun):
+        error("failed_file`과 `verify.rerun`은 함께 적는다")
+    max_files = raw.get("max_files", VerifyConfig.max_files)
+    if type(max_files) is not int:  # bool은 int의 하위형이지만 정수 설정으로 받지 않는다
+        error("max_files`는 정수이어야 한다")
+    elif max_files < 1:
+        error("max_files`는 1 이상이어야 한다")
+    if len(problems) > before:
+        return VerifyConfig()
+    return VerifyConfig(failed_file, rerun, max_files)
 
 
 def worker_tests(raw: dict) -> tuple[WorkerTestsConfig, list[str]]:

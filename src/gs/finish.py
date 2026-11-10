@@ -388,20 +388,25 @@ def _verify(r, wt: Path, label: str) -> bool:
     종료 코드 줄은 verify.run이 쓴다. 시간을 넘기면 그 줄 바로 앞이 `시간 초과: <N>분` 줄이고 실패다. 끊김(Result.interrupted)도 여느 실패와 같다: 끊겼다고 다시 돌리는 것은 티켓 검증뿐이다.
     지난 gs가 남긴 검증은 이번 gs go가 시작할 때 이미 끝냈다(verify.stop_stale). 로그 경로가 그 표지다.
     integration worktree에서 통과하면 그 커밋을 `verified_head`로 남긴다. 첫 base 검증 전에 `_same_as_verified`가, base 검증이 실패했을 때
-    `_code_same`이 병합 커밋과 비교한다."""
+    `_code_same`이 병합 커밋과 비교한다.
+    판별(verify 머리말)은 실행 중인 config `[verify]`로 하고, 판별·전체 재실행 전에 같은 트리 규칙(`same`)으로 트리를 확인한다."""
     log = r.rundir / "finish" / f"{label}-verify.log"
     head = git.sha(wt, "HEAD")
     branch = git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout
+
+    def same() -> bool:
+        return (git.sha(wt, "HEAD") == head and setup.is_clean(wt)
+                and git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout == branch)
+
     print(f"■ {label} 검증: {r.feat.spec.verify}", flush=True)
     with log.open("w", encoding="utf-8") as stream:
         stream.write(f"$ {r.feat.spec.verify}\nHEAD: {head}\n")
-        res = verify.run(r.feat.spec, wt, stream)
+        res = verify.run(r.feat.spec, wt, stream, r.cfg.verify, same)
         if res.timed_out:
             print(f"■ {label} 검증 시간 초과({res.minutes}분): 프로세스 그룹을 끝냈다", flush=True)
             metrics.validation(r, label, r.feat.spec.verify, head, res)
             return False
-        changed = (git.sha(wt, "HEAD") != head or not setup.is_clean(wt)
-                   or git.run(wt, "symbolic-ref", "-q", "HEAD", check=False).stdout != branch)
+        changed = not same()
         if changed:
             stream.write("검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
         elif res.ok:

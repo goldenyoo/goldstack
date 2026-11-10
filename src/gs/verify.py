@@ -15,6 +15,20 @@
 표지는 그 검증의 로그 경로라 검증마다 다르고, run 디렉터리 아래라 어느 feature의 것인지 드러난다. 다음 gs go가 잠금을 잡자마자 stop_stale로 그 run의 표지를 모두 끝낸다.
 같은 run의 다른 검증도 끝내는 이유: 티켓 검증과 integration 검증은 같은 worktree를 쓰는데 재개 뒤 어느 검증이 먼저 돌지 모른다. 한 feature에 gs go는 하나이고 검증은 한 번에 하나라, 잠금을 잡은 때 살아 있는 검증은 모두 옛 것이다.
 못 찾는 것: 검증이 스스로 `exec`로 bash를 대신했거나, bash만 먼저 죽고 자식이 남은 그룹. 명령줄에 표지가 없다.
+
+판별(triage, config `[verify]`, goldstack-v31 02): 바뀐 코드와 무관한 시험 하나의 1회성 실패로 검증이 떨어지지 않게 한다. 실패한 시험 파일을 따로 돌리는 것은 판별에만 쓰고,
+통과 판정은 언제나 전체 명령이 한다(따로 돌려 통과해도 `&&` 사슬의 뒤 명령, 정규식이 못 뽑는 import 오류를 전체 재실행이 다시 본다). 한 시도는 이렇다:
+1. 전체 명령이 실패했고(`Result.ok`가 아님) 시간 초과·끊김이 아니면, 그 실행의 출력만(앞 시도·gs가 먼저 쓴 머리말은 빼고)에 `failed_file`을 re.MULTILINE으로 맞춰 첫 그룹을 모으고 중복을 뺀다.
+2. 매치가 없거나, `max_files`를 넘거나, 값이 SAFE_FILE이 아니거나(셸 명령 틀에 그대로 들어간다. 따옴표로 막지 않고 값을 제한한다), 호출자의 확인 함수(`unchanged`)가
+   트리가 바뀌었다고 하거나 그 함수가 없으면 판별하지 않는다. 로그에 `판별 안 함: <이유>` 한 줄을 남기고 실패 그대로다.
+3. 파일마다 `rerun`의 `{file}`을 그 값으로 바꿔 같은 cwd·환경·표지로 돌린다. 판별 실행들은 검증 시간(limit_seconds) 하나를 나눠 쓴다. 하나라도 `Result.ok`가
+   아니면(시간 초과는 종료 0이어도) 판별 실패이고 실패 그대로다. 판별 실행의 끝 줄은 `판별 종료 코드: <N>`이다(`종료 코드:` 줄은 전체 명령에만 쓴다).
+4. 모두 통과하고 확인 함수가 트리 그대로라고 하면 전체 명령을 한 번 더 돈다. 그 결과가 이 시도의 결과다(`Result.triaged`에 파일들). 통과를 받아들일지는
+   호출자가 트리를 보고 정하고, 받아들이면 flaky가 `flaky: <label> <파일들> 따로 돌려 통과, 전체 다시 통과`를 쓴다.
+verify_retries와 함께 쓰면 시도마다 판별을 먼저 한다. 전체를 한 번 더 도는 것은 재시도와 별개로 시도당 한 번이고, 그 결과는 다시 판별하지 않는다.
+재시도 전에도 확인 함수를 부르고 트리가 바뀌었으면 `검증 재시도 안 함: …` 줄을 남기고 더 돌리지 않는다. 판별이나 앞 실행이 바꾼 트리를 다음 실행이 되돌려
+호출자의 최종 비교를 통과하는 일을 막는다. 그 시도의 실패 결과를 돌려주고 바뀐 트리는 손대지 않는다(트리 변경 판정은 호출자의 비교가 한다).
+설정은 호출자가 실행 중인 config 값을 넘긴다(검증하는 worktree의 config를 읽지 않는다). 측정 키는 metrics.sample·metrics.triage가 적는다.
 """
 from __future__ import annotations
 
@@ -25,7 +39,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import IO
+from typing import IO, Callable
 from urllib.parse import quote
 
 from . import metrics
@@ -40,6 +54,7 @@ MARK = "gs-verify:"
 KEEP_BASH = "\nexit $?"
 MARKED_ROW = re.compile(r"^bash -c .*exit \$\? (" + MARK + r"\S+)$")  # 줄바꿈은 ps가 바꿔 보인다(macOS `\012`). 표지는 공백이 없어 마지막 낱말이다
 PS_SECONDS = 30.0
+SAFE_FILE = re.compile(r"[A-Za-z0-9_.-]+")  # 판별에 쓸 수 있는 시험 파일 값. 이것만 rerun의 {file} 자리에 넣는다
 
 
 @dataclass(frozen=True)
@@ -50,6 +65,7 @@ class Result:
     retries: int = 0  # 첫 실행을 제외하고 다시 돌린 횟수
     samples: tuple[dict, ...] = field(default=(), compare=False)  # 재시도까지 각 명령의 시간·결과
     interrupted: bool = False  # 이 실행이 신호로 끊긴 것처럼 보인다. 시간 초과는 timed_out이고 끊김이 아니다
+    triaged: tuple[str, ...] = ()  # 따로 돌려 통과한 시험 파일. 있으면 이 결과는 판별 뒤 전체를 한 번 더 돈 것이다
 
     @property
     def ok(self) -> bool:
@@ -83,36 +99,125 @@ def mark(path) -> str:
     return MARK + quote(os.path.realpath(path), safe="/")
 
 
-def run(spec, cwd: Path, stream: IO[str]) -> Result:
-    """실패한 명령을 verify_retries만큼 다시 돌린다. 각 실행의 시간 제한은 같다. 돌려주는 결과는 마지막 실행의 것이고, 실행마다 로그 끝에 종료 코드 줄을 남긴다."""
+def run(spec, cwd: Path, stream: IO[str], triage=None, unchanged: Callable[[], bool] | None = None) -> Result:
+    """실패한 명령을 verify_retries만큼 다시 돌린다. 각 실행의 시간 제한은 같다. 돌려주는 결과는 마지막 실행의 것이고, 실행마다 로그 끝에 종료 코드 줄을 남긴다.
+
+    triage는 config `[verify]`(config.VerifyConfig), unchanged는 트리가 검증 전 그대로면 True인 함수다. 둘 다 있고 triage가 켜져 있으면 시도마다 판별하고(머리말),
+    재시도 전에도 unchanged를 불러 트리가 바뀌었으면 더 돌리지 않고 그 시도의 실패 결과를 돌려준다(바뀐 트리는 그대로 두어 호출자의 최종 비교가 본다)."""
     samples = []
-    for attempt in range(getattr(spec, "verify_retries", 0) + 1):
-        if attempt:
-            stream.write(f"\n검증 재시도 {attempt}\n")
-        start = metrics.clock()
-        result = _run_once(spec, cwd, stream)
-        stream.write(f"\n종료 코드: {result.code}\n")
-        stream.flush()
-        metrics.sample(samples, start, result)
-        if result.ok:
+    on = triage is not None and triage.enabled
+    attempt = 0
+    while True:
+        offset = _offset(stream)
+        result = _full(spec, cwd, stream, samples)
+        if not result.ok and on:
+            files = _triage(spec, cwd, stream, triage, unchanged, result, _output(stream, offset), samples)
+            if files:
+                result = replace(_full(spec, cwd, stream, samples, after_triage=True), triaged=files)
+        if result.ok or attempt >= getattr(spec, "verify_retries", 0):
             break
+        if on and unchanged is not None and not unchanged():
+            stream.write("\n검증 재시도 안 함: 검증 중 트리가 바뀌었다\n")
+            break
+        attempt += 1
+        stream.write(f"\n검증 재시도 {attempt}\n")
     return replace(result, retries=attempt, samples=tuple(samples))
 
 
 def flaky(result: Result, label: str, stream: IO[str]) -> None:
-    """재시도 성공은 원본 로그에 남겨 보고서의 수집 증거에도 들어가게 한다."""
-    if result.ok and result.retries:
+    """재시도·판별 성공은 원본 로그에 남겨 보고서의 수집 증거에도 들어가게 한다. 판별로 통과했으면 재시도 줄 대신 판별 줄만 쓴다."""
+    if result.ok and result.triaged:
+        stream.write(f"\nflaky: {label} {' '.join(result.triaged)} 따로 돌려 통과, 전체 다시 통과\n")
+    elif result.ok and result.retries:
         stream.write(f"\nflaky: {label} 재시도 {result.retries}번 만에 통과\n")
 
 
+def _full(spec, cwd: Path, stream: IO[str], samples: list, *, after_triage: bool = False) -> Result:
+    """전체 명령 한 번. 로그 끝에 종료 코드 줄, 측정에 표본 하나."""
+    start = metrics.clock()
+    result = _run_once(spec, cwd, stream)
+    stream.write(f"\n종료 코드: {result.code}\n")
+    stream.flush()
+    metrics.sample(samples, start, result, after_triage=after_triage)
+    return result
+
+
+def failed_files(pattern: str, output: str) -> tuple[str, ...]:
+    """출력에서 pattern(re.MULTILINE)의 첫 그룹을 나온 순서대로, 중복 없이. 그룹이 맞지 않은 매치는 빈 문자열이다(SAFE_FILE이 아니라 판별하지 않는다)."""
+    found: dict[str, None] = {}
+    for m in re.compile(pattern, re.MULTILINE).finditer(output):
+        found.setdefault(m.group(1) or "", None)
+    return tuple(found)
+
+
+def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result, output: str, samples: list) -> tuple[str, ...]:
+    """판별(머리말 1–3). 전체를 한 번 더 돌 차례면 따로 돌려 통과한 파일들, 아니면 빈 튜플. 결과는 실패한 전체 실행의 표본에 붙인다."""
+    start = metrics.clock()
+
+    def skip(reason: str, why: str, files: tuple[str, ...] = ()) -> tuple[str, ...]:
+        stream.write(f"\n판별 안 함: {why}\n")
+        metrics.triage(samples, "skipped", files, reason, start)
+        return ()
+
+    if result.timed_out:
+        return skip("timeout", "전체 검증이 시간 초과로 끝났다")
+    if result.interrupted:
+        return skip("interrupted", "전체 검증이 끊겼다")
+    files = failed_files(triage.failed_file, output)
+    if not files:
+        return skip("no_match", "출력에서 failed_file에 맞는 실패 시험 파일을 찾지 못했다")
+    if len(files) > triage.max_files:
+        return skip("too_many", f"실패한 시험 파일 {len(files)}개가 max_files {triage.max_files}개보다 많다: {' '.join(files)}", files)
+    bad = next((name for name in files if not SAFE_FILE.fullmatch(name)), None)
+    if bad is not None:
+        return skip("bad_value", f"시험 파일 값 {bad!r}에 [A-Za-z0-9_.-] 밖 문자가 있다", files)
+    if unchanged is None:
+        return skip("no_check", "트리를 확인할 함수가 없다", files)
+    if not unchanged():
+        return skip("tree_changed", "검증 중 트리가 바뀌었다", files)
+    total = limit_seconds(spec)
+    deadline = _clock() + total
+    for name in files:
+        command = triage.rerun.replace("{file}", name)
+        stream.write(f"\n판별 {name}: $ {command}\n")
+        left = deadline - _clock()
+        if left > 0:
+            res = _launch(command, left, cwd, stream)
+        else:
+            stream.write(f"판별 시간({minutes(total)}분)을 다 써서 돌리지 않았다\n")
+            res = Result(1, True, minutes(total))
+        stream.write(f"\n판별 종료 코드: {res.code}\n")
+        if not res.ok:
+            stream.write(f"\n판별 실패: {name}" + (" 시간 초과" if res.timed_out else "") + ". 전체 검증은 다시 돌리지 않는다\n")
+            metrics.triage(samples, "failed", files, name, start)
+            return ()
+    if not unchanged():
+        stream.write("\n판별 통과, 전체 검증은 다시 돌리지 않는다: 판별 중 트리가 바뀌었다\n")
+        metrics.triage(samples, "passed", files, "tree_changed", start)
+        return ()
+    stream.write(f"\n판별 통과: {' '.join(files)}. 전체 검증을 한 번 더 돌린다\n")
+    stream.flush()
+    metrics.triage(samples, "passed", files, "", start)
+    return files
+
+
+def _clock() -> float:
+    """판별 시간 예산의 시계. 시험이 바꾼다."""
+    return time.monotonic()
+
+
 def _run_once(spec, cwd: Path, stream: IO[str]) -> Result:
-    """spec.verify를 cwd에서 돌려 출력을 stream에 쓴다. 시간을 넘기면 끝에 `시간 초과: <N>분` 줄을 남긴다. 끊겼으면 남은 그룹을 끝낸다."""
-    seconds = limit_seconds(spec)
+    """spec.verify를 cwd에서 spec의 시간 제한으로 돌린다(_launch)."""
+    return _launch(spec.verify, limit_seconds(spec), cwd, stream)
+
+
+def _launch(command: str, seconds: float, cwd: Path, stream: IO[str]) -> Result:
+    """command를 cwd에서 돌려 출력을 stream에 쓴다. 시간을 넘기면 끝에 `시간 초과: <N>분` 줄을 남긴다. 끊겼으면 남은 그룹을 끝낸다."""
     limit = minutes(seconds)
     stream.flush()
     try:
         start = os.lseek(stream.fileno(), 0, os.SEEK_CUR)  # 자식과 함께 쓰는 위치다. 여기부터가 이번 실행의 출력이다
-        p = subprocess.Popen(["bash", "-c", spec.verify + KEEP_BASH, mark(_log_path(stream, cwd))], cwd=cwd, stdin=subprocess.DEVNULL,
+        p = subprocess.Popen(["bash", "-c", command + KEEP_BASH, mark(_log_path(stream, cwd))], cwd=cwd, stdin=subprocess.DEVNULL,
                              stdout=stream, stderr=subprocess.STDOUT, env=env(), start_new_session=True)
     except OSError as e:
         stream.write(f"검증 명령 실행 실패: {e}\n")
@@ -148,8 +253,19 @@ def _interrupted(code: int, stream: IO[str], start: int) -> bool:
     return code < 0 or code > 128 or SIGNAL_LINE.search(_output(stream, start)) is not None
 
 
-def _output(stream: IO[str], start: int) -> str:
-    """stream의 파일에서 start부터 끝까지(stream은 쓰기 전용이라 다시 연다). 읽지 못하면 빈 문자열이고 끊김은 종료 코드로만 판단한다."""
+def _offset(stream: IO[str]) -> int | None:
+    """stream 파일의 지금 쓰기 위치. 이 뒤가 다음 실행의 출력이다. 파일이 아니면 None."""
+    try:
+        stream.flush()
+        return os.lseek(stream.fileno(), 0, os.SEEK_CUR)
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _output(stream: IO[str], start: int | None) -> str:
+    """stream의 파일에서 start부터 끝까지(stream은 쓰기 전용이라 다시 연다). 읽지 못하면 빈 문자열이고 끊김은 종료 코드로만 판단한다(판별은 매치 없음)."""
+    if start is None:
+        return ""
     try:
         with open(stream.name, "rb") as f:
             f.seek(start)

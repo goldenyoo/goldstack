@@ -890,7 +890,7 @@ class VerifiedHeadTest(unittest.TestCase):
     def verify(self, wt, code=0, clean=True) -> dict:
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "finish").mkdir()
-            r = SimpleNamespace(iwt=self.INTEGRATION, rundir=Path(tmp), save=lambda: None,
+            r = SimpleNamespace(iwt=self.INTEGRATION, rundir=Path(tmp), save=lambda: None, cfg=SimpleNamespace(verify=None),
                                 st=SimpleNamespace(finish={}, metrics={}, phase="finish"),
                                 feat=SimpleNamespace(spec=SimpleNamespace(verify="check")))
             with (mock.patch("gs.finish.git.sha", return_value=PASSED),

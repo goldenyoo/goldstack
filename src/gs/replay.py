@@ -477,7 +477,8 @@ def _reset_tree(tree: Path, head: str) -> None:
 
 
 def _verify(cfg: config.Config, spec: featmod.Spec, tree: Path, head: str, logdir: Path, out) -> str:
-    """깨끗한 트리(head의 분리 worktree)에서 setup 뒤 spec `verify`를 돌린다. `gs go`처럼 트리가 바뀌면 실패다."""
+    """깨끗한 트리(head의 분리 worktree)에서 setup 뒤 spec `verify`를 돌린다. `gs go`처럼 트리가 바뀌면 실패다.
+    판별(verify 머리말)도 `gs go`처럼 실행 중인 config `[verify]`로 하고, 판별·전체 재실행 전에 트리가 head 그대로인지 본다."""
     if cfg.worktree.setup.strip():
         _say(out, "■ 깨끗한 트리 준비 중")
         if not setup.run(cfg, tree, logdir / "verify-setup.log").ok:
@@ -487,11 +488,13 @@ def _verify(cfg: config.Config, spec: featmod.Spec, tree: Path, head: str, logdi
     _say(out, f"■ verify: {spec.verify}")
     with log.open("w", encoding="utf-8") as f:
         f.write(f"$ {spec.verify}\ncwd: {tree}\n")
-        res = verify.run(spec, tree, f)
+        res = verify.run(spec, tree, f, cfg.verify, lambda: _at_head(tree, head))
         changed = not res.timed_out and not _at_head(tree, head)
         if changed:
             f.write("\n검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
             f.write(git.run(tree, "status", "--porcelain", "--untracked-files=all", check=False).stdout)
+        elif res.ok:
+            verify.flaky(res, "replay", f)
     if res.timed_out:
         return f"실패(시간 초과 {res.minutes}분)"
     if changed:
