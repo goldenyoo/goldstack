@@ -68,6 +68,12 @@ class CrossReviewTest(unittest.TestCase):
         self.assertIn(WARNING, self.check(TABLE_HEAD + "| 1 | codex | a \\| b 오류 | 코드 확인 | |\n"))
         self.assertNotIn(WARNING, self.check(TABLE_HEAD + "| 1 | codex | a \\| b 오류 | 코드 확인 | 반영함 |\n"))
 
+    def test_table_without_outer_pipes(self):
+        head = "번호 | 검토 모델 | 지적 | 확인(코드·실측) | 반영\n---|---|---|---|---\n"
+        self.assertNotIn(WARNING, self.check(head + "1 | codex gpt-6.1-sol/high | 경계 누락 | 코드 확인, 맞다 | 반영함\n"))
+        self.assertIn(WARNING, self.check(head + "1 | <모델/effort> | <지적 한 줄> | <확인한 방법과 결과> | <반영함>\n"))
+        self.assertIn(WARNING, self.check(head + "1 | codex | 지적 | | 반영함\n"))
+
     def test_skip_line_is_silent(self):
         self.assertNotIn(WARNING, self.check("교차 검토 못 함: codex 한도\n"))
 

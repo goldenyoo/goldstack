@@ -207,9 +207,10 @@ _SEPARATOR_CELL = re.compile(r":?-+:?")
 
 def _table_cells(line: str) -> list[str] | None:
     line = line.strip()
-    if not line.startswith("|"):
+    if not re.search(r"(?<!\\)\|", line):
         return None
-    line = line[1:]
+    if line.startswith("|"):
+        line = line[1:]
     if line.endswith("|") and not line.endswith("\\|"):
         line = line[:-1]
     return [c.strip() for c in re.split(r"(?<!\\)\|", line)]  # `\|`는 칸 안의 글자
