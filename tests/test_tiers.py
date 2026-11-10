@@ -96,7 +96,8 @@ class TiersTest(unittest.TestCase):
                 self.assertEqual(bool(feat.errors), tier in ('huge', '[]'), feat.problems)
                 if not feat.errors:
                     self.assertEqual(feat.tickets['01'].tier, tier)
-            path.write_text(support.ticket('01'))
+            # gs check는 touches 없는 티켓을 오류로 막는다(goldstack-v30 03). 이 시험은 설정 경고만 본다.
+            path.write_text(support.ticket('01').replace('reviewer: codex\n', 'reviewer: codex\ntouches: ["src/a.py"]\n'))
             self.path.write_text(CONFIG.replace('telegram = true', 'telegram = false'))
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

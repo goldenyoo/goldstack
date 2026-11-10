@@ -398,7 +398,7 @@ class AgyHookTest(unittest.TestCase):
         self.assertEqual((cp.returncode, json.loads(cp.stdout)["decision"]), (0, "deny"), cp.stderr)
 
 
-AGY_TICKET = '---\nid: "{tid}"\ntitle: t{tid}\nblocked_by: []\nmodel: {model}\nreviewer: claude\n---\n## 목표\n{tid}\n'
+AGY_TICKET = '---\nid: "{tid}"\ntitle: t{tid}\nblocked_by: []\nmodel: {model}\nreviewer: claude\ntouches: ["{tid}.py"]\n---\n## 목표\n{tid}\n'
 
 
 class AgyGoAndCheckTest(Base):

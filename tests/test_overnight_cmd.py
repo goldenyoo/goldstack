@@ -64,7 +64,7 @@ sys.exit(overnight.add(repo, name, sys.stdout, sys.stderr))
 """
 
 SPEC = '---\nfeature: demo\nverify: "true"\n---\n# demo\n'
-TICKET = '---\nid: "01"\ntitle: t\nblocked_by: []\nmodel: claude\nreviewer: codex\n---\n## 목표\n'
+TICKET = '---\nid: "01"\ntitle: t\nblocked_by: []\nmodel: claude\nreviewer: codex\ntouches: ["a.py"]\n---\n## 목표\n'
 # 부른 순서를 $NEXT_CALLS에 남기는 가짜 외부 명령들
 FAKE_GS = f'''#!/bin/sh
 echo "gs $*" >> "$NEXT_CALLS"

@@ -62,7 +62,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 
 **spec frontmatter**(feature마다, [guide.md의 표](guide.md#spec-frontmatter-키)) — `feature`(디렉터리 이름과 같아야 한다), `verify`(비어 있지 않은 한 줄 셸 명령)는 필수. 선택: `verify_ticket`(같은 형식), 1 이상 정수 `max_workers`(기본 3)·`idle_minutes`(기본 20)·`verify_minutes`(기본 20), 0 이상 정수 `verify_retries`(기본 0). 그 밖의 키는 경고, 범위 밖·정수 아닌 값은 오류.
 
-**티켓 frontmatter** — `id`, `title`, `blocked_by`(목록, 없으면 `[]`), `model`, `reviewer`가 모두 필요. 파일 이름은 `<id>-`로 시작한다. `model`·`reviewer`는 `claude|codex|agy` 중 하나이고 서로 달라야 한다. `gs check`는 없는 id 참조, 순환, 겹치는 id를 오류로 본다. 그 밖의 키는 경고다. 선택 키 넷(`feature.TICKET_OPTIONAL`):
+**티켓 frontmatter** — `id`, `title`, `blocked_by`(목록, 없으면 `[]`), `model`, `reviewer`가 모두 필요. 파일 이름은 `<id>-`로 시작한다. `model`·`reviewer`는 `claude|codex|agy` 중 하나이고 서로 달라야 한다. `gs check`는 없는 id 참조, 순환, 겹치는 id를 오류로 본다. 사람이 치는 `gs check`(`cli.cmd_check`)는 범위 안 티켓의 `touches`가 없거나 `[]`이면 그 파일에 오류를 낸다(`cli.touches_required_problems`. `--only` 밖은 보지 않는다). `gs go`가 쓰는 `check.check()`와 `gs go a b`의 사전 검사(`require_touches=False`), `review.py`의 빈 touches 처리는 그대로다. 그 밖의 키는 경고다. 선택 키 넷(`feature.TICKET_OPTIONAL`):
 - `tier`: `small`·`medium`·`large`. 아니면 오류. worker의 등급이고 없으면 `medium`이다(아래 "모델 어댑터"). 계열 표가 없으면 쓰이지 않는다. `/grill`이 적는다(템플릿에 `tier: medium`).
 - `touches`: 문자열 목록, 레포 루트 기준 경로(glob 허용). 목록이 아니거나, 빈 값·절대 경로·`..`가 든 값은 오류. 없으면 `[]`이고 겹침 검사에서 빠진다. `/grill`의 티켓 분해 라운드가 적는다(템플릿 `skills/grill/templates/ticket.md`에 `touches: []`).
 - `verify`: 비어 있지 않은 한 줄 셸 명령. 아니면 오류. 이 티켓의 검증 명령을 spec의 것 대신 정한다("검증 명령 고르기와 재시도"). 마무리는 영향을 받지 않는다. 템플릿에는 주석으로 있다(필요한 티켓에만).

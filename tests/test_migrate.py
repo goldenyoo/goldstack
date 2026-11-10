@@ -12,7 +12,7 @@ from gs import cli, config
 from support import fake_clis, isolate_git_env
 
 SPEC = '---\nfeature: demo\nverify: "true"\n---\n'
-TICKET = '---\nid: "01"\ntitle: a\nblocked_by: []\nmodel: claude\nreviewer: codex\n---\n## 목표\na\n'
+TICKET = '---\nid: "01"\ntitle: a\nblocked_by: []\nmodel: claude\nreviewer: codex\ntouches: ["a.py"]\n---\n## 목표\na\n'
 
 
 def sh(cwd, *args):
