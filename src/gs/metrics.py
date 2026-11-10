@@ -12,6 +12,8 @@ v9부터 리뷰는 루프 밖이라 다른 티켓의 리뷰 시간은 여기 들
 review.REPAIR_ROUND다. 수리 뒤 다시 한 검증은 validations의 label이 `ticket-<NN>-repair`다. 끊긴 검증은 그 label 끝에 `-끊김`이 붙는다(go._verify).
 validations 한 줄은 검증 하나의 재시도 하나다. `integration_head`(검증한 integration 끝)와 `ticket_head`(병합하려던 티켓 커밋)는 다르고,
 같은 티켓의 검증이 여러 번이어도 integration_head가 같을 수 있다. `ticket_attempt`는 티켓 worker 시도 번호, `retry`는 한 검증 안의 재시도 번호다.
+판별(verify 머리말, config `[verify]`)은 판별한 실패 실행의 줄에 `triage`·`triage_files`·`triage_reason`·`triage_seconds`로, 판별 뒤 전체를 한 번 더 돈 실행은
+그 다음 줄의 `after_triage`로 남는다(sample·triage).
 """
 from __future__ import annotations
 
@@ -104,8 +106,25 @@ def worker_finished(r, job) -> None:
 
 
 @best_effort
-def sample(samples, start, result) -> None:
-    samples.append({"seconds": elapsed(start), "code": result.code, "timed_out": result.timed_out, "ok": result.ok})
+def sample(samples, start, result, *, after_triage=False) -> None:
+    """전체 명령 실행 하나. `after_triage`(True일 때만 적는다): 판별을 통과해 전체를 한 번 더 돈 실행이다."""
+    rec = {"seconds": elapsed(start), "code": result.code, "timed_out": result.timed_out, "ok": result.ok}
+    if after_triage:
+        rec["after_triage"] = True
+    samples.append(rec)
+
+
+@best_effort
+def triage(samples, outcome, files, reason, start) -> None:
+    """판별 결과를 판별한 실패 실행의 표본(samples 끝)에 붙인다. 판별 대상이 아닌 표본(통과, 설정 꺼짐, 판별 뒤 다시 돈 실행)에는 키가 없다.
+
+    - `triage`: `skipped`(판별 안 함), `failed`(따로 돌린 파일 하나가 통과 못함), `passed`(모두 통과).
+    - `triage_files`: 출력에서 뽑은 시험 파일 값(나온 순서, 중복 없음). 뽑기 전에 멈췄으면(시간 초과·끊김) 빈 목록.
+    - `triage_reason`: `skipped`면 `timeout`·`interrupted`·`no_match`·`too_many`·`bad_value`·`no_check`(확인 함수 없음)·`tree_changed`,
+      `failed`면 통과 못한 파일 값, `passed`면 빈 문자열(전체를 한 번 더 돎) 또는 `tree_changed`(판별 중 트리가 바뀌어 다시 돌지 않음).
+    - `triage_seconds`: 판별에 쓴 초(따로 돌린 실행 포함).
+    """
+    samples[-1].update(triage=outcome, triage_files=list(files), triage_reason=reason, triage_seconds=elapsed(start))
 
 
 @best_effort
@@ -117,7 +136,8 @@ def validation(r, label, command, integration_head, result, changed=False, *, tr
       같은 티켓의 다른 검증과 같을 수 있다. 티켓 코드가 아니다.
     - `ticket_head`: 티켓 검증에서 병합하려던 티켓 커밋(MERGE_HEAD). 마무리 검증은 비어 있다.
     - `ticket_attempt`: 그때의 티켓 worker 시도 번호(마무리 검증은 None). 검증 재시도 번호가 아니다.
-    - `retry`: 이 검증 안의 재시도 번호(1부터, `verify.run` 표본 순서). 티켓 시도와 무관하다.
+    - `retry`: 이 검증 안의 재시도 번호(1부터, `verify.run` 표본 순서). 티켓 시도와 무관하다. 판별 뒤 전체를 한 번 더 돈 실행도 한 줄이다(`after_triage`).
+    - `triage`·`triage_files`·`triage_reason`·`triage_seconds`·`after_triage`: 판별(sample·triage). 판별하지 않은 줄에는 없다.
     옛 state는 `sha`(= integration_head), `attempt`(= retry), `merge_head`(= ticket_head)로 읽는다(report.validation_row).
     """
     for nth, item in enumerate(result.samples, 1):

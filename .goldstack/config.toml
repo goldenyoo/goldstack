@@ -46,6 +46,12 @@ max_calls_per_run = 24
 [overnight]
 autonomy = "record"
 
+# 검증이 실패하면 실패한 시험 파일(unittest `FAIL:`·`ERROR:` 줄의 모듈)만 따로 돌려 1회성인지 가리고, 통과하면 전체를 한 번 더 돌린다(goldstack-v31 02).
+[verify]
+failed_file = '^(?:FAIL|ERROR): \S+ \((test_\w+)\.'
+rerun = ".venv/bin/python -m unittest discover -s tests -p {file}.py"
+max_files = 3
+
 # worker의 고비용 시험 실행을 hook이 막는다(goldstack-v26 01). 정규식은 명령 원문에 Python re.search로 맞춘다.
 # deny: 시험 폴더를 `ls tests | … | xargs`로 순회(v25 03), `-p` 없는 `unittest discover`(시험 전체),
 # (`|` 뒤에 줄바꿈을 넣은 변형도 막는다.)
