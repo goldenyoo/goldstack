@@ -2767,16 +2767,21 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
 
     (결과, 로그, 트리가 바뀌었나). 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
     더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 수리 뒤의 다시 검증은 측정 라벨이 따로다.
-    끊긴 검증의 다시 검증은 로그를 덮지 않고 이어 쓴다: 끊긴 증거가 남고, 수리 worker도 같은 파일을 받는다. 끊긴 검증이 남긴 파일은 트리 변경으로 보지 않고(되돌린다) 측정 라벨 끝이 `-끊김`이다."""
+    끊긴 검증의 다시 검증은 로그를 덮지 않고 이어 쓴다: 끊긴 증거가 남고, 수리 worker도 같은 파일을 받는다. 끊긴 검증이 남긴 파일은 트리 변경으로 보지 않고(되돌린다) 측정 라벨 끝이 `-끊김`이다.
+    판별(verify 머리말)은 실행 중인 config `[verify]`로 하고, 판별·전체 재실행 전에 같은 트리 규칙(`same`)으로 트리를 확인한다."""
     log = Path(r.st.ticket(t.id).log).parent / "verify.log"
     again = _verifying_again(r, t.id)
     spec = r.feat.spec
     command = spec.verify_for(t)
     before = _merge_state(r)
+
+    def same() -> bool:
+        return _merge_state(r) == before and setup.is_clean(r.iwt, staged_ok=True)
+
     say(f"[{t.id}] 검증: {command}")
     with log.open("a" if again else "w", encoding="utf-8") as f:
         f.write(("\n끊긴 검증을 같은 트리로 다시 돌린다\n" if again else "") + f"$ {command}\ncwd: {r.iwt}\n")
-        res = verify.run(replace(spec, verify=command), r.iwt, f)
+        res = verify.run(replace(spec, verify=command), r.iwt, f, r.cfg.verify, same)
         after = _merge_state(r)
         changed = not res.timed_out and not res.interrupted and (after != before or not setup.is_clean(r.iwt, staged_ok=True))
         if changed:
