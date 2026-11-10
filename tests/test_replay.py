@@ -177,6 +177,54 @@ class StartCommitTest(ReplayTestCase):
             replay.start_commit(self.repo, FEATURE, "03", "no-such-commit")
         self.assertIn("no-such-commit", str(caught.exception))
 
+    def test_base_history_wins_over_a_rebuilt_unmerged_integration(self):
+        """goldstack-v30-05-1: base에 병합된 03이 있고, 다시 만든 integration에 다른 `Merge 03:`이 남아 있다."""
+        start = self.seed()
+        self.git("checkout", "-q", "-b", f"gs/{FEATURE}/03")
+        self.commit("work", **{"src__a.py": "1\n"})
+        self.merge_ticket("03", f"gs/{FEATURE}/03")
+        self.land()
+        self.git("checkout", "-q", "-B", f"gs/{FEATURE}/integration", "main")
+        self.git("checkout", "-q", "-b", f"gs/{FEATURE}/03-redo", "main")
+        self.commit("redo", **{"src__b.py": "1\n"})
+        redo = self.merge_ticket("03", f"gs/{FEATURE}/03-redo")
+        self.assertEqual(self.git("branch", "--contains", redo, "--list", "main"), "")
+        self.assertEqual(replay.start_commit(self.repo, FEATURE, "03", None), start)
+
+    def test_unmerged_integration_is_searched_when_base_has_none(self):
+        start = self.seed()
+        self.git("checkout", "-q", "-b", f"gs/{FEATURE}/03")
+        self.commit("work", **{"src__a.py": "1\n"})
+        self.merge_ticket("03", f"gs/{FEATURE}/03")
+        self.assertEqual(replay.start_commit(self.repo, FEATURE, "03", None), start)
+
+    def test_two_merges_in_base_is_an_error_even_if_integration_has_one(self):
+        self.seed()
+        self.git("checkout", "-q", "-b", f"gs/{FEATURE}/03")
+        self.commit("work", **{"src__a.py": "1\n"})
+        first = self.merge_ticket("03", f"gs/{FEATURE}/03")
+        self.git("checkout", "-q", f"gs/{FEATURE}/03")
+        self.commit("work again", **{"src__a.py": "2\n"})
+        second = self.merge_ticket("03", f"gs/{FEATURE}/03")
+        self.land()
+        self.git("checkout", "-q", "-B", f"gs/{FEATURE}/integration", "main")
+        self.git("checkout", "-q", "-b", f"gs/{FEATURE}/03-redo", "main")
+        self.commit("redo", **{"src__b.py": "1\n"})
+        self.merge_ticket("03", f"gs/{FEATURE}/03-redo")
+        with self.assertRaises(replay.MissingCommitError) as caught:
+            replay.start_commit(self.repo, FEATURE, "03", None)
+        message = str(caught.exception)
+        self.assertIn(first[:12], message)
+        self.assertIn(second[:12], message)
+        self.assertIn("검색한 ref: main)", message)
+
+    def test_no_merge_anywhere_lists_both_stages_refs(self):
+        self.seed()
+        with self.assertRaises(replay.MissingCommitError) as caught:
+            replay.start_commit(self.repo, FEATURE, "03", None)
+        self.assertIn(f"main, gs/{FEATURE}/integration", str(caught.exception))
+        self.assertIn("--base", str(caught.exception))
+
     def test_other_feature_merge_with_same_ticket_number_is_ignored(self):
         start = self.seed()
         self.git("checkout", "-q", "-b", f"gs/{FEATURE}/03")

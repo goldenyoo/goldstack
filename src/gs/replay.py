@@ -149,8 +149,10 @@ def _commit_of(repo: Path, ref: str) -> str | None:
 def start_commit(repo: Path, feature: str, ticket_id: str, base: str | None = None) -> str:
     """티켓 브랜치의 원래 시작 commit(전체 sha). `base`는 `--base <sha>` 덮어쓰기다.
 
-    config `[git] base`(와 그 원격, 이 feature의 integration) 이력에서 `Merge <NN>:` 제목에 `gs-ticket: <feature>/<NN>`
-    줄이 있는 병합 커밋 M을 찾는다. M의 둘째 부모에서 첫 부모만 따라가며 M^1에 없는 가장 오래된 커밋의 부모가 시작 commit이다.
+    `Merge <NN>:` 제목에 `gs-ticket: <feature>/<NN>` 줄이 있는 병합 커밋 M을 먼저 config `[git] base`(와 그 원격) 이력에서
+    찾는다. 거기 하나도 없을 때만 이 feature의 integration(와 그 원격) 이력을 찾는다(아직 병합되지 않은 feature).
+    버려진 integration에 같은 `Merge <NN>:`이 남아 있어도 base에 병합된 티켓은 base 것을 쓴다. 한 단계에서 여럿이면 오류다.
+    M을 찾으면 M의 둘째 부모에서 첫 부모만 따라가며 M^1에 없는 가장 오래된 커밋의 부모가 시작 commit이다.
     티켓 브랜치에 integration을 합친 커밋이 끼어도 그 둘째 부모는 따라가지 않아 갈림점을 잘못 잡지 않는다
     (`merge-base M^1 M^2`는 합친 integration까지 닿아 더 뒤일 수 있다).
     """
@@ -162,20 +164,31 @@ def start_commit(repo: Path, feature: str, ticket_id: str, base: str | None = No
         return found
     remote, branch = _git_remote_base(repo)
     integration = f"gs/{feature}/integration"
-    refs = [ref for ref in (f"{remote}/{branch}", branch, f"{remote}/{integration}", integration) if _commit_of(repo, ref)]
+    subject = re.compile(rf"Merge {re.escape(ticket_id)}:")
+    trailer = f"gs-ticket: {feature}/{ticket_id}"
+
+    def search(candidates: list[str]) -> tuple[list[str], dict[str, list[str]]]:
+        refs = [ref for ref in candidates if _commit_of(repo, ref)]
+        if not refs:
+            return refs, {}
+        log = git.run(repo, "log", "--merges", "--format=%H%x00%P%x00%s%x00%b%x01", *refs).stdout
+        found: dict[str, list[str]] = {}
+        for record in log.split("\x01"):
+            if not record.strip():
+                continue
+            sha, parents, title, body = record.lstrip("\n").split("\x00", 3)
+            if subject.match(title) and any(line.rstrip() == trailer for line in body.splitlines()):
+                found[sha] = parents.split()
+        return refs, found
+
+    base_refs, merges = search([f"{remote}/{branch}", branch])
+    refs = base_refs
+    if not merges:
+        integration_refs, merges = search([f"{remote}/{integration}", integration])
+        refs = base_refs + integration_refs if not merges else integration_refs
     hint = f"`--base <sha>`로 시작 commit을 직접 준다(검색한 ref: {', '.join(refs) or '없음'})"
     if not refs:
         raise MissingCommitError(f"{remote}/{branch}도 {integration}도 이 레포에 없어 `Merge {ticket_id}:`를 찾을 수 없다. {hint}")
-    log = git.run(repo, "log", "--merges", "--format=%H%x00%P%x00%s%x00%b%x01", *refs).stdout
-    subject = re.compile(rf"Merge {re.escape(ticket_id)}:")
-    trailer = f"gs-ticket: {feature}/{ticket_id}"
-    merges: dict[str, list[str]] = {}
-    for record in log.split("\x01"):
-        if not record.strip():
-            continue
-        sha, parents, title, body = record.lstrip("\n").split("\x00", 3)
-        if subject.match(title) and any(line.rstrip() == trailer for line in body.splitlines()):
-            merges[sha] = parents.split()
     if not merges:
         raise MissingCommitError(f"{feature}/{ticket_id}의 `Merge {ticket_id}:` 커밋이 없다. {hint}")
     if len(merges) > 1:
