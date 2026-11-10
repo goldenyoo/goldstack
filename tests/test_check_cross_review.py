@@ -15,7 +15,8 @@ TABLE_HEAD = "| # | 검토 모델 | 지적 | 확인(코드·실측) | 반영 |\n
 PLACEHOLDER = "| 1 | <모델/effort> | <지적 한 줄> | <확인한 방법과 결과> | <반영함> |\n"
 REAL = "| 1 | codex gpt-6.1-sol/high | 경계 누락 | 코드 확인, 맞다 | 반영함 |\n"
 COMMENT = "<!-- 돌리지 못했으면 표 대신 한 줄 \"교차 검토 못 함: <이유>\"만 적는다 -->\n"
-TICKET = '---\nid: "01"\ntitle: t\nblocked_by: []\nmodel: claude\nreviewer: codex\n---\n## 목표\n'
+# gs check는 touches 없는 티켓을 오류(종료 1)로 막는다(goldstack-v30 03). 이 시험은 교차 검토 경고만 본다
+TICKET = '---\nid: "01"\ntitle: t\nblocked_by: []\ntouches: ["src/a.py"]\nmodel: claude\nreviewer: codex\n---\n## 목표\n'
 WARNING = "spec §7 교차 검토 기록이 없다"
 
 
