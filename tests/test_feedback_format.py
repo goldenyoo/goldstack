@@ -447,6 +447,11 @@ class RedactionTest(unittest.TestCase):
         with mock.patch.object(feedback.shutil, "which", return_value=None):
             self.assertEqual(feedback._cli_version("gh"), "없음")
 
+    def test_compose_keeps_the_timeout_mark_in_the_cli_line(self):
+        env = feedback.Environment("9.9.9", "Darwin 27.0.0 arm64", (("gh", "모름(시간 초과)"), ("git", "모름")))
+        issue = self.compose(env=env)
+        self.assertIn("- CLI: gh 모름(시간 초과), git 모름", issue.body)
+
     def test_environment_collects_every_cli_without_host_name(self):
         with mock.patch.object(feedback, "_cli_version", return_value="1.0"), \
                 mock.patch("platform.system", return_value="Linux"), \
