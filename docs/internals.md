@@ -4,7 +4,7 @@
 
 | 파일 | 하는 일 |
 |---|---|
-| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `retro-log`, `feedback`, `overnight`, `hook` |
+| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `replay`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `retro-log`, `feedback`, `overnight`, `hook` |
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
 | `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
@@ -15,6 +15,7 @@
 | `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰(2차 재리뷰의 재확인) |
 | `remote.py` | `gs remote check·go·status`: herdr `--machine`으로 원격 준비 검사(`_script_in_pane`과 `launch`는 먼저 `_shell_ready`로 표시 줄을 `SHELL_READY_MS` 안에서 최대 `SHELL_READY_TRIES`번 다시 보내 셸이 입력을 받는지 확인하고, 끝내 안 되면 `shell_start` 표시가 붙은 timeout 오류로 셸 시작 질문을 짚는 안내를 낸다; pane에서 python 프로브를 돌려 참/거짓만 받는다), 버전·grill 커밋 관문, 원격 pane에 claude를 띄워 `/go <feature> -- <UNATTENDED>` 전송(무인 세션 문장: 멈추면 원인 후보만 적고 멈춘다), `check` 끝의 재로그인 `안내:` 줄, 원격 `gs status` 조회 |
 | `overnight.py` | `gs overnight arm·disarm·add·next`: 조상 Claude 프로세스의 (pid, 시작 시각)으로 세션을 가르는 표시(`.goldstack/overnight/armed/`)와 거부 기록(`denied.log`), 밤샘 파일 `결과` 표의 대기열(잠금 안에서 줄 더하기, `disarm`은 `대기` 줄이 있으면 거부), 사이 단계 묶기(push 안 된 grill 커밋만 `git pull --rebase`, goldstack 레포면 재설치, 새 프로세스로 `gs check`. push 안 함). 모듈 docstring에 근거와 한계 |
+| `replay.py` | `gs replay`: 지난 티켓의 시작 commit 찾기(`start_commit`, `Merge NN:` 커밋에서 티켓 브랜치를 첫 부모로 거슬러 올라감, `--base`로 덮어씀)와 그 시점의 티켓·spec 사본(`freeze_inputs`), 분리 worktree에서 worker → spec `verify` → 첫 리뷰 1회 → 판단 모델 분류(수정·재리뷰·수리 없음), `.goldstack/trials/replay.md`에 행 쌓기(커밋은 사람이), 끝나면 worker를 먼저 끝내고 worktree 삭제, 바뀐 `refs/heads/*` 되돌림. 로그는 `.goldstack/work/<feature>/run/replay/`. 모듈 docstring에 순서와 근거 |
 | `retrolog.py` | `gs retro-log`: `/retro`용 로그 파일 하나(`run/retro-log.md`)를 크기 상한 안에 모은다 |
 | `findings.py` | 보고만 high·medium 지적을 `.goldstack/ideas/` 파일로 넘긴다 |
 | `transient.py` | 일시 오류 판별, 대기 일정(`Backoff`), 중단 예외(`NetworkAbort`), codex `Reconnecting` 감시 |
@@ -219,7 +220,7 @@ codex 리뷰어는 `-C`가 worktree가 아니라 호출마다(끊겨서 다시 �
 코디네이터는 끊김을 실패와 구분한다. 티켓을 잃지 않고, 리뷰 없이 병합하지 않는다. 일시 오류 판별은 아래 "모델 어댑터"의 `transient.reason`이다. 대기 일정(`transient.Backoff`)은 worker와 호출이 함께 쓴다: 1→2→5→10→10…분, 합계 `timeouts.network_wait_minutes`(기본 60), 마지막 간격은 상한에 맞춰 줄인다. 다시 부르는 것이 회복 확인이고 호스트를 따로 찌르지 않는다.
 
 **worker의 대기**(`go.Outage`, `go._net_hold`, `go._net_tick`) — 대기는 sleep이 아니라 `_loop`의 시계다.
-1. 판별(`go._transient_end`): worker가 끝났는데 종료 0 + 커밋이 아니면 어댑터의 `transient_reason`을 본다. idle 시간 초과와 확인 오류는 일시 오류가 아니다.
+1. 판별(`go._transient_end`): 먼저 이번 실행에서 띄운 수리 worker가 커밋 없이 끝나 마지막 메시지에 `브랜치 밖 원인:` 줄을 남겼는지 본다. 그렇다면 일시 오류로 보지 않고 `_end_repair`로 가서 `retry=False`다(표식이 끊김보다 먼저, v30 01). 그 밖에는 worker가 끝났는데 종료 0 + 커밋이 아니면 어댑터의 `transient_reason`을 본다. idle 시간 초과와 확인 오류는 일시 오류가 아니다.
 2. 세우기(`_net_hold`): `failures`와 등급을 그대로 두고 `transient_errors`를 올린다. 이유 `네트워크 대기: <이유>`, phase `network`, `network_resume`을 남긴다. 다른 worker가 잡아 둔 대기가 있으면 거기에 함께 탄다. 다음 대기가 없으면(`Backoff.next`가 `None`) `NetworkAbort`다.
 3. 끊김 동안(`Outage.active`: 기다리는 worker나 회복을 확인하는 worker가 있을 때): 새 worker·리뷰를 시작하지 않는다. 도는 worker는 그대로 두고, 성공으로 끝난 worker(수정 worker 포함)의 리뷰·재리뷰는 미룬다(`_net_park`, `network_resume.done`). 진행 줄은 `네트워크 대기(2회, 3분 뒤)`, 회복 확인 중이면 `네트워크 회복 확인(2회)`.
 4. 다시 띄우기(`_resume`): 같은 worktree·브랜치에서 새 worker를 띄운다. 구현은 새 시도 디렉터리 `run/<NN>/<시도>`, 수정 worker는 `fix-net<k>`(`fix2-net<k>`)다. brief에 `worker.NETWORK_RESUME`("지난 시도가 네트워크로 끊겼다…")가 붙는다. 처음 base를 그대로 쓰므로 앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정이다. 수정·수리의 실패 이유는 새 디렉터리(`fix-net<k>`, `repair-net<k>`)에 남는다: 지난 디렉터리의 `worker.log`는 대기를 일으킨 일시 오류라 결함 수집이 이유까지 걸러 낸다.
