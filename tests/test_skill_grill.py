@@ -42,6 +42,8 @@ class SkillTest(unittest.TestCase):
             if "tier" not in feature.TICKET_KEYS + feature.TICKET_OPTIONAL:
                 # 엔진은 v7 티켓 08이 넣는다. 그 전에는 모르는 키라 경고가 난다. 08 뒤로는 이 줄을 타지 않는다
                 ticket = re.sub(r"^tier:.*\n", "", ticket, flags=re.M)
+            # 템플릿의 `touches: []`는 grill이 채운다. 비워 두면 gs check가 오류로 막는다(goldstack-v30 03)
+            ticket = ticket.replace("touches: []", 'touches: ["src/a.py"]')
             (root / "tickets" / "01-a.md").write_text(fill(ticket, NN="01"), encoding="utf-8")
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

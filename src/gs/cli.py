@@ -247,7 +247,8 @@ def _go_features(repo: Path, names: list[str], only: list[str] | None, session) 
     if len(names) == 1:
         return _go_one(repo, names[0], session, only)
     # 뒤 feature의 오류 때문에 앞 feature만 실행되는 일을 막는다. 전부 검사한 뒤 시작한다.
-    checks = [cmd_check(repo, name, None) for name in names]
+    # touches 필수 검사는 사람이 치는 gs check만 건다. gs go의 사전 검사는 단일 feature와 같은 기준을 쓴다(goldstack-v30 03)
+    checks = [cmd_check(repo, name, None, require_touches=False) for name in names]
     if any(checks):
         return 1
     for i, name in enumerate(names):
@@ -285,9 +286,11 @@ def cmd_config(repo: Path, key: str) -> int:
     return 0
 
 
-def cmd_check(repo: Path, name: str, only: list[str] | None) -> int:
+def cmd_check(repo: Path, name: str, only: list[str] | None, require_touches: bool = True) -> int:
     feat, lines = check(repo, name, only)
     feat.problems.extend(guard_problems(repo, feat, only))
+    if require_touches:
+        feat.problems.extend(touches_required_problems(repo, feat, only))
     for p in feat.problems:
         print(p, file=sys.stderr)
     errors, warnings = len(feat.errors), len(feat.warnings)
@@ -297,6 +300,23 @@ def cmd_check(repo: Path, name: str, only: list[str] | None) -> int:
     for line in lines:
         print(line)
     return 0
+
+
+def touches_required_problems(repo: Path, feat: featmod.Feature, only: list[str] | None) -> list[featmod.Problem]:
+    """범위 안 티켓에 touches가 없거나 비어 있으면 오류. 사람이 치는 `gs check`에서만 건다.
+
+    grill이 touches 없는 티켓을 남기지 못하게 하는 검사다. `gs go`가 쓰는 check.check()와 review.py의 빈 touches 처리는 그대로다.
+    touches 값 자체가 틀려 이미 오류가 난 티켓은 거기에 맡긴다(같은 티켓에 "없다"를 또 적으면 거짓말이다).
+    """
+    already = {p.where for p in feat.problems if p.level == "오류" and "`touches`" in p.message}
+    found = []
+    for tid in sorted(feat.tickets):
+        ticket = feat.tickets[tid]
+        where = featmod.rel(ticket.path, repo)
+        if (only is not None and tid not in only) or ticket.touches or where in already:
+            continue
+        found.append(featmod.Problem("오류", where, "touches가 없다(고칠 파일을 레포 루트 기준 경로로 적는다)"))
+    return found
 
 
 def guard_problems(repo: Path, feat: featmod.Feature, only: list[str] | None) -> list[featmod.Problem]:

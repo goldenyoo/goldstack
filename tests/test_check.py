@@ -22,7 +22,26 @@ verify: "true"
 """
 
 
-def ticket(tid, blocked_by="[]", model="claude", reviewer="codex", extra=""):
+NO_TOUCHES = object()
+
+
+def copy_feature_with_touches(src, dst):
+    """옛 feature(v1–v3)의 기록을 dst로 복사하고, touches 없는 티켓에만 티켓마다 다른 touches를 더한다.
+    gs check는 touches 없는 티켓을 오류로 막는다(goldstack-v30 03). 기록 파일은 고치지 않고 복사본만 고쳐서 나머지 형식이 통과하는지 본다."""
+    shutil.copytree(src, dst)
+    for path in sorted((Path(dst) / "tickets").glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        if "\ntouches:" not in text.partition("\n---\n")[0]:
+            path.write_text(text.replace("\n---\n", f'\ntouches: ["fixture_{path.stem}.py"]\n---\n', 1), encoding="utf-8")
+
+
+def ticket(tid, blocked_by="[]", model="claude", reviewer="codex", extra="", touches=None):
+    """touches를 안 주면 티켓마다 다른 파일을 적는다(`gs check`는 touches 없는 티켓을 오류로 막고, 같은 파일이면 순서 경고가 난다).
+    NO_TOUCHES면 키를 쓰지 않는다. extra에 touches가 있으면 그것을 쓴다."""
+    if touches is None and "touches:" not in extra:
+        touches = [f"fixture_{tid}.py"]
+    if touches is not None and touches is not NO_TOUCHES:
+        extra += f"touches: {json.dumps(touches)}\n"
     return f'---\nid: "{tid}"\ntitle: t{tid}\nblocked_by: {blocked_by}\nmodel: {model}\nreviewer: {reviewer}\n{extra}---\n## 목표\n'
 
 
@@ -422,7 +441,8 @@ class CheckTest(unittest.TestCase):
 
 
 class RealRepoTest(unittest.TestCase):
-    def test_goldstack_v0_passes(self):
+    def test_goldstack_v0_fails_only_on_touches(self):
+        """v0 티켓에는 touches가 없다. gs check는 이를 오류로 막는다(goldstack-v30 03). 그 밖의 오류는 없다."""
         out, err = io.StringIO(), io.StringIO()
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -436,8 +456,12 @@ class RealRepoTest(unittest.TestCase):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
                     mock.patch("gs.check.shutil.which", return_value="/test/cli"):
                 code = cli.main(["--repo", str(repo), "check", "goldstack-v0"])
-        self.assertEqual(code, 0, err.getvalue())
-        self.assertIn("지금 시작 가능: 01 11", out.getvalue())
+        self.assertEqual(code, 1, err.getvalue())
+        lines = err.getvalue().splitlines()
+        self.assertEqual(len(lines), 11, err.getvalue())
+        for line in lines:
+            self.assertRegex(line, r"^오류: \.goldstack/work/goldstack-v0/tickets/\d\d-.+\.md: touches가 없다")
+        self.assertIn("오류 11, 경고 0", out.getvalue())
 
 
 if __name__ == "__main__":
