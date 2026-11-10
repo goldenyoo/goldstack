@@ -296,6 +296,12 @@ class ReplayRunTest(unittest.TestCase):
         edited = sh(self.repo, "git", "show", f"{head}:{WORK}/tickets/{TID}-t.md")
         self.assertIn("worker가 고친 티켓", edited)  # worker head의 티켓은 바뀌었다(이 시험이 그 경우를 본다)
         self.assertIn("worker가 고친 spec", sh(self.repo, "git", "show", f"{head}:{WORK}/spec.md"))
+        # brief의 참고 줄도 worktree 안의 티켓·spec이 아니라 사본을 가리킨다
+        brief = (logdir / "brief.md").read_text(encoding="utf-8")
+        self.assertIn(f"`{logdir / 'input' / 'spec.md'}`", brief)
+        self.assertIn(f"`{logdir / 'input' / f'{TID}-t.md'}`", brief)
+        self.assertNotIn(f"`{WORK}/spec.md`", brief)
+        self.assertNotIn(f"`{WORK}/tickets/{TID}-t.md`", brief)
         self.assertEqual((self.bin / "review.ticket").read_text(encoding="utf-8"), TICKET)
         self.assertNotIn("worker가 고친 spec", (self.bin / "review.spec").read_text(encoding="utf-8"))
         prompt = (self.bin / "review.prompt").read_text(encoding="utf-8")

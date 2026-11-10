@@ -15,8 +15,8 @@
 **실행(`gs replay`, `command`·`run`)**
 1. 시작 commit을 고르고 출력한다. 시작 commit 티켓의 `reviewer`가 `--worker` 계열과 같으면 아무것도 만들기 전에 오류다.
 2. 실행 디렉터리 `.goldstack/work/<feature>/run/replay/<NN>-<모델>-<시각>/`에 티켓·spec 사본(`input/`)을 꺼낸다.
-   brief는 사본의 티켓 본문을 싣고, 리뷰·판단은 사본 경로를 받는다. worker가 worktree의 티켓·spec을 고쳐도 리뷰 입력은 그대로다.
-   (brief의 참고 줄은 `gs go`처럼 worktree 안 경로를 가리킨다. worker가 고치기 전에는 시작 commit 그대로라 사본과 같다.)
+   brief는 사본의 티켓 본문을 싣고 참고 줄도 사본 경로로 바꾼다(`gs go`의 brief는 worktree 안 경로를 가리킨다).
+   리뷰·판단도 사본 경로를 받는다. worker가 worktree의 티켓·spec을 고쳐도 brief가 가리키는 명세와 리뷰 입력은 그대로다.
 3. 시작 commit의 분리 worktree(`wt/`)에서 config `[worktree] setup`을 돌리고, `gs go`와 같은 brief(`worker.write_brief`)와
    실행 스크립트(`worker.write_script`: push·gh 차단, `[hook.worker_tests]` 환경)로 worker를 돌린다. 브랜치는 만들지 않는다.
 4. worker가 끝나면 종료 코드와 시작 commit 대비 커밋 수를 적는다. 미커밋 변경이 남았으면 비고에 적는다.
@@ -388,6 +388,20 @@ def _load_frozen(repo: Path, feature: str, frozen: Frozen) -> tuple[featmod.Tick
     return ticket, spec
 
 
+def _point_brief_at_copies(brief: Path, feature: str, frozen: Frozen) -> None:
+    """`worker.write_brief`의 참고 줄(worktree 안의 티켓·spec 경로)을 run 디렉터리의 사본 경로로 바꾼다.
+    worker가 worktree의 티켓·spec을 고친 뒤 다시 읽어도 시작 commit의 명세를 읽게 한다. 줄을 못 찾으면 RuntimeError."""
+    rel = featmod.work_rel(feature)
+    old = (f"참고: feature spec `{rel}/spec.md`, 티켓 파일 `{rel}/tickets/{frozen.ticket_path.name}` "
+           "(둘 다 이 worktree 안에 있다)")
+    new = (f"참고: feature spec `{frozen.spec_path}`, 티켓 파일 `{frozen.ticket_path}` "
+           "(시작 commit에서 꺼낸 사본이다. worktree 안의 같은 파일이 아니라 이 사본을 읽는다)")
+    text = brief.read_text(encoding="utf-8")
+    if text.count(old) != 1:
+        raise RuntimeError(f"brief에서 티켓·spec 참고 줄을 찾지 못했다(worker.write_brief 형식이 바뀌었다): {brief}")
+    brief.write_text(text.replace(old, new), encoding="utf-8")
+
+
 def _count(n: float | None) -> str:
     if n is None:
         return NONE
@@ -539,7 +553,8 @@ def run(repo: Path, cfg: config.Config, feature: str, ticket_id: str, chosen: Wo
                     raise SetupFailed(f"worker worktree 준비 실패. 로그: {logdir / 'setup.log'}")
                 setup.remember(wt)
             worker.write_brief(job, spec, feature, DETACHED)
-            adapter = adapters.for_model(chosen.family, cfg.models, config.ModelEffort(chosen.model, chosen.effort),
+            _point_brief_at_copies(job.brief, feature, frozen)
+            adapter =adapters.for_model(chosen.family, cfg.models, config.ModelEffort(chosen.model, chosen.effort),
                                          worker_tests=cfg.hook.worker_tests)
             adapter.prepare(job.input)
             worker.write_script(job, adapter)
