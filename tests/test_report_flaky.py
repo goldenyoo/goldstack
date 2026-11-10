@@ -1,4 +1,5 @@
 """보고서 Summary의 flaky 줄과 integration 검증 실패의 티켓 이유."""
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -71,6 +72,17 @@ class ReportFlakyTest(unittest.TestCase):
         self.assertEqual(report.flaky_lines(self.r), [])
         self.assertNotIn("- flaky:", self.summary())
 
+    def test_flaky_line_in_an_earlier_ticket_log_survives_a_later_log(self):
+        first = self.rundir / "05/1"
+        first.mkdir()
+        (first / "verify.log").write_text("$ check\n" + NEW.format("ticket-05", "test_first"))
+        second = self.rundir / "05/2"
+        second.mkdir()
+        (second / "verify.log").write_text("$ check\nOK\n")
+        later = (first / "verify.log").stat().st_mtime + 10
+        os.utime(second / "verify.log", (later, later))
+        self.assertIn("- flaky: 05 티켓 검증 test_first (따로 돌려 통과, 전체 다시 통과)", self.summary())
+
     def test_same_flaky_line_appears_once(self):
         self.ticket_log(NEW.format("ticket-05", "test_x") * 2)
         self.assertEqual(len(report.flaky_lines(self.r)), 1)
@@ -111,6 +123,25 @@ class ReportFlakyTest(unittest.TestCase):
         self.assertEqual(verify.call_args.args[2], "integration-recheck")
         self.assertEqual(saved["failed_verify"], "integration-recheck")
         self.assertEqual(saved["phase"], "not_merged")
+
+    def test_recheck_failure_rewrites_the_report_with_the_new_reason(self):
+        self.r.cfg = SimpleNamespace(git=SimpleNamespace(wait_checks=True))
+        head = support.sh(self.r.repo, "git", "rev-parse", "HEAD").strip()
+        self.r.st.finish = {"phase": "checks_timeout", "head": head, "merge_head": head, "url": "u"}
+        (self.rundir / "finish/summary.md").write_text("요약")
+        self.r.feat.tickets["05"].closes = []
+
+        def refresh(r, view):
+            finish._save(r, failed_verify="integration-recheck", phase="not_merged")
+            return False
+
+        updates = []
+        with (mock.patch.object(finish, "_view", return_value={"state": "OPEN"}),
+              mock.patch.object(finish, "_save", side_effect=lambda r, **kw: r.st.finish.update(kw)),
+              mock.patch.object(finish, "_refresh_check_head", side_effect=refresh),
+              mock.patch.object(finish, "_update", side_effect=lambda r, summary: updates.append(summary))):
+            self.assertEqual(finish._run(self.r, False), ("u", False))
+        self.assertEqual(updates, ["요약"])
 
 
 if __name__ == "__main__":

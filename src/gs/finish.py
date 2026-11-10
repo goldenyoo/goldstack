@@ -1262,6 +1262,8 @@ def _run(r, cleanup: bool) -> tuple[str | None, bool]:
             if view.get("state") not in ("MERGED", "CLOSED"):
                 if r.cfg.git.wait_checks or f["phase"] in CHECK_PHASES:
                     if not _refresh_check_head(r, view):
+                        if f["phase"] == "not_merged":
+                            _update(r, summary)  # 티켓 이유가 새 failed_verify를 따르게 보고서를 다시 쓴다
                         return f.get("url"), False
                     if r.cfg.git.wait_checks and not _wait_checks(r):
                         return f.get("url"), False

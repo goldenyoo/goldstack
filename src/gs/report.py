@@ -163,14 +163,12 @@ def _spot(label: str) -> str:
 
 @metrics.best_effort
 def flaky_lines(r) -> list[str] | None:
-    """이번 실행 검증 로그(티켓마다 가장 최근 verify.log, 마무리 *verify.log)의 flaky 줄을 Summary 줄로 바꾼다.
+    """이번 실행 검증 로그(티켓마다 모든 verify.log, 마무리 *verify.log)의 flaky 줄을 Summary 줄로 바꾼다.
     02의 줄은 지점·시험 파일과 함께, 옛 재시도 줄은 파일을 모르므로 그렇게 적는다. 같은 줄은 한 번만 낸다.
     표시용이라 읽다 실패해도 보고서 쓰기를 막지 않는다(None)."""
     logs = []
     for tid in r.order:
-        found = list((r.rundir / tid).glob("**/verify.log"))
-        if found:
-            logs.append(max(found, key=lambda p: p.stat().st_mtime))
+        logs.extend(sorted((r.rundir / tid).glob("**/verify.log"), key=lambda p: p.stat().st_mtime))
     logs.extend(sorted((r.rundir / "finish").glob("*verify.log")))
     out = []
     for log in logs:
