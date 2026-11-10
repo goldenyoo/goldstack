@@ -511,6 +511,8 @@ def _cli_version(name: str) -> str:
         with tempfile.TemporaryDirectory(prefix="gs-version-", ignore_cleanup_errors=True) as empty:
             cp = subprocess.run([os.path.abspath(path), "--version"], cwd=empty, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=5)
+    except subprocess.TimeoutExpired:
+        return "모름(시간 초과)"
     except (OSError, subprocess.SubprocessError):
         return "모름"
     found = _VERSION_IN_OUTPUT.search(cp.stdout + cp.stderr) if cp.returncode == 0 else None
