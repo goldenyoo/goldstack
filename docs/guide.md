@@ -318,6 +318,26 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 | `overnight.autonomy` | `stop`(절이 없거나 `gs init`이 쓴 config도 같다) | `stop` 허락 밖의 일은 멈춘다 · `record` 되돌릴 수 있으면 추천대로 진행하고 `쓴 허락`에 적는다. [밤사이 판단](#밤사이-판단overnight-autonomy) |
 | `feedback.max_per_day` | `5` | 하루에 새로 올리는 issue 최대 수 |
 
+### 1회성 시험 실패 다시 돌리기(`[verify]`)
+
+바뀐 코드와 무관한 시험 하나가 한 번 떨어졌다고 티켓 시도나 feature 병합 전체를 버리지 않게 한다. 대상 레포 `.goldstack/config.toml`:
+```toml
+[verify]
+failed_file = '^(?:FAIL|ERROR): \S+ \((test_\w+)\.'
+rerun = ".venv/bin/python -m unittest discover -s tests -p {file}.py"
+max_files = 3
+```
+이 레포(goldstack)가 쓰는 값이다. 다른 레포는 시험 도구에 맞게 바꾼다. goldstack은 시험 도구를 가정하지 않는다.
+
+- `failed_file`: 검증 출력의 줄 머리에 맞추는 정규식. 첫 캡처 그룹이 실패한 시험 파일 이름이다.
+- `rerun`: 그 파일 하나를 돌리는 명령 틀. `{file}`이 파일 이름으로 바뀐다. 이름은 `[A-Za-z0-9_.-]+`만 받고 아니면 판별하지 않는다.
+- `max_files`: 한 번에 따로 돌릴 파일 수 상한. 넘으면 판별하지 않는다.
+- **비면 꺼진다.** `failed_file`과 `rerun`이 둘 다 있어야 켜진다.
+- **동작**: 검증이 실패하면 실패한 파일만 `rerun`으로 따로 돌린다. 모두 통과하면(1회성으로 본다) 통과 판정은 따로 돌린 결과가 아니라 **전체 `verify` 명령을 한 번 더 돌린 결과**로 한다. 그래서 `&&` 뒤 단계(plugin 검사, build)와 import 오류는 놓치지 않는다. 하나라도 실패하면 처음 실패가 그대로 확정이다. 판별 전체가 `verify_minutes` 하나를 나눠 쓴다. 판별 사이 작업 트리가 바뀌었으면 하지 않는다.
+- **모든 검증 지점**(티켓 병합 전, integration, integration-final, integration-recheck, main, main-recheck)에 같이 적용된다. 변경 파일 조건은 없다.
+- **`verify_retries`와의 관계**: `verify_retries`는 실패한 명령 전체를 다시 돌리는 일반 재시도다(오래 걸린다). `[verify]`는 실패한 파일만 보고 판별한다(몇 초). 둘을 함께 쓰면 시도마다 판별을 먼저 하고, 그래도 실패면 `verify_retries`만큼 더 시도한다. 판별 뒤 전체를 한 번 더 도는 것은 시도당 한 번이다.
+- **flaky는 숨기지 않는다.** 검증 로그에 `flaky: <지점> <파일들> 따로 돌려 통과, 전체 다시 통과`가 남고, 최종 보고서 Summary "남은 위험"에 `- flaky: <지점> <시험 파일> (따로 돌려 통과, 전체 다시 통과)`가 나온다. 옛 `verify_retries` 통과는 `- flaky: <지점> (전체 재시도 N번 만에 통과, 시험 파일 모름)`이다.
+
 ### 병합 뒤 setup 다시(`setup_when`)
 
 의존성이나 버전 파일을 바꾸는 티켓은 병합된 뒤 integration의 설치가 옛 값으로 남아 검증이 엉뚱하게 실패할 수 있다. `.goldstack/config.toml`에 그 파일을 적어 두면 gs가 다시 설치한다.
@@ -343,7 +363,7 @@ feature마다 다른 값은 config가 아니라 `.goldstack/work/<feature>/spec.
 | `feature` | 필수 | `gs check`: 디렉터리 이름과 같아야 한다 |
 | `verify` | 필수 | `gs go`: integration, integration-final, 병합 뒤 base 검증. 티켓 `verify`도 `verify_ticket`도 없으면 티켓 검증과 worker brief도. 비어 있지 않은 셸 한 줄 |
 | `verify_ticket` | 없음 | 티켓 `verify`가 없는 티켓의 검증과 worker brief가 `verify` 대신 이것을 쓴다. 병합 트리에서 돈다(티켓 worktree가 아니다). 비어 있지 않은 셸 한 줄 |
-| `verify_retries` | `0` | 모든 검증 지점에서 실패 시 다시 돌리는 횟수. 0 이상 정수 |
+| `verify_retries` | `0` | 모든 검증 지점에서 실패 시 다시 돌리는 횟수. 0 이상 정수. 실패한 시험 파일만 따로 돌리는 [`[verify]`](#1회성-시험-실패-다시-돌리기verify)와 별개다 |
 | `verify_minutes` | `20` | 검증 명령 한 번의 상한(`verify`, `verify_ticket`, 티켓 `verify` 모두). 1 이상 정수 |
 | `idle_minutes` | `20` | 로그 출력·새 커밋 없는 worker를 끝내는 시간. 1 이상 정수 |
 | `max_workers` | `3` | 동시 worker 수. 1 이상 정수. 리뷰 중인 티켓은 자리를 차지하지 않는다(worker 최대 `max_workers` + 리뷰 중인 티켓 최대 `max_workers`) |
@@ -453,7 +473,7 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 | `id`, `title`, `blocked_by`, `model`, `reviewer` | 필수 | `gs check`, `gs go`. `model`·`reviewer`는 `claude`·`codex`·`agy` 중 서로 다른 계열 |
 | `tier` | `medium` | worker의 모델·effort를 등급표에서 고른다. `small`·`medium`·`large` |
 | `verify` | spec `verify_ticket` → spec `verify` | 이 티켓의 worker brief와 병합 트리 검증. 비어 있지 않은 셸 한 줄 |
-| `touches` | `[]` | `gs check`의 겹침 경고. **터미널에서 치는 `gs check`는 `touches`가 없거나 `[]`인 티켓을 오류로 막는다**(`touches가 없다`). `gs go`는 막지 않는다 |
+| `touches` | `[]` | `gs check`의 겹침 경고. **터미널에서 치는 `gs check`는 `touches`가 없거나 `[]`인 티켓을 오류로 막는다**(`touches가 없다`). `gs go`는 막지 않는다. 끝난 옛 feature(v0–v4 같은)는 `gs check`에서 오류로 나오고, 다시 돌릴 일이 없으면 그대로 둔다 |
 | `second_reviewer` | 없음 | 두 번째 리뷰어. `model`·`reviewer`와 다른 계열 |
 
 ### `tier` — 티켓 크기에 맞는 모델·effort
@@ -913,7 +933,7 @@ $ gs replay goldstack-v27/03 --worker claude:fable/high [--base <sha>] [--usage 
 ```
 
 - **인자**: `<feature>/<NN>`과 `--worker <claude|codex>:<모델>/<effort>`가 필수다. `--worker`가 티켓의 `model`과 tier 표를 대신한다. 계열이 티켓 `reviewer`와 같으면 아무것도 만들기 전에 오류다. `--usage <전>,<후>`는 사람이 읽은 `/usage` 주간 %를 표에 적는 선택 값이다.
-- **시작 commit**: 자동으로 찾는다. integration의 `Merge NN:` 커밋에서 티켓 브랜치를 첫 부모로 거슬러 첫 커밋 앞 commit이다. 첫 줄 `■ 시작 commit: <sha>`로 보인다. 못 찾거나 여럿이면 `--base <sha>`로 덮어쓴다. 티켓·spec은 그 commit 트리의 것을 쓴다(그사이 고친 파일은 읽지 않는다).
+- **시작 commit**: 자동으로 찾는다. 먼저 base 이력(`<remote>/<base>`, `<base>`)에서 `Merge NN:` 커밋을 찾고, 거기 하나도 없을 때만 integration 이력을 본다(버려진 integration에 같은 `Merge NN:`이 남아 있어도 base에 병합된 티켓은 base 것을 쓴다). 찾은 `Merge NN:` 커밋에서 티켓 브랜치를 첫 부모로 거슬러 첫 커밋 앞 commit이다. 첫 줄 `■ 시작 commit: <sha>`로 보인다. 못 찾거나 여럿이면 `--base <sha>`로 덮어쓴다. 티켓·spec은 그 commit 트리의 것을 쓴다(그사이 고친 파일은 읽지 않는다).
 - **범위**: worker → spec `verify` → 티켓 `reviewer`의 첫 리뷰 1회 → 판단 모델 분류까지다. **수정·재리뷰·수리는 없다.** 그래서 표의 `fix` 칸은 고쳤다는 뜻이 아니라 판단 모델이 `fix`로 나눈 지적 수다.
 - **결과**: 대상 레포 `.goldstack/trials/replay.md`에 행이 쌓인다(없으면 머리 행과 함께 만든다). 행은 날짜, 티켓, 시작 commit, worker, 커밋 수, verify, 지적 h/m/l, fix, worker 분, 토큰 입력/캐시/출력, `total_cost_usd`(API 환산, 구독 한도와 다르다), `/usage`, 로그 경로, 비고다. **gs는 이 파일을 커밋하지 않는다. 사람이 커밋한다.**
 - **로그**: `.goldstack/work/<feature>/run/replay/<NN>-<모델>-<시각>/`(gitignore 안). 재생 worktree는 끝나면 지운다. 신호(SIGINT·SIGTERM·SIGHUP)로 멈추면 worker를 먼저 끝내고 worktree를 지우며 행을 남기지 않는다(종료 130).
