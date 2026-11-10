@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v27 리뷰 01"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v30"
 ---
 touches가 빈 티켓은 diff에 포함된 파일까지 수정하도록 허용해 명세의 수정 범위를 넓힌다. 해당 파일이 다른 미병합 티켓의 작업 대상이어도 defer 대신 fix할 수 있다.
 

@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v27 리뷰 03"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v30"
 ---
 이번 실행의 수리 worker가 표식을 남기고 네트워크 오류로 종료하면 retry=False 처리가 실행되지 않는다. 표식 판정이 _end_repair에만 있어, 먼저 실행되는 일시 오류 분기가 worker를 다시 띄운다.
 

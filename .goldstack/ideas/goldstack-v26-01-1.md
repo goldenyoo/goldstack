@@ -2,8 +2,8 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v26 리뷰 01"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v30"
 ---
 파이프 뒤에 줄바꿈이 있는 시험 폴더 전체 순회 명령은 차단을 통과한다.
 
