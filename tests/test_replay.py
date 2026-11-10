@@ -1,8 +1,10 @@
 """gs replay 입력 확정: 시작 commit 찾기, 그 commit 트리의 티켓·spec 꺼내기, 옵션 값 읽기. 임시 git 레포로 돈다."""
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from gs import replay
 from support import isolate_git_env
@@ -95,6 +97,25 @@ class StartCommitTest(ReplayTestCase):
         self.land()
         naive = self.git("merge-base", f"{merge}^1", f"{merge}^2")
         self.assertNotEqual(naive, start, "merge-base가 시작 commit이면 이 시험이 합침 커밋을 검증하지 못한다")
+        self.assertEqual(replay.start_commit(self.repo, FEATURE, "03", None), start)
+
+    def test_side_commits_merged_into_ticket_branch_are_not_followed(self):
+        """티켓 브랜치가 integration 밖 커밋(앞 시도 브랜치)을 합쳐도 첫 부모 사슬만 따라 그 브랜치의 갈림점을 돌려준다."""
+        seed = self.seed()
+        self.git("checkout", "-q", "-b", f"gs/{FEATURE}/03", seed)
+        with mock.patch.dict(os.environ, {"GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z",
+                                          "GIT_COMMITTER_DATE": "2020-01-01T00:00:00Z"}):
+            old = self.commit("attempt 1", **{"src__a.py": "old\n"})  # 가장 오래된 커밋. 날짜 순이면 맨 끝에 온다
+        self.git("checkout", "-q", "-b", f"gs/{FEATURE}/01", seed)
+        self.commit("other work", **{"src__other.py": "x\n"})
+        start = self.merge_ticket("01", f"gs/{FEATURE}/01")
+        self.git("checkout", "-q", "-b", f"gs/{FEATURE}/03-retry-1", start)
+        self.commit("attempt 2", **{"src__b.py": "new\n"})
+        self.git("merge", "--no-ff", "-q", "-m", "앞 시도를 합침", f"gs/{FEATURE}/03")
+        merge = self.merge_ticket("03", f"gs/{FEATURE}/03-retry-1")
+        self.land()
+        every = self.git("rev-list", f"{merge}^2", "--not", f"{merge}^1").split()
+        self.assertEqual(every[-1], old, "첫 부모만 따르지 않으면 앞 시도 커밋에 닿아야 이 시험이 그 경로를 가른다")
         self.assertEqual(replay.start_commit(self.repo, FEATURE, "03", None), start)
 
     def test_missing_merge_commit_names_base_option(self):
@@ -256,9 +277,11 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(str(replay.parse_worker("claude:opus/xhigh")), "claude:opus/xhigh")
 
     def test_worker_format_errors_say_why(self):
-        for value, reason in (("claude", "':'"), ("agy:gemini/high", "계열"), ("gemini:x/high", "계열"),
-                              ("claude:fable", "effort"), ("claude:/high", "모델"), ("claude:fable/", "effort"),
-                              ("claude:fa ble/high", "모델"), ("claude:fable/hi gh", "effort"), ("", "':'")):
+        # 이유는 형식 안내문(`<claude|codex>:<모델>/<effort>`)에 없는 조각으로 본다. "모델"·"effort"만 보면 안내문이 늘 통과시킨다.
+        for value, reason in (("claude", "':'가 없다"), ("agy:gemini/high", "계열 'agy'"), ("gemini:x/high", "계열 'gemini'"),
+                              ("claude:fable", "'/<effort>'가 없다"), ("claude:/high", "모델 ''"),
+                              ("claude:fable/", "effort ''"), ("claude:fa ble/high", "모델 'fa ble'"),
+                              ("claude:fable/hi gh", "effort 'hi gh'"), ("", "':'가 없다")):
             with self.subTest(value):
                 with self.assertRaises(replay.InvalidValueError) as caught:
                     replay.parse_worker(value)
