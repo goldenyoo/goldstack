@@ -217,6 +217,11 @@ class FreezeInputsTest(ReplayTestCase):
             replay.freeze_inputs(self.repo, "HEAD", FEATURE, "03", self.out)
         self.assertEqual(replay.freeze_inputs(self.repo, start, FEATURE, "03", self.out).ticket_path.name, "03-demo.md")
 
+    def test_non_ascii_ticket_file_name_is_found(self):
+        start = self.commit("hangul", **{f"{WORK}__spec.md": spec(), f"{WORK}__tickets__03-재생.md": ticket("03")})
+        frozen = replay.freeze_inputs(self.repo, start, FEATURE, "03", self.out)
+        self.assertEqual(frozen.ticket_path.name, "03-재생.md")
+
     def test_ticket_prefix_must_be_the_whole_id(self):
         start = self.commit("other ids", **{f"{WORK}__spec.md": spec(), f"{WORK}__tickets__031-demo.md": ticket("031")})
         with self.assertRaises(replay.MissingFileError):

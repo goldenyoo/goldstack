@@ -192,7 +192,7 @@ def freeze_inputs(repo: Path, commit: str, feature: str, ticket_id: str, outdir:
     if sha is None:
         raise MissingFileError(f"{commit!r}는 이 레포의 commit이 아니다")
     work = featmod.work_rel(feature)
-    listed = git.run(repo, "ls-tree", "--name-only", sha, f"{work}/tickets/", check=False).stdout.split("\n")
+    listed = git.run(repo, "ls-tree", "-z", "--name-only", sha, f"{work}/tickets/", check=False).stdout.split("\0")
     names = [Path(line).name for line in listed if Path(line).name.startswith(f"{ticket_id}-") and line.endswith(".md")]
     if not names:
         raise MissingFileError(f"{sha[:12]} 트리의 {work}/tickets/에 {ticket_id}-*.md가 없다")
