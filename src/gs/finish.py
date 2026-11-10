@@ -40,7 +40,7 @@ feature PR로 base에 간다. base에 없으면(revert가 지움, 파일을 쓰�
 finish 상태를 외부 작업마다 저장한다. 병합 후 중단된 실행은 같은 PR을 다시 병합하지 않고
 base 검증/revert를 이어 간다. 호출 worktree의 base 브랜치는 건드리지 않는다.
 병합 뒤 무엇을 할지는 `revert_decision.next_step`이 정하고 `_postmerge`는 사실을 읽어 그 답을 실행한다.
-integration 전체 검증 실패로 not_merged가 되면 실패한 검증 단계를 남겨 보고서가 로그·후보 티켓을 붙인다.
+integration 전체 검증 실패(integration·integration-final·integration-recheck)로 not_merged가 되면 실패한 검증 단계를 남겨 보고서가 로그·후보 티켓을 붙이고 병합된 티켓의 이유에 그 단계를 적는다.
 
 마무리를 멈춘 git 오류는 어느 단계에서 났든 `run`이 finish.error에 남긴다(`_note_failure`). 준비·보고서·PR 단계(`_publish` 등)도 같다.
 결함 수집(feedback.finish_anomaly)이 이 글로 gs 결함과 환경 오류를 가른다. push 설정 변경은 go.go가 남긴다.
@@ -262,7 +262,8 @@ def _refresh_check_head(r, view: dict) -> bool:
     ok = _verify(r, r.iwt, "integration-recheck")
     if not ok:
         _restore_integration(r, head)
-        _save(r, integration_ok=False, phase="not_merged", outcome="integration 검증 실패 → 병합 안 함")
+        _save(r, integration_ok=False, failed_verify="integration-recheck", phase="not_merged",
+              outcome="integration 검증 실패 → 병합 안 함")
         return False
     _save(r, head=head, merge_head=head, integration_ok=True)
     return True
@@ -1261,6 +1262,8 @@ def _run(r, cleanup: bool) -> tuple[str | None, bool]:
             if view.get("state") not in ("MERGED", "CLOSED"):
                 if r.cfg.git.wait_checks or f["phase"] in CHECK_PHASES:
                     if not _refresh_check_head(r, view):
+                        if f["phase"] == "not_merged":
+                            _update(r, summary)  # 티켓 이유가 새 failed_verify를 따르게 보고서를 다시 쓴다
                         return f.get("url"), False
                     if r.cfg.git.wait_checks and not _wait_checks(r):
                         return f.get("url"), False
