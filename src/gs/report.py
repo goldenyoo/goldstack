@@ -151,13 +151,60 @@ def prior_findings_section(r) -> str:
     return "### 버려진 시도의 지적\n\n" + "\n".join(lines) + "\n\n" if lines else ""
 
 
+INTEGRATION_VERIFY_LABELS = ("integration", "integration-final", "integration-recheck")
+_FLAKY_TRIAGED = re.compile(r"flaky: (\S+) (.+) 따로 돌려 통과, 전체 다시 통과")
+_FLAKY_RETRIED = re.compile(r"flaky: (\S+) 재시도 (\d+)번 만에 통과")
+
+
+def _spot(label: str) -> str:
+    """검증 라벨(`ticket-05`, `main`)을 보고서 지점 이름으로. 티켓 라벨만 풀어 쓴다."""
+    return f"{label[len('ticket-'):]} 티켓 검증" if label.startswith("ticket-") else label
+
+
+@metrics.best_effort
+def flaky_lines(r) -> list[str] | None:
+    """이번 실행 검증 로그(티켓마다 가장 최근 verify.log, 마무리 *verify.log)의 flaky 줄을 Summary 줄로 바꾼다.
+    02의 줄은 지점·시험 파일과 함께, 옛 재시도 줄은 파일을 모르므로 그렇게 적는다. 같은 줄은 한 번만 낸다.
+    표시용이라 읽다 실패해도 보고서 쓰기를 막지 않는다(None)."""
+    logs = []
+    for tid in r.order:
+        found = list((r.rundir / tid).glob("**/verify.log"))
+        if found:
+            logs.append(max(found, key=lambda p: p.stat().st_mtime))
+    logs.extend(sorted((r.rundir / "finish").glob("*verify.log")))
+    out = []
+    for log in logs:
+        try:
+            lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if m := _FLAKY_TRIAGED.fullmatch(line):
+                item = f"- flaky: {_spot(m[1])} {m[2]} (따로 돌려 통과, 전체 다시 통과)"
+            elif m := _FLAKY_RETRIED.fullmatch(line):
+                item = f"- flaky: {_spot(m[1])} (전체 재시도 {m[2]}번 만에 통과, 시험 파일 모름)"
+            else:
+                continue
+            if item not in out:
+                out.append(item)
+    return out
+
+
+def merged_reason(r) -> str:
+    """병합된 티켓의 기본 이유. 마무리가 integration 계열 검증 실패로 not_merged이면 티켓 검증과 나눠 쓴다."""
+    f = r.st.finish
+    if f.get("phase") == "not_merged" and f.get("failed_verify") in INTEGRATION_VERIFY_LABELS:
+        return f"integration에 병합(티켓 검증 통과) · {f['failed_verify']} 검증 실패"
+    return "integration에 병합·검증됨"
+
+
 def evidence(r, tail: int = LOG_TAIL) -> str:
     """티켓·integration의 최신 준비 로그와 verify·base 준비 로그의 끝부분 tail자씩 붙인다."""
     rows, notes, timings = [], [], []
     logs = []
     for tid in r.order:
         ts = r.st.tickets[tid]
-        reason = ts.reason or ("integration에 병합·검증됨" if ts.status == "merged" else "")
+        reason = ts.reason or (merged_reason(r) if ts.status == "merged" else "")
         if repaired := state.repair_summary(ts):
             reason += "\n" + repaired
         durations = state.phase_durations(ts)
@@ -624,6 +671,8 @@ def _render(r, summary: str, tail: int) -> str:
         summary_status += f" · {remaining}"
     if counts := finding_counts(r):
         summary_status += f"\n{counts}"
+    if flaky := flaky_lines(r):
+        summary_status += "\n" + "\n".join(flaky)
     missing_docs = docs_missing(r)
     docs_notice = "".join(f"문서 미반영: {tid}\n\n" for tid in missing_docs)
     # 모델 요약은 병합 전에 쓰여 revert를 모른다. 상태와 다음 명령은 코드가 맨 위에 넣는다.
