@@ -429,20 +429,28 @@ class RedactionTest(unittest.TestCase):
         self.assertIn("- CLI: git 모름", issue.body)
 
     def test_cli_version_keeps_the_number_only(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            script = Path(tmp) / "fake-gh"
-            script.write_text("#!/bin/sh\necho 'gh at /Users/acme/secret/bin 1.2.3'\n")
-            script.chmod(0o755)
-            with mock.patch.dict(os.environ, GS_GH=str(script)):
+        def probe(stdout="", returncode=0, error=None):
+            result = subprocess.CompletedProcess(["gh", "--version"], returncode, stdout, "")
+            return mock.patch.object(feedback.subprocess, "run", side_effect=error, return_value=result)
+
+        with mock.patch.object(feedback.shutil, "which", return_value="/bin/gh"):
+            with probe("gh at /Users/acme/secret/bin 1.2.3\n"):
                 self.assertEqual(feedback._cli_version("gh"), "1.2.3")
-            script.write_text("#!/bin/sh\necho 'no number here'\n")
-            with mock.patch.dict(os.environ, GS_GH=str(script)):
+            with probe("no number here\n"):
                 self.assertEqual(feedback._cli_version("gh"), "모름")
-            script.write_text("#!/bin/sh\necho 9.9.9; exit 3\n")
-            with mock.patch.dict(os.environ, GS_GH=str(script)):
+            with probe("9.9.9\n", returncode=1):
                 self.assertEqual(feedback._cli_version("gh"), "모름")
-            with mock.patch.dict(os.environ, GS_GH=str(script) + "-absent"):
-                self.assertEqual(feedback._cli_version("gh"), "없음")
+            with probe(error=subprocess.TimeoutExpired(["gh"], 5)):
+                self.assertEqual(feedback._cli_version("gh"), "모름(시간 초과)")
+            with probe(error=OSError("boom")):
+                self.assertEqual(feedback._cli_version("gh"), "모름")
+        with mock.patch.object(feedback.shutil, "which", return_value=None):
+            self.assertEqual(feedback._cli_version("gh"), "없음")
+
+    def test_compose_keeps_the_timeout_mark_in_the_cli_line(self):
+        env = feedback.Environment("9.9.9", "Darwin 27.0.0 arm64", (("gh", "모름(시간 초과)"), ("git", "모름")))
+        issue = self.compose(env=env)
+        self.assertIn("- CLI: gh 모름(시간 초과), git 모름", issue.body)
 
     def test_environment_collects_every_cli_without_host_name(self):
         with mock.patch.object(feedback, "_cli_version", return_value="1.0"), \

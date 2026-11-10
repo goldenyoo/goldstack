@@ -480,7 +480,7 @@ def compose(*, phase: str, kind: str, frames: Iterable[Frame], error_lines: Iter
     lines = redactor.lines(raw)
     fingerprint = _fingerprint(version, phase, kind, shown, raw)
     key = _recurrence_key(phase, kind, shown)
-    clis = ", ".join(f"{name} {_clean_version(value) if value != '없음' else value}"
+    clis = ", ".join(f"{name} {value if value in ('없음', '모름(시간 초과)') else _clean_version(value)}"
                      for name, value in env.clis if name in _CLIS)
     body = [f"- gs: {version}", f"- CLI: {clis or '모름'}", f"- OS: {redactor.line(env.os) or '모름'}",
             f"- 단계: {phase}", f"- 오류 종류: {kind}", f"- config: {_config_line(cfg)}",
@@ -511,6 +511,8 @@ def _cli_version(name: str) -> str:
         with tempfile.TemporaryDirectory(prefix="gs-version-", ignore_cleanup_errors=True) as empty:
             cp = subprocess.run([os.path.abspath(path), "--version"], cwd=empty, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=5)
+    except subprocess.TimeoutExpired:
+        return "모름(시간 초과)"
     except (OSError, subprocess.SubprocessError):
         return "모름"
     found = _VERSION_IN_OUTPUT.search(cp.stdout + cp.stderr) if cp.returncode == 0 else None
