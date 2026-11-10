@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.2.14 — 2026-11-10
+
+### goldstack-v30
+
+- 수리 worker: 이번 실행에서 띄운 수리 worker가 커밋 없이 끝나고 마지막 메시지에 `브랜치 밖 원인:` 줄이 있으면, 네트워크 끊김으로 보이는 종료여도 표식을 먼저 본다. 다시 띄우지 않고 재시도 없이 실패한다.
+- 이 레포 `.goldstack/config.toml`의 worker 시험 차단 첫 규칙이 줄바꿈 뒤의 `xargs`도 잡는다(`hook.py`는 그대로).
+- `gs check`: `touches`가 없거나 `[]`인 티켓을 오류로 막는다(터미널에서 치는 `gs check`만. `gs go`는 그대로). spec에 `### 교차 검토` 제목이 있는데 실제 행도 `교차 검토 못 함:` 줄도 없으면 경고한다.
+- `gs replay <feature>/<NN> --worker <계열>:<모델>/<effort> [--base <sha>] [--usage <전>,<후>]`: 지난 티켓을 원래 시작 commit에서 다른 worker 모델로 다시 돌려 worker → verify → 첫 리뷰 → 판단까지 재고 `.goldstack/trials/replay.md`에 한 행을 남긴다(수정·재리뷰·수리 없음, 커밋은 사람이). 로그는 `.goldstack/work/<feature>/run/replay/`.
+- `docs/guide.md`·`docs/internals.md`를 맞췄다.
+- 버전을 `0.2.14`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.13 — 2026-11-09
 
 ### goldstack-v29

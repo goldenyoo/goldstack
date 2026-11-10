@@ -426,6 +426,8 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 02 medium 구현 claude sonnet/high · 수정 claude sonnet/high · 수리 claude sonnet/high · 첫 리뷰 codex gpt-6.1-sol/high · 재리뷰 codex gpt-6.1-sol/medium
 03 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6.1-sol/high + agy gemini-4-argon-high · 재리뷰 codex gpt-6.1-sol/medium + agy gemini-4-argon-medium
 ```
+티켓이 있고 spec에 `### 교차 검토` 제목이 있는데 그 절에 실제 표 행(2–5번째 칸이 모두 찬 행)도 `교차 검토 못 함:` 줄도 없으면 `gs check`가 경고한다: `spec §7 교차 검토 기록이 없다(…)`. 템플릿의 자리표시 행만 있어도 같다. 그 제목이 없는 옛 spec은 조용하다. 경고라 막지는 않으니 교차 검토를 돌려 결과를 적거나, 못 돌렸으면 이유를 `교차 검토 못 함: <이유>`로 적는다.
+
 오류가 없으면 `gs check`는 `순서`와 `지금 시작 가능` 뒤에 세 가지를 더 보인다.
 - `실측(지난 실행): small 9분(14) · …` — 같은 레포 다른 feature의 지난 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값(괄호는 표본 수)이다. 소요는 티켓의 첫 단계 시작부터 끝까지이고 재시도를 포함한다. 등급이 없는 옛 티켓과 읽을 수 없는 state는 건너뛴다. 표본이 없으면 `실측 기록 없음`이다. `/grill`은 티켓 표의 예상에 그 티켓 tier의 중앙값을 쓰고, 값이 없으면 `–`로 둔다.
 - `공통 모델: 판단 claude … · 실패 요약 claude …` — 지적 분류·보고서 Summary에 쓰는 `models.judge`와 실패 요약에 쓰는 `models.failure_summary`다.
@@ -451,7 +453,7 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 | `id`, `title`, `blocked_by`, `model`, `reviewer` | 필수 | `gs check`, `gs go`. `model`·`reviewer`는 `claude`·`codex`·`agy` 중 서로 다른 계열 |
 | `tier` | `medium` | worker의 모델·effort를 등급표에서 고른다. `small`·`medium`·`large` |
 | `verify` | spec `verify_ticket` → spec `verify` | 이 티켓의 worker brief와 병합 트리 검증. 비어 있지 않은 셸 한 줄 |
-| `touches` | `[]` | `gs check`의 겹침 경고 |
+| `touches` | `[]` | `gs check`의 겹침 경고. **터미널에서 치는 `gs check`는 `touches`가 없거나 `[]`인 티켓을 오류로 막는다**(`touches가 없다`). `gs go`는 막지 않는다 |
 | `second_reviewer` | 없음 | 두 번째 리뷰어. `model`·`reviewer`와 다른 계열 |
 
 ### `tier` — 티켓 크기에 맞는 모델·effort
@@ -532,7 +534,7 @@ csv-export: 티켓 3장, 오류 0, 경고 1
 순서: 01 02 03
 지금 시작 가능: 01 02
 ```
-뜻: 01과 02가 동시에 돌 수 있고, 나중에 병합되는 쪽이 같은 줄을 고쳤으면 `conflict`로 실패해 재시도를 쓴다. 경고라서 `gs go`를 막지는 않는다. 고치는 법은 둘 중 하나다: 한쪽에 순서를 준다(02에 `blocked_by: ["01"]`), 또는 실제로는 다른 곳이면 `touches`를 좁힌다. grill은 경고가 없어질 때까지 고친 뒤 커밋한다. `touches`가 없거나 `[]`인 티켓은 이 검사에서 빠진다.
+뜻: 01과 02가 동시에 돌 수 있고, 나중에 병합되는 쪽이 같은 줄을 고쳤으면 `conflict`로 실패해 재시도를 쓴다. 경고라서 `gs go`를 막지는 않는다. 고치는 법은 둘 중 하나다: 한쪽에 순서를 준다(02에 `blocked_by: ["01"]`), 또는 실제로는 다른 곳이면 `touches`를 좁힌다. grill은 경고가 없어질 때까지 고친 뒤 커밋한다. `touches`가 없거나 `[]`인 티켓은 이 겹침 검사에서 빠지지만, `gs check`가 따로 오류로 막는다(위 [티켓 선택 키](#티켓-선택-키와-agy-한도)).
 
 ### `second_reviewer` — 위험한 티켓에 Gemini 한 번 더
 `reviewer`는 그대로 두고, 필요한 티켓에만 한 줄 더한다(템플릿에는 없는 키라 grill이 그 티켓에만 적는다). 값은 `claude|codex|agy` 중 `model`·`reviewer`와 모두 다른 계열이라, 남는 계열 하나다. claude 구현·codex 리뷰 티켓이면 `agy`(Gemini)가 된다. 같은 계열이면 `gs check` 오류:
@@ -644,7 +646,7 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 티켓 검증이 실패하면(검증 시간 초과는 제외, 수리 없이 바로 아래 재시도로 간다) 시도 하나에 한 번, 새 worktree로 처음부터 다시 하기 전에 **수리 worker**가 같은 브랜치·worktree에서 돈다. 구현 모델이 그대로이고, brief에 실패한 `verify.log` 경로만 더해 그 실패의 원인만 고치게 한다. 출력은 `[03] 검증 실패… → 새 시도 대신 같은 브랜치에서 수리한다`, `[03] 수리 worker 시작`이다.
 - 커밋을 남기면 구현과 다른 계열 리뷰어가 `tiers.rereview` 등급으로 수리 커밋의 diff만 본다. 지적은 보고서에만 남고 고치지 않는다. 그 뒤 gs가 다시 병합·검증한다.
 - 수리 worker를 띄우지 못했으면(agy 한도, 실행 오류) 수리가 없던 것으로 하고 재리뷰 없이 같은 head를 다시 검증한다. 티켓은 실패가 아니다. 반면 커밋이 없으면, worker가 실패했으면 **같은 head를 다시 검증하지 않는다.** 방금 떨어진 트리라 결과가 뻔하다. 그 시도를 실패로 끝내고 다음 등급의 새 worktree에서 처음부터 한 번 다시 한다(수리는 새 시도에서 한 번 더 돈다). 실패 이유에 수리 worker의 마지막 메시지 요약이 들어가고, 다음 시도의 brief와 실패 요약에 그 마지막 메시지 파일(`run/<NN>/<시도>/repair/worker-last.txt`) 경로가 붙는다.
-- 고칠 곳이 이 브랜치 밖이면 수리 worker가 커밋하지 않고 마지막 메시지에 `브랜치 밖 원인: <이유>`로 시작하는 줄을 쓴다(예: integration 환경 차이, 다른 티켓의 코드). 그러면 gs는 **재시도 없이** 그 티켓을 실패로 끝낸다. 새 worktree에서 다시 해도 같은 원인이기 때문이다. 이유는 실패 사유, 보고서, `gs status`에 남는다. 사람이 그 원인을 고친 뒤 `gs go`로 다시 돌린다. 줄이 없으면 위의 일반 경로다. 수리 worker가 실패 종료(종료 코드 0이 아님)해도 커밋 없이 이 줄을 남겼으면 똑같이 재시도 없이 끝난다. 끊겨서 수리 worker를 다시 띄우지 못한 자리는 앞 실행 로그의 마지막 메시지를 `(앞 실행)` 표시와 함께 실패 이유·`worker-last.txt`·다음 시도 brief에 싣는다. 그 메시지의 `브랜치 밖 원인:` 줄은 끊긴 실행의 것이라 재시도 판단에 쓰지 않는다.
+- 고칠 곳이 이 브랜치 밖이면 수리 worker가 커밋하지 않고 마지막 메시지에 `브랜치 밖 원인: <이유>`로 시작하는 줄을 쓴다(예: integration 환경 차이, 다른 티켓의 코드). 그러면 gs는 **재시도 없이** 그 티켓을 실패로 끝낸다. 새 worktree에서 다시 해도 같은 원인이기 때문이다. 이유는 실패 사유, 보고서, `gs status`에 남는다. 사람이 그 원인을 고친 뒤 `gs go`로 다시 돌린다. 줄이 없으면 위의 일반 경로다. 수리 worker가 실패 종료(종료 코드 0이 아님)해도 커밋 없이 이 줄을 남겼으면 똑같이 재시도 없이 끝난다. 끊겨서 수리 worker를 다시 띄우지 못한 자리는 앞 실행 로그의 마지막 메시지를 `(앞 실행)` 표시와 함께 실패 이유·`worker-last.txt`·다음 시도 brief에 싣는다. 그 메시지의 `브랜치 밖 원인:` 줄은 끊긴 실행의 것이라 재시도 판단에 쓰지 않는다. **표식은 네트워크 끊김 판정보다 먼저 본다.** 이번 실행에서 띄운 수리 worker가 커밋 없이 끝났고 마지막 메시지에 `브랜치 밖 원인:` 줄이 있으면, 종료 때 일시 오류(연결 실패 등)가 함께 보여도 네트워크 대기로 다시 띄우지 않고 재시도 없이 실패한다. 표식은 worker가 낸 결론이고 끊김이 그것을 무효로 하지 않는다.
 - 수리 brief는 검증이 integration의 병합 트리에서 도는 것 자체는 정상이라고 하되, integration과 worktree의 환경 차이(setup을 돌린 시각, 설치 메타데이터)는 원인 후보로 확인하게 하고, 브랜치 안에서 고칠 수 없으면 위 줄을 쓰고 커밋하지 말라고 안내한다. 실패 요약도 같다.
 - 모든 worker의 brief는 전체 검증 대신 고친 곳에 닿는 좁은 시험만 시킨다. 첫 구현 worker(claude·codex·agy 계열 무관, 재개한 worker 포함)도 수리 worker와 [수정 worker](#리뷰와-재리뷰)와 같다. 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 하므로, 같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없앴다. 티켓 `verify`가 좁아도 같다. 뒤 실행에서 첫 검증 실패가 늘어 수리 시간이 줄어든 시간을 넘으면 되돌린다(goldstack-v20 결정 4-2). 모든 brief에는 "다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 다루고 `pkill`·`killall`로 찾아 죽이지 않는다"가 붙는다.
 - 첫·수정·수리 worker의 brief에는 "버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다"가 붙는다. worker는 복구한 뒤 커밋하고 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다. 재리뷰 지시에는 넣지 않는다.
@@ -901,6 +903,21 @@ git pull && gs self-update   # 새 gs로 바꾼다(로컬 설치였으면 gs sel
 gs go goldstack-v5
 ```
 goldstack 밖의 레포(gs를 고치지 않는 feature)에는 해당하지 않는다.
+
+## 지난 티켓을 다른 모델로 다시 돌리기(`gs replay`)
+
+지난 티켓을 원래 시작 commit에서 다른 worker 모델로 다시 돌려 결과를 한 행으로 견준다(예: large 등급에 Fable을 쓸지 정할 때). 터미널에서 친다.
+
+```console
+$ gs replay goldstack-v27/03 --worker claude:fable/high [--base <sha>] [--usage 41,44]
+```
+
+- **인자**: `<feature>/<NN>`과 `--worker <claude|codex>:<모델>/<effort>`가 필수다. `--worker`가 티켓의 `model`과 tier 표를 대신한다. 계열이 티켓 `reviewer`와 같으면 아무것도 만들기 전에 오류다. `--usage <전>,<후>`는 사람이 읽은 `/usage` 주간 %를 표에 적는 선택 값이다.
+- **시작 commit**: 자동으로 찾는다. integration의 `Merge NN:` 커밋에서 티켓 브랜치를 첫 부모로 거슬러 첫 커밋 앞 commit이다. 첫 줄 `■ 시작 commit: <sha>`로 보인다. 못 찾거나 여럿이면 `--base <sha>`로 덮어쓴다. 티켓·spec은 그 commit 트리의 것을 쓴다(그사이 고친 파일은 읽지 않는다).
+- **범위**: worker → spec `verify` → 티켓 `reviewer`의 첫 리뷰 1회 → 판단 모델 분류까지다. **수정·재리뷰·수리는 없다.** 그래서 표의 `fix` 칸은 고쳤다는 뜻이 아니라 판단 모델이 `fix`로 나눈 지적 수다.
+- **결과**: 대상 레포 `.goldstack/trials/replay.md`에 행이 쌓인다(없으면 머리 행과 함께 만든다). 행은 날짜, 티켓, 시작 commit, worker, 커밋 수, verify, 지적 h/m/l, fix, worker 분, 토큰 입력/캐시/출력, `total_cost_usd`(API 환산, 구독 한도와 다르다), `/usage`, 로그 경로, 비고다. **gs는 이 파일을 커밋하지 않는다. 사람이 커밋한다.**
+- **로그**: `.goldstack/work/<feature>/run/replay/<NN>-<모델>-<시각>/`(gitignore 안). 재생 worktree는 끝나면 지운다. 신호(SIGINT·SIGTERM·SIGHUP)로 멈추면 worker를 먼저 끝내고 worktree를 지우며 행을 남기지 않는다(종료 130).
+- 재생하는 동안 같은 레포에서 다른 `gs go`를 돌리거나 커밋하지 않는다. 재생 전후 `refs/heads/*`를 비교해 바뀐 브랜치를 되돌리고 비고에 적는다. 원격에는 push하지 않는다.
 
 ## 끝난 feature 치우기(`gs clean`)
 
