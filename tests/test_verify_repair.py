@@ -11,24 +11,31 @@ goldstack-v25 03: 커밋 없이 끝났거나 실패해 버린 수리는 같은 h
 
 goldstack-v27 03: 그 줄은 수리 worker가 실패로 끝나도 재시도 없는 실패다. 다시 띄우지 못한 수리 worker 자리는 앞 실행의 마지막 메시지를 "(앞 실행)" 표시로 싣고,
 그 메시지의 줄은 재시도 판단에 쓰지 않는다(EndAndResumeTest, AgyLimitTest).
+
+goldstack-v30 01: 이번 실행에서 띄운 수리 worker가 그 줄을 남기고 네트워크로 끊겨도 다시 띄우지 않는다. 표식을 일시 오류 처리보다 먼저 본다
+(MarkerBeforeNetworkTest는 가짜 codex로 끝까지, MarkerOrderTest는 _check_worker의 조건별로).
 """
+import contextlib
+import io
 import json
 import os
 import shlex
 import signal
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import support
 import test_network_wait
 from support import alive, group_alive, kill_group_quietly, kill_quietly, sh
 
-from gs import config, failure, go, report, retrolog, review, state, transient, verify, worker
+from gs import config, failure, feature, go, report, retrolog, review, state, transient, verify, worker
 
 IS_REPAIR = 'grep -q "^## 검증 실패(고칠 것)" "$GS_BRIEF"'
 BREAKS = 'touch BROKEN; echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"'
@@ -1392,6 +1399,225 @@ class NetworkRepairTest(support.GoTest):
         self.assertEqual((ts.status, ts.failures, ts.attempts), ("merged", 0, 1))
         self.assertIn("rereview", self.phases("11"))
         self.assertEqual(self.ts("12").status, "merged")
+
+
+def codex_said(text):
+    """codex worker가 text를 마지막 메시지로 남기는 셸 명령(agent_message 한 줄. streamfmt.last_message가 읽는다)."""
+    return "echo " + shlex.quote(json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": text}}, ensure_ascii=False))
+
+
+# codex가 응답 도중 끊긴 이벤트(goldstack-v27-03-1의 재현). transient.reason이 일시 오류 `stream disconnected before completion`으로 본다
+CUT_EVENT = {"type": "turn.failed", "error": {"message": "stream disconnected before completion: "
+                                                         "error sending request for url (https://chatgpt.com/backend-api/codex/responses)"}}
+CUT = "echo " + shlex.quote(json.dumps(CUT_EVENT)) + "; exit 1"
+CUT_REASON = "stream disconnected before completion"
+MARKED = f"integration을 확인했다.\n{review.OUT_OF_BRANCH} {OUTSIDE}"  # 표식을 남긴 수리 worker의 마지막 메시지
+
+
+class MarkerBeforeNetworkTest(support.GoTest):
+    """goldstack-v30 01: 이번 실행에서 띄운 수리 worker가 `브랜치 밖 원인:` 표식을 남기고 네트워크로 끊겨도 다시 띄우지 않는다.
+
+    _check_worker가 일시 오류 처리(_net_hold)보다 표식을 먼저 본다. 가짜 codex를 실제 어댑터로 돌린다: 끊김 판별(turn.failed)과
+    마지막 메시지(agent_message)가 진짜 경로다. 가짜 codex의 n회차는 runs[n-1]을 돈다(1회차는 구현, 2회차부터 수리).
+    넘으면 BROKEN이 있으면 고치고(수리), 없으면 그냥 커밋한다(새 시도의 구현).
+    """
+    N = test_network_wait.NetworkTest
+    fake, tickets = N.fake, N.tickets
+    repair_dir, prior_file, no_new_dir = EndAndResumeTest.repair_dir, EndAndResumeTest.prior_file, EndAndResumeTest.no_new_dir
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ, {"GS_NETWORK_MINUTE": self.N.MINUTE})
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("GS_WORKER_CMD")
+        self.tickets({"01": test_network_wait.worker_ticket("01", model="codex", reviewer="claude")})
+
+    def codex(self, *runs):
+        cases = "".join(f"  {n}) {run}; exit $? ;;\n" for n, run in enumerate(runs, 1))
+        self.fake("codex", f'case "$n" in\n{cases}esac\n'
+                           'if [ -f BROKEN ]; then git rm -q BROKEN; git commit -qm repaired; exit 0; fi\n' + GOOD + "\n")
+
+    def ts(self, tid="01"):
+        return state.load(self.rundir, "demo").tickets[tid]
+
+    def starts(self):
+        return [line for line in self.lines("events.log") if line.startswith("start ")]
+
+    def go_counting(self, *args):
+        """gs go를 돌리고 (종료 코드, 출력, _net_hold 호출 수, _fail에 넘긴 retry 목록)을 돌려준다."""
+        with mock.patch("gs.go._net_hold", wraps=go._net_hold) as hold, mock.patch("gs.go._fail", wraps=go._fail) as fail:
+            code, out, err = self.go(*args)
+        return code, out + err, hold.call_count, [c.kwargs.get("retry", True) for c in fail.call_args_list]
+
+    def test_marked_repair_cut_by_the_network_fails_without_a_retry(self):
+        self.codex(BREAKS, codex_said(MARKED) + "; " + CUT)
+        code, out, holds, retries = self.go_counting("--only", "01")
+        self.assertEqual(holds, 0, out)  # 표식을 일시 오류보다 먼저 본다: 끊겼어도 다시 띄우지 않는다
+        self.assertEqual(retries, [False], out)
+        self.assertEqual(code, 1, out)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.transient_errors, ts.network_resume), ("failed", 1, 1, 0, {}))
+        self.assertEqual(self.starts(), ["start 01 1", "start 01 2"])  # 구현 + 수리. 수리를 다시 띄우지 않았고 새 시도도 없다
+        self.assertFalse(self.repair_dir("repair-net1").exists())
+        self.assertFalse((self.rundir / "01/2").exists())
+        # 실패 이유와 출력은 끊김 없이 표식을 남기고 실패한 수리 worker와 같다(EndAndResumeTest의 첫 시험)
+        last = self.repair_dir() / review.WORKER_LAST
+        first = f"검증 실패(로그 {self.rundir / '01/1/verify.log'})"
+        self.assertEqual(ts.reason, f"{first} → 수리 수리 worker 실패(종료 코드 1), 수리 버림, {review.OUT_OF_BRANCH} {OUTSIDE} "
+                                    f"(재시도하지 않는다. 수리 worker 마지막 메시지 `{last}`)")
+        self.assertEqual((ts.repairs[0]["result"], ts.repairs[0]["detail"]), (state.REPAIR_FAILED, ts.reason))
+        self.assertIn("[01] 수리 수리 worker 실패(종료 코드 1), 수리 버림: 브랜치 밖 원인이라 재시도하지 않고 사람에게 넘긴다", out)
+        self.assertNotIn("일시 오류(", out)
+        self.assertNotIn("한 번 재시도", out)
+        self.assertEqual(last.read_text(), MARKED + "\n")
+
+    def test_cut_without_the_marker_waits_for_the_network_as_before(self):
+        self.codex(BREAKS, codex_said(NO_FIX) + "; " + CUT)
+        code, out, holds, retries = self.go_counting("--only", "01")
+        self.assertEqual(holds, 1, out)
+        self.assertEqual(retries, [], out)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"[01] 일시 오류({CUT_REASON}): 실패로 세지 않는다", out)
+        self.assertIn("■ 네트워크 회복", out)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.transient_errors), ("merged", 1, 0, 1))
+        self.assertEqual(self.starts(), ["start 01 1", "start 01 2", "start 01 3"])  # 끊긴 수리를 같은 worktree에 다시 띄웠다
+        self.assertTrue((self.repair_dir("repair-net1") / "worker.log").exists())
+        self.assertEqual(ts.repairs[0]["result"], state.REPAIR_PASSED)
+
+    def test_marker_and_cut_left_by_a_prior_run_keep_the_retry(self):
+        self.codex(BREAKS, codex_said(MARKED) + "; " + CUT)
+        real = go._check_worker
+
+        def stop_at_repair(r, a, *rest):
+            if a.repair:
+                raise KeyboardInterrupt  # 수리 worker의 끝을 보기 전에 gs가 멈춘다
+            return real(r, a, *rest)
+
+        with mock.patch("gs.go._check_worker", side_effect=stop_at_repair), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        mark = self.ts().network_resume
+        self.assertEqual((mark["repair"], mark["done"], Path(mark["rundir"])), (go.REPAIR_RUN, False, self.repair_dir()))
+        with self.no_new_dir():  # 다음 gs go가 수리 worker를 다시 띄우지 못한다: 이번 실행에서 띄우지 않은 자리다
+            code, out, holds, retries = self.go_counting("--only", "01")
+        self.assertEqual(code, 0, out)
+        self.assertEqual((holds, retries), (0, [True]), out)  # 지금 동작 그대로: 끊긴 실행의 표식은 재시도 판단에 쓰지 않는다
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertEqual(self.starts(), ["start 01 1", "start 01 2", "start 01 3"])  # 구현 + 수리 + 새 시도의 구현
+        last = self.repair_dir() / review.WORKER_LAST
+        detail = ts.repairs[0]["detail"]
+        self.assertTrue(detail.endswith(f"같은 head를 다시 검증하지 않는다. 수리 worker 마지막 메시지{go.PRIOR_RUN} `{last}`: "
+                                        + " ".join(MARKED.split())), detail)
+        self.assertNotIn("재시도하지 않는다", detail)
+        self.assertNotIn("브랜치 밖 원인이라", out)
+        self.assertEqual(last.read_text(), self.prior_file() + MARKED + "\n")
+
+    def test_marked_repair_restarted_during_an_outage_is_not_a_recovery(self):
+        # 수리 worker가 표식 없이 끊겨 다시 띄웠다(회복을 판정할 worker). 다시 띄운 worker가 표식을 남기고 또 끊겼다
+        self.codex(BREAKS, CUT, codex_said(MARKED) + "; " + CUT)
+        code, out, holds, retries = self.go_counting("--only", "01")
+        self.assertEqual((holds, retries), (1, [False]), out)
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("■ 네트워크 회복", out)  # 일시 오류로 끝난 worker는 회복의 근거가 아니다
+        self.assertIn(go.NO_PROBE_LINE, out)
+        self.assertLess(out.index(go.NO_PROBE_LINE), out.index("브랜치 밖 원인이라 재시도하지 않고 사람에게 넘긴다"), out)
+        st = state.load(self.rundir, "demo")
+        self.assertEqual(st.network["wait"], {})  # 끝난 대기를 진행 바에 남기지 않는다
+        ts = st.tickets["01"]
+        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.transient_errors), ("failed", 1, 1, 1))
+        self.assertEqual(self.starts(), ["start 01 1", "start 01 2", "start 01 3"])
+        last = self.repair_dir("repair-net1") / review.WORKER_LAST
+        self.assertTrue(ts.reason.endswith(f"{review.OUT_OF_BRANCH} {OUTSIDE} (재시도하지 않는다. 수리 worker 마지막 메시지 `{last}`)"), ts.reason)
+
+
+class MarkerOrderTest(unittest.TestCase):
+    """goldstack-v30 01: _check_worker가 끊긴 worker를 _net_hold 대신 _end_repair로 보내는 조건. 끊김으로 판별된 worker를 직접 넘긴다(goldstack-v27-03-1의 재현과 같은 모양).
+
+    표식은 이번 실행에서 띄운(launched) 수리 worker가 커밋 없이 끝났을 때만 일시 오류보다 먼저다. 나머지는 지금처럼 네트워크 대기다.
+    """
+
+    class Cut:
+        """일시 오류로 끝난 worker. 판별은 로그와 상관없이 끊김이다: 메시지를 읽지 못하는 경우도 끊김 판별까지는 간다."""
+        note = ""
+
+        def __init__(self, job):
+            self.job = job
+
+        def transient_reason(self):
+            return CUT_REASON
+
+        def stop(self):
+            pass
+
+        def finish(self, ok):
+            pass
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.rundir = self.root / "repair"
+        self.rundir.mkdir()
+
+    def log(self, message):
+        (self.rundir / "worker.log").write_text(json.dumps(CUT_EVENT) + "\n" if message is None else
+                                                f"{json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': message}}, ensure_ascii=False)}\n"
+                                                f"{json.dumps(CUT_EVENT)}\n")
+
+    def check(self, *, repair=go.REPAIR_RUN, fix=0, launched=True, commits=0, code=1):
+        """_check_worker를 부르고 간 곳을 돌려준다: "hold"(_net_hold), "repair"(_end_repair), "fix"(_end_fix), "fail"(_fail_worker)."""
+        t = feature.Ticket("01", "t", [], [], "codex", "claude", "", "", Path("01.md"))
+        a = go.Active(t, self.Cut(worker.Job(t, self.root, self.rundir)), "b", self.root, "base", fix=fix, repair=repair, launched=launched)
+        r = SimpleNamespace(repo=self.root, ihead="i", net=go.Outage(), st=mock.MagicMock())
+        r.st.ticket.return_value.network_resume = {}
+        with mock.patch("gs.go.metrics.worker_finished"), mock.patch("gs.go.git.count", return_value=commits), \
+                mock.patch("gs.go._reset_integration", return_value=False), mock.patch("gs.go._net_hold") as hold, \
+                mock.patch("gs.go._end_repair", return_value=False) as end, mock.patch("gs.go._end_fix", return_value=True) as end_fix, \
+                mock.patch("gs.go._fail_worker") as fail, contextlib.redirect_stdout(io.StringIO()):
+            go._check_worker(r, a, code, [], "")
+        went = [name for name, m in (("hold", hold), ("repair", end), ("fix", end_fix), ("fail", fail)) if m.called]
+        self.assertEqual(len(went), 1, went)
+        if end.called:
+            self.assertEqual(end.call_args.args[1:], (a, code, commits, ""))
+        return went[0]
+
+    def test_marked_repair_goes_to_end_repair(self):
+        self.log(MARKED)
+        self.assertEqual(self.check(), "repair")
+
+    def test_without_the_marker_it_waits(self):
+        self.log(NO_FIX)
+        self.assertEqual(self.check(), "hold")
+
+    def test_marker_not_at_a_line_start_does_not_count(self):
+        self.log(f"- {review.OUT_OF_BRANCH} {OUTSIDE}")
+        self.assertEqual(self.check(), "hold")
+
+    def test_no_message_waits(self):
+        self.log(None)
+        self.assertEqual(self.check(), "hold")
+
+    def test_missing_log_waits(self):
+        self.assertEqual(self.check(), "hold")
+
+    def test_unreadable_log_waits(self):
+        (self.rundir / "worker.log").mkdir()  # 읽기 오류(IsADirectoryError)
+        self.assertEqual(self.check(), "hold")
+
+    def test_slot_not_launched_in_this_run_waits(self):
+        self.log(MARKED)
+        self.assertEqual(self.check(launched=False), "hold")
+
+    def test_repair_with_a_commit_waits(self):
+        self.log(MARKED)
+        self.assertEqual(self.check(commits=1), "hold")
+
+    def test_fix_and_implementation_workers_wait(self):
+        self.log(MARKED)
+        self.assertEqual(self.check(repair="", fix=1), "hold")
+        self.assertEqual(self.check(repair="", fix=0), "hold")
 
 
 class AgyLimitTest(Base):
