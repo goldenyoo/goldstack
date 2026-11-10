@@ -133,6 +133,17 @@ class StartCommitTest(ReplayTestCase):
         self.assertIn(second[:12], message)
         self.assertIn("--base", message)
 
+    def test_merge_whose_ticket_side_has_no_own_commits_is_an_error(self):
+        start = self.seed()
+        head = self.commit("next", **{"x.txt": "x\n"})
+        tree = self.git("rev-parse", f"{head}^{{tree}}")
+        fake = self.git("commit-tree", tree, "-p", head, "-p", start, "-m", f"Merge 03: t03\n\ngs-ticket: {FEATURE}/03")
+        self.git("update-ref", f"refs/heads/gs/{FEATURE}/integration", fake)
+        with self.assertRaises(replay.MissingCommitError) as caught:
+            replay.start_commit(self.repo, FEATURE, "03", None)
+        self.assertIn("--base", str(caught.exception))
+        self.assertIn(fake[:12], str(caught.exception))
+
     def test_base_option_overrides_the_search(self):
         start = self.seed()
         later = self.commit("later", **{"x.txt": "x\n"})
