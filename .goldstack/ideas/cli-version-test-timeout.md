@@ -2,9 +2,9 @@
 date: "2026-11-09"
 severity: "medium"
 source: "goldstack-v29 회고"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v31"
 ---
 `test_cli_version_keeps_the_number_only`가 실제 subprocess와 `timeout=5`에 기대 부하에서 떨어진다(추정). `_cli_version`은 시간 초과와 "숫자 없음"을 모두 `모름`으로 돌려 로그로 원인을 가를 수 없다.
 

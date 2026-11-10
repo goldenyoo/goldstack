@@ -2,9 +2,9 @@
 date: "2026-11-09"
 severity: "medium"
 source: "goldstack-v29 회고"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v31"
 ---
 integration 검증에 flaky 재시도가 없어, diff 밖 시험 하나의 1회성 실패로 feature 전체가 병합되지 않는다.
 

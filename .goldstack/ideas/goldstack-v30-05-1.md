@@ -2,8 +2,8 @@
 date: "2026-11-10"
 severity: "medium"
 source: "goldstack-v30 리뷰 05"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v31"
 ---
 base에 병합되지 않은 integration 이력까지 후보에 포함하여, base 이력에 시작 commit을 확정할 병합이 하나뿐이어도 중복 후보 오류를 낸다. 폐기하거나 다시 만든 integration 브랜치가 남아 있으면 정상적인 지난 티켓의 자동 재생이 막힌다.
 

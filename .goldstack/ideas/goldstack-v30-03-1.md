@@ -2,8 +2,8 @@
 date: "2026-11-10"
 severity: "medium"
 source: "goldstack-v30 리뷰 03"
-status: "open"
-feature: ""
+status: "dropped"
+feature: "goldstack-v31"
 ---
 v1–v3 호환 시험이 티켓에 가짜 touches를 주입해 통과하므로, 실제 기록의 호환성 실패를 숨긴다. 완료 조건인 v1–v3의 종료 0·stderr 빈 문자열은 충족되지 않았다.
 
