@@ -37,6 +37,8 @@ class SkillTest(unittest.TestCase):
             (root / "tickets").mkdir(parents=True)
             spec = (TEMPLATES / "spec.md").read_text(encoding="utf-8")
             spec = spec.replace("<셸 명령 한 줄. gs가 integration에서 직접 돌린다>", '"true"')
+            # 교차 검토 절은 자리표시 행만 남으면 gs check가 경고한다. 채운 템플릿은 실제 행 하나를 가진다
+            spec = re.sub(r"^\| 1 \| <모델/effort>.*$", "| 1 | codex gpt-6.1-sol/high | 지적 | 코드로 확인 | 반영함 |", spec, flags=re.M)
             (root / "spec.md").write_text(fill(spec, feature="demo"), encoding="utf-8")
             ticket = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
             if "tier" not in feature.TICKET_KEYS + feature.TICKET_OPTIONAL:

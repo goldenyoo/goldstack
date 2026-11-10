@@ -9,7 +9,7 @@
 | `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
 | `doctor.py` | `gs doctor`: GitHub 병합·보호 설정 읽기, config 제안, `--write` |
-| `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, `.goldstack/config.toml`에 닿는 티켓의 좁은 검증 경고(`config_verify_problems`, 티켓 `touches`가 설정 파일에 겹치는데 `spec.verify_for(ticket)`이 spec `verify`와 다르면 경고. 다른 설정 형식은 보지 않는다), agy 배정 수, 환경 검사, 출력 끝의 `실측(지난 실행)`(`tier_samples`: 다른 feature의 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값)·`공통 모델`·티켓별 단계 모델 줄(`ticket_model_line`: 실행과 같은 선택 함수) |
+| `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, `.goldstack/config.toml`에 닿는 티켓의 좁은 검증 경고(`config_verify_problems`, 티켓 `touches`가 설정 파일에 겹치는데 `spec.verify_for(ticket)`이 spec `verify`와 다르면 경고. 다른 설정 형식은 보지 않는다), agy 배정 수, 빈 교차 검토 절 경고(`cross_review_problems`: 티켓이 있고 spec에 `### 교차 검토` 제목이 있는데 절에 실제 표 행도 `교차 검토 못 함:` 줄도 없으면 경고. 제목 없는 spec은 조용하다), 환경 검사, 출력 끝의 `실측(지난 실행)`(`tier_samples`: 다른 feature의 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값)·`공통 모델`·티켓별 단계 모델 줄(`ticket_model_line`: 실행과 같은 선택 함수) |
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 리뷰·수정·재리뷰 띄우기(두 리뷰 동시), agy 호출 세기, 재개 뒤 멈춤, 요약 출력, 알림 |
 | `worker.py`, `herdr.py`, `adapters.py`, `streamfmt.py` | worker 띄우기(brief, 실행 스크립트, push 차단), herdr pane, 모델별 명령·판정, pane 출력 정리 |
 | `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰(2차 재리뷰의 재확인) |
@@ -625,6 +625,7 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
 - `hook.equals_word`: worker의 따옴표 없는 `=` 단어 차단(맨 바깥 셸과 `eval`·`zsh -c` 본문·치환 속. `bash -c`·`sh -c`는 제외. `GS_NOEQUALS` worker는 같은 셸 판정을 건너뛰고 새 zsh 본문만 본다).
 - `shellenv.py`: worker 셸의 `noequals` 전달 폴더(`prepare`, `worker_env`)와 실측 통과 CLI 목록 `NOEQUALS_CLIS`.
 - `check.config_verify_problems`: 설정 파일을 고치는 티켓의 좁은 검증 경고.
+- `check.cross_review_problems`: 빈 `### 교차 검토` 절 경고.
 - `review.fix_brief(found, nth, touches, merged)`: 수정 worker brief에 티켓 `touches`와 그중 시험 파일을 돌리라는 문장, 고칠 수 있는 파일 목록이 붙는다.
 - `overnight._live_markers`: 낡은 프로세스 목록으로 `arm` 표시를 지우지 않는다. 살아 있지 않아 보이는 표시가 있을 때만 `ps`를 다시 읽고, 새 목록에서도 없을 때만 지운다. 다시 읽기가 실패하면 지우지 않는다.
 
