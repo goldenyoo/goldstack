@@ -47,7 +47,9 @@ BLOCKED = [V25_03, listed(11), listed(12),
            ".venv/bin/python -m unittest discover -s tests",
            "python -m unittest discover -s tests",
            ".venv/bin/python -m unittest discover -s tests -p 'test_*.py'",
-           "ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p"]
+           "ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p",
+           # `|` 뒤 줄바꿈 변형
+           "ls tests | grep \"^test_\" |\nxargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p"]
 PASSED = [listed(8), listed(10),
           ".venv/bin/python -m unittest discover -s tests -p test_x.py",
           "uv run python -m unittest discover -s tests -p test_hook.py",

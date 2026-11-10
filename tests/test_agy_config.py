@@ -172,13 +172,20 @@ class AgyCheckTest(unittest.TestCase):
         repo = Path(__file__).resolve().parents[1]
         path = self.repo / config.CONFIG_PATH
         path.write_text(path.read_text().replace("[agy]\nmax_calls_per_run = 3\n\n", ""))
-        for name in ("goldstack-v0", "goldstack-v1", "goldstack-v2", "goldstack-v3"):
+        for name in ("goldstack-v1", "goldstack-v2", "goldstack-v3"):
             with self.subTest(name=name):
-                shutil.copytree(repo / ".goldstack/work" / name, self.tickets.parent.parent / name)
+                test_check.copy_feature_with_touches(repo / ".goldstack/work" / name, self.tickets.parent.parent / name)
                 out, err = io.StringIO(), io.StringIO()
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                     code = cli.main(["--repo", str(self.repo), "check", name])
                 self.assertEqual((code, err.getvalue()), (0, ""), out.getvalue())
+        # v0 티켓에는 touches가 없다: gs check가 그것만 오류로 막는다(goldstack-v30 03)
+        shutil.copytree(repo / ".goldstack/work/goldstack-v0", self.tickets.parent.parent / "goldstack-v0")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["--repo", str(self.repo), "check", "goldstack-v0"])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertEqual({line.split(": ", 2)[2][:12] for line in err.getvalue().splitlines()}, {"touches가 없다("})
 
 
 if __name__ == "__main__":

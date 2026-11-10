@@ -18,7 +18,7 @@ class TouchesTest(unittest.TestCase):
 
     def add(self, tid, touches=None, deps=()):
         extra = "" if touches is None else f"touches: {json.dumps(touches)}\n"
-        self.write(f"{tid}-ticket.md", test_check.ticket(tid, json.dumps(deps), extra=extra))
+        self.write(f"{tid}-ticket.md", test_check.ticket(tid, json.dumps(deps), extra=extra, touches=test_check.NO_TOUCHES))
 
     def assert_clean(self, *args):
         code, out, err = self.run_check(*args)
@@ -64,7 +64,11 @@ class TouchesTest(unittest.TestCase):
         self.add("03", ["src/a.py"])
         for path in self.tickets.glob("*.md"):
             path.write_text(path.read_text() + "\n수정: src/a.py\n")
-        self.assert_clean()
+        code, out, err = self.run_check()
+        # 경고는 없고 touches 오류만 난다(01·02). 본문에 적힌 경로는 touches로 읽지 않는다
+        self.assertEqual(code, 1, out)
+        self.assertEqual([line.split(": ")[2][:12] for line in err.splitlines()], ["touches가 없다("] * 2, err)
+        self.assertIn("오류 2, 경고 0", out)
         self.assertEqual(feature.load(self.repo, "demo").tickets["01"].touches, [])
 
     def test_same_path_warns_once_per_pair(self):
@@ -84,7 +88,7 @@ class TouchesTest(unittest.TestCase):
 
     def test_transitive_dependency_orders_tickets(self):
         self.add("01", ["src/a.py"], ["03"])
-        self.add("03", deps=["02"])
+        self.add("03", ["src/c.py"], ["02"])
         self.add("02", ["src/a.py"])
         self.assert_clean()
         # 범위 밖 티켓을 통한 의존 순서도 유지한다.
@@ -154,14 +158,75 @@ class TouchesTest(unittest.TestCase):
         self.assertIn("없는 티켓", err)
 
     def test_v0_through_v3_have_no_errors_or_warnings(self):
-        for name in ("goldstack-v0", "goldstack-v1", "goldstack-v2", "goldstack-v3"):
+        for name in ("goldstack-v1", "goldstack-v2", "goldstack-v3"):
             with self.subTest(name=name):
-                shutil.copytree(REPO / ".goldstack/work" / name, self.tickets.parent.parent / name)
+                test_check.copy_feature_with_touches(REPO / ".goldstack/work" / name, self.tickets.parent.parent / name)
                 out, err = io.StringIO(), io.StringIO()
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                     code = cli.main(["--repo", str(self.repo), "check", name])
                 self.assertEqual((code, err.getvalue()), (0, ""), out.getvalue())
                 self.assertIn("오류 0, 경고 0", out.getvalue())
+
+    def test_v0_is_blocked_by_missing_touches(self):
+        shutil.copytree(REPO / ".goldstack/work/goldstack-v0", self.tickets.parent.parent / "goldstack-v0")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(["--repo", str(self.repo), "check", "goldstack-v0"])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn("오류: .goldstack/work/goldstack-v0/tickets/01-skeleton.md: touches가 없다(", err.getvalue())
+        self.assertIn("오류 11", out.getvalue())
+
+
+class TouchesRequiredTest(unittest.TestCase):
+    """gs check 명령은 touches 없는 티켓을 오류로 막는다. gs go가 쓰는 check.check()는 막지 않는다(goldstack-v30 03)."""
+    setUp, tearDown = test_check.CheckTest.setUp, test_check.CheckTest.tearDown
+    write, run_check = test_check.CheckTest.write, test_check.CheckTest.run_check
+
+    def add(self, tid, touches=test_check.NO_TOUCHES, deps="[]"):
+        self.write(f"{tid}-ticket.md", test_check.ticket(tid, deps, touches=touches))
+
+    def where(self, tid):
+        return f".goldstack/work/demo/tickets/{tid}-ticket.md"
+
+    def test_missing_key_is_error(self):
+        self.add("01")
+        code, out, err = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(err, f"오류: {self.where('01')}: touches가 없다(고칠 파일을 레포 루트 기준 경로로 적는다)\n")
+
+    def test_empty_list_is_error(self):
+        self.add("01", [])
+        code, out, err = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"오류: {self.where('01')}: touches가 없다(", err)
+
+    def test_declared_touches_pass(self):
+        self.add("01", ["src/a.py"])
+        code, out, err = self.run_check()
+        self.assertEqual((code, err), (0, ""), out)
+
+    def test_only_skips_tickets_out_of_scope(self):
+        self.add("01", ["src/a.py"])
+        self.add("02", deps='["01"]')
+        code, out, err = self.run_check("--only", "01")
+        self.assertEqual((code, err), (0, ""), out)
+        code, out, err = self.run_check("--only", "02")
+        self.assertEqual(code, 1, out)
+        self.assertIn(self.where("02"), err)
+        self.assertNotIn(self.where("01"), err)
+
+    def test_invalid_touches_gets_one_error_only(self):
+        self.add("01", ["/abs.py"])
+        code, out, err = self.run_check()
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("touches가 없다", err)
+
+    def test_check_function_used_by_go_does_not_report_it(self):
+        from gs import check
+        self.add("01")
+        self.add("02", [])
+        feat, _ = check.check(self.repo, "demo")
+        self.assertEqual([str(p) for p in feat.problems], [])
 
 
 if __name__ == "__main__":

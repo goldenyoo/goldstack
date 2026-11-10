@@ -51,6 +51,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("feature", nargs="+", help=".goldstack/work/<feature>. 여러 개면 verified 뒤 차례로 실행")
     p.add_argument("--only", help="쉼표로 나눈 티켓 id(wave). 범위 밖 의존은 끝났다고 본다. integration까지만 하고 병합하지 않는다(병합은 옵션 없는 gs go)")
 
+    p = sub.add_parser("replay", help="지난 티켓을 같은 시작 commit에서 다른 worker 모델로 다시 돌려 "
+                                      ".goldstack/trials/replay.md에 비교 행을 남긴다(커밋하지 않음)")
+    p.add_argument("target", help="<feature>/<NN>")
+    p.add_argument("--worker", required=True, help="<claude|codex>:<모델>/<effort>(예: claude:fable/high)")
+    p.add_argument("--base", help="시작 commit(기본: integration의 `Merge NN:` 커밋에서 티켓 브랜치의 갈림점을 찾는다)")
+    p.add_argument("--usage", help="<전>,<후>: 사람이 읽은 /usage 주간 %%(예: 41,44)")
+
     p = sub.add_parser("clean", help="feature의 worktree·로컬·원격 브랜치를 지운다(실행 기록은 남김)")
     p.add_argument("feature", help=".goldstack/work/<feature>")
     p.add_argument("--force", action="store_true", help="verified·reverted가 아니어도 정리한다(실행 중이면 거부)")
@@ -149,6 +156,9 @@ def _run(args: argparse.Namespace) -> int:
         return cmd_check(repo, args.feature, _ids(args.only))
     if args.cmd == "go":
         return cmd_go(repo, args.feature, _ids(args.only))
+    if args.cmd == "replay":
+        from .replay import command
+        return command(repo, args.target, args.worker, args.base, args.usage, sys.stdout, sys.stderr)
     if args.cmd == "clean":
         from .clean import clean
         return clean(repo, args.feature, args.force, sys.stdout, sys.stderr)
@@ -247,7 +257,8 @@ def _go_features(repo: Path, names: list[str], only: list[str] | None, session) 
     if len(names) == 1:
         return _go_one(repo, names[0], session, only)
     # 뒤 feature의 오류 때문에 앞 feature만 실행되는 일을 막는다. 전부 검사한 뒤 시작한다.
-    checks = [cmd_check(repo, name, None) for name in names]
+    # touches 필수 검사는 사람이 치는 gs check만 건다. gs go의 사전 검사는 단일 feature와 같은 기준을 쓴다(goldstack-v30 03)
+    checks = [cmd_check(repo, name, None, require_touches=False) for name in names]
     if any(checks):
         return 1
     for i, name in enumerate(names):
@@ -285,9 +296,11 @@ def cmd_config(repo: Path, key: str) -> int:
     return 0
 
 
-def cmd_check(repo: Path, name: str, only: list[str] | None) -> int:
+def cmd_check(repo: Path, name: str, only: list[str] | None, require_touches: bool = True) -> int:
     feat, lines = check(repo, name, only)
     feat.problems.extend(guard_problems(repo, feat, only))
+    if require_touches:
+        feat.problems.extend(touches_required_problems(repo, feat, only))
     for p in feat.problems:
         print(p, file=sys.stderr)
     errors, warnings = len(feat.errors), len(feat.warnings)
@@ -297,6 +310,23 @@ def cmd_check(repo: Path, name: str, only: list[str] | None) -> int:
     for line in lines:
         print(line)
     return 0
+
+
+def touches_required_problems(repo: Path, feat: featmod.Feature, only: list[str] | None) -> list[featmod.Problem]:
+    """범위 안 티켓에 touches가 없거나 비어 있으면 오류. 사람이 치는 `gs check`에서만 건다.
+
+    grill이 touches 없는 티켓을 남기지 못하게 하는 검사다. `gs go`가 쓰는 check.check()와 review.py의 빈 touches 처리는 그대로다.
+    touches 값 자체가 틀려 이미 오류가 난 티켓은 거기에 맡긴다(같은 티켓에 "없다"를 또 적으면 거짓말이다).
+    """
+    already = {p.where for p in feat.problems if p.level == "오류" and "`touches`" in p.message}
+    found = []
+    for tid in sorted(feat.tickets):
+        ticket = feat.tickets[tid]
+        where = featmod.rel(ticket.path, repo)
+        if (only is not None and tid not in only) or ticket.touches or where in already:
+            continue
+        found.append(featmod.Problem("오류", where, "touches가 없다(고칠 파일을 레포 루트 기준 경로로 적는다)"))
+    return found
 
 
 def guard_problems(repo: Path, feat: featmod.Feature, only: list[str] | None) -> list[featmod.Problem]:

@@ -4,17 +4,18 @@
 
 | 파일 | 하는 일 |
 |---|---|
-| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `retro-log`, `feedback`, `overnight`, `hook` |
+| `cli.py` | `gs` 명령줄: `self-update`, `init`, `doctor`, `config`, `migrate`, `check`, `replay`, `go`(여러 feature 연속 실행 포함), `clean`, `status`, `backlog`, `retro-log`, `feedback`, `overnight`, `hook` |
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
 | `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
 | `doctor.py` | `gs doctor`: GitHub 병합·보호 설정 읽기, config 제안, `--write` |
-| `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, `.goldstack/config.toml`에 닿는 티켓의 좁은 검증 경고(`config_verify_problems`, 티켓 `touches`가 설정 파일에 겹치는데 `spec.verify_for(ticket)`이 spec `verify`와 다르면 경고. 다른 설정 형식은 보지 않는다), agy 배정 수, 환경 검사, 출력 끝의 `실측(지난 실행)`(`tier_samples`: 다른 feature의 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값)·`공통 모델`·티켓별 단계 모델 줄(`ticket_model_line`: 실행과 같은 선택 함수) |
+| `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, `.goldstack/config.toml`에 닿는 티켓의 좁은 검증 경고(`config_verify_problems`, 티켓 `touches`가 설정 파일에 겹치는데 `spec.verify_for(ticket)`이 spec `verify`와 다르면 경고. 다른 설정 형식은 보지 않는다), agy 배정 수, 빈 교차 검토 절 경고(`cross_review_problems`: 티켓이 있고 spec에 `### 교차 검토` 제목이 있는데 절에 실제 표 행도 `교차 검토 못 함:` 줄도 없으면 경고. 제목 없는 spec은 조용하다), 환경 검사, 출력 끝의 `실측(지난 실행)`(`tier_samples`: 다른 feature의 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값)·`공통 모델`·티켓별 단계 모델 줄(`ticket_model_line`: 실행과 같은 선택 함수) |
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 리뷰·수정·재리뷰 띄우기(두 리뷰 동시), agy 호출 세기, 재개 뒤 멈춤, 요약 출력, 알림 |
 | `worker.py`, `herdr.py`, `adapters.py`, `streamfmt.py` | worker 띄우기(brief, 실행 스크립트, push 차단), herdr pane, 모델별 명령·판정, pane 출력 정리 |
 | `review.py` | 다른 계열 리뷰, 판단 모델의 fix·report 분류, 수정 커밋 재리뷰(2차 재리뷰의 재확인) |
 | `remote.py` | `gs remote check·go·status`: herdr `--machine`으로 원격 준비 검사(`_script_in_pane`과 `launch`는 먼저 `_shell_ready`로 표시 줄을 `SHELL_READY_MS` 안에서 최대 `SHELL_READY_TRIES`번 다시 보내 셸이 입력을 받는지 확인하고, 끝내 안 되면 `shell_start` 표시가 붙은 timeout 오류로 셸 시작 질문을 짚는 안내를 낸다; pane에서 python 프로브를 돌려 참/거짓만 받는다), 버전·grill 커밋 관문, 원격 pane에 claude를 띄워 `/go <feature> -- <UNATTENDED>` 전송(무인 세션 문장: 멈추면 원인 후보만 적고 멈춘다), `check` 끝의 재로그인 `안내:` 줄, 원격 `gs status` 조회 |
 | `overnight.py` | `gs overnight arm·disarm·add·next`: 조상 Claude 프로세스의 (pid, 시작 시각)으로 세션을 가르는 표시(`.goldstack/overnight/armed/`)와 거부 기록(`denied.log`), 밤샘 파일 `결과` 표의 대기열(잠금 안에서 줄 더하기, `disarm`은 `대기` 줄이 있으면 거부), 사이 단계 묶기(push 안 된 grill 커밋만 `git pull --rebase`, goldstack 레포면 재설치, 새 프로세스로 `gs check`. push 안 함). 모듈 docstring에 근거와 한계 |
+| `replay.py` | `gs replay`: 지난 티켓의 시작 commit 찾기(`start_commit`, `Merge NN:` 커밋에서 티켓 브랜치를 첫 부모로 거슬러 올라감, `--base`로 덮어씀)와 그 시점의 티켓·spec 사본(`freeze_inputs`), 분리 worktree에서 worker → spec `verify` → 첫 리뷰 1회 → 판단 모델 분류(수정·재리뷰·수리 없음), `.goldstack/trials/replay.md`에 행 쌓기(커밋은 사람이), 끝나면 worker를 먼저 끝내고 worktree 삭제, 바뀐 `refs/heads/*` 되돌림. 로그는 `.goldstack/work/<feature>/run/replay/`. 모듈 docstring에 순서와 근거 |
 | `retrolog.py` | `gs retro-log`: `/retro`용 로그 파일 하나(`run/retro-log.md`)를 크기 상한 안에 모은다 |
 | `findings.py` | 보고만 high·medium 지적을 `.goldstack/ideas/` 파일로 넘긴다 |
 | `transient.py` | 일시 오류 판별, 대기 일정(`Backoff`), 중단 예외(`NetworkAbort`), codex `Reconnecting` 감시 |
@@ -62,7 +63,7 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 
 **spec frontmatter**(feature마다, [guide.md의 표](guide.md#spec-frontmatter-키)) — `feature`(디렉터리 이름과 같아야 한다), `verify`(비어 있지 않은 한 줄 셸 명령)는 필수. 선택: `verify_ticket`(같은 형식), 1 이상 정수 `max_workers`(기본 3)·`idle_minutes`(기본 20)·`verify_minutes`(기본 20), 0 이상 정수 `verify_retries`(기본 0). 그 밖의 키는 경고, 범위 밖·정수 아닌 값은 오류.
 
-**티켓 frontmatter** — `id`, `title`, `blocked_by`(목록, 없으면 `[]`), `model`, `reviewer`가 모두 필요. 파일 이름은 `<id>-`로 시작한다. `model`·`reviewer`는 `claude|codex|agy` 중 하나이고 서로 달라야 한다. `gs check`는 없는 id 참조, 순환, 겹치는 id를 오류로 본다. 그 밖의 키는 경고다. 선택 키 넷(`feature.TICKET_OPTIONAL`):
+**티켓 frontmatter** — `id`, `title`, `blocked_by`(목록, 없으면 `[]`), `model`, `reviewer`가 모두 필요. 파일 이름은 `<id>-`로 시작한다. `model`·`reviewer`는 `claude|codex|agy` 중 하나이고 서로 달라야 한다. `gs check`는 없는 id 참조, 순환, 겹치는 id를 오류로 본다. 사람이 치는 `gs check`(`cli.cmd_check`)는 범위 안 티켓의 `touches`가 없거나 `[]`이면 그 파일에 오류를 낸다(`cli.touches_required_problems`. `--only` 밖은 보지 않는다). `gs go`가 쓰는 `check.check()`와 `gs go a b`의 사전 검사(`require_touches=False`), `review.py`의 빈 touches 처리는 그대로다. 그 밖의 키는 경고다. 선택 키 넷(`feature.TICKET_OPTIONAL`):
 - `tier`: `small`·`medium`·`large`. 아니면 오류. worker의 등급이고 없으면 `medium`이다(아래 "모델 어댑터"). 계열 표가 없으면 쓰이지 않는다. `/grill`이 적는다(템플릿에 `tier: medium`).
 - `touches`: 문자열 목록, 레포 루트 기준 경로(glob 허용). 목록이 아니거나, 빈 값·절대 경로·`..`가 든 값은 오류. 없으면 `[]`이고 겹침 검사에서 빠진다. `/grill`의 티켓 분해 라운드가 적는다(템플릿 `skills/grill/templates/ticket.md`에 `touches: []`).
 - `verify`: 비어 있지 않은 한 줄 셸 명령. 아니면 오류. 이 티켓의 검증 명령을 spec의 것 대신 정한다("검증 명령 고르기와 재시도"). 마무리는 영향을 받지 않는다. 템플릿에는 주석으로 있다(필요한 티켓에만).
@@ -219,7 +220,7 @@ codex 리뷰어는 `-C`가 worktree가 아니라 호출마다(끊겨서 다시 �
 코디네이터는 끊김을 실패와 구분한다. 티켓을 잃지 않고, 리뷰 없이 병합하지 않는다. 일시 오류 판별은 아래 "모델 어댑터"의 `transient.reason`이다. 대기 일정(`transient.Backoff`)은 worker와 호출이 함께 쓴다: 1→2→5→10→10…분, 합계 `timeouts.network_wait_minutes`(기본 60), 마지막 간격은 상한에 맞춰 줄인다. 다시 부르는 것이 회복 확인이고 호스트를 따로 찌르지 않는다.
 
 **worker의 대기**(`go.Outage`, `go._net_hold`, `go._net_tick`) — 대기는 sleep이 아니라 `_loop`의 시계다.
-1. 판별(`go._transient_end`): worker가 끝났는데 종료 0 + 커밋이 아니면 어댑터의 `transient_reason`을 본다. idle 시간 초과와 확인 오류는 일시 오류가 아니다.
+1. 판별(`go._transient_end`): 먼저 이번 실행에서 띄운 수리 worker가 커밋 없이 끝나 마지막 메시지에 `브랜치 밖 원인:` 줄을 남겼는지 본다. 그렇다면 일시 오류로 보지 않고 `_end_repair`로 가서 `retry=False`다(표식이 끊김보다 먼저, v30 01). 그 밖에는 worker가 끝났는데 종료 0 + 커밋이 아니면 어댑터의 `transient_reason`을 본다. idle 시간 초과와 확인 오류는 일시 오류가 아니다.
 2. 세우기(`_net_hold`): `failures`와 등급을 그대로 두고 `transient_errors`를 올린다. 이유 `네트워크 대기: <이유>`, phase `network`, `network_resume`을 남긴다. 다른 worker가 잡아 둔 대기가 있으면 거기에 함께 탄다. 다음 대기가 없으면(`Backoff.next`가 `None`) `NetworkAbort`다.
 3. 끊김 동안(`Outage.active`: 기다리는 worker나 회복을 확인하는 worker가 있을 때): 새 worker·리뷰를 시작하지 않는다. 도는 worker는 그대로 두고, 성공으로 끝난 worker(수정 worker 포함)의 리뷰·재리뷰는 미룬다(`_net_park`, `network_resume.done`). 진행 줄은 `네트워크 대기(2회, 3분 뒤)`, 회복 확인 중이면 `네트워크 회복 확인(2회)`.
 4. 다시 띄우기(`_resume`): 같은 worktree·브랜치에서 새 worker를 띄운다. 구현은 새 시도 디렉터리 `run/<NN>/<시도>`, 수정 worker는 `fix-net<k>`(`fix2-net<k>`)다. brief에 `worker.NETWORK_RESUME`("지난 시도가 네트워크로 끊겼다…")가 붙는다. 처음 base를 그대로 쓰므로 앞 시도의 커밋도 이 worker의 커밋으로 센다. 띄우지 못하면 구현은 티켓 실패, 수정은 실패한 수정이다. 수정·수리의 실패 이유는 새 디렉터리(`fix-net<k>`, `repair-net<k>`)에 남는다: 지난 디렉터리의 `worker.log`는 대기를 일으킨 일시 오류라 결함 수집이 이유까지 걸러 낸다.
@@ -625,6 +626,7 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
 - `hook.equals_word`: worker의 따옴표 없는 `=` 단어 차단(맨 바깥 셸과 `eval`·`zsh -c` 본문·치환 속. `bash -c`·`sh -c`는 제외. `GS_NOEQUALS` worker는 같은 셸 판정을 건너뛰고 새 zsh 본문만 본다).
 - `shellenv.py`: worker 셸의 `noequals` 전달 폴더(`prepare`, `worker_env`)와 실측 통과 CLI 목록 `NOEQUALS_CLIS`.
 - `check.config_verify_problems`: 설정 파일을 고치는 티켓의 좁은 검증 경고.
+- `check.cross_review_problems`: 빈 `### 교차 검토` 절 경고.
 - `review.fix_brief(found, nth, touches, merged)`: 수정 worker brief에 티켓 `touches`와 그중 시험 파일을 돌리라는 문장, 고칠 수 있는 파일 목록이 붙는다.
 - `overnight._live_markers`: 낡은 프로세스 목록으로 `arm` 표시를 지우지 않는다. 살아 있지 않아 보이는 표시가 있을 때만 `ps`를 다시 읽고, 새 목록에서도 없을 때만 지운다. 다시 읽기가 실패하면 지우지 않는다.
 

@@ -44,9 +44,9 @@ class ChainTest(unittest.TestCase):
         events = []
         check = cli.cmd_check
 
-        def preflight(repo, name, only):
+        def preflight(repo, name, only, **kw):
             events.append(("check", name))
-            return check(repo, name, only)
+            return check(repo, name, only, **kw)
 
         def run(repo, name):
             events.append(("go", name))
@@ -58,6 +58,16 @@ class ChainTest(unittest.TestCase):
         self.assertEqual((code, err), (0, ""), out)
         self.assertEqual(events, [("check", n) for n in ("a", "b", "c")] +
                          [("go", n) for n in ("a", "b", "c")])
+
+    def test_preflight_of_several_features_accepts_tickets_without_touches(self):
+        """gs go a b의 사전 검사는 touches 없는 티켓을 막지 않는다(그 오류는 사람이 치는 gs check 몫이다, goldstack-v30 03)."""
+        def run(repo, name):
+            self.save_phase(name, "verified")
+            return 0
+
+        with mock.patch("gs.go.go", side_effect=run):
+            code, out, err = self.run_cli("a", "b", "c")
+        self.assertEqual((code, err), (0, ""), out)
         self.assertIn("■ a: verified → b 시작", out)
         self.assertIn("■ b: verified → c 시작", out)
 

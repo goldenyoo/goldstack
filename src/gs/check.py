@@ -1,6 +1,7 @@
 """spec과 티켓 그래프 검사. `gs check`와 `gs go`가 같이 쓴다."""
 from __future__ import annotations
 
+import re
 import shutil
 from collections import deque
 from collections.abc import Callable, Iterable
@@ -198,6 +199,69 @@ def config_verify_problems(feat: featmod.Feature, scope: Iterable[str]) -> list[
     return problems
 
 
+CROSS_REVIEW_HEADING = "### 교차 검토"
+CROSS_REVIEW_SKIP = "교차 검토 못 함:"
+_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+_SEPARATOR_CELL = re.compile(r":?-+:?")
+
+
+def _table_cells(line: str) -> list[str] | None:
+    line = line.strip()
+    if not re.search(r"(?<!\\)\|", line):
+        return None
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|") and not line.endswith("\\|"):
+        line = line[:-1]
+    return [c.strip() for c in re.split(r"(?<!\\)\|", line)]  # `\|`는 칸 안의 글자
+
+
+def cross_review_recorded(spec_text: str) -> bool | None:
+    """spec의 `### 교차 검토` 절에 기록이 있는지. 그 제목이 없으면 None(v0–v29 spec).
+    기록 = 실제 표 행(머리·구분 행 제외, 2–5번째 칸이 모두 차 있고 `<`로 시작하지 않음) 또는
+    `교차 검토 못 함:`으로 시작하는 줄. 주석 안의 글자는 세지 않고, 절은 다음 `##`·`###` 제목에서 끝난다."""
+    lines = _COMMENT.sub("", spec_text).splitlines()
+    start = next((i for i, line in enumerate(lines) if line.startswith(CROSS_REVIEW_HEADING)), None)
+    if start is None:
+        return None
+    section = []
+    for line in lines[start + 1:]:
+        if re.match(r"#{2,3}\s", line):
+            break
+        section.append(line)
+    rows = []
+    for line in section:
+        if line.strip().startswith(CROSS_REVIEW_SKIP):
+            return True
+        if (cells := _table_cells(line)) is not None:
+            rows.append(cells)
+    for i, cells in enumerate(rows):
+        if all(_SEPARATOR_CELL.fullmatch(c) for c in cells):
+            continue  # `|---|` 구분 행
+        if i + 1 < len(rows) and all(_SEPARATOR_CELL.fullmatch(c) for c in rows[i + 1]):
+            continue  # 구분 행 바로 앞 = 머리 행
+        if len(cells) >= 5 and all(c and not c.startswith("<") for c in cells[1:5]):
+            return True
+    return False
+
+
+def cross_review_problems(repo: Path, feat: featmod.Feature) -> list[featmod.Problem]:
+    """티켓이 있고 spec에 `### 교차 검토` 제목이 있는데 기록이 없으면 경고한다(grill이 교차 검토를 빠뜨리지 않게).
+    제목이 없는 옛 spec(v0–v29)과 티켓 없는 feature에서는 조용하다."""
+    if not feat.tickets:
+        return []
+    path = feat.root / "spec.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return []
+    if cross_review_recorded(text) is not False:
+        return []
+    return [featmod.Problem(
+        "경고", featmod.rel(path, repo),
+        f'spec §7 교차 검토 기록이 없다(다른 계열 CLI로 읽기 전용 대조를 하거나 "{CROSS_REVIEW_SKIP} <이유>"를 적는다)')]
+
+
 def environment_problems(repo: Path, cfg: config.Config, feat: featmod.Feature,
                          scope: dict[str, list[str]]) -> list[featmod.Problem]:
     required = {"git", "gh", "claude"}  # judge·보고서·실패 요약은 티켓 모델과 무관하게 claude를 쓴다
@@ -288,6 +352,7 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
     feat.problems.extend(touches_problems(feat, full_graph, g))
     feat.problems.extend(config_verify_problems(feat, g))
     feat.problems.extend(agy_problems(cfg, feat, g))
+    feat.problems.extend(cross_review_problems(repo, feat))
     feat.problems.extend(environment_problems(repo, cfg, feat, g))
     lines.append("순서: " + " ".join(graph.topo_order(g)))
     lines.append("지금 시작 가능: " + " ".join(graph.frontier(g)))

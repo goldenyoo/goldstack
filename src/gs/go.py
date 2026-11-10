@@ -17,6 +17,7 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 커밋을 남기면 수리 diff를 tiers.rereview 등급으로 재리뷰하고(_repair_review, 지적은 보고만) 다시 병합·검증한다. 수리 worker를 띄우지 못했으면 재리뷰 없이 바로 다시 검증한다(불안정한 시험이면 여기서 통과한다).
 커밋 없이 끝났거나 수리 worker가 실패해 그 수정을 버렸으면 같은 head를 다시 검증하지 않고 _fail로 간다(_end_repair). 이유에 수리 worker의 마지막 메시지 요약이, failure.log와 다음 시도 brief에 그 파일(worker-last.txt) 경로가 들어간다.
 이번 실행에서 띄워 커밋 없이 끝난 수리 worker의 마지막 메시지에 `브랜치 밖 원인: <이유>` 줄이 있으면 종료 코드와 상관없이 재시도하지 않고(retry=False) 실패로 끝내 사람에게 넘긴다.
+이 표식은 일시 오류 처리보다 먼저 본다: 표식을 남긴 뒤 네트워크 오류로 끝나도 다시 띄우지 않는다(_check_worker, _out_of_branch_end). 표식이 없으면 아래 끊김 처리대로 다시 띄운다.
 끊긴 수리 worker를 다시 띄우지 못했으면 앞 실행 로그의 마지막 메시지를 "(앞 실행)" 표시로 같은 자리(이유, worker-last.txt, 다음 시도 brief)에 싣는다. 끊긴 실행의 메시지라 그 표식은 재시도 판단에 쓰지 않는다.
 다시 검증도 실패하면 그때 _fail로 간다: 실패는 시도마다 한 번만 센다. 병합 충돌, 검증 시간 초과, 검증하는 동안 integration이 바뀐 것은 수리하지 않고 바로 _fail이다.
 수리는 검증 실패부터 다시 검증까지 network_resume의 repair(REPAIR_*)로 이어 간다: 어디서 gs가 죽거나 끊겨도 다음 gs go가 그 지점부터 같은 worktree에서 잇는다. 옛 state에는 이 값이 없고 수리하지 않은 티켓처럼 읽는다.
@@ -58,6 +59,7 @@ worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 �
 돌던 worker와 리뷰어를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴 network_resume으로 다음 `gs go`가 같은 worktree에서 잇는다. 합계는 그때 새로 센다.
 어떻게 루프를 떠나든(중단, Ctrl-C·SIGTERM·SIGHUP, 뜻밖의 오류) 돌던 리뷰어의 프로세스 그룹을 끝낸다(_stop_reviews). 리뷰 단계의 티켓은 network_resume이 있어 다음 `gs go`가 리뷰를 다시 한다.
 수리 worker가 끊기면 수정 worker처럼 같은 worktree에 새 실행 디렉터리(repair-net<n>)로 다시 띄운다. 수리 재리뷰의 끊김도 리뷰와 같다.
+단 이번 실행에서 띄운 수리 worker가 커밋 없이 `브랜치 밖 원인:` 표식을 남겼으면 끊겼어도 다시 띄우지 않는다: 표식을 먼저 보고 _end_repair로 간다(retry=False). 그 worker는 회복의 근거도 아니다.
 수정 worker의 실패는 티켓 실패가 아니라 _fail을 지나지 않는다. 수리 worker의 실패는 그 시도의 실패다(_end_repair). 어느 쪽이든 이유는 그 실행 디렉터리에 따로 남겨 결함 수집이 읽는다(feedback.note_worker_failure).
 """
 from __future__ import annotations
@@ -1183,6 +1185,25 @@ def _net_hold(r: Run, a: Active, why: str) -> None:
     say(f"[{tid}] 일시 오류({why}): 실패로 세지 않는다. {state.network_label(r.st, state.now())}")
 
 
+NO_PROBE_LINE = "■ 네트워크 대기 끝: 다시 띄운 worker가 없어 다른 티켓 시작을 재개한다"  # 회복을 판정할 worker 없이 끊김이 끝났다(_net_tick, _net_drop)
+
+
+def _net_drop(r: Run, tid: str) -> None:
+    """일시 오류로 끝났지만 다시 띄우지 않는 worker(_check_worker의 `브랜치 밖 원인:` 표식)를 회복의 근거(probes)에서 뺀다. 일시 오류로 끝났으니 회복이 아니다.
+
+    그것으로 끊김이 끝나면(기다리는 worker도 다시 띄운 worker도 없다) _net_tick처럼 끝을 알리고 그 시각을 적고 state의 대기를 지운다.
+    미룬 리뷰(parked)가 있으면 여기서 끝내지 않는다: _net_tick이 끝내며 돌려놓는다.
+    """
+    n = r.net
+    if tid not in n.probes:
+        return
+    n.probes.discard(tid)
+    if not n.active and not n.parked:
+        say(NO_PROBE_LINE)
+        n.ended_at = time.monotonic()
+        _net_publish(r)
+
+
 def _net_park(r: Run, a: Active) -> bool:
     """끊김 중에 끝난 성공 worker의 리뷰를 회복 뒤로 미룬다. 미뤘으면 True."""
     if not r.net.active:
@@ -1196,7 +1217,7 @@ def _net_park(r: Run, a: Active) -> bool:
 
 
 def _net_recovered(n: Outage, active: dict[str, Active], now: float) -> bool:
-    """다시 띄운 worker 중 하나가 일시 오류 없이 끝났거나, 마지막 일시 오류 뒤로 5분 넘게 조용히 돈다. 일시 오류로 끝나면 _net_hold가 probes에서 뺀다."""
+    """다시 띄운 worker 중 하나가 일시 오류 없이 끝났거나, 마지막 일시 오류 뒤로 5분 넘게 조용히 돈다. 일시 오류로 끝나면 _net_hold가(표식으로 다시 띄우지 않으면 _net_drop이) probes에서 뺀다."""
     if n.probes - active.keys():
         return True
     enough = transient.RECOVERY_MINUTES * transient.minute_seconds()
@@ -1230,8 +1251,7 @@ def _net_tick(r: Run, active: dict[str, Active], runner) -> None:
         n.probes.clear()
         healed = True
     if not n.active:
-        say("■ 네트워크 회복: 다른 티켓 시작을 재개한다" if healed
-            else "■ 네트워크 대기 끝: 다시 띄운 worker가 없어 다른 티켓 시작을 재개한다")
+        say("■ 네트워크 회복: 다른 티켓 시작을 재개한다" if healed else NO_PROBE_LINE)
         n.ended_at = now
         active.update(n.parked)
         n.parked.clear()
@@ -1545,6 +1565,10 @@ def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error:
     """1단계: 끝난 worker의 결과를 확인한다. 다음 단계(TO_REVIEW | TO_MERGE)를 돌려준다. 여기서 티켓을 처리했으면 None(실패, 네트워크 대기, 리뷰 미룸).
 
     실패한 수정 worker는 그 수정을 버리고 재리뷰 없이 병합·검증으로 간다(_end_fix). 수리 worker는 다르다: 실패했거나 커밋이 없으면 다시 검증하지 않고 이 시도가 실패한다(_end_repair, None).
+    순서: integration 되돌리기 → 일시 오류 판별(_transient_end) → `브랜치 밖 원인:` 표식(_out_of_branch_end) → 네트워크 대기(_net_hold) → worker 종류별 처리.
+    표식이 일시 오류 처리보다 먼저다: 이번 실행에서 띄운 수리 worker가 커밋 없이 끝났고 마지막 메시지에 표식이 있으면 일시 오류로 끝났어도
+    _net_hold로 다시 띄우지 않고 _end_repair로 가 재시도 없이 실패한다(retry=False). 표식은 일시 오류일 때만 여기서 읽는다(아니면 _end_repair가 본다).
+    표식이 없거나 메시지를 읽지 못했으면(로그 없음, 읽기 오류) 지금처럼 _net_hold다. 커밋을 남긴 수리 worker, 이번 실행에서 띄우지 않은 자리, 구현·수정 worker도 그렇다.
     """
     metrics.worker_finished(r, a.proc.job)
     t, wt, branch = a.t, a.wt, a.branch
@@ -1568,7 +1592,11 @@ def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error:
         say(f"[{t.id}] 경고: integration worktree가 바뀌어 되돌렸다. 함께 돌던 worker({', '.join([t.id, *others])}) 중 "
             "누구 짓인지 모른다")
     why = _transient_end(a, code, commits, error)
-    if why:
+    if why and _out_of_branch_end(a, commits):
+        # 표식은 worker의 결론이다. 끊김이 그것을 무효로 하지 않으니 다시 띄우지 않고 아래 _end_repair로 간다(retry=False).
+        # 끊김 중에 다시 띄운 worker였으면 회복 판정에서 뺀다: 일시 오류로 끝난 worker는 회복의 근거가 아니다
+        _net_drop(r, t.id)
+    elif why:
         _net_hold(r, a, why)
         return None
     if a.repair:  # 표시는 _end_repair까지 둔다: 수리는 다시 검증까지 그것으로 잇는다
@@ -1794,6 +1822,17 @@ def _transient_end(a: Active, code: int | None, commits: int, error: str) -> str
     except Exception as e:  # noqa: BLE001 — 판별은 덤이다. 평소의 실패 처리로 간다
         say(f"[{a.t.id}] 경고: 일시 오류 판별 실패: {_err(e)}")
         return ""
+
+
+def _out_of_branch_end(a: Active, commits: int) -> bool:
+    """이번 실행에서 띄운(a.launched) 수리 worker가 커밋 없이 끝났고 마지막 메시지에 `브랜치 밖 원인:` 줄이 있나(review.out_of_branch).
+
+    _check_worker가 일시 오류로 끝난 worker에만 부른다: 참이면 _net_hold 대신 _end_repair로 간다. 메시지는 _end_repair와 같은 곳(이 자리의 worker.log)에서 읽고,
+    _end_repair가 같은 판정을 다시 해 이유를 만든다. 로그가 없거나 읽지 못하면(streamfmt.last_message가 None) 거짓이다: 일시 오류 처리로 간다.
+    """
+    if not (a.repair and a.launched) or commits:
+        return False
+    return bool(review.out_of_branch(streamfmt.last_message(a.proc.job.log)))
 
 
 @dataclass
@@ -2317,6 +2356,8 @@ def _end_repair(r: Run, a: Active, code: int | None, commits: int, error: str) -
     failure.log에 그 파일과 첫 검증 실패의 로그를 실으며, 다음 시도 brief의 실패 요약 끝에 그 경로를 적는다(_fail의 last).
     이번 실행에서 띄워(a.launched) 커밋 없이 끝난 수리 worker의 마지막 메시지에 `브랜치 밖 원인: <이유>`로 시작하는 줄이 있으면(review.out_of_branch)
     종료 코드와 상관없이(실패로 끝나도) 재시도하지 않는다(retry=False): 새 worktree에서 다시 해도 브랜치 밖의 원인은 그대로다.
+    네트워크 오류 같은 일시 오류로 끝났어도 같다: _check_worker가 표식을 일시 오류 처리(_net_hold)보다 먼저 보고(_out_of_branch_end) 다시 띄우지 않고 여기로 보낸다.
+    실패 이유와 출력은 일시 오류가 없을 때와 같다. 표식이 없으면 일시 오류로 끝난 수리 worker는 여기 오지 않고 다시 띄운다(_net_hold).
     그 이유는 실패 이유에 남아 보고서와 `gs status`에 나온다. 줄이 없거나 커밋을 남기고 실패했으면 일반 실패처럼 한 번 재시도한다.
     이번 실행에서 띄우지 않은 자리(_resume이 다시 띄우지 못해 대신 세운 자리. 새 디렉터리를 만들기 전 실패와 agy 한도면 앞 실행의 디렉터리를 그대로 쓴다)면
     worker가 남긴 메시지는 앞 실행(a.prior)의 것이다. 실패 이유와 worker-last.txt에 PRIOR_RUN 표시와 함께 싣고 다음 시도에 그 경로를 넘기지만,

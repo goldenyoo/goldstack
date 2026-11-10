@@ -292,7 +292,7 @@ class ConfigTest(unittest.TestCase):
         (root / "tickets").mkdir(parents=True)
         (root / "spec.md").write_text('---\nfeature: demo\nverify: "true"\n---\n')
         (root / "tickets/01-a.md").write_text(
-            '---\nid: "01"\ntitle: a\nblocked_by: []\nmodel: claude\nreviewer: codex\n---\n')
+            '---\nid: "01"\ntitle: a\nblocked_by: []\nmodel: claude\nreviewer: codex\ntouches: ["a.py"]\n---\n')
         self.path.write_text(CONFIG + "extra = 1\n")
         (self.repo / ".goldstack/local.env").write_text("TG_TOKEN=1:abc\nTG_CHAT_ID=42\n")  # telegram = true의 비밀 경고(06) 제외
         code, out, err = self.cli("check", "demo")
