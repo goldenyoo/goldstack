@@ -1,8 +1,7 @@
 ---
 name: retro
-description: "코딩 세션 하나나 goldstack feature의 실행 기록을 되돌아보고, 다음 실행이 나아지도록 agent의 환경(검사, 포인터, 기준, 도구)을 고칠 후보를 심각한 순으로 제안한다. 고치지는 않는다. 사용: /retro [세션|feature]"
+description: "사람이 회고를 명시적으로 요청할 때만 쓴다. 코딩 세션 하나나 goldstack feature의 실행 기록을 되돌아보고, 다음 실행이 나아지도록 agent의 환경(검사, 포인터, 기준, 도구)을 고칠 후보를 심각한 순으로 제안한다. 고치지는 않는다. 사용: /retro [세션|feature]"
 argument-hint: "[세션|feature]"
-disable-model-invocation: true
 ---
 사람이 **회고**(retrospective)를 청했다. 너는 코드가 아니라 코딩 agent의 **환경**을 고칠 후보를 제안한다. 제안만 한다. 사람이 후보를 고르기 전에는 개선 대상(코드·문서·설정)과 아이디어 파일을 바꾸지 않는다. 분석용 `run/retro-log.md`는 만들어도 된다.
 
