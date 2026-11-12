@@ -9,6 +9,7 @@ integration head = 검증한 integration 끝(티켓 검증이어도 티켓 코�
 판단 입력 `report-input.md`에는 실패한 검증의 시험 줄(failing_tests)과 티켓별 worker 마지막 보고(worker_reports, 믿을 수 없는 자료)가 들어간다. 로그가 없으면 없다고 적는다.
 base 검증이 실패한 보고서(reverted)는 Evidence 맨 앞에 그 실패 줄·로그 경로를 싣고, Summary 맨 위 줄에 revert 상태와 `gs go <feature>`를 코드로 넣는다.
 후보 티켓(추정)이 없으면 병합된 티켓별 실제 변경 파일을 함께 보인다.
+landlock 모드로 돈 실행의 보고서는 제목 바로 아래에 `샌드박스: landlock(네트워크 열림)` 줄이 있다(sandbox_line). os 모드면 없다.
 defer 지적(review.DEFER: 재현됐지만 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않은 결함)은 상태가 "재현된 미수리"이고, Evidence의
 "재현된 미수리 결함" 절에 따로 나오며(deferred_section), 원래 심각도와 상관없이 남은 high로 센다(remaining_line). 옛 state에는 없다.
 """
@@ -21,7 +22,7 @@ from collections import Counter
 from fnmatch import fnmatchcase
 from pathlib import Path
 
-from . import config, git, metrics, review, setup, state, streamfmt, transient
+from . import config, git, metrics, review, sandbox, setup, state, streamfmt, transient
 from .feature import WORK
 
 LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
@@ -660,6 +661,13 @@ def issue_notes(r) -> str:
     return "### issue\n\n" + "\n".join(lines) + "\n\n" if lines else ""
 
 
+def sandbox_line(r) -> str:
+    """보고서 머리(제목 바로 아래)의 샌드박스 줄. landlock 모드로 쓴 보고서만 있다(goldstack-v32 spec 2-7).
+    값은 gs go가 실행 시작 때 계산한 모드(Run.sandbox)다. 그 값이 없는 r(옛 호출, 시험)은 os다."""
+    box = getattr(r, "sandbox", None)
+    return f"샌드박스: {sandbox.LANDLOCK_LABEL}\n\n" if getattr(box, "landlock", False) else ""
+
+
 def _render(r, summary: str, tail: int) -> str:
     f = r.st.finish
     merge = f.get("merge_sha", "<PR의 mergeCommit.oid>")
@@ -675,7 +683,7 @@ def _render(r, summary: str, tail: int) -> str:
     docs_notice = "".join(f"문서 미반영: {tid}\n\n" for tid in missing_docs)
     # 모델 요약은 병합 전에 쓰여 revert를 모른다. 상태와 다음 명령은 코드가 맨 위에 넣는다.
     revert_first = (f"{status_line(r)} · 다음 명령: `gs go {r.name}`\n\n" if f.get("phase") == "reverted" else "")
-    text = (f"# {r.name} 결과\n\n{docs_notice}## Summary\n\n{revert_first}{summary}\n\n{summary_status}\n\n"
+    text = (f"# {r.name} 결과\n\n{sandbox_line(r)}{docs_notice}## Summary\n\n{revert_first}{summary}\n\n{summary_status}\n\n"
             f"## Evidence\n\n{verification_failure(r)}{evidence(r, tail)}\n"
             f"## Merge Danger\n\n결과: {f.get('outcome', f.get('phase', '준비'))}\n\n"
             f"PR: {f.get('url') or '아직 없음'}\n\n"

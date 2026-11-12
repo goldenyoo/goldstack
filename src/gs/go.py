@@ -64,6 +64,10 @@ codex는 그래도 종료 0으로 끝나니 그대로 두면 `커밋 없음` 실
 걸리면 SandboxAbort(NetworkAbort의 하위)를 올려 위 중단과 같은 길을 간다: worker 시도는 실패로 세지 않고, 리뷰 답은 형식에 맞아도(지적 0건이어도) 버리고 리뷰 실패로 적지 않아
 병합하지 않는다. 다음 `gs go`가 같은 worktree에서 worker나 리뷰부터 잇는다. 중단 종류는 state의 network kind(sandbox|network)에 남고, `■ 샌드박스 중단 이유:` 줄,
 끝 안내(SANDBOX_ABORT_LINE), 티켓 이유, 결과(_outcome)·요약·알림이 그것을 따른다(abort_label). kind가 없는 옛 state는 네트워크 중단으로 읽는다.
+샌드박스 모드(goldstack-v32 03): 시작할 때 주 레포에서 `sandbox.mode`와 가둘 CLI별 `sandbox.denies`를 한 번 계산해(_sandbox, Run.sandbox) 실행 동안 쓴다.
+worktree에서 다시 읽지 않는다(local.env는 gitignore라 worktree에 없다). landlock이면 codex worker(_worker_adapter)와 codex·agy 리뷰·재리뷰·수리 재리뷰
+(리뷰 job의 sandbox)를 gs jail로 가둬 띄운다(adapters.Sandbox). 가두지 못한 흔적(`jail.JAIL_FAILED` 줄: worker 로그는 _sandbox_end, 리뷰어 stderr는 review._call)과
+리뷰 트리가 리뷰어 쓰기 경로 아래인 것(review.reviewer_argv)도 SandboxAbort다. 보고서 머리에 `샌드박스: landlock(네트워크 열림)` 줄이 붙는다(report._render).
 수리 worker가 끊기면 수정 worker처럼 같은 worktree에 새 실행 디렉터리(repair-net<n>)로 다시 띄운다. 수리 재리뷰의 끊김도 리뷰와 같다.
 단 이번 실행에서 띄운 수리 worker가 커밋 없이 `브랜치 밖 원인:` 표식을 남겼으면 끊겼어도 다시 띄우지 않는다: 표식을 먼저 보고 _end_repair로 간다(retry=False). 그 worker는 회복의 근거도 아니다.
 수정 worker의 실패는 티켓 실패가 아니라 _fail을 지나지 않는다. 수리 worker의 실패는 그 시도의 실패다(_end_repair). 어느 쪽이든 이유는 그 실행 디렉터리에 따로 남겨 결함 수집이 읽는다(feedback.note_worker_failure).
@@ -83,7 +87,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from . import adapters, clean, config, failure, feedback, finish, git, graph, herdr, metrics, notify, report, review, setup, state, streamfmt, transient, verify, worker
+from . import adapters, clean, config, failure, feedback, finish, git, graph, herdr, metrics, notify, report, review, sandbox, setup, state, streamfmt, transient, verify, worker
 from .check import check
 from .feature import Feature, Ticket, work_rel
 
@@ -140,6 +144,7 @@ class Run:
     net: Outage | None = None  # 지금의 네트워크 끊김. _loop가 새로 만든다: 대기 합계는 gs go마다 새로 센다
     reviews: Reviews | None = None  # 루프 밖 리뷰. _loop가 만든다
     no_merge: bool = False  # 지난 마무리를 회복하지 않는 --only 실행이다. 마무리 없이 멈추고, 지난 마무리의 기록을 이번 결과로 보이지 않는다
+    sandbox: adapters.Sandbox = field(default_factory=adapters.Sandbox)  # 실행 시작 때 주 레포에서 계산한 모드·거부 목록(_sandbox). 기본 os
 
     @property
     def name(self) -> str:
@@ -188,7 +193,12 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
         print(f"gs go: 검사 오류 {len(feat.errors)}개. 아무것도 띄우지 않았다.", file=sys.stderr)
         return 1
     cfg, _ = config.load(repo)  # check가 이미 검사했다(오류면 위에서 끝났다). 경고는 check가 보였다
-    r = Run(repo, feat, only, cfg)
+    try:
+        box = _sandbox(repo, cfg)
+    except ValueError as e:  # check가 이미 오류로 멈췄다. 그 사이 local.env가 바뀐 경우뿐이다
+        print(f"gs go: {e}. 아무것도 띄우지 않았다.", file=sys.stderr)
+        return 1
+    r = Run(repo, feat, only, cfg, sandbox=box)
     lock = state.Lock(r.rundir)
     try:
         lock.acquire()
@@ -265,6 +275,15 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
     if aborted:
         return EXIT_NETWORK
     return 0 if ok else 1
+
+
+def _sandbox(repo: Path, cfg: config.Config) -> adapters.Sandbox:
+    """샌드박스 모드와 가둘 CLI별 거부 목록(sandbox.denies)을 주 레포에서 한 번 계산한다. 실행 동안 이 값을 쓰고 worktree에서 다시 읽지 않는다
+    (local.env는 gitignore라 worktree에 없다). os 모드면 거부 목록이 없다. 모드 값이 틀렸으면 ValueError."""
+    mode = sandbox.mode(repo)
+    if mode != adapters.LANDLOCK:
+        return adapters.Sandbox()
+    return adapters.Sandbox(mode, {cli: sandbox.denies(cli, cfg, repo) for cli in adapters.JAILED_CLIS})
 
 
 def _issue_failures(r: Run) -> list[str]:
@@ -471,7 +490,7 @@ def _worker_adapter(r: Run, t: Ticket) -> adapters.Adapter:
     hook의 시험 규칙(config `[hook.worker_tests]`)도 여기서 어댑터에 실어 worker 환경 변수로 넘긴다."""
     ts = r.st.ticket(t.id)
     tier, selection = r.cfg.tiers.worker(t.model, t.tier, failures=ts.failures)
-    adapter = adapters.for_model(t.model, r.cfg.models, selection, worker_tests=r.cfg.hook.worker_tests)
+    adapter = adapters.for_model(t.model, r.cfg.models, selection, worker_tests=r.cfg.hook.worker_tests, sandbox=r.sandbox)
     # model은 진행·계열별 소요 통계가 쓰므로 계열로 유지한다. 빈 값은 CLI 사용자 기본값이다.
     chosen = getattr(adapter, "selection", None)
     metrics.worker_selection(ts, tier, chosen)
@@ -1833,6 +1852,7 @@ def _catch_up_reviewed(r: Run, a: Active, head: str) -> None:
 def _sandbox_end(a: Active) -> str:
     """이번 실행에서 띄운 worker의 로그에 샌드박스가 명령을 띄우지 못한 흔적(transient.sandbox_failure)이 있으면 `(계열)의 명령이 …: 이유`, 아니면 빈 문자열.
 
+    gs jail로 가둔 worker(adapter.jailed, landlock 모드의 codex)는 줄 처음이 jail.JAIL_FAILED인 줄(가두지 못해 명령을 띄우지 못했다)도 본다. 이유는 그 줄이다.
     다시 띄우지 않은 자리(worker.Finished, 어댑터 없음)는 보지 않는다: 그 로그는 앞 실행의 것이라 이미 멈춘 중단을 또 멈추게 된다.
     로그를 못 읽으면 흔적이 없다고 본다. 시험 seam(GS_WORKER_CMD)의 어댑터는 계열이 아니라 보지 않는다.
     """
@@ -1840,9 +1860,11 @@ def _sandbox_end(a: Active) -> str:
     if adapter is None:
         return ""
     try:
-        why = transient.sandbox_failure(adapter.name, a.proc.job.log.read_text(encoding="utf-8", errors="replace"))
+        text = a.proc.job.log.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+    why = adapters.jail_failure(text) if getattr(adapter, "jailed", False) else ""
+    why = why or transient.sandbox_failure(adapter.name, text)
     return f"({adapter.name})의 명령이 샌드박스에서 돌지 못했다: {why}" if why else ""
 
 
@@ -1935,7 +1957,7 @@ def _plan_review(r: Run, a: Active) -> ReviewPlan:
     merged = _merged_touches(r, t)  # 고칠 수 있는 파일(판단 모델): 이 티켓 touches + 이미 병합된 티켓들의 touches
     jobs = [dict(repo=r.repo, rdir=rdir, base=r.ihead, branch=head, ticket=t.path.resolve(),
                  spec=r.feat.spec.path.resolve(), model=t.model, reviewer=who, cfg=r.cfg, on_wait=wait,
-                 worker_log=_attempt_dir(a) / "worker.log", touches=list(t.touches), merged=merged)
+                 worker_log=_attempt_dir(a) / "worker.log", touches=list(t.touches), merged=merged, sandbox=r.sandbox)
             for _, who, rdir in launch]
     return ReviewPlan(slots, launch, recs, head, jobs)
 
@@ -2528,7 +2550,7 @@ def _plan_repair_reviews(r: Run, a: Active, head: str) -> tuple[list[dict], list
     wait = _review_wait(r, t.id)
     jobs = [dict(repo=r.repo, rdir=_repair_review_dir(a, rec), base=a.base, head=head, verify_log=ts.repairs[-1]["verify_log"],
                  ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), reviewer=rec["reviewer"], cfg=r.cfg, on_wait=wait,
-                 worker_log=a.proc.job.log) for rec in launch]
+                 worker_log=a.proc.job.log, sandbox=r.sandbox) for rec in launch]
     return launch, jobs
 
 
@@ -2695,7 +2717,8 @@ def _plan_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]],
     merged = _merged_touches(r, t)  # 1차 재리뷰의 새 지적을 나눌 판단 모델의 고칠 수 있는 파일(_plan_review와 같다)
     jobs = [dict(repo=r.repo, rdir=_rereview_dir(a, rec, nth), base=a.base, head=head, found=[dict(f) for f in found],
                  ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), reviewer=rec["reviewer"], cfg=r.cfg, nth=nth,
-                 on_wait=wait, worker_log=a.proc.job.log, touches=list(t.touches), merged=merged) for rec, found in launch]
+                 on_wait=wait, worker_log=a.proc.job.log, touches=list(t.touches), merged=merged, sandbox=r.sandbox)
+            for rec, found in launch]
     return launch, jobs
 
 
