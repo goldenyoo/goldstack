@@ -603,6 +603,15 @@ def record(repo: Path, cfg: config.Config, *, phase: str, kind: str, frames: Ite
 MANUAL_HEADING = "\n\n## 사람이 쓴 피드백\n"
 
 
+def _manual_title(message: str) -> str:
+    """사람이 쓴 원문에서 제목을 고른다. 자유 글이므로 오류 가리기를 적용하지 않는다."""
+    lines = message.splitlines()
+    heading = next((line[2:] for line in lines if line.startswith("# ")), None)
+    candidate = heading if heading is not None else next((line for line in lines if line.strip()), "")
+    candidate = " ".join(_CONTROL.sub(" ", candidate).split())
+    return candidate[:79] + "…" if len(candidate) > 80 else candidate
+
+
 def record_manual(repo: Path, cfg: config.Config, message: str) -> Path | None:
     """사람이 명시적으로 보낸 글. 자동 수집과 달리 자유 글을 그대로 싣는다."""
     if os.environ.get("GS_ROLE") == "worker":
@@ -611,8 +620,10 @@ def record_manual(repo: Path, cfg: config.Config, message: str) -> Path | None:
         return None
     if not message.strip() or LOCAL_MARKER in message:
         raise ValueError("피드백은 비어 있거나 로컬 전용 표시를 포함할 수 없다")
+    env = environment()
     issue = compose(phase="feedback", kind="feedback", frames=[], error_lines=[], cfg=cfg,
-                    redactor=redactor_for(repo), env=environment())
+                    redactor=redactor_for(repo), env=env)
+    title = f"[field] {_manual_title(message)} (gs {_clean_version(env.gs_version)})"
     fingerprint = hashlib.sha256((issue.fingerprint + "\0" + message).encode()).hexdigest()[:16]
     path = draft_path(repo, fingerprint)
     _prepare_dir(repo)
@@ -624,7 +635,7 @@ def record_manual(repo: Path, cfg: config.Config, message: str) -> Path | None:
     # 수동 피드백은 글마다 다른 issue다. 모두 같은 단계·종류라서 재발 키를 두면 서로 합쳐진다.
     body = re.sub(r"^- 재발 키: .*\n", "", issue.body.replace(issue.fingerprint, fingerprint), flags=re.MULTILINE)
     body += MANUAL_HEADING + message
-    _write_draft(path, {"fingerprint": fingerprint, "title": issue.title, "labels": list(issue.labels), "count": "1"},
+    _write_draft(path, {"fingerprint": fingerprint, "title": title, "labels": list(issue.labels), "count": "1"},
                  body, "")
     return path
 
