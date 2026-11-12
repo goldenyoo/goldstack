@@ -46,6 +46,7 @@ class SkillTest(unittest.TestCase):
                 ticket = re.sub(r"^tier:.*\n", "", ticket, flags=re.M)
             # 템플릿의 `touches: []`는 grill이 채운다. 비워 두면 gs check가 오류로 막는다(goldstack-v30 03)
             ticket = ticket.replace("touches: []", 'touches: ["src/a.py"]')
+            ticket = ticket.replace("<claude|codex>", "codex").replace("<model과 다른 계열>", "claude")
             (root / "tickets" / "01-a.md").write_text(fill(ticket, NN="01"), encoding="utf-8")
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -129,6 +130,53 @@ class GrillBreakdownTest(unittest.TestCase):
     def test_ticket_template_asks_for_final_observation_point_and_its_test(self):
         text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
         self.assertIn("고친 동작이 사람·호출자에게 보이는 최종 관측 지점과 그곳의 시험 하나", text)
+
+    def test_ticket_template_placeholders_are_rejected_until_family_is_chosen(self):
+        raw = fill((TEMPLATES / "ticket.md").read_text(encoding="utf-8"), NN="01")
+        data, _ = frontmatter.split(raw)
+        self.assertEqual(data["model"], "<claude|codex>")
+        self.assertNotIn(data["model"], feature.FAMILIES)
+        self.assertNotIn(data["reviewer"], feature.FAMILIES)
+        for model, reviewer in (("claude", "codex"), ("codex", "claude")):
+            self.assertIn(model, feature.FAMILIES)
+            self.assertIn(reviewer, feature.FAMILIES)
+
+    def test_ticket_template_with_placeholder_family_fails_check(self):
+        out = self.check_ticket(lambda t: t)
+        self.assertIn("`model` 값 `<claude|codex>`", out)
+        self.assertNotIn("오류 0,", out)
+
+    def test_ticket_template_with_chosen_family_passes_check(self):
+        out = self.check_ticket(lambda t: t.replace("<claude|codex>", "codex").replace("<model과 다른 계열>", "claude"))
+        self.assertIn("오류 0,", out)
+
+    def check_ticket(self, edit):
+        fake_clis(self, "gh", "claude", "codex")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            git.run(repo, "init", "-q")
+            git.run(repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
+            (repo / ".goldstack").mkdir()
+            (repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+            root = repo / ".goldstack/work" / "demo"
+            (root / "tickets").mkdir(parents=True)
+            spec = (TEMPLATES / "spec.md").read_text(encoding="utf-8")
+            spec = spec.replace("<셸 명령 한 줄. gs가 integration에서 직접 돌린다>", '"true"')
+            (root / "spec.md").write_text(fill(spec, feature="demo"), encoding="utf-8")
+            ticket = (TEMPLATES / "ticket.md").read_text(encoding="utf-8").replace("touches: []", 'touches: ["src/a.py"]')
+            (root / "tickets" / "01-a.md").write_text(fill(edit(ticket), NN="01"), encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                cli.main(["--repo", str(repo), "check", "demo"])
+            return out.getvalue() + err.getvalue()
+
+    def test_spec_template_family_criteria(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        for text in ("`touches`가 좁고 완료 조건이 시험으로 닫히는 코드 티켓", "글이 결과물인 티켓과 코디네이터 상태 전이",
+                     "리뷰는 구현과 다른 계열", "'기본'을 이유로 쓰지 않는다"):
+            self.assertIn(text, comment)
+        self.assertRegex(comment.partition("-->")[0] + (TEMPLATES / "spec.md").read_text(encoding="utf-8"),
+                         r"\| 01 \|.*\| codex gpt[^|]*\|[^\n]*\| claude ")
 
     def test_ticket_template_keys(self):
         ticket = fill((TEMPLATES / "ticket.md").read_text(encoding="utf-8"), NN="01")
