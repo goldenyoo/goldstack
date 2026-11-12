@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.2.16 — 2026-11-12
+
+### goldstack-v32
+
+- 샌드박스가 없는 리눅스 머신(컨테이너 AppArmor가 bubblewrap의 mount를 막는 pod 등)에서 쓰는 길을 열었다. `gs check`·`gs go`가 시작 전에 `codex sandbox -c sandbox_mode=workspace-write -- true`로 점검해 실패하면 멈추고, `gs doctor`에 `샌드박스` 행이 생겼다. AppArmor가 원인으로 보이면 pod spec 힌트를 낸다(검증 안 됨).
+- `.goldstack/local.env`의 `GS_SANDBOX=landlock`: codex worker·codex 리뷰·agy 리뷰를 `gs jail`(커널 Landlock)로 가둔다. 비밀 경로 읽기와 쓰기 목록 밖 쓰기를 막고 네트워크는 열려 있다. config `[sandbox] secrets`로 경로를 더한다. 보고서 머리에 `샌드박스: landlock(네트워크 열림)`.
+- 실행 중 샌드박스가 명령을 띄우지 못하면 `중단(샌드박스)`(종료 코드 3)로 멈추고, 다음 `gs go`가 잇는다. 지적 0건 리뷰도 버리고 리뷰 없이 병합하지 않는다.
+- `docs/guide.md`·`docs/internals.md`를 맞췄다.
+- 버전을 `0.2.16`으로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.15 — 2026-11-10
 
 ### goldstack-v31

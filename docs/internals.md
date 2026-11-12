@@ -18,6 +18,8 @@
 | `replay.py` | `gs replay`: 지난 티켓의 시작 commit 찾기(`start_commit`, `Merge NN:` 커밋에서 티켓 브랜치를 첫 부모로 거슬러 올라감, `--base`로 덮어씀. base 이력(`<remote>/<base>`, `<base>`)을 먼저 찾고 없을 때만 integration 이력)와 그 시점의 티켓·spec 사본(`freeze_inputs`), 분리 worktree에서 worker → spec `verify` → 첫 리뷰 1회 → 판단 모델 분류(수정·재리뷰·수리 없음), `.goldstack/trials/replay.md`에 행 쌓기(커밋은 사람이), 끝나면 worker를 먼저 끝내고 worktree 삭제, 바뀐 `refs/heads/*` 되돌림. 로그는 `.goldstack/work/<feature>/run/replay/`. 모듈 docstring에 순서와 근거 |
 | `retrolog.py` | `gs retro-log`: `/retro`용 로그 파일 하나(`run/retro-log.md`)를 크기 상한 안에 모은다 |
 | `findings.py` | 보고만 high·medium 지적을 `.goldstack/ideas/` 파일로 넘긴다 |
+| `jail.py` | `gs jail`: 커널 Landlock(ctypes, ABI 1의 13종)으로 명령 하나를 가둔다. 읽기는 전체에서 거부 경로만 뺀 덮개(`read_cover`), 쓰기는 받은 경로 아래만. 거부와 겹치는 쓰기 경로·가두기 실패는 stderr `JAIL_FAILED` 줄과 종료 2. 한계: 네트워크, ABI 1의 `truncate(2)`·`chmod` |
+| `sandbox.py` | 샌드박스 모드(`local.env`의 `GS_SANDBOX`, 비우면 `os`·`landlock`), CLI별 거부 목록(`denies`, config `[sandbox] secrets`), 실행 전 점검(`problems`: `gs check`·`gs go`, `doctor_row`: `gs doctor`. `codex sandbox -c sandbox_mode=workspace-write -- true`와 Landlock 가능 여부, AppArmor 힌트) |
 | `transient.py` | 일시 오류 판별, 대기 일정(`Backoff`), 중단 예외(`NetworkAbort`), codex `Reconnecting` 감시 |
 | `verify.py`, `setup.py`, `failure.py` | verify 명령(시간 제한, 프로세스 그룹, 재시도), worktree 준비 명령, 실패 증거와 요약 |
 | `finish.py`, `report.py` | 보고서(`remaining_line`: `남은 high N(상태 n · …) · 건너뛴 리뷰: 티켓`을 `go._summary`의 `■` 줄과 마무리 줄 뒤에 보이기만 한다. 판정·종료 코드는 그대로), PR, CI 대기, 병합 확인(merge·squash), base 재검증, revert, 보호된 base의 PR |
@@ -229,6 +231,8 @@ codex 리뷰어는 `-C`가 worktree가 아니라 호출마다(끊겨서 다시 �
 6. 같은 끊김으로 잇기(`transient.SAME_OUTAGE_MINUTES`, 30분): 회복해도 대기 일정과 합계는 남는다. 끊김이 끝난 뒤 30분 안에 다시 끊기면 같은 끊김으로 누계를 잇고, 30분을 넘겨 정상으로 돌았으면 새 끊김으로 새로 센다. 그래서 끊겼다 붙었다를 반복해도 합계가 `network_wait_minutes`를 넘으면 `중단(네트워크)`로 실제로 멈춘다.
 
 **codex**(`transient.ReconnectWatch`) — codex worker는 끊겨도 죽지 않고 `Reconnecting...` 이벤트를 찍으며 기다린다. `_wait_any`가 로그를 이어 읽어, `Reconnecting`만 `network_wait_minutes` 넘게 이어지면 `NetworkAbort`다. 다른 이벤트가 나오면 처음부터 다시 잰다. 회복 시간도 마지막 `Reconnecting`부터 잰다.
+
+**`중단(샌드박스)`**(`transient.SandboxAbort`, `NetworkAbort`의 하위, `go.SANDBOX_ABORT`) — 실행 전 점검(`sandbox.problems`)을 지나서도 샌드박스가 명령을 띄우지 못하면(`transient.sandbox_failure`: codex `command_execution`의 bwrap 실패, agy의 sandbox server 연결 실패, 가두지 못한 `jail.JAIL_FAILED` 줄, 리뷰 트리가 리뷰어 쓰기 경로 아래) 올린다. worker 시도는 실패로 세지 않고, 리뷰 답은 지적 0건이어도 버리며 리뷰 실패로 적지 않아 리뷰 없이 병합하지 않는다. 아래 `중단(네트워크)`와 같은 길(`_loop` → `network_resume` → `pending`)과 종료 코드 3으로 멈추고 다음 `gs go`가 잇는다. 출력은 `■ 샌드박스 중단 이유: …`, `■ 중단(샌드박스): 머신의 샌드박스를 고치거나 GS_SANDBOX=landlock을 켠 뒤 gs go로 잇는다`다. landlock 모드의 보고서 머리에는 `샌드박스: landlock(네트워크 열림)` 줄이 붙는다.
 
 **`중단(네트워크)`**(`transient.NetworkAbort`, `go._net_abort`, `go.EXIT_NETWORK = 3`) — 세 곳에서 온다: worker 대기 합계, codex `Reconnecting`, 리뷰·재리뷰·지적 분류의 대기 합계. `_loop`가 받아 돌던 worker를 끝내고 티켓마다 `network_resume`을 남긴 뒤(리뷰 중이었으면 `done`) `pending`, 이유 `중단(네트워크)`로 둔다. 두 리뷰 중 한쪽이 중단되면 다른 쪽 결과도 버린다(다음 `gs go`가 다시 받는다). `go.go`가 `network.aborted`를 적고 마무리를 건너뛴다: 보고서·PR·병합이 없고 `failures`는 그대로다. 출력은 `■ 네트워크 중단 이유: …`, `■ 중단(네트워크): 다음 gs go가 이어 간다`, 요약(`■ 마무리: 중단(네트워크)`)이고, 종료 코드 3이다. 알림은 `❌ <f> · 중단(네트워크) · …`, `gs status` 첫 줄은 `<f>: 중단(네트워크)(<시각>) · 다음 gs go가 이어 간다`. `gs go a b`는 여기서 멈춘다.
 
