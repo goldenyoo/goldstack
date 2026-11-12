@@ -274,7 +274,7 @@ def _go_one(repo: Path, name: str, session, *args) -> int:
 
 
 def _go_features(repo: Path, names: list[str], only: list[str] | None, session) -> int:
-    from .go import NETWORK_ABORT
+    from .go import abort_label
     from . import state
 
     if len(names) == 1:
@@ -288,8 +288,8 @@ def _go_features(repo: Path, names: list[str], only: list[str] | None, session) 
         code = _go_one(repo, name, session)
         try:
             st = state.load(featmod.work_dir(repo, name) / "run", name)
-            # 중단(네트워크)이면 지난 실행의 마무리 phase가 남아 있어도 이번 결과는 중단이다
-            phase = NETWORK_ABORT if st.network.get("aborted") else st.finish.get("phase") or "unknown"
+            # 중단(네트워크·샌드박스)이면 지난 실행의 마무리 phase가 남아 있어도 이번 결과는 중단이다
+            phase = abort_label(st) if st.network.get("aborted") else st.finish.get("phase") or "unknown"
         except (OSError, ValueError) as e:
             print(f"gs go: {name}의 state.json을 읽을 수 없다: {e}", file=sys.stderr)
             phase = "unknown"

@@ -118,7 +118,8 @@ class State:
     progress: dict = field(default_factory=dict)
     agy_calls: int = 0  # 이번 실행에서 gs가 띄운 agy 호출 수(worker 1번·리뷰 1번 = 1회, 재시도·수정·재리뷰 포함). 실행마다 0에서
     # 네트워크 끊김: errors(일시 오류 수), waited_seconds(기다린 시간, 둘 다 실행을 넘어 누적),
-    # wait(지금의 대기: count, due_at. due_at이 비면 다시 띄운 worker로 회복을 확인하는 중), aborted(중단 이유)
+    # wait(지금의 대기: count, due_at. due_at이 비면 다시 띄운 worker로 회복을 확인하는 중), aborted(중단 이유),
+    # kind(중단 종류: network | sandbox. 옛 state에는 없고 network로 읽는다, go.abort_label)
     network: dict = field(default_factory=dict)
     # 선택 측정 이력. 재개·재시도·새 마무리에서도 덮어쓰지 않는다. 옛 state에는 없어도 된다.
     # runtime, workers, validations, reviewers, review_calls, finish_stages의 목록(metrics.py).
