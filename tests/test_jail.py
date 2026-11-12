@@ -191,12 +191,27 @@ class JailCliTest(JailCall, TempDirTest):
         self.assert_failed(*self.call("--write", str(self.base), "--"), "명령이 없다")
 
     def test_bad_arguments_also_print_the_failure_line(self):
+        # 값 없는 옵션은 하위 parser가, 모르는 옵션은 최상위 parser가 잡는다. 어느 쪽이든 같은 한 줄이다
+        for argv in (["jail", "--write"], ["jail", "--unknown", "--", "true"],
+                     ["jail", "--write", str(self.base), "--nope=1", "--", "true"], ["--bogus", "jail", "--", "true"]):
+            with self.subTest(argv=argv):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised, \
+                        mock.patch.object(jail, "_confine") as confine, mock.patch.object(jail.os, "execvp") as execvp:
+                    cli.main(argv)
+                self.assertEqual(raised.exception.code, 2)
+                self.assertTrue(err.getvalue().startswith(jail.JAIL_FAILED + "인자를 읽지 못했다("), err.getvalue())
+                self.assertEqual(len(err.getvalue().splitlines()), 1)
+                confine.assert_not_called()
+                execvp.assert_not_called()
+
+    def test_unknown_arguments_of_other_commands_are_not_jail_failures(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
-            cli.main(["jail", "--write"])
+            cli.main(["hook", "pretooluse", "--unknown"])
         self.assertEqual(raised.exception.code, 2)
-        self.assertTrue(err.getvalue().startswith(jail.JAIL_FAILED + "인자를 읽지 못했다("), err.getvalue())
-        self.assertEqual(len(err.getvalue().splitlines()), 1)
+        self.assertNotIn(jail.JAIL_FAILED, err.getvalue())
+        self.assertIn("unrecognized arguments: --unknown", err.getvalue())
 
     def test_confine_failure(self):
         with mock.patch.object(jail, "abi", return_value=1), \

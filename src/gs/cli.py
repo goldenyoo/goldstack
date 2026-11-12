@@ -100,7 +100,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("command", nargs=argparse.REMAINDER, help="-- 뒤의 명령과 인자")
     p.error = _jail_usage_error
 
-    args = parser.parse_args(argv)
+    # 모르는 인자는 하위 parser가 아니라 최상위 parser가 거부하므로 `jail`이면 여기서 `JAIL_FAILED` 줄로 바꾼다
+    args, extras = parser.parse_known_args(argv)
+    if extras:
+        message = f"unrecognized arguments: {' '.join(extras)}"
+        if args.cmd == "jail":
+            _jail_usage_error(message)
+        parser.error(message)
     if args.cmd == "go" and len(args.feature) > 1 and args.only is not None:
         parser.error("여러 feature와 --only는 함께 쓸 수 없다")
     try:
