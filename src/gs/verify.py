@@ -26,6 +26,8 @@
 4. 모두 통과하고 확인 함수가 트리 그대로라고 하면 전체 명령을 한 번 더 돈다. 그 결과가 이 시도의 결과다(`Result.triaged`에 파일들). 통과를 받아들일지는
    호출자가 트리를 보고 정하고, 받아들이면 flaky가 `flaky: <label> <파일들> 따로 돌려 통과, 전체 다시 통과`를 쓴다.
 verify_retries와 함께 쓰면 시도마다 판별을 먼저 한다. 전체를 한 번 더 도는 것은 재시도와 별개로 시도당 한 번이고, 그 결과는 다시 판별하지 않는다.
+따로 돌린 파일이 시간 안에 신호 없이 실패하면 결정적 실패로 보고 남은 재시도 없이 그 시도의 결과를 돌려준다. 판별을 못 했거나 꺼져 있으면,
+판별 파일이 시간 초과(판별 시간 예산 소진 포함)·끊김으로 끝났으면, 판별 통과 뒤 전체가 다시 실패했으면 verify_retries만큼 재시도한다.
 재시도 전에도 확인 함수를 부르고 트리가 바뀌었으면 `검증 재시도 안 함: …` 줄을 남기고 더 돌리지 않는다. 판별이나 앞 실행이 바꾼 트리를 다음 실행이 되돌려
 호출자의 최종 비교를 통과하는 일을 막는다. 그 시도의 실패 결과를 돌려주고 바뀐 트리는 손대지 않는다(트리 변경 판정은 호출자의 비교가 한다).
 설정은 호출자가 실행 중인 config 값을 넘긴다(검증하는 worktree의 config를 읽지 않는다). 측정 키는 metrics.sample·metrics.triage가 적는다.
@@ -72,6 +74,12 @@ class Result:
         return self.code == 0 and not self.timed_out
 
 
+@dataclass(frozen=True)
+class _TriageResult:
+    files: tuple[str, ...] = ()  # 모두 통과하고 트리가 그대로여서 전체를 한 번 더 돌릴 파일들
+    deterministic_failure: bool = False  # 시간 초과·끊김 없이 실패해 verify_retries도 멈춘다
+
+
 def limit_seconds(spec) -> float:
     raw = os.environ.get("GS_VERIFY_TIMEOUT", "").strip()
     if raw:
@@ -100,9 +108,10 @@ def mark(path) -> str:
 
 
 def run(spec, cwd: Path, stream: IO[str], triage=None, unchanged: Callable[[], bool] | None = None) -> Result:
-    """실패한 명령을 verify_retries만큼 다시 돌린다. 각 실행의 시간 제한은 같다. 돌려주는 결과는 마지막 실행의 것이고, 실행마다 로그 끝에 종료 코드 줄을 남긴다.
+    """실패한 명령을 최대 verify_retries만큼 다시 돌린다. 각 실행의 시간 제한은 같다. 돌려주는 결과는 마지막 전체 실행의 것이고, 실행마다 로그 끝에 종료 코드 줄을 남긴다.
 
     triage는 config `[verify]`(config.VerifyConfig), unchanged는 트리가 검증 전 그대로면 True인 함수다. 둘 다 있고 triage가 켜져 있으면 시도마다 판별하고(머리말),
+    따로 돌린 파일이 시간 초과·끊김 없이 실패하면 남은 재시도를 멈춘다. 판별 생략·꺼짐, 판별 파일의 시간 초과·끊김, 판별 통과 뒤 전체 실패는 재시도한다.
     재시도 전에도 unchanged를 불러 트리가 바뀌었으면 더 돌리지 않고 그 시도의 실패 결과를 돌려준다(바뀐 트리는 그대로 두어 호출자의 최종 비교가 본다)."""
     samples = []
     on = triage is not None and triage.enabled
@@ -110,14 +119,17 @@ def run(spec, cwd: Path, stream: IO[str], triage=None, unchanged: Callable[[], b
     while True:
         offset = _offset(stream)
         result = _full(spec, cwd, stream, samples)
+        outcome = _TriageResult()
         if not result.ok and on:
-            files = _triage(spec, cwd, stream, triage, unchanged, result, _output(stream, offset), samples)
-            if files:
-                result = replace(_full(spec, cwd, stream, samples, after_triage=True), triaged=files)
+            outcome = _triage(spec, cwd, stream, triage, unchanged, result, _output(stream, offset), samples)
+            if outcome.files:
+                result = replace(_full(spec, cwd, stream, samples, after_triage=True), triaged=outcome.files)
         if result.ok or attempt >= getattr(spec, "verify_retries", 0):
             break
         if on and unchanged is not None and not unchanged():
             stream.write("\n검증 재시도 안 함: 검증 중 트리가 바뀌었다\n")
+            break
+        if outcome.deterministic_failure:
             break
         attempt += 1
         stream.write(f"\n검증 재시도 {attempt}\n")
@@ -150,14 +162,14 @@ def failed_files(pattern: str, output: str) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result, output: str, samples: list) -> tuple[str, ...]:
-    """판별(머리말 1–3). 전체를 한 번 더 돌 차례면 따로 돌려 통과한 파일들, 아니면 빈 튜플. 결과는 실패한 전체 실행의 표본에 붙인다."""
+def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result, output: str, samples: list) -> _TriageResult:
+    """판별(머리말 1–3). 전체를 한 번 더 돌릴 파일들과 재시도를 멈출 결정적 실패 여부를 돌려준다. 측정은 실패한 전체 실행의 표본에 붙인다."""
     start = metrics.clock()
 
-    def skip(reason: str, why: str, files: tuple[str, ...] = ()) -> tuple[str, ...]:
+    def skip(reason: str, why: str, files: tuple[str, ...] = ()) -> _TriageResult:
         stream.write(f"\n판별 안 함: {why}\n")
         metrics.triage(samples, "skipped", files, reason, start)
-        return ()
+        return _TriageResult()
 
     if result.timed_out:
         return skip("timeout", "전체 검증이 시간 초과로 끝났다")
@@ -190,15 +202,15 @@ def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result,
         if not res.ok:
             stream.write(f"\n판별 실패: {name}" + (" 시간 초과" if res.timed_out else "") + ". 전체 검증은 다시 돌리지 않는다\n")
             metrics.triage(samples, "failed", files, name, start)
-            return ()
+            return _TriageResult(deterministic_failure=not res.timed_out and not res.interrupted)
     if not unchanged():
         stream.write("\n판별 통과, 전체 검증은 다시 돌리지 않는다: 판별 중 트리가 바뀌었다\n")
         metrics.triage(samples, "passed", files, "tree_changed", start)
-        return ()
+        return _TriageResult()
     stream.write(f"\n판별 통과: {' '.join(files)}. 전체 검증을 한 번 더 돌린다\n")
     stream.flush()
     metrics.triage(samples, "passed", files, "", start)
-    return files
+    return _TriageResult(files=files)
 
 
 def _clock() -> float:
