@@ -571,22 +571,22 @@ class RealLandlockTest(unittest.TestCase):
             (bin_ / name).write_text(PROBE)
             (bin_ / name).chmod(0o755)
         self.repo = self.root / "repo"
-        self.repo.mkdir()
-        sh(self.repo, "git", "init", "-q", "-b", "main")
-        (self.repo / "a").write_text("a\n")
-        sh(self.repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
-        sh(self.repo, "git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init")
         self.local_env = self.repo / ".goldstack" / "local.env"
-        self.local_env.parent.mkdir()
-        self.local_env.write_text("GS_SANDBOX=landlock\n")
         self.secret = self.root / "secret.txt"
-        self.secret.write_text("s3cret\n")
-        self.wt = self.root / "wt"
-        sh(self.repo, "git", "worktree", "add", "-q", "-b", "gs/demo/01", str(self.wt))
         os.environ.update(GIT_ENV, HOME=str(home), PATH=f"{bin_}{os.pathsep}{os.environ['PATH']}",
                           GS_SECRET=str(self.secret), GS_LOCAL_ENV=str(self.local_env), GS_AGY=str(bin_ / "agy"))
         for name in ("GS_REVIEWER_CMD", "GS_WORKER_CMD", "CODEX_HOME"):
             os.environ.pop(name, None)
+        self.repo.mkdir()
+        sh(self.repo, "git", "init", "-q", "-b", "main")
+        (self.repo / "a").write_text("a\n")
+        sh(self.repo, "git", "add", "-A")
+        sh(self.repo, "git", "commit", "-qm", "init")
+        self.local_env.parent.mkdir()
+        self.local_env.write_text("GS_SANDBOX=landlock\n")
+        self.secret.write_text("s3cret\n")
+        self.wt = self.root / "wt"
+        sh(self.repo, "git", "worktree", "add", "-q", "-b", "gs/demo/01", str(self.wt))
         self.box = go._sandbox(self.repo, SimpleNamespace(sandbox=SimpleNamespace(secrets=[str(self.secret)])))
         self.assertEqual(self.box.mode, "landlock")
 
