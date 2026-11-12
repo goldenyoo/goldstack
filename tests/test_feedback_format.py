@@ -814,7 +814,8 @@ class FeedbackConfigTest(unittest.TestCase):
 
     def test_gs_init_writes_template_and_ignore_lines(self):
         subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
-        self.assertEqual(self.cli("init")[0], 0)
+        with mock.patch.dict(os.environ, GS_AGY=str(self.repo / "no-agy")):
+            self.assertEqual(self.cli("init")[0], 0)
         self.assertEqual(config.load(self.repo)[0].feedback.mode, "draft")
         lines = (self.repo / ".gitignore").read_text().splitlines()
         self.assertIn(".goldstack/feedback/", lines)
