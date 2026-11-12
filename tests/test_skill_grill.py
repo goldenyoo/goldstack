@@ -126,6 +126,10 @@ class GrillBreakdownTest(unittest.TestCase):
         text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
         self.assertIn("완료 조건의 동작을 지우면 실패하는", text)
 
+    def test_ticket_template_asks_for_final_observation_point_and_its_test(self):
+        text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
+        self.assertIn("고친 동작이 사람·호출자에게 보이는 최종 관측 지점과 그곳의 시험 하나", text)
+
     def test_ticket_template_keys(self):
         ticket = fill((TEMPLATES / "ticket.md").read_text(encoding="utf-8"), NN="01")
         data, _ = frontmatter.split(ticket)
