@@ -109,7 +109,7 @@ fi
         self.assertEqual(self.integration("show", "origin/main:file_01"), "01 worker")
         report = self.final_report()
         for text in ("## Summary", "## Evidence", "## Merge Danger", "| 01 | t01 | merged |",
-                     "main-verify.log", "종료 코드: 0", 'git -C "$dir" revert', "mktemp -d", f["merge_sha"]):
+                     "main-verify.log", "main: 통과 · 종료 코드 0",'git -C "$dir" revert', "mktemp -d", f["merge_sha"]):
             self.assertIn(text, report)
         self.assertEqual((self.bin / "pr-body.md").read_text().strip(), report)
         self.assertEqual(list(self.rundir.glob("gs-main-*")), [])
