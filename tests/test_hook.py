@@ -49,6 +49,30 @@ class HookTest(unittest.TestCase):
         for cmd in ["git push origin HEAD", "git push --force-with-lease", "gh pr merge 3", "cd .. && git push"]:
             self.assertBlocked(cmd)
 
+    def test_git_stash_blocked_in_worktree_because_refs_stash_is_shared(self):
+        """`refs/stash`는 모든 worktree가 함께 쓴다(goldstack-v31 03: `stash push -u` 뒤 `pop`)."""
+        for cmd in ["git stash", "git stash push", "git stash push -u", "git stash -u", "git stash --include-untracked",
+                    "git stash pop", "git stash apply", "git stash drop", "git stash clear", "git stash save wip",
+                    "git stash create", "git stash store abc", "git stash branch b", "git stash -m wip",
+                    "git -C . stash push -u", f"cd {self.wt} && git stash", "git status && git stash pop",
+                    "git stash $X"]:
+            self.assertBlocked(cmd)
+        reason = self.bash("git stash push -u")
+        self.assertIn("refs/stash", reason)
+        self.assertIn("모든 worktree가 함께 쓴다", reason)
+
+    def test_git_stash_list_and_show_allowed(self):
+        for cmd in ["git stash list", "git stash show", "git stash show -p stash@{0}", "git stash list --oneline",
+                    "git -C . stash show --stat"]:
+            self.assertAllowed(cmd)
+
+    def test_git_stash_outside_worktree_keeps_old_verdict(self):
+        """worktree 밖은 그대로다: 임시 디렉터리의 버리는 레포만 통과하고 다른 곳은 하위 명령과 상관없이 막힌다."""
+        self.assertAllowed(f"git -C {self.scratch} stash push -u")
+        self.assertAllowed(f"cd {self.scratch} && git stash pop")
+        self.assertBlocked("git -C .. stash list")
+        self.assertBlocked("cd .. && git stash push")
+
     def test_normal_work_allowed(self):
         for cmd in ["git commit -m 'x'", "git log --oneline -5", "uv run python -m unittest discover -s tests",
                     "git add -A && git commit -qm t09", "git status", "git diff HEAD~1",
@@ -550,7 +574,7 @@ class PluginTest(unittest.TestCase):
         self.assertIn("if [ \"${GS_ROLE:-}\" != worker ]; then exit 0; fi", self.hook_command())
 
     def test_worker_keeps_tool_block_as_second_guard(self):
-        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)"', adapters.Claude.BASE)
+        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor', adapters.Claude.BASE)
 
     def test_force_push_message_says_force(self):
         env = {"GS_ROLE": "worker", "GS_WORKTREE": "/w"}
