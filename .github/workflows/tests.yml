@@ -9,7 +9,31 @@ permissions:
   contents: read
 
 jobs:
+  # 리눅스에서만 실제로 도는 Landlock 시험. 짧아서 병합 전에 기다린다(.goldstack/config.toml `[git] checks`).
+  linux-only:
+    name: linux-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GS_REQUIRE_LANDLOCK: "1"
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: astral-sh/setup-uv@v5.4.1
+        with:
+          enable-cache: true
+      - name: Set git identity for tests
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Run Landlock tests
+        run: |
+          .venv/bin/python -m unittest discover -s tests -p test_jail.py
+          .venv/bin/python -m unittest discover -s tests -p test_sandbox_launch.py
+
   tests:
+    name: tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -21,5 +45,8 @@ jobs:
         run: |
           git config --global user.name "GitHub Actions"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-      - name: Run tests
-        run: uv run python -m unittest discover -s tests
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Run tests in parallel, one file per process
+        run: |
+          ls tests | grep '^test_' | xargs -P "$(nproc)" -n 1 .venv/bin/python -m unittest discover -s tests -p

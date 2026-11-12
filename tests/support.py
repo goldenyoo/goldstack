@@ -21,6 +21,54 @@ from gs import adapters, cli, config, state, worker
 # CI에는 codex가 없고, GoTest의 가짜 codex는 종료 1이다.
 os.environ.setdefault("GS_SANDBOX_PROBE", "pass")
 
+REQUIRE_LANDLOCK = "GS_REQUIRE_LANDLOCK"
+
+
+def landlock_required(env=None) -> bool:
+    """`GS_REQUIRE_LANDLOCK=1`이면 Landlock 시험을 건너뛰지 않고 실패시킨다(CI의 `linux-only` job)."""
+    return (os.environ if env is None else env).get(REQUIRE_LANDLOCK) == "1"
+
+
+def landlock_gate(abi: int, env=None) -> tuple[str, str]:
+    """Landlock 시험을 돌릴지 정한다. `("run", "")`, `("skip", 이유)`, `("fail", 이유)` 중 하나다.
+
+    ABI가 1 이상이면 돌린다. 못 쓰는데 `GS_REQUIRE_LANDLOCK=1`이면 skip 대신 실패다. 두 Landlock 시험 파일이 함께 쓴다."""
+    if abi >= 1:
+        return "run", ""
+    reason = "Landlock을 쓸 수 없는 머신(리눅스가 아니거나 커널이 지원하지 않음)"
+    if landlock_required(env):
+        return "fail", f"{REQUIRE_LANDLOCK}=1인데 {reason}"
+    return "skip", reason
+
+
+def skip_or_fail_landlock(test: unittest.TestCase, reason: str, env=None) -> None:
+    """Landlock 시험 안에서 환경이 모자랄 때: 보통은 skip, `GS_REQUIRE_LANDLOCK=1`이면 실패."""
+    if landlock_required(env):
+        test.fail(f"{REQUIRE_LANDLOCK}=1인데 {reason}")
+    test.skipTest(reason)
+
+
+def requires_landlock(abi: int, env=None):
+    """클래스 데코레이터. Landlock이 없으면 시험을 skip하고, `GS_REQUIRE_LANDLOCK=1`이면 시험마다 실패시킨다."""
+    action, reason = landlock_gate(abi, env)
+
+    def decorate(cls):
+        if action == "run":
+            return cls
+        if action == "skip":
+            return unittest.skip(reason)(cls)
+
+        def failing(self):
+            self.fail(reason)
+
+        for name in [n for n in dir(cls) if n.startswith("test")]:
+            if callable(getattr(cls, name)):
+                setattr(cls, name, failing)
+        return cls
+
+    return decorate
+
+
 APPLE_GIT_SHIM = "/usr/bin/git"
 _shim_dir = None  # import 때 만든 링크 디렉터리. 프로세스가 끝날 때 지운다
 
