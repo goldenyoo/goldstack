@@ -34,7 +34,7 @@ blocked_by: 같은 파일을 건드릴 쌍은 줄 세운다. 이유는 "같은 �
 tier: small|medium|large와 이유 한 줄. 예: 문서 small, 재개 흐름 large. 코드와 상한 있는 skill 글을 함께 고치는 티켓은 `small`로 잡지 않는다(goldstack-v11 09: small 예상 25분, 네 번 시도에 약 150분)
 예상: 티켓 하나에 걸릴 시간. `gs check`의 `실측(지난 실행)` 줄에서 그 티켓 tier의 중앙값을 쓴다. 그 tier 값이 없거나 `실측 기록 없음`이면 예상을 적지 말고 `–`로 둔다
 모델: `gs check`의 구현·수정·수리·첫 리뷰·재리뷰 계열 모델/effort를 그대로 옮긴다. `CLI 기본값`도 출력대로 쓴다. 두 번째 리뷰어는 +로 잇는다. 공통 모델(판단·실패 요약)은 표 아래 한 줄로 옮긴다
-계열: 구현·리뷰 계열을 고른 이유를 한 줄 적는다
+계열: 구현·리뷰 계열을 고른 이유를 한 줄 적는다. 티켓마다 고른다. codex는 `touches`가 좁고 완료 조건이 시험으로 닫히는 코드 티켓, claude는 skill·프롬프트·한국어 문서처럼 글이 결과물인 티켓과 코디네이터 상태 전이(재개·수리·병합). 리뷰는 구현과 다른 계열이다. 계열 줄에 '기본'을 이유로 쓰지 않는다. 티켓마다 이유를 쓴다
 두 번째 리뷰어(`second_reviewer`): 틀리면 바로 사고인 티켓에만 붙인다(`docs/guide.md`와 같은 기준). 상태 전이·재개·revert, 파일·브랜치 삭제, 차단 hook, 비밀, 데이터 마이그레이션. 문서·문구·시험으로 다 확인되는 변경에는 붙이지 않는다
 touches: 레포 루트 기준 경로, glob 허용
 verify: 문서·설정 티켓은 좁은 명령, 코드 티켓은 `전체`. 문서·버전 티켓은 레포에서 확인한 환경 동기화·버전 시험·plugin 검사로 좁힌다(전체 검증과 겹치지 않게). `.goldstack/config.toml`을 고치는 티켓은 문서·설정 티켓이어도 `전체`(spec `verify`)를 쓴다(좁은 검증이면 `gs check`가 경고한다)
@@ -42,7 +42,7 @@ skill 글(`skills/*/SKILL.md`)을 고치는 티켓: 완료 조건에 `tests/test
 일렬 경로: 예상 합이 가장 긴 blocked_by 사슬. 평균 동시: 전체 예상 합 ÷ 일렬 경로 예상. 표 아래에 둘을 함께 보인다. 예: `일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1` -->
 | id | 제목 | blocked_by(이유) | wave | tier(이유) | 예상 | 구현 | 수정 | 수리 | 첫 리뷰 | 재리뷰 | touches | verify |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01 | <제목> | – | 1 | small(<이유. 예: 문서>) | 20분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `<경로>` | `<좁은 명령>` |
+| 01 | <제목> | – | 1 | small(<이유. 예: 좁은 코드 수정>) | 20분 | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | claude opus/high | claude sonnet/high | `<경로>` | 전체 |
 | 02 | <제목> | 01 앞 결과 필요 | 2 | large(<이유. 예: 재개 흐름>) | 60분 | codex gpt-6.1-sol/high | codex gpt-6.1-sol/high | codex gpt-6.1-sol/high | claude opus/xhigh + agy gemini-4-argon-high | claude sonnet/high + agy gemini-4-argon-medium | `<경로>` | 전체 |
 
 계열: <구현·리뷰 계열을 고른 이유 한 줄>

@@ -5,8 +5,9 @@ blocked_by: []
 touches: []
 # closes: [12]  # 이 티켓이 고치는 issue 번호 목록(선택)
 tier: medium  # small|medium|large
-model: claude
-reviewer: codex
+# 계열은 티켓마다 고른다. 기준은 spec 템플릿 §5 주석. 두 줄 모두 자리표시를 채운다
+model: <claude|codex>
+reviewer: <model과 다른 계열>
 # verify: "<검사 명령 한 줄>"  # 문서·설정 티켓: 앞의 `# `를 지우고 좁은 명령을 쓴다. 코드 티켓: 이 줄을 지운다. 단 spec에 `verify_ticket`이 있으면 그 값을 물려받으니 `# `를 지우고 spec `verify`(전체 검증)를 그대로 쓴다
 ---
 ## 목표
