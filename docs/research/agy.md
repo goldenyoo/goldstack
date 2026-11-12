@@ -113,6 +113,7 @@ NDJSON 한 줄에 이벤트 하나. 본 이벤트는 세 종류다 **[측정]**:
 
 ## 4. 모델 선택과 추론 강도
 - 목록: `agy models`(`--output-format json` 가능). 이 계정에서는 `gemini-4-argon-{low,medium,high}`, `gemini-3.8-flash-{low,medium,high}`, `claude-opus-5-5-*`, `claude-sonnet-5-5-*`, `gpt-oss-120b-medium` **[측정]**.
+- **Carbon (2026-11-12)**: agy 1.5.6의 `agy models`에 `gemini-4-carbon-{low,medium,high}`가 있다(맥북에서 확인). 이 레포는 `models.agy`와 `[tiers.agy]` 세 칸을 `gemini-4-carbon-high`로, gs 기본값(`DEFAULT_CONFIG`)은 `medium = gemini-4-carbon-medium`, `large`·`models.agy = gemini-4-carbon-high`로 옮겼다. Argon과 비교 측정은 하지 않았다. 사람이 Carbon을 쓰겠다고 정해 바꿨고, 시간·지적 품질은 바꾼 뒤 실행 보고서와 `/retro`로 본다. 아래 Argon 측정은 옛 모델 기준이다.
 - 지정 방법 **[측정]** X7·X9·X10 + `/model`·`/effort`:
   - `--model gemini-4-argon-high` 처럼 강도가 붙은 slug, 또는
   - `--model gemini-4-argon --effort high`(→ `/model`이 `gemini-4-argon-high`로 해석). `--effort` 값은 `low|medium|high|xhigh|max` 중 모델이 지원하는 것.
