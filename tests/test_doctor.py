@@ -81,6 +81,7 @@ class DoctorTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.repo = Path(tmp.name)
+        os.environ["GS_AGY"] = str(self.repo / "no-agy")
         git.run(self.repo, "init", "-q")
         git.run(self.repo, "remote", "add", "origin", "https://github.com/wrong/repo.git")
         git.run(self.repo, "remote", "add", "upstream", "git@github.com:owner/project.git")
@@ -132,6 +133,47 @@ else:
             "required_pull_request_reviews": {"required_approving_review_count": 2},
             "required_status_checks": {"contexts": ["build"], "checks": [{"context": "test"}, {"context": "build"}]},
         }
+
+    def test_models_compare_both_families_even_without_github(self):
+        self.path.write_text(test_config.CONFIG + '''
+[tiers.codex]
+small = "codex-model/medium"
+medium = "available/high"
+large = "gpt-6-astra/xhigh"
+''')
+        fake = self.repo / "agy"
+        fake.write_text(f"#!{sys.executable}\nimport sys\nassert sys.argv[1:] == ['models']\nprint('available-agy description')\n")
+        fake.chmod(0o755)
+        (self.repo / "models_cache.json").write_text('{"models": [{"slug": "codex-model"}, {"slug": "available"}]}')
+        git.run(self.repo, "remote", "set-url", "upstream", "/local/repo")
+        with mock.patch.dict(os.environ, CODEX_HOME=str(self.repo), GS_AGY=str(fake)):
+            code, out = self.command("doctor")
+        self.assertEqual(code, 0, out)
+        self.assertEqual([line for line in out.splitlines() if line.startswith("모델  ")], [
+            "모델  tiers.codex.large의 gpt-6-astra가 이 머신 codex 모델 목록에 없다",
+            "모델  models.agy의 agy-model가 이 머신 agy 모델 목록에 없다",
+        ])
+
+    def test_models_unknown_reasons_and_matching_list(self):
+        self.path.write_text(test_config.CONFIG)
+        fake = self.repo / "agy"
+        fake.write_text(f"#!{sys.executable}\nprint('Please sign in to view available models')\n")
+        fake.chmod(0o755)
+        with mock.patch.dict(os.environ, CODEX_HOME=str(self.repo), GS_AGY=str(fake)):
+            code, out = self.command("doctor")
+            self.assertEqual(code, 0, out)
+            self.assertIn("모델  codex: 확인 못 함(", out)
+            self.assertIn("models_cache.json", out)
+            self.assertIn("모델  agy: 확인 못 함(agy 로그인 필요(Please sign in))", out)
+            self.assertNotIn("모델 목록에 없다", out)
+            (self.repo / "models_cache.json").write_text('{"models": [{"slug": "codex-model"}]}')
+            fake.write_text(f"#!{sys.executable}\nprint('agy-model description')\n")
+            code, out = self.command("doctor")
+            self.assertEqual(code, 0, out)
+            for family in ("codex", "agy"):
+                self.assertIn(f"모델  {family}: 설정한 모델이 이 머신 모델 목록에 있다", out)
+            self.path.write_text(test_config.CONFIG.replace('codex = "codex-model"', 'codex = ""'))
+            self.assertNotIn("모델  codex:", self.command("doctor")[1])
 
     def test_setup_recommends_install_commands_that_preserve_lockfiles(self):
         for command in ("npm install", "npm i --ignore-scripts", "yarn", "cd app && yarn install"):

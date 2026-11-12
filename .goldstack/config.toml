@@ -12,7 +12,7 @@ setup_when = ["uv.lock", "pyproject.toml"]
 [models]
 judge = "opus"
 claude_review = "opus"
-agy = "gemini-4-argon-high"
+agy = "gemini-4-carbon-high"
 codex = ""
 failure_summary = "haiku"
 
@@ -31,9 +31,9 @@ medium = "gpt-6-astra/high"
 large = "gpt-6-astra/xhigh"
 
 [tiers.agy]
-small = "gemini-4-argon-high"
-medium = "gemini-4-argon-high"
-large = "gemini-4-argon-high"
+small = "gemini-4-carbon-high"
+medium = "gemini-4-carbon-high"
+large = "gemini-4-carbon-high"
 
 [timeouts]
 review_minutes = 30

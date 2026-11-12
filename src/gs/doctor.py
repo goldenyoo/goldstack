@@ -1,8 +1,11 @@
-"""GitHub 설정을 읽어 제안한다. --write도 제안한 config 값만 바꾼다.
+"""GitHub 설정과 옛 모델 기본값을 읽어 제안한다. --write도 제안한 config 값(`git.*`, 옛 기본값인 모델 칸)만 바꾸고 커밋하지 않는다.
 
 `필수 검사` 행은 config `git.checks`가 있으면 GitHub 대신 그 목록과 출처를 보이고 제안하지 않는다. `git.wait_checks = false`인데
 `git.checks`가 있으면 `CI 대기` 경고 행을 더한다.
 머신 행(`샌드박스`)은 GitHub 원격과 무관하게 이 머신의 샌드박스 모드와 점검 결과를 보인다(sandbox.doctor_row). 제안은 없다.
+`모델 기본값` 행은 옛 기본값인 칸만 새 값을 제안한다. 목록에 없으면 제외하고, 목록을 모르면 표시하고 제안한다.
+--write는 제안한 모델 칸만 바꾼다. config에 없는 모델 키는 더하지 않고, 고칠 수 없는 형식이면 그 칸만 건너뛰고 이유를 보인다.
+`모델` 행은 codex 캐시·agy models와 config를 대조한다. 조회 실패는 확인 못 함이며 모델 값은 고치지 않는다.
 """
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ from pathlib import Path
 from typing import TextIO
 from urllib.parse import quote
 
-from . import config, frontmatter, git, sandbox, version
+from . import config, frontmatter, git, models, sandbox, version
 
 
 class ReadError(ValueError):
@@ -150,10 +153,22 @@ def _literal(value: object) -> str:
 
 
 def _edit(text: str, key: str, value: object) -> str:
-    """후보 위치를 TOML 전체 파싱으로 확인해 문자열·다른 테이블은 건드리지 않는다."""
+    """`key`(점으로 이은 경로, 예: `git.merge_method`, `tiers.codex.large`)의 값 하나만 바꾼다.
+
+    `[git]`·`[tiers.codex]` 같은 표, dotted key(`tiers.codex.large = …`), 인라인 표를 받는다. 후보 위치마다 TOML 전체를
+    다시 파싱해 그 키 하나만 바뀌는 위치에서만 고치므로 주석·문자열·다른 표는 건드리지 않는다.
+    빠진 키는 `git` 절만 더한다. 다른 절의 빠진 키는 더하지 않고 LookupError다. 위치를 찾지 못하면 ValueError다.
+    """
+    *parents, name = key.split(".")
     data = tomllib.loads(text)
     target = copy.deepcopy(data)
-    target["git"][key] = value
+    table = target
+    for part in parents:
+        table = table.get(part) if isinstance(table, dict) else None
+    if not isinstance(table, dict) or name not in table and parents != ["git"]:
+        raise LookupError(f"{key}가 config에 없어 더하지 않는다")
+    present = name in table
+    table[name] = value
 
     def matches(candidate: str) -> bool:
         try:
@@ -161,52 +176,90 @@ def _edit(text: str, key: str, value: object) -> str:
         except ValueError:
             return False
 
-    atom = rf'(?:{key}|"{key}"|\'{key}\')'
+    atom = rf'(?:{name}|"{name}"|\'{name}\')'
     token = r'(?P<value>"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^"\\])*"|\'[^\'\r\n]*\'|true|false)'
-    pattern = rf'(?<!\w)(?:(?:git|"git"|\'git\')[ \t]*\.[ \t]*)?{atom}[ \t]*=[ \t]*{token}'
-    if key in data["git"]:
-        for match in re.finditer(pattern, text):
+    # 앞 경로(`git.`, `tiers.codex.`, 표 머리말)는 맞추지 않는다. 어느 키의 값인지는 다시 파싱해 확인한다.
+    pattern = re.compile(rf'(?<![\w-]){atom}[ \t]*=[ \t]*{token}')
+    if present:
+        # 주석이나 문자열 안의 가짜 후보가 진짜 값을 삼키지 않게 한 글자씩 넘어가며 찾는다.
+        pos = 0
+        while match := pattern.search(text, pos):
             start, end = match.span("value")
             candidate = text[:start] + _literal(value) + text[end:]
             if matches(candidate):
                 return candidate
+            pos = match.start() + 1
     else:
         newline = "\r\n" if "\r\n" in text else "\n"
         # 명시적 [git] 테이블과 루트 dotted key 형식을 모두 지원한다.
         for match in re.finditer(r'(?m)^[ \t]*\[[ \t]*(?:git|"git"|\'git\')[ \t]*\][ \t]*(?:#[^\r\n]*)?(?:\r?\n|$)', text):
             pos = match.end()
             prefix = "" if text[:pos].endswith("\n") else newline
-            candidate = text[:pos] + prefix + f"{key} = {_literal(value)}{newline}" + text[pos:]
+            candidate = text[:pos] + prefix + f"{name} = {_literal(value)}{newline}" + text[pos:]
             if matches(candidate):
                 return candidate
-        candidate = f"git.{key} = {_literal(value)}{newline}" + text
+        candidate = f"git.{name} = {_literal(value)}{newline}" + text
         if matches(candidate):
             return candidate
         # inline table도 전체 의미가 원하는 한 키만 바뀌는 위치에서만 편집한다.
         for match in re.finditer(r"\{", text):
             pos = match.end()
             separator = ", " if data["git"] else ""
-            candidate = text[:pos] + f"{key} = {_literal(value)}{separator}" + text[pos:]
+            candidate = text[:pos] + f"{name} = {_literal(value)}{separator}" + text[pos:]
             if matches(candidate):
                 return candidate
-    raise ValueError(f"git.{key}의 값을 주석·다른 줄을 보존하며 바꿀 수 없는 TOML 형식")
+    raise ValueError(f"{key}의 값을 주석·다른 줄을 보존하며 바꿀 수 없는 TOML 형식")
 
 
-def _write(repo: Path, cfg: config.Config, proposals: dict[str, tuple[object, str]], out: TextIO) -> None:
+def _write(repo: Path, proposals: dict[str, tuple[object, object, str]], out: TextIO) -> None:
+    """제안한 값만 바꾸고 바꾼 칸마다 한 줄을 보인다. 커밋하지 않는다.
+
+    `git.*`을 고칠 수 없으면 아무것도 쓰지 않고 ValueError다(빠진 키는 더한다). 모델 칸은 config에 없거나 고칠 수 없으면
+    그 칸만 건너뛰고 이유를 보이며 다른 칸은 쓴다.
+    """
     path = repo / config.CONFIG_PATH
     text = path.read_bytes().decode("utf-8")
     original = text
-    changes = []
-    for key, (value, reason) in proposals.items():
-        old = getattr(cfg.git, key)
+    lines = []
+    for key, (old, value, reason) in proposals.items():
         if old == value:
             continue
-        text = _edit(text, key, value)
-        changes.append(f"git.{key}: {_literal(old)} → {_literal(value)} ({reason})")
+        try:
+            text = _edit(text, key, value)
+        except (LookupError, ValueError) as e:
+            if key.startswith("git."):
+                raise
+            lines.append(f"건너뜀: {e}")
+            continue
+        lines.append(f"{key}: {_literal(old)} → {_literal(value)} ({reason})")
     if text != original:
         path.write_bytes(text.encode("utf-8"))
-    for line in changes:
+    for line in lines:
         print(line, file=out)
+
+
+def _model_defaults(cfg: config.Config) -> tuple[list[str], dict[str, tuple[object, object, str]]]:
+    """`모델 기본값` 행과 --write가 쓸 제안. 옛 기본값이 있는 계열만 조회한다. effort는 목록 대조에서 제외한다.
+
+    목록에 새 모델이 없는 칸은 제안하지 않는다. 목록을 모르는 칸은 제안한다(spec 2-1).
+    """
+    inventories = {}
+    rows = []
+    proposals = {}
+    for key, value in config.old_model_defaults(cfg).items():
+        family = key.split(".")[1]
+        if family not in inventories:
+            inventories[family] = (models.codex_models() if family == "codex"
+                                   else models.agy_models(timeout=15))
+        names = inventories[family]
+        description = f"{key}가 옛 기본값이다"
+        if names is not None and value.split("/", 1)[0] not in names:
+            rows.append(f"{description}; 새 기본값 {value}이 이 머신 {family} 목록에 없다")
+        else:
+            suffix = " (목록 확인 못 함)" if names is None else ""
+            rows.append(f"{description} → {key} = {_literal(value)}{suffix}")
+            proposals[key] = config.model_setting(cfg, key), value, "옛 기본값"
+    return rows, proposals
 
 
 def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
@@ -216,13 +269,13 @@ def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
         print(problem, file=out)
     if cfg is None:
         return 1
-    proposals: dict[str, tuple[object, str]] = {}
+    proposals: dict[str, tuple[object, object, str]] = {}  # 경로 → (지금 값, 새 값, 이유)
 
     def row(label: str, description: str, key: str = "", value: object = None) -> None:
         suggestion = f" → git.{key} = {_literal(value)}" if key else ""
         print(f"{label}  {description}{suggestion}", file=out)
         if key:
-            proposals[key] = value, description
+            proposals[f"git.{key}"] = getattr(cfg.git, key), value, description
 
     # 있으면 gs는 보호 규칙 대신 이 이름만 기다린다(finish._poll_checks). 필수 검사 행은 GitHub 조회 대신 이 목록이다.
     named = f"{', '.join(cfg.git.checks)} (출처: config git.checks)" if cfg.git.checks else ""
@@ -276,9 +329,15 @@ def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
            for command in re.split(r"[;&|\n]", cfg.worktree.setup)):
         row("setup", "lockfile을 바꾸지 않는 명령 권장: npm ci · yarn --frozen-lockfile · uv sync --locked")
     row("샌드박스", sandbox.doctor_row(repo))
+    for description in models.doctor_rows(cfg):
+        row("모델", description)
+    rows, upgrades = _model_defaults(cfg)
+    for description in rows:
+        row("모델 기본값", description)
+    proposals.update(upgrades)
     if write:
         try:
-            _write(repo, cfg, proposals, out)
+            _write(repo, proposals, out)
         except (OSError, ValueError) as e:
             print(f"오류: config를 쓸 수 없다: {e}", file=out)
             return 1

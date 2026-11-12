@@ -1,6 +1,8 @@
 """spec과 티켓 그래프 검사. `gs check`와 `gs go`가 같이 쓴다.
 
 이 머신에서 범위 안 티켓을 돌릴 수 없는 이유(샌드박스, `sandbox.problems`)도 오류로 더한다. 그래서 `gs go`는 아무것도 띄우지 않는다.
+옛 모델 기본값인 칸은 목록과 무관하게 개수만 경고한다.
+codex 캐시에 없는 config 모델 칸은 경고한다. 캐시를 못 읽으면 경고하지 않고, agy 목록은 조회하지 않는다.
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from pathlib import Path, PurePosixPath
 from statistics import median
 
 from . import feature as featmod
-from . import adapters, config, git, graph, sandbox, state, version
+from . import adapters, config, git, graph, models, sandbox, state, version
 from .review import reviewer_selection
 
 
@@ -322,6 +324,10 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
         return featmod.Feature(name=name, root=featmod.work_dir(repo, name), spec=None, problems=problems), []
     if error := version.requirement_error(cfg.goldstack.requires):
         problems.append(featmod.Problem("오류", config.CONFIG_PATH, error))
+    problems.extend(featmod.Problem("경고", config.CONFIG_PATH, models.missing_message(key, name, "codex"))
+                    for key, name in models.missing(cfg, "codex", models.codex_models()))
+    if old_defaults := config.old_model_defaults(cfg):
+        problems.append(featmod.Problem("경고", "", f"옛 모델 기본값 {len(old_defaults)}칸(gs doctor로 확인)"))
     feat = featmod.load(repo, name)
     feat.problems[:0] = problems + notify_problems(repo, cfg)
     g = {t.id: t.blocked_by for t in feat.tickets.values()}

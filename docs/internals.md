@@ -8,7 +8,8 @@
 | `config.py` | `.goldstack/config.toml` 읽기·검사, `local.env` 읽기, `gs init` |
 | `selfupdate.py` | CLI 재설치·플러그인 갱신, 머신 프로세스 검사와 결과 요약 |
 | `version.py` | 설치 버전·VCS 출처·플러그인 조회, main 비교 경고, 레포 최소 버전 비교 |
-| `doctor.py` | `gs doctor`: GitHub 병합·보호 설정 읽기, config 제안, `--write` |
+| `doctor.py` | `gs doctor`: GitHub 병합·보호 설정 읽기, 머신 모델 목록 대조, config 제안, `--write` |
+| `models.py` | codex 캐시·agy models 조회, config의 계열별 모델 칸 대조. 목록 조회 실패는 모름이며 경고하지 않는다 |
 | `feature.py`, `frontmatter.py`, `graph.py`, `check.py` | spec·티켓 읽기, 그래프(순환, 없는 id, 위상 순서, frontier), `touches` 겹침, `.goldstack/config.toml`에 닿는 티켓의 좁은 검증 경고(`config_verify_problems`, 티켓 `touches`가 설정 파일에 겹치는데 `spec.verify_for(ticket)`이 spec `verify`와 다르면 경고. 다른 설정 형식은 보지 않는다), agy 배정 수, 빈 교차 검토 절 경고(`cross_review_problems`: 티켓이 있고 spec에 `### 교차 검토` 제목이 있는데 절에 실제 표 행도 `교차 검토 못 함:` 줄도 없으면 경고. 제목 없는 spec은 조용하다), 환경 검사, 출력 끝의 `실측(지난 실행)`(`tier_samples`: 다른 feature의 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값)·`공통 모델`·티켓별 단계 모델 줄(`ticket_model_line`: 실행과 같은 선택 함수) |
 | `go.py` | `gs go` 코디네이터: 병렬 루프, 병합·검증, 재시도, 리뷰·수정·재리뷰 띄우기(두 리뷰 동시), agy 호출 세기, 재개 뒤 멈춤, 요약 출력, 알림 |
 | `worker.py`, `herdr.py`, `adapters.py`, `streamfmt.py` | worker 띄우기(brief, 실행 스크립트, push 차단), herdr pane, 모델별 명령·판정, pane 출력 정리 |
@@ -80,8 +81,10 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 - **병합 방식**: `repos/<o>/<r>`의 `allow_merge_commit`, `allow_squash_merge`. merge가 켜져 있으면 `merge`, 아니면 squash가 켜져 있으면 `squash`, 둘 다 꺼져 있으면 경고(제안 없음).
 - **보호**: `repos/<o>/<r>/branches/<base>/protection`(관리자 권한 필요). 못 읽으면 `repos/<o>/<r>/rules/branches/<base>`(rulesets). rulesets는 확인한 양의 사실만 쓴다: 규칙이 없으면 보호가 없다고 단정하지 않고 `모름`이다. 직접 push 금지로 치는 것: 필수 리뷰, push 제한(restrictions), branch lock, 필수 검사, 필수 서명(새 revert·보고서 커밋이 통과할 수 없다). code owner 리뷰나 last-push 승인이 켜져 있으면 승인은 최소 1명이다. 필수 검사가 있으면 `wait_checks = true`를 제안한다.
 - **검증**: `.goldstack/work/*/spec.md`마다 `verify`를 읽어 없거나 `true`·`:`면 경고. 경고일 뿐 `gs check`는 막지 않는다.
+- **모델**: `[models]`·`[tiers.codex]`·`[tiers.agy]`의 모델 이름(`/effort` 제외)을 이 머신 목록과 대조한다(`models.py`). codex는 `$CODEX_HOME/models_cache.json`(환경 변수 없으면 `~/.codex/`)의 `models[].slug`, agy는 `agy models`(`GS_AGY`, 15초 제한) 출력 첫 열이다. 없는 칸마다 `모델  <키>의 <모델>가 이 머신 <계열> 모델 목록에 없다`를 보인다. 조회 실패·로그인 요구는 `확인 못 함(<이유>)`, 빈 계열은 행을 생략한다. 모델 값은 고치지 않는다. `gs check`·`gs go`의 공통 검사는 codex 파일만 읽고 없는 칸마다 경고한다. agy 조회는 하지 않는다.
+- **모델 기본값**: `config.OLD_DEFAULTS`는 키별 옛 모델 기본값을 최근 순서로 보관한다. `config.old_model_defaults`가 일치하는 칸의 새 기본값을 고르고 doctor가 제안한다. 새 모델이 머신 목록에 없으면 제안하지 않는다. 목록을 모르면 제안 끝에 `(목록 확인 못 함)`을 붙인다. 이력에 없는 사용자 값은 제외하며 의도적으로 옛 기본값을 고른 경우는 구별할 수 없다. `--write`는 제안된 칸만 `_edit`로 바꾸며 config에 없는 모델 키는 더하지 않는다(`git.*`은 빠진 키를 더한다). 모델 칸을 고칠 수 없으면 `건너뜀: …`으로 그 칸만 빼고 나머지는 쓴다. `gs init`은 `config._machine_models`로 새 기본값이 목록에 없으면 `OLD_DEFAULTS`에서 목록에 있는 최근 값을 적고, 없으면 새 값 + 경고다. `gs check`는 목록과 무관하게 `경고: 옛 모델 기본값 N칸(gs doctor로 확인)` 한 줄을 더한다.
 - **setup**: `worktree.setup`의 명령 중 `npm install`·`npm i`, 또는 `--frozen-lockfile`·`--immutable` 없는 `yarn`(`yarn`, `yarn install`, `yarn --…`)이 있으면 `setup  lockfile을 바꾸지 않는 명령 권장: npm ci · yarn --frozen-lockfile · uv sync --locked`를 더한다. 제안 키가 없어 `--write`는 고치지 않는다. `/adopt`도 같은 것을 권한다.
-- **`--write`**: 제안한 키(`git.merge_method`, `git.direct_push`, `git.wait_checks`)만 값이 다를 때 고치고 `git.<키>: <전> → <후> (<이유>)`를 쓴다. 후보 위치를 TOML 전체 파싱 결과가 원하는 한 키만 바뀌는지로 확인해 다른 줄·주석을 그대로 둔다. 그렇게 고칠 수 없는 형식이면 `오류: config를 쓸 수 없다: …`, 종료 1. `모름`·제안 없음은 쓰지 않는다.
+- **`--write`**: 제안한 키(`git.merge_method`, `git.direct_push`, `git.wait_checks`와 모델 기본값 칸)만 값이 다를 때 고치고 `git.<키>: <전> → <후> (<이유>)`를 쓴다. 후보 위치를 TOML 전체 파싱 결과가 원하는 한 키만 바뀌는지로 확인해 다른 줄·주석을 그대로 둔다. 그렇게 고칠 수 없는 형식이면 `오류: config를 쓸 수 없다: …`, 종료 1. `모름`·제안 없음은 쓰지 않는다.
 
 ## `gs go`의 흐름
 

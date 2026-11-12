@@ -35,6 +35,7 @@ class ConfigTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
+        os.environ["GS_AGY"] = str(self.repo / "no-agy")
         (self.repo / ".goldstack").mkdir()
         self.path = self.repo / config.CONFIG_PATH
         self.path.write_text(CONFIG, encoding="utf-8")
@@ -330,6 +331,7 @@ class InitTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name)
+        os.environ["GS_AGY"] = str(self.repo / "no-agy")
         subprocess.run(["git", "init", "-q", "-b", "main", str(self.repo)], check=True)
 
     def init(self):
@@ -345,7 +347,7 @@ class InitTest(unittest.TestCase):
         cfg, problems = config.load(self.repo)
         self.assertEqual(problems, [])
         self.assertEqual(cfg, config.Config(
-            config.GitConfig("origin", "main"), config.ModelsConfig("opus", "opus", "gemini-4-argon-high", "", "haiku"),
+            config.GitConfig("origin", "main"), config.ModelsConfig("opus", "opus", "gemini-4-carbon-high", "", "haiku"),
             config.TimeoutsConfig(30, 10, 60), config.NotifyConfig(False), tiers=cfg.tiers,
             feedback=config.FeedbackConfig("draft")))
         example = (self.repo / ".goldstack/local.env.example").read_text()
