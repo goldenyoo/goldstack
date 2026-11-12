@@ -34,7 +34,7 @@ setup = ""
 [models]
 judge = "opus"
 claude_review = "opus"
-agy = "gemini-4-argon-high"
+agy = "gemini-4-carbon-high"
 codex = ""
 failure_summary = "haiku"
 
@@ -49,13 +49,13 @@ large = "opus/xhigh"
 
 [tiers.codex]
 small = "gpt-6-luna/medium"
-medium = "gpt-6.1-sol/medium"
-large = "gpt-6.1-sol/high"
+medium = "gpt-6-astra/high"
+large = "gpt-6-astra/xhigh"
 
 [tiers.agy]
 small = "gemini-3.8-flash-medium"
-medium = "gemini-4-argon-medium"
-large = "gemini-4-argon-high"
+medium = "gemini-4-carbon-medium"
+large = "gemini-4-carbon-high"
 
 [agy]
 max_calls_per_run = 3
@@ -79,6 +79,16 @@ detail = "errors"
 repo = "goldenyoo/goldstack"
 max_per_day = 5
 '''
+# 최근 옛 기본값부터 적는다. 현재 기본값과 사람이 고른 다른 값은 이력에 넣지 않는다.
+OLD_DEFAULTS = {
+    "models.agy": ("gemini-4-argon-high",),
+    "tiers.agy.medium": ("gemini-4-argon-medium",),
+    "tiers.agy.large": ("gemini-4-argon-high",),
+    "tiers.codex.medium": ("gpt-6.1-sol/medium",),
+    "tiers.codex.large": ("gpt-6.1-sol/high",),
+}
+
+
 LOCAL_ENV_EXAMPLE = """# 이 파일을 .goldstack/local.env로 복사한 뒤 값을 채운다.
 # Telegram BotFather에서 받은 토큰과 알림 받을 채팅 ID를 따옴표 없이 적는다.
 # .goldstack/local.env는 비밀 파일이므로 커밋하지 않는다.
@@ -284,6 +294,26 @@ class Config:
     hook: HookConfig = HookConfig()
     verify: VerifyConfig = VerifyConfig()
     sandbox: SandboxConfig = SandboxConfig()
+
+
+def old_model_defaults(cfg: Config) -> dict[str, str]:
+    """키별 옛 기본값과 같은 칸의 새 기본값. 의도적으로 옛 값을 고른 경우도 구별할 수 없다.
+
+    목록은 조회하지 않는다. 빠진 등급표와 이력에 없는 사용자 값은 건너뛴다.
+    """
+    defaults = tomllib.loads(DEFAULT_CONFIG.format(base='"main"'))
+    upgrades = {}
+    for key, history in OLD_DEFAULTS.items():
+        value = cfg
+        default = defaults
+        for part in key.split("."):
+            value = value.get(part) if isinstance(value, dict) else getattr(value, part, None)
+            default = default[part]
+        if isinstance(value, ModelEffort):
+            value = value.model + (f"/{value.effort}" if value.effort else "")
+        if value in history:
+            upgrades[key] = default
+    return upgrades
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:

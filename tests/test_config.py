@@ -347,7 +347,7 @@ class InitTest(unittest.TestCase):
         cfg, problems = config.load(self.repo)
         self.assertEqual(problems, [])
         self.assertEqual(cfg, config.Config(
-            config.GitConfig("origin", "main"), config.ModelsConfig("opus", "opus", "gemini-4-argon-high", "", "haiku"),
+            config.GitConfig("origin", "main"), config.ModelsConfig("opus", "opus", "gemini-4-carbon-high", "", "haiku"),
             config.TimeoutsConfig(30, 10, 60), config.NotifyConfig(False), tiers=cfg.tiers,
             feedback=config.FeedbackConfig("draft")))
         example = (self.repo / ".goldstack/local.env.example").read_text()
