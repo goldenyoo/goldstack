@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import support
+import test_protected_base
 from gs import config, finish, go, state
 from support import sh
 
@@ -243,6 +244,138 @@ class WaitChecksTest(unittest.TestCase):
         self.assertEqual(self.finish()["outcome"], "CI 대기 시간 초과")
         self.assertEqual(self.merges(), [])
 
+    # --- config `git.checks`로 기다릴 이름을 고른다(goldstack-v33 05) ---
+
+    def name_checks(self, *names):
+        """config `git.checks`를 적어 커밋하고 base에 올린다."""
+        path = self.repo / config.CONFIG_PATH
+        text = path.read_text()
+        self.assertIn("\nchecks = []", text)
+        path.write_text(text.replace("\nchecks = []", "\nchecks = " + json.dumps(list(names))))
+        sh(self.repo, "git", "commit", "-qam", "named checks")
+        sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
+
+    def run_go_clock(self, on_sleep=None):
+        """실제 시간 대신 sleep이 더하는 시계로 gs go. (종료 코드, out, err, 지난 초)."""
+        elapsed = [0]
+
+        def sleep(seconds):
+            self.assertEqual(self.merges(), [])
+            elapsed[0] += seconds
+            if on_sleep:
+                on_sleep(elapsed[0])
+
+        with mock.patch("gs.finish.time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep)):
+            code, out, err = self.run_go()
+        return code, out, err, elapsed[0]
+
+    def test_named_checks_gate_merge_without_protection_lookup(self):
+        self.name_checks("linux-only")
+        self.checks(("linux-only", "pass"), ("tests", "pending"), ("lint", "fail"))
+        self.checks(("tests", "pending"), required=True)
+        code, out, err, elapsed = self.run_go_clock()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(elapsed, 0)
+        self.assertEqual(self.finish()["phase"], "verified")
+        self.assertEqual(len(self.merges()), 1)
+        self.assertIn("CI 검사 대기 중(linux-only ✓)", out)
+        gh = self.lines("gh.log")
+        self.assertFalse([line for line in gh if "/protection" in line or "/rules/" in line])
+        queries = [line for line in gh if line.startswith("pr checks ")]
+        self.assertTrue(queries)
+        self.assertFalse([line for line in queries if "--required" in line])
+
+    def test_named_check_failure_blocks_merge(self):
+        self.name_checks("linux-only")
+        self.checks(("linux-only", "fail"), ("tests", "pending"), ("lint", "cancel"))
+        before = sh(self.remote, "git", "rev-parse", "main")
+        code, out, err, _ = self.run_go_clock()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.finish()["phase"], "checks_failed")
+        self.assertEqual(self.finish()["outcome"], "CI 실패: linux-only")
+        self.assertEqual(self.merges(), [])
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), before)
+        self.assertTrue((self.bin / "gh.open").exists())
+
+    def test_named_check_missing_after_grace_stays_open_and_resumes_same(self):
+        self.name_checks("linux-only", "lint")
+        self.checks(("tests", "pass"))
+
+        def lint_appears(elapsed):  # 유예 안에 lint만 나타나고(아직 도는 중) linux-only는 끝까지 없다
+            if elapsed >= 30:
+                self.checks(("lint", "pending"), ("tests", "pass"))
+
+        code, out, err, elapsed = self.run_go_clock(lint_appears)
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(elapsed, 60)  # checks_grace_seconds 기본값. 시간 초과(60분)까지 기다리지 않는다
+        f = self.finish()
+        self.assertEqual(f["phase"], "checks_missing")
+        self.assertEqual(f["outcome"], "CI 검사 없음: linux-only")
+        self.assertEqual(self.merges(), [])
+        self.assertTrue((self.bin / "gh.open").exists())
+        self.assertIn("CI 검사 대기 중(lint …, linux-only …)", out)
+        self.assertIn("CI 검사 없음(linux-only) → 병합 안 함", out)
+        r = SimpleNamespace(st=state.load(self.rundir, "demo"), order=["01"], name="demo", base="main")
+        self.assertIn("CI 검사 없음: linux-only", go._message(r, f["url"], False))
+
+        real_verify = finish._verify
+        labels = []
+
+        def verify(r, wt, label):
+            labels.append(label)
+            return real_verify(r, wt, label)
+
+        with mock.patch("gs.finish._verify", side_effect=verify):
+            code, out, err, elapsed = self.run_go_clock()  # 다음 gs go가 같은 head를 다시 읽고 같은 판정을 한다
+            self.assertEqual(code, 1, out + err)
+            self.assertEqual(elapsed, 60)
+            self.assertEqual(self.finish()["phase"], "checks_missing")
+            self.assertEqual(self.finish()["outcome"], "CI 검사 없음: linux-only")
+            self.assertEqual(self.finish()["merge_head"], f["merge_head"])
+            self.assertEqual(self.merges(), [])
+            self.assertEqual(labels, [])
+
+            self.checks(("linux-only", "pass"), ("lint", "skipping"), ("tests", "pending"))
+            code, out, err, _ = self.run_go_clock()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.finish()["phase"], "verified")
+        self.assertEqual(self.finish()["merge_head"], f["merge_head"])
+        self.assertIn(f["merge_head"], self.merges()[0])
+        self.assertEqual(labels, ["main"])
+        self.assertEqual(self.calls(), ["01"])
+
+    def run_go_grace_is_deadline(self):
+        """checks_minutes = 1, checks_grace_seconds = 60(기본값): 유예가 끝나는 때가 대기 제한이다."""
+        real_load = config.load
+
+        def load(repo):
+            cfg, problems = real_load(repo)
+            return replace(cfg, timeouts=replace(cfg.timeouts, checks_minutes=1)), problems
+
+        with mock.patch("gs.go.config.load", side_effect=load):
+            return self.run_go_clock()
+
+    def test_named_check_missing_when_grace_equals_deadline(self):
+        self.name_checks("linux-only")
+        self.checks(("tests", "pending"))
+        code, out, err, elapsed = self.run_go_grace_is_deadline()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(elapsed, 60)
+        self.assertEqual(self.finish()["phase"], "checks_missing")
+        self.assertEqual(self.finish()["outcome"], "CI 검사 없음: linux-only")
+        self.assertIn("CI 검사 없음(linux-only) → 병합 안 함", out)
+        self.assertEqual(self.merges(), [])
+
+    def test_named_check_pending_when_grace_equals_deadline_times_out(self):
+        self.name_checks("linux-only")
+        self.checks(("linux-only", "pending"))
+        code, out, err, elapsed = self.run_go_grace_is_deadline()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(elapsed, 60)
+        self.assertEqual(self.finish()["phase"], "checks_timeout")
+        self.assertEqual(self.finish()["outcome"], "CI 대기 시간 초과")
+        self.assertEqual(self.merges(), [])
+
     def test_head_changes_during_check_query_blocks_merge(self):
         self.checks(("test", "pass"))
         real_checks = finish._checks
@@ -262,6 +395,65 @@ class WaitChecksTest(unittest.TestCase):
         code, out, err = self.run_go()
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.finish()["merge_head"], moved[0])
+
+
+class NamedChecksSidePrTest(unittest.TestCase):
+    """보호된 base의 보고서 PR(`_side_pr`)도 `git.checks`의 이름만 기다리고, 없으면 같은 판정으로 멈춘다."""
+    BASE, REMOTE = "main", "origin"
+    G, P = support.GoTest, test_protected_base.ProtectedBaseTest
+    tearDown, calls, rundir, integration, lines = G.tearDown, G.calls, G.rundir, G.integration, G.lines
+    final_report, remote_files = G.final_report, G.remote_files
+    prs, finish, merges, base_report = P.prs, P.finish, P.merges, P.base_report
+    assert_no_base_push, protected_go = P.assert_no_base_push, P.go
+
+    def setUp(self):
+        self.P.setUp(self, wait_checks=True)
+
+    def go(self):
+        """원격 hook이 base push를 막아 config 커밋을 올릴 수 없다. 읽은 config에 이름을 넣는다. 시계는 sleep이 더한다."""
+        real_load, elapsed = config.load, [0]
+
+        def load(repo):
+            cfg, problems = real_load(repo)
+            return replace(cfg, git=replace(cfg.git, checks=("linux-only", "lint"))), problems
+
+        def sleep(seconds):
+            elapsed[0] += seconds
+
+        with mock.patch("gs.go.config.load", side_effect=load), \
+                mock.patch("gs.finish.time", SimpleNamespace(monotonic=lambda: elapsed[0], sleep=sleep)):
+            code, out, err = self.protected_go()
+        return code, out, err, elapsed[0]
+
+    def test_report_pr_waits_for_named_checks_and_stops_when_missing(self):
+        url = test_protected_base.URL.format(2)
+        checks = self.bin / "checks.all"
+        checks.write_text(json.dumps([{"name": "linux-only", "bucket": "pass"}, {"name": "lint", "bucket": "pass"},
+                                      {"name": "tests", "bucket": "pending"}]))
+        (self.bin / "checks.2").write_text(json.dumps([{"name": "tests", "bucket": "pass"}]))
+        for _ in range(2):  # 다음 gs go도 같은 판정
+            code, out, err, elapsed = self.go()
+            self.assertEqual(code, 1, out + err)
+            self.assertEqual(elapsed, 60)  # 기능 PR은 바로 통과, 보고서 PR은 유예만큼
+            f = self.finish()
+            self.assertEqual(f["phase"], "report_pending")
+            self.assertEqual(f["outcome"], f"report PR CI 검사 없음: linux-only, lint: {url}")
+            self.assertEqual([p["state"] for p in self.prs()], ["MERGED", "OPEN"])
+            self.assertFalse([m for m in self.merges() if m.startswith(f"pr merge {url} ")])
+            self.assertIn("CI 검사 없음(linux-only, lint) → 병합 안 함", out)
+
+        (self.bin / "checks.2").unlink()  # 보고서 PR에도 적은 검사가 나타나 통과했다
+        code, out, err, _ = self.go()
+        self.assertEqual(code, 0, out + err)
+        f = self.finish()
+        self.assertEqual(f["phase"], "verified")
+        self.assertEqual([p["state"] for p in self.prs()], ["MERGED", "MERGED"])
+        self.assertIn("\n마무리: verified · ", self.base_report())
+        gh = self.lines("gh.log")
+        self.assertFalse([line for line in gh if "/protection" in line or "/rules/" in line])
+        self.assertFalse([line for line in gh if line.startswith("pr checks ") and "--required" in line])
+        self.assertEqual(self.calls(), ["01"])
+        self.assert_no_base_push()
 
 
 if __name__ == "__main__":

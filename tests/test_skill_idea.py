@@ -11,7 +11,7 @@ class IdeaFlowTest(unittest.TestCase):
     def test_idea_skill(self):
         data, body = skill_frontmatter(self.read("idea"))
         self.assertEqual(data["name"], "idea")
-        self.assertEqual(data["disable-model-invocation"], "true")
+        self.assertNotIn("disable-model-invocation", data)  # 사람이 자연어로 불러도 돈다
         self.assertIn("/idea <한 줄>", data["description"])
         self.assertIn("templates/idea.md", body)  # 형식 원본은 플러그인 안에 있다
         template = (SKILLS / "idea" / "templates" / "idea.md").read_text(encoding="utf-8")

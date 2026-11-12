@@ -3,6 +3,7 @@
 전체 명령과 판별 명령은 가짜 bash 조각이다. n번째 전체 실행이 무엇을 할지는 full.sh의 case가 정하고, 판별 명령은 받은 값을 rerun.calls에 적는다.
 시간 초과와 시간 예산은 실제 시간에 기대지 않고 verify._run_once·_launch·_clock을 바꿔 본다.
 """
+import errno
 import io
 import os
 import subprocess
@@ -106,6 +107,106 @@ class TriageTest(Case):
         self.assertEqual((res.samples[0]["triage"], res.samples[0]["triage_reason"]), ("failed", "test_a"))
         self.assertEqual(len(res.samples), 1)
 
+    def test_deterministic_triage_failure_skips_remaining_retries(self):
+        res, log = self.run_verify(self.full(fail("test_a", "test_b"), "exit 0"),
+                                   self.triage(rerun="echo {file} >> rerun.calls; exit 7"), retries=1)
+        self.assertEqual(self.count(), 1)
+        self.assertEqual((res.ok, res.code, res.retries, res.triaged), (False, 1, 0, ()))
+        self.assertEqual(self.calls(), ["test_a"])
+        self.assertIn("\n판별 실패: test_a. 전체 검증은 다시 돌리지 않는다\n", log)
+        self.assertNotIn("검증 재시도 1", log)
+        self.assertNotIn("flaky:", log)
+        self.assertEqual(len(res.samples), 1)
+        self.assertEqual((res.samples[0]["triage"], res.samples[0]["triage_files"], res.samples[0]["triage_reason"]),
+                         ("failed", ["test_a", "test_b"], "test_a"))
+
+    def test_deterministic_failure_on_a_retry_keeps_the_retry_count(self):
+        res, log = self.run_verify(self.full("exit 1", fail("test_a"), "exit 0"),
+                                   self.triage(rerun="exit 7 # {file}"), retries=2)
+        self.assertEqual((res.ok, res.code, res.retries, self.count()), (False, 1, 1, 2))
+        self.assertEqual([s["triage"] for s in res.samples], ["skipped", "failed"])
+        self.assertIn("검증 재시도 1", log)
+        self.assertNotIn("검증 재시도 2", log)
+
+    def test_skipped_triage_keeps_retries(self):
+        cases = (
+            ("no_match", "echo boom; exit 1", self.triage()),
+            ("too_many", fail("test_a", "test_b"), self.triage(max_files=1)),
+            ("bad_value", "echo 'FAIL: a/b'; exit 1", self.triage(failed_file=r"^FAIL: (.*)$")),
+            ("no_check", fail("test_a"), self.triage()),
+        )
+        for reason, output, triage in cases:
+            with self.subTest(reason=reason):
+                (self.dir / "full.count").unlink(missing_ok=True)
+                self.unchanged = None if reason == "no_check" else mock.Mock(return_value=True)
+                res, log = self.run_verify(self.full(output), triage, retries=1)
+                self.assertEqual((res.ok, res.retries, self.count(), self.calls()), (False, 1, 2, []))
+                self.assertEqual([(s["triage"], s["triage_reason"]) for s in res.samples],
+                                 [("skipped", reason), ("skipped", reason)])
+                self.assertEqual(log.count("검증 재시도 1"), 1)
+
+    def test_timeout_and_interrupted_full_runs_keep_retries(self):
+        for result, reason in ((verify.Result(-15, True, "1"), "timeout"),
+                               (verify.Result(1, False, "1", interrupted=True), "interrupted")):
+            with self.subTest(reason=reason):
+                with mock.patch.object(verify, "_run_once", return_value=result) as full:
+                    res, log = self.run_verify("unused", self.triage(), retries=1)
+                self.assertEqual((res.ok, res.retries, full.call_count, self.calls()), (False, 1, 2, []))
+                self.assertEqual([(s["triage"], s["triage_reason"]) for s in res.samples],
+                                 [("skipped", reason), ("skipped", reason)])
+                self.assertEqual(log.count("검증 재시도 1"), 1)
+
+    def test_timeout_and_interrupted_triage_runs_keep_retries(self):
+        real = verify._launch
+        for result in (verify.Result(-15, True, "1"), verify.Result(0, True, "1"),
+                       verify.Result(1, False, "1", interrupted=True)):
+            with self.subTest(result=result):
+                (self.dir / "full.count").unlink(missing_ok=True)
+
+                def launch(command, seconds, cwd, stream):
+                    if command == "bash full.sh":
+                        return real(command, seconds, cwd, stream)
+                    return result
+
+                with mock.patch.object(verify, "_launch", side_effect=launch):
+                    res, log = self.run_verify(self.full(fail("test_a")), self.triage(), retries=1)
+                self.assertEqual((res.ok, res.retries, self.count()), (False, 1, 2))
+                self.assertEqual([(s["triage"], s["triage_reason"]) for s in res.samples],
+                                 [("failed", "test_a"), ("failed", "test_a")])
+                self.assertEqual(log.count("검증 재시도 1"), 1)
+
+    def test_exhausted_triage_budget_keeps_retries(self):
+        with mock.patch.object(verify, "_clock", side_effect=[0, 60, 100, 160]):
+            res, log = self.run_verify(self.full(fail("test_a")), self.triage(), retries=1)
+        self.assertEqual((res.ok, res.retries, self.count(), self.calls()), (False, 1, 2, []))
+        self.assertEqual([(s["triage"], s["triage_reason"]) for s in res.samples],
+                         [("failed", "test_a"), ("failed", "test_a")])
+        self.assertEqual(log.count("판별 시간(1분)을 다 써서 돌리지 않았다"), 2)
+        self.assertEqual(log.count("검증 재시도 1"), 1)
+
+    def test_triage_launch_failure_keeps_retries(self):
+        real = subprocess.Popen
+        for error in (errno.EAGAIN, errno.ENOMEM, errno.EMFILE):
+            with self.subTest(error=error):
+                (self.dir / "full.count").unlink(missing_ok=True)
+
+                def popen(args, **kwargs):
+                    if args[2] == "bash full.sh" + verify.KEEP_BASH:
+                        return real(args, **kwargs)
+                    raise OSError(error, os.strerror(error))
+
+                with mock.patch.object(verify.subprocess, "Popen", side_effect=popen) as launch, \
+                        mock.patch.object(verify, "_clock", return_value=0):
+                    res, log = self.run_verify(self.full(fail("test_a")), self.triage(), retries=1)
+                self.assertEqual(self.count(), 2)
+                self.assertEqual((res.ok, res.code, res.retries, res.triaged), (False, 1, 1, ()))
+                self.assertEqual(launch.call_count, 4)
+                self.assertEqual(self.calls(), [])
+                self.assertEqual([(s["triage"], s["triage_reason"]) for s in res.samples],
+                                 [("failed", "test_a"), ("failed", "test_a")])
+                self.assertEqual(log.count("검증 명령 실행 실패:"), 2)
+                self.assertEqual(log.count("검증 재시도 1"), 1)
+
     def assert_skipped(self, output, reason, triage=None, files=()):
         (self.dir / "full.count").unlink(missing_ok=True)
         res, log = self.run_verify(self.full(output, "exit 0"), triage or self.triage())
@@ -178,9 +279,10 @@ class TriageTest(Case):
         self.assertEqual((res.ok, self.count(), res.samples[0]["triage_reason"]), (False, 1, "test_c"))
 
     def test_earlier_attempt_and_header_matches_do_not_count(self):
-        (self.dir / "rerun.fail").touch()
         header = "$ " + fail("test_head") + "\nFAIL: test_x (test_head.Case.test_x)\n"
-        res, log = self.run_verify(self.full(fail("test_a"), fail("test_b"), "exit 0"), self.triage(), retries=1, header=header)
+        # 끊긴 판별은 재시도하므로 앞 시도·머리말의 매치를 다음 판별에서 빼는지 본다.
+        triage = self.triage(rerun="echo {file} >> rerun.calls; exit 130")
+        res, log = self.run_verify(self.full(fail("test_a"), fail("test_b"), "exit 0"), triage, retries=1, header=header)
         self.assertEqual((res.ok, res.retries, self.count()), (False, 1, 2))
         self.assertEqual(self.calls(), ["test_a", "test_b"])
         self.assertEqual([s["triage_files"] for s in res.samples], [["test_a"], ["test_b"]])

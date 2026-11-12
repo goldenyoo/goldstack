@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from gs import cli, jail
-from support import isolate_git_env
+from support import isolate_git_env, requires_landlock
 
 LANDLOCK = jail.abi() >= 1
 # 서명 설정을 타지 않고, commit 뒤 떼어 놓고 도는 `git maintenance`(시험이 기다릴 수 없는 프로세스)를 띄우지 않는다
@@ -350,7 +350,7 @@ class ConfineRulesTest(TempDirTest):
             os.fstat(fake.ruleset)
 
 
-@unittest.skipUnless(LANDLOCK, "커널 Landlock이 필요하다(맥에서는 건너뛰고 리눅스 CI에서 돈다)")
+@requires_landlock(jail.abi())  # 맥에서는 건너뛰고 리눅스 CI에서 돈다. GS_REQUIRE_LANDLOCK=1이면 실패한다
 class RealJailTest(TempDirTest):
     """자식 `gs jail`을 진짜로 가둔다. 거부·쓰기 경로는 모두 임시 폴더 안이다."""
 

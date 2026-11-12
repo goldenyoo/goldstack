@@ -1,6 +1,7 @@
 """`gs go`의 실행·병렬 처리·격리·재개 시나리오."""
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -38,6 +39,13 @@ class GoExecutionTest(support.GoTest):
         self.assertLess(ev.index("end 01"), ev.index("start 04"), ev)
         t04 = self.integration("log", "--format=%H", "--grep=^t04$", "gs/demo/integration")
         self.assertIn("file_01", self.integration("ls-tree", "--name-only", f"{t04}^").split())
+        # brief의 base 줄: 04는 01이 병합된 base에서 시작하므로 줄에 01의 병합 커밋이 든다(같이 병합된 다른 티켓이 더 있을 수 있다).
+        # 01은 아무것도 병합되기 전에 시작해 `없음`이다
+        line = next(l for l in (self.rundir / "04/1/brief.md").read_text().splitlines() if l.startswith("- base에 이미 병합된 티켓: "))
+        sha_01 = re.search(r"\b01\(([0-9a-f]+)\)", line)
+        self.assertIsNotNone(sha_01, line)
+        self.assertIn("gs-ticket: demo/01", self.integration("show", "-s", "--format=%B", sha_01[1]))
+        self.assertIn("- base에 이미 병합된 티켓: 없음\n", (self.rundir / "01/1/brief.md").read_text())
         # 병합·검증은 한 번에 하나씩
         self.assertEqual(vlog.read_text().split(), ["s", "e"] * 7)  # 티켓 5 + integration 1 + main 1
 

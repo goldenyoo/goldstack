@@ -1,8 +1,7 @@
 ---
 name: grill
-description: "feature 하나를 사람과 라운드 질문으로 정렬해 .goldstack/work/<feature>/에 spec·티켓을, .goldstack/out-of-scope/에 뺀 것을 쓴다. 사용: /grill <feature>"
+description: "사람이 feature 하나를 grill하거나 결정을 정리해 달라고 명시적으로 요청할 때만 쓴다. feature 하나를 사람과 라운드 질문으로 정렬해 .goldstack/work/<feature>/에 spec·티켓을, .goldstack/out-of-scope/에 뺀 것을 쓴다. 사용: /grill <feature>"
 argument-hint: <feature>
-disable-model-invocation: true
 ---
 # /grill $ARGUMENTS
 

@@ -35,8 +35,14 @@ SEE_FAIL_RULE = (
     "- 버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다. "
     "복구한 뒤 커밋하고, 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다.")
 REAL_TEST_RULE = (
-    "- 시험은 완료 조건의 동작을 지우면 실패하도록 쓴다. 그 동작을 지워도 통과하는 시험은 쓰지 않는다. "
+    "- 시험은 완료 조건의 동작을 지우면 실패하도록 쓴다. diff가 더한 새 분기와 바꾼 호출 지점 모두를 시험한다. "
+    "그 동작을 지워도 통과하는 시험은 쓰지 않는다. "
     "기존 단언을 약하게 만들거나 지우지 않는다(티켓이 요구한 변경은 예외다).")
+CHANGED_NAMES_RULE = (
+    "- 서명이나 읽는 속성을 바꾼 함수·클래스는 그 이름을 시험 폴더(이 레포는 profile을 본다. 예: `tests/`)에서도 grep한다. "
+    "나온 시험 파일을 모두 파일마다 따로 돌리고, 돌린 파일 목록을 마지막 메시지에 적는다.")
+BASE_TICKETS_LABEL = "- base에 이미 병합된 티켓: "
+PENDING_BLOCKERS_LABEL = "- base에 아직 병합되지 않은 blocked_by 티켓: "
 MACHINE_RULE = (
     "- 다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 기다리고 끝낸다. "
     "이름이나 패턴으로 프로세스를 찾아 죽이지 않는다(`pkill`, `killall`).")
@@ -121,14 +127,25 @@ def _prior_commands_section(commands: list[str]) -> str:
             f"{fence}\n{body}\n{fence}\n")
 
 
+def base_lines(merged: list[tuple[str, str]], blocked_by: list[str]) -> str:
+    """brief의 base 줄. merged는 worktree의 base에 이미 병합된 이번 실행의 티켓 (id, 커밋)(`git.merged_tickets`).
+    병합이 없으면 `없음`. blocked_by 중 merged에 없는 티켓이 있으면 줄을 하나 더 적는다."""
+    line = BASE_TICKETS_LABEL + (", ".join(f"{tid}({sha})" for tid, sha in merged) or "없음")
+    done = {tid for tid, _ in merged}
+    pending = [b for b in blocked_by if b not in done]
+    return line + (f"\n{PENDING_BLOCKERS_LABEL}{', '.join(pending)}" if pending else "")
+
+
 def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "",
-                resumed: bool = False) -> None:
+                resumed: bool = False, merged: list[tuple[str, str]] | None = None) -> None:
     """worker brief를 쓴다. 첫 worker, 재개한 worker, 수정·수리 worker 모두 같은 규칙을 받는다(계열 분기 없음):
     전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌리므로 worker는 고친 곳에 닿는 좁은 시험만 돌린다.
     같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없애려는 것이다. 티켓 `verify`가 좁아도 같다.
     모든 brief에 `MACHINE_RULE`도 붙는다: 다른 티켓이 같은 기계에서 함께 도니 자기가 띄운 프로세스만 PID로 다룬다.
     어느 brief든 버그를 고치면 새 시험의 실패를 직접 보라는 규칙이 붙는다(`SEE_FAIL_RULE`).
-    시험은 완료 조건의 동작을 지우면 실패하게 쓰고 기존 단언을 약하게 하지 않는다는 규칙도 모든 brief에 붙는다(`REAL_TEST_RULE`).
+    시험은 완료 조건의 동작을 지우면 실패하게 쓰고(diff가 더한 새 분기와 바꾼 호출 지점 모두) 기존 단언을 약하게 하지 않는다는 규칙도 모든 brief에 붙는다(`REAL_TEST_RULE`).
+    서명이나 읽는 속성을 바꾼 이름을 시험 폴더에서도 grep해 나온 시험 파일을 모두 따로 돌리고 목록을 적으라는 규칙도 모든 brief에 붙는다(`CHANGED_NAMES_RULE`).
+    merged는 첫·재개 worker만 넘긴다: worktree의 base에 이미 병합된 이번 실행의 티켓 (id, 커밋). 주면 base 줄이 붙고(없으면 `없음`), 이 티켓의 `blocked_by` 중 병합되지 않은 것은 따로 적는다(`base_lines`). None이면(수정·수리 worker, replay) 줄이 없다.
     같은 티켓의 앞 시도 로그가 있고 거기 성공한 명령이 있으면 그 목록이 믿을 수 없는 자료로 표시되어 붙는다(`prior_commands`). 첫 시도나 기록이 없으면 이 부분이 없다."""
     t = job.ticket
     verify = spec.verify_for(t)
@@ -138,6 +155,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     spec_rel = f"{work_rel(feature)}/spec.md"
     ticket_rel = f"{work_rel(feature)}/tickets/{t.path.name}"
     # worktree는 base(integration) 위에 새로 만든 것이라, 여기 있으면 base에 커밋된 profile이다
+    base = f"\n{base_lines(merged, t.blocked_by)}" if merged is not None else ""
     profile = f"\n먼저 `{PROFILE_REL}`를 읽어라(레포 요약: 구조, 빌드·시험 명령, 관례, 주의점).\n" \
         if (job.worktree / PROFILE_REL).is_file() else ""
     job.brief.write_text(f"""# 티켓 {t.id}: {t.title}
@@ -151,10 +169,11 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 {verify_rule}
 {SEE_FAIL_RULE}
 {REAL_TEST_RULE}
+{CHANGED_NAMES_RULE}
 {MACHINE_RULE}
 - sandbox에서 네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 검증 단계만 돌릴 수 없다면 실패로 보지 않는다. 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다. 돌릴 수 없던 단계와 이유를 마지막 메시지에 적고 변경을 커밋한다. gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.
-- 완료 조건이 이 티켓의 명세다. 범위 밖은 건드리지 않는다.
+- 완료 조건이 이 티켓의 명세다. 범위 밖은 건드리지 않는다.{base}
 
 참고: feature spec `{spec_rel}`, 티켓 파일 `{ticket_rel}` (둘 다 이 worktree 안에 있다)
 {profile}

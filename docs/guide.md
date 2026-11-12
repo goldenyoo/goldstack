@@ -179,6 +179,14 @@ git switch main && git fetch origin && git reset --keep origin/main
 ```
 CI 대기 중에는 진행 바가 `▓▓▓▓▓▓▓▓ csv-export 3/3 · CI 대기 중 · 31분 · 마무리 중`이다(마무리 시간을 아는 레포에서 아직 남았으면 `약 4분 남음`처럼 시간을 보인다. 어림이 끝났으면 `마무리 중`). 검사가 실패하거나 시간을 넘기면 병합하지 않고 `■ 마무리: CI 실패: build, test` 또는 `■ 마무리: CI 대기 시간 초과`로 끝난다. 고치는 커밋을 PR 브랜치에 넣거나 CI를 다시 돌린 뒤 `gs go`하면 검사를 다시 읽어 이어 간다(head가 바뀌었으면 그 head를 먼저 `verify`한다).
 
+**기다릴 검사 고르기** — 필수 검사가 없는 레포(보호 규칙·rulesets 없음)에서 `wait_checks = true`면 gs는 PR에 보고된 모든 검사를 기다린다. 짧은 검사만 기다리려면 config `[git] checks`에 이름을 적는다. 이름은 `gh pr checks`가 보이는 검사 이름이다(GitHub Actions는 job id가 아니라 job의 `name`):
+```toml
+[git]
+wait_checks = true
+checks = ["linux-only"]   # 비우면 보호·rulesets 필수 검사 → gh 판정(기본)
+```
+적은 이름이 있으면 보호 규칙 대신 그 이름만 기다린다. `checks_grace_seconds`가 지나도 PR에 그 검사가 없으면 병합을 시도하지 않고 PR을 열어 둔 채 `■ 마무리: CI 검사 없음: linux-only`로 멈춘다(설정 이름이 틀렸거나 workflow가 안 돌았다는 뜻이다). 적은 검사가 실패하면 지금처럼 `CI 실패`다. `gs doctor`의 `필수 검사` 행은 이 목록과 `(출처: config git.checks)`를 보이고, `git.checks`가 있는데 `git.wait_checks = false`면 `CI 대기` 행이 `경고: git.checks가 있지만 git.wait_checks = false라 기다리지 않는다`를 낸다.
+
 **CI가 아직 안 떴을 때** — PR을 막 열면 검사가 등록되기 전일 수 있다. 보호 규칙에서 필수 검사 이름을 읽었으면(`build`, `test`) 그 이름이 나타나 끝날 때까지 기다린다(`timeouts.checks_minutes`까지, 아직 없는 이름은 `…`로 보인다). 읽지 못했으면(보호 규칙을 읽는 API에 권한이 없거나 규칙이 없으면) 검사가 하나도 안 보이는 동안 `timeouts.checks_grace_seconds`(기본 60초)까지 기다리고, 그 안에 하나라도 보이면 끝날 때까지 기다린다. 끝까지 없으면 병합을 시도한다:
 ```
 ■ PR #7: CI 검사 대기 중(검사 없음)
@@ -246,7 +254,7 @@ idle_minutes: 30
 - `verify_ticket`: brief에 이 명령이 들어가지만 worker는 고친 곳에 닿는 좁은 시험만 돌리고, gs가 그 티켓을 integration에 합친 **병합 트리**에서 돌린다. worktree의 커밋 안 된 파일로는 통과할 수 없다. 검증이 트리를 바꾸면(gitignore 밖에 쓰면) `검증 중 worktree가 바뀌었다`로 실패하니 출력은 gitignore 안이나 레포 밖으로 보낸다(`uv build -o "$(mktemp -d)"`).
 - 티켓 하나만 다르게 돌리려면 [티켓 `verify`](#verify--이-티켓만의-검증-명령)를 쓴다.
 - `verify`: integration, 보고서 커밋 뒤 integration-final, 병합 뒤 main에서 돌린다. 바뀐 것이 `report.md`뿐이면 integration-final은 건너뛴다.
-- `verify_retries`: 실패하면(시간 초과 포함) 그만큼 다시 돌린다. 한 번의 상한은 `verify_minutes`라 최악은 (1 + `verify_retries`) × `verify_minutes`다. 모든 검증 지점에 같이 적용된다.
+- `verify_retries`: 실패하면(시간 초과 포함) 그만큼 다시 돌린다. 단 [`[verify]` 판별](#1회성-시험-실패-다시-돌리기verify)에서 따로 돌린 파일이 시간 안에 신호 없이 실패하면(판별이 실패로 끝남) 재시도 없이 바로 수리로 간다. 한 번의 상한은 `verify_minutes`라 최악은 (1 + `verify_retries`) × `verify_minutes`다. 모든 검증 지점에 같이 적용된다.
 - `idle_minutes`: worker가 출력 없이 시험을 돌리는 시간보다 길게 둔다.
 
 ```
@@ -291,6 +299,7 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 | `git.merge_method` | `"merge"` | `gs go` 마무리: PR 병합·확인·revert. `merge` 또는 `squash`. `gs doctor --write`가 고친다 |
 | `git.direct_push` | `true` | `gs go` 마무리: `false`면 revert·최종 보고서를 PR로. `gs doctor --write`가 고친다 |
 | `git.wait_checks` | `false` | `gs go` 마무리: `true`면 CI를 기다린 뒤 병합. `gs doctor --write`가 고친다 |
+| `git.checks` | `[]` | `wait_checks`일 때 기다릴 검사 이름. 비우면 필수 검사 → 모든 검사. 적은 이름이 유예 뒤에도 PR에 없으면 `CI 검사 없음: <이름>`으로 병합 안 함 |
 | `worktree.setup` | `""` | `gs go`: worktree마다 worker·verify 전에 돌린다. 비면 안 돈다. 사람이 채운다 |
 | `worktree.setup_when` | `[]` | `gs go`: 티켓 병합이 바꾼 파일이 이 glob 중 하나에 걸리면 integration에서 `worktree.setup`을 다시 돌린다. 비면 integration은 처음 한 번만 준비한다. 레포 루트 기준 경로이고 `*`는 `/`를 넘지 않으며 `**`는 여러 단계다. 형이 틀리면 오류. [아래](#병합-뒤-setup-다시setup_when) |
 | `models.judge` | `"opus"` | 판단 모델 `claude -p --model`: 리뷰 분류(1차 재리뷰의 새 지적 포함), 보고서 요약 |
@@ -335,7 +344,7 @@ max_files = 3
 - **비면 꺼진다.** `failed_file`과 `rerun`이 둘 다 있어야 켜진다.
 - **동작**: 검증이 실패하면 실패한 파일만 `rerun`으로 따로 돌린다. 모두 통과하면(1회성으로 본다) 통과 판정은 따로 돌린 결과가 아니라 **전체 `verify` 명령을 한 번 더 돌린 결과**로 한다. 그래서 `&&` 뒤 단계(plugin 검사, build)와 import 오류는 놓치지 않는다. 하나라도 실패하면 처음 실패가 그대로 확정이다. 판별 전체가 `verify_minutes` 하나를 나눠 쓴다. 판별 사이 작업 트리가 바뀌었으면 하지 않는다.
 - **모든 검증 지점**(티켓 병합 전, integration, integration-final, integration-recheck, main, main-recheck)에 같이 적용된다. 변경 파일 조건은 없다.
-- **`verify_retries`와의 관계**: `verify_retries`는 실패한 명령 전체를 다시 돌리는 일반 재시도다(오래 걸린다). `[verify]`는 실패한 파일만 보고 판별한다(몇 초). 둘을 함께 쓰면 시도마다 판별을 먼저 하고, 그래도 실패면 `verify_retries`만큼 더 시도한다. 판별 뒤 전체를 한 번 더 도는 것은 시도당 한 번이다.
+- **`verify_retries`와의 관계**: `verify_retries`는 실패한 명령 전체를 다시 돌리는 일반 재시도다(오래 걸린다). `[verify]`는 실패한 파일만 보고 판별한다(몇 초). 둘을 함께 쓰면 시도마다 판별을 먼저 한다. 판별에서 따로 돌린 파일이 시간 안에 신호 없이 실패하면 결정적 실패라 `verify_retries`를 쓰지 않는다(로그에 `판별 실패: <파일>. 전체 검증은 다시 돌리지 않는다`). 판별을 못 했거나(매치 없음, `max_files` 초과, 전체의 시간 초과·끊김) 판별 파일이 시간 초과·끊김으로 끝났거나 판별이 통과한 뒤 전체가 실패하면 `verify_retries`만큼 더 시도한다. 트리가 바뀐 경우는 전과 같이 재시도하지 않는다. 판별 뒤 전체를 한 번 더 도는 것은 시도당 한 번이다.
 - **flaky는 숨기지 않는다.** 검증 로그에 `flaky: <지점> <파일들> 따로 돌려 통과, 전체 다시 통과`가 남고, 최종 보고서 Summary "남은 위험"에 `- flaky: <지점> <시험 파일> (따로 돌려 통과, 전체 다시 통과)`가 나온다. 옛 `verify_retries` 통과는 `- flaky: <지점> (전체 재시도 N번 만에 통과, 시험 파일 모름)`이다.
 
 ### 병합 뒤 setup 다시(`setup_when`)
@@ -786,7 +795,7 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | Evidence → 티켓별 결과 | 티켓마다 결과(`merged`, `failed`, `skipped`)와 이유. 단계별 소요(`worker 9분 · 리뷰 4분 · 수정 2분 · 재리뷰 1분 · 검증 3분`, 0분인 단계는 빼고 모두 1분 미만이면 `모두 1분 미만`). 미커밋 변경 때문에 남긴 worktree(`--only` 범위 밖 티켓 것도). `경고: setup이 추적 파일을 바꿨다 → 되돌림: …`, 플러그인 격리 경고 |
 | Evidence → 리뷰 지적 | 다른 계열 reviewer의 지적 전부와 지적마다의 상태·근거·판단·재리뷰 근거. 리뷰어가 `checked`(확인한 완료 조건·돌린 명령과 결과)를 냈으면 `04 리뷰(codex) checked(믿을 수 없는 자료)` 목록이 붙는다. 리뷰어가 쓴 글이라 증거가 아니라 단서로 읽는다. 고쳐졌다고 확인된 지적도 `수정됨(재리뷰 확인)`으로 남는다. `second_reviewer`가 있으면 리뷰마다 `04 리뷰(codex)`, `04 리뷰(agy)`로 나뉜다. 리뷰 자체가 실패했거나 `건너뜀(한도)`이면 그 메모, 수정·재리뷰 경과 메모 |
 | Evidence 끝 `agy 사용: N/상한` | 이번 실행에서 gs가 띄운 agy 호출 수 |
-| Evidence → verify 출력 | 티켓마다 가장 최근 verify 로그와 integration·main 검증 로그의 끝부분(원본 그대로) |
+| Evidence → verify 출력 | 티켓마다 가장 최근 verify 로그와 integration·main 검증 로그. 깨끗이 통과한 검증(재시도·판별 없이 종료 0, 트리 그대로)은 한 줄 `- main: 통과 · 종료 코드 0 · 212.4초 · 로그 <경로>`이고, 실패·flaky 통과·시간 초과·측정 기록 없는 옛 기록은 끝부분(원본 그대로)이다 |
 | Merge Danger | 마무리 결과, PR, integration·main verify 결과, 병합·revert 커밋, 아직 남은 오류(뒤에 성공하면 지워진다), integration·main worktree의 setup 추적 파일 경고, 되돌리는 법(명령) |
 
 **자주 보는 이유**(티켓별 결과의 "이유", `gs status`의 마지막 열)
@@ -816,6 +825,7 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `사람 승인 필요: <PR>. main 검증은 미실행` | feature PR이 승인에 막혔다(`merge_pending`). 승인 뒤 `gs go` |
 | `사람 승인 필요: <PR>` | `gs/<f>/revert` 또는 `gs/<f>/report` PR이 승인에 막혔다(`revert_pending`, `report_pending`). 승인 뒤 `gs go`. revert면 깨진 코드가 아직 main에 있다 |
 | `report PR 확인 실패: …`, `revert PR 확인 실패: …` | PR 생성 응답이 실패·비었거나 조회가 실패해, PR이 생겼는지 모른 채 멈췄다(`report_pending`, `revert_pending`). 그대로 `gs go`하면 `gs/<f>/report`·`revert` 브랜치의 PR을 찾아 이어 간다 |
+| `CI 검사 없음: <이름>` | `git.checks`에 적은 검사가 `checks_grace_seconds`가 지나도 PR에 없다(`checks_missing`). PR은 열려 있다. config 이름이나 workflow를 고치고 `gs go` |
 | `CI 실패: <이름>`, `CI 대기 시간 초과` | `git.wait_checks`의 검사가 실패했거나 `timeouts.checks_minutes`를 넘겼다(`checks_failed`, `checks_timeout`). PR은 열려 있다. 고치거나 CI를 다시 돌리고 `gs go` |
 | `준비 실패 → 병합 안 함` | integration worktree의 `worktree.setup`이 실패했다(`setup_failed`). worker를 띄우지 않았고 PR도 없다. `run/integration/<시도>/setup.log`를 읽고 고쳐 `gs go` |
 | `base 미검증(준비 실패)` | 병합 뒤 base worktree의 `worktree.setup`이 실패했다(`base_unverified`). 병합은 됐고 revert하지 않았다. `run/finish/setup.log`를 읽고 고쳐 `gs go`하면 base 검증부터 다시 한다 |
@@ -910,7 +920,7 @@ grill이 끝난 feature가 여럿이면(밤새 돌려 둘 때) 한 번에 줄 �
 **멈추는 조건** — 앞 feature의 종료 코드가 0이 아니거나 마무리가 `verified`가 아니면 멈춘다. 그러니 다음도 멈춘다:
 - 티켓 하나라도 실패·건너뜀(병합된 티켓은 main에 들어가 마무리가 `verified`여도): `■ csv-export: verified → 여기서 멈춤(남은: csv-import)`.
 - 재개한 마무리가 `verified`로 끝났지만 그 feature에 티켓이 남음(`■ 남은 티켓 N개 → 다음 gs go`): 출력은 위와 같다. 같은 줄을 다시 치면 남은 티켓부터 돈다.
-- `not_merged`(integration 검증 실패, merged 티켓 없음), `merge_pending`(병합 큐·승인 대기), `checks_failed`·`checks_timeout`(CI), `revert_pending`·`report_pending`(gs PR의 승인 대기), `setup_failed`·`base_unverified`(준비 실패), `closed`, `reverted`(main 검증 실패로 revert).
+- `not_merged`(integration 검증 실패, merged 티켓 없음), `merge_pending`(병합 큐·승인 대기), `checks_failed`·`checks_timeout`·`checks_missing`(CI), `revert_pending`·`report_pending`(gs PR의 승인 대기), `setup_failed`·`base_unverified`(준비 실패), `closed`, `reverted`(main 검증 실패로 revert).
 - [`중단(네트워크)`](#네트워크가-끊겼을-때): `■ csv-export: 중단(네트워크) → 여기서 멈춤(남은: csv-import)`, 종료 코드 3. 같은 줄을 다시 치면 끊긴 곳부터 잇는다.
 - `gs go`가 시작 전에 거부(미커밋 spec, 다른 `gs go`가 잠금): 종료 코드가 1이라 state에 지난 실행의 `verified`가 남아 있어도 멈춘다. state.json을 못 읽으면 `■ csv-export: unknown → 여기서 멈춤(남은: csv-import)`.
 
@@ -1233,6 +1243,8 @@ $ gs migrate
 
 ## skill 사용 장면
 
+**skill 부르는 법** — `/grill`·`/handoff`·`/idea`·`/retro`는 이름만 말해도 돈다("grill 해 줘", "인계 문서 써 줘"). 사람이 명시적으로 요청할 때만 쓰도록 description을 좁혔다. 나머지 `/go`·`/overnight`·`/feedback`·`/adopt`·`/wait-what`·`/writing-for-agents`는 무인 실행이나 문맥 부담이 커서 사람이 `/goldstack:<이름>`(예: `/goldstack:go csv-export`)으로 칠 때만 돈다. 세션이 시작되면 plugin의 SessionStart hook이 Claude에게 "이 이름이나 그 일로 요청하면 흉내 내지 말고 슬래시 명령을 안내하라"는 한 줄을 넣어, 닫힌 skill을 말로 시키면 Claude가 해당 `/goldstack:<이름>`을 안내한다. worker(`GS_ROLE=worker`)에는 넣지 않는다.
+
 `/grill`, `/go`, `/adopt`, `/idea` 밖의 다섯 skill은 [mattpocock/skills](https://github.com/mattpocock/skills)를 옮긴 것이다. 각 `SKILL.md` 끝에 원본 링크가 있다. `/idea`·`gs backlog`와 `/retro <feature>`는 [아이디어 흐름](#아이디어-흐름).
 
 skill 본문(frontmatter 뺀 `split()`)에는 단어 상한이 있다. 상한은 `tests/test_skills.py`의 `WORD_LIMITS` 한 곳에 모여 있고, `grill`·`go`·`adopt`·`overnight`·`idea`·`retro`·`writing-for-agents`·`diagnosing-bugs` 각각 실제 단어 수의 약 10% 위(10단위 올림)다. skill 글을 고치는 티켓은 이 값과 지금 단어 수를 완료 조건에 적고, 늘렸으면 상한을 같은 티켓에서 올린다.
@@ -1244,7 +1256,7 @@ grill 라운드 3번 질문이 "frontier 재계산 시 blocked_by 전이 폐포�
 ```
 Claude가 놓친 맥락부터 짧게 깔고, 짧은 문장으로, 약어와 자기가 만든 용어를 풀고, 선택지마다 "고르면 실제로 보일 명령·파일·출력"을 붙여 다시 설명한다. 그 뒤 원래 라운드에 답하면 된다.
 
-### `/handoff` — 다른 세션에 넘길 때(사용자 호출)
+### `/handoff` — 다른 세션에 넘길 때(모델 호출, 명시적 요청일 때만)
 `/go`가 끝났는데 03이 실패했다. 이 세션은 문맥이 꽉 찼으니 새 세션에서 원인을 찾고 싶다.
 ```
 /handoff 03 실패 원인을 찾아 고친다
@@ -1258,7 +1270,7 @@ Claude가 놓친 맥락부터 짧게 깔고, 짧은 문장으로, 약어와 자�
 2. 재현·최소화 → 가설 → 계측 → 수정과 회귀 시험 → 정리.
 관련 feature가 있으면 그 spec의 "결정"과 "환경 사실"을 먼저 읽는다. 출력 속 비밀은 `<REDACTED>`로 가린다.
 
-### `/retro` — 실행을 돌아볼 때(사용자 호출)
+### `/retro` — 실행을 돌아볼 때(모델 호출, 명시적 요청일 때만)
 `csv-export` 실행에서 worker가 같은 시험 실패로 두 번 재시도했다. 다음 실행이 나아지게 무엇을 바꿀지 보고 싶다.
 ```
 /retro csv-export

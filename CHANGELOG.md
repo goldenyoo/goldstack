@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.2.17 — 2026-11-12
+
+### goldstack-v33
+
+- worker hook이 worktree 안 `git stash`도 막는다(`refs/stash`는 모든 worktree가 공유). claude worker는 `Monitor` 도구를 쓰지 못한다.
+- 판별(`[verify]`)에서 따로 돌린 파일이 시간 안에 신호 없이 실패하면 `verify_retries`를 쓰지 않고 바로 수리로 간다. 판별을 못 했거나 시간 초과·끊김이면 지금처럼 재시도한다.
+- worker brief: 바꾼 이름을 `tests/`에서도 grep해 나온 시험 파일을 모두 돌리고 목록을 적게 한다. 시험은 diff의 새 분기와 호출 지점 모두를 건드린다. base에 이미 병합된 티켓(id·커밋)을 알려 준다.
+- 보고서: 요약 입력에 티켓 병합 사실(git)을 주고 병합 순서·상태 주장은 그 표와 대조하게 했다. 깨끗이 통과한 검증은 `- <라벨>: 통과 · 종료 코드 0 · <초>초 · 로그 <경로>` 한 줄이다.
+- config `[git] checks`: 병합 전에 기다릴 CI 검사 이름을 고른다. 적은 검사가 유예 뒤에도 PR에 없으면 `CI 검사 없음: <이름>`으로 병합하지 않는다. `gs doctor`가 이 목록과 `wait_checks = false` 경고를 보인다.
+- CI: 전체 시험을 파일별 병렬로 돌리고 리눅스 전용 시험만 도는 `linux-only` job을 더했다(`GS_REQUIRE_LANDLOCK=1`). 이 레포는 `wait_checks = true`, `checks = ["linux-only"]`.
+- `grill`·`handoff`·`idea`·`retro`를 모델 호출로 열었다(명시적 요청일 때만). 닫힌 skill 여섯은 SessionStart hook이 슬래시 명령(`/goldstack:<이름>`) 안내를 문맥에 넣는다(worker 제외).
+- `docs/guide.md`·`docs/internals.md`·README·profile을 맞췄다.
+- 버전을 `0.2.17`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.16 — 2026-11-12
 
 ### goldstack-v32

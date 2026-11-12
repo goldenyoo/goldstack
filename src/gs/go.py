@@ -1399,6 +1399,12 @@ def _failure_summary(r: Run, ts: state.TicketState) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _base_tickets(r: Run, base: str) -> list[tuple[str, str]]:
+    """worker worktree의 base에 이미 병합된 이번 실행의 티켓 (id, 커밋). 첫·재개 worker brief의 base 줄이다(worker.write_brief의 merged).
+    수정·수리 worker는 같은 worktree에서 이어 가는 일이라 받지 않는다. git에서 읽으며 state는 보지 않는다(git.merged_tickets)."""
+    return git.merged_tickets(r.repo, r.name, base, base_ref=r.base_ref)
+
+
 def _resumable(r: Run, mark: dict) -> bool:
     """network_resume이 가리키는 worktree가 그 브랜치로 그대로 있나."""
     try:
@@ -1473,7 +1479,8 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         state.begin_phase(ts, phase, t.model, attempt=attempt)
         _set(r, t.id, status=state.RUNNING, attempts=ts.attempts + (0 if nth or repair else 1), branch=branch, pane="",
              worktree=str(wt), log=str(job.log), started_at=state.now(), ended_at="", reason="")
-        worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True)
+        worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True,
+                           merged=None if nth or repair else _base_tickets(r, base))
         if nth or repair:
             with job.brief.open("a", encoding="utf-8") as f:
                 f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth, t.touches, _merged_touches(r, t)))
@@ -1546,7 +1553,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
                 return None
             setup.remember(wt)
             _phase(r, t.id, "worker", t.model)
-        worker.write_brief(job, r.feat.spec, r.name, branch, summary)
+        worker.write_brief(job, r.feat.spec, r.name, branch, summary, merged=_base_tickets(r, base))
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)
