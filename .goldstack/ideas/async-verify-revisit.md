@@ -13,3 +13,4 @@ feature: ""
 - goldstack-v30: 351–590초 대기 7번. v10–v15에도 있었고, v11의 `verify-blocks-result-wait`는 측정만 더했다.
 
 관련: [[async-verify-evidence]] [[ticket-verify-narrow-revisit]]
+- 2026-11-13 goldstack-v33(147분, 티켓 검증 10번이 일렬로 각 590–640초): 처리·결과 대기 03/1 worker 1184초, 05 worker 644초, 02 fix 629초, 02 재리뷰 601초, 07 리뷰 569초, 03/2 worker 420초. 02는 low 지적 하나의 실제 수정이 72초인데 fix·재리뷰에 23분이 걸렸다 (출처: /retro goldstack-v33, report 측정 표·`run/retro-log.md` L113–L115)

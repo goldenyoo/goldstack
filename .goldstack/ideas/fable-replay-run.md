@@ -2,7 +2,7 @@
 date: "2026-11-10"
 severity: "medium"
 source: "goldstack-v30 grill 라운드 2-5"
-status: "open"
+status: "dropped"
 issues: []
 feature: ""
 ---
@@ -15,3 +15,5 @@ feature: ""
 - 먼저 `git pull`과 `gs self-update`로 0.2.14 이상인지 확인한다.
 
 **관련**: [[fable-large-tier-trial]], [[model-tiering]]
+
+버린 이유: goldstack-v35 grill 라운드 1-3에서 사람이 dropped로 정했다(추천은 손으로 따로 측정).
