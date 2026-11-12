@@ -3,6 +3,7 @@
 `필수 검사` 행은 config `git.checks`가 있으면 GitHub 대신 그 목록과 출처를 보이고 제안하지 않는다. `git.wait_checks = false`인데
 `git.checks`가 있으면 `CI 대기` 경고 행을 더한다.
 머신 행(`샌드박스`)은 GitHub 원격과 무관하게 이 머신의 샌드박스 모드와 점검 결과를 보인다(sandbox.doctor_row). 제안은 없다.
+`모델 기본값` 행은 옛 기본값인 칸만 새 값을 제안한다. 목록에 없으면 제외하고, 목록을 모르면 표시하고 제안한다. 쓰지는 않는다.
 `모델` 행은 codex 캐시·agy models와 config를 대조한다. 조회 실패는 확인 못 함이며 모델 값은 고치지 않는다.
 """
 from __future__ import annotations
@@ -210,6 +211,25 @@ def _write(repo: Path, cfg: config.Config, proposals: dict[str, tuple[object, st
         print(line, file=out)
 
 
+def _model_default_rows(cfg: config.Config) -> list[str]:
+    """옛 기본값이 있는 계열만 조회한다. effort는 목록 대조에서 제외한다."""
+    inventories = {}
+    rows = []
+    for key, value in config.old_model_defaults(cfg).items():
+        family = key.split(".")[1]
+        if family not in inventories:
+            inventories[family] = (models.codex_models() if family == "codex"
+                                   else models.agy_models(timeout=15))
+        names = inventories[family]
+        description = f"{key}가 옛 기본값이다"
+        if names is not None and value.split("/", 1)[0] not in names:
+            rows.append(f"{description}; 새 기본값 {value}이 이 머신 {family} 목록에 없다")
+        else:
+            suffix = " (목록 확인 못 함)" if names is None else ""
+            rows.append(f"{description} → {key} = {_literal(value)}{suffix}")
+    return rows
+
+
 def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
     version.warn(repo, out)
     cfg, problems = config.load(repo)
@@ -279,6 +299,8 @@ def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
     row("샌드박스", sandbox.doctor_row(repo))
     for description in models.doctor_rows(cfg):
         row("모델", description)
+    for description in _model_default_rows(cfg):
+        row("모델 기본값", description)
     if write:
         try:
             _write(repo, cfg, proposals, out)

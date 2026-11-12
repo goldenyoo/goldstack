@@ -50,7 +50,7 @@ class ConfigChecksTest(unittest.TestCase):
         self.write("01-a.md", test_check.ticket("01"))
         path = self.repo / config.CONFIG_PATH
         original = path.read_text()
-        for key, default in (("judge", "opus"), ("claude_review", "opus"), ("agy", "gemini-4-argon-high")):
+        for key, default in (("judge", "opus"), ("claude_review", "opus"), ("agy", "gemini-4-carbon-high")):
             for value in ("", " \t "):
                 with self.subTest(key=key, value=value):
                     path.write_text(original.replace(f'{key} = "{default}"', f"{key} = {json.dumps(value)}"))

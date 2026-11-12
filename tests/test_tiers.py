@@ -33,22 +33,20 @@ class TiersTest(unittest.TestCase):
         self.assertEqual(problems, [])
         expected = {
             'claude': [('sonnet', 'medium'), ('sonnet', 'high'), ('opus', 'xhigh')],
-            'codex': [('gpt-6-luna', 'medium'), ('gpt-6.1-sol', 'medium'), ('gpt-6.1-sol', 'high')],
-            'agy': [('gemini-3.8-flash-medium', ''), ('gemini-4-argon-medium', ''), ('gemini-4-argon-high', '')],
+            'codex': [('gpt-6-luna', 'medium'), ('gpt-6-astra', 'high'), ('gpt-6-astra', 'xhigh')],
+            'agy': [('gemini-3.8-flash-medium', ''), ('gemini-4-carbon-medium', ''), ('gemini-4-carbon-high', '')],
         }
         actual_repo, problems = config.load(Path(__file__).resolve().parents[1])
         self.assertEqual(problems, [])
+        self.assertEqual(cfg.models.agy, 'gemini-4-carbon-high')
+        self.assertEqual(actual_repo.models.agy, 'gemini-4-carbon-high')
+        self.assertEqual(actual_repo.timeouts.rereview_minutes, 20)
         for family, entries in expected.items():
             for tier, pair in zip(feature.TIERS, entries):
                 self.assertEqual(cfg.tiers.worker(family, tier), (tier, config.ModelEffort(*pair)))
-                if family == 'agy':  # 이 레포는 agy를 모든 티어에서 Argon High로 쓴다(기본값과 다르다).
+                if family == 'agy':  # 이 레포는 agy를 모든 티어에서 Carbon High로 쓴다(기본값과 다르다).
                     self.assertEqual(actual_repo.tiers.worker(family, tier),
-                                     (tier, config.ModelEffort('gemini-4-argon-high', '')))
-                elif family == 'codex':  # 이 레포는 codex medium·large를 astra로 쓴다(기본값과 다르다. goldstack-v34 전에 먼저 바꿈)
-                    repo_codex = {'small': ('gpt-6-luna', 'medium'), 'medium': ('gpt-6-astra', 'high'),
-                                  'large': ('gpt-6-astra', 'xhigh')}
-                    self.assertEqual(actual_repo.tiers.worker(family, tier),
-                                     (tier, config.ModelEffort(*repo_codex[tier])))
+                                     (tier, config.ModelEffort('gemini-4-carbon-high', '')))
                 else:
                     self.assertEqual(cfg.tiers.worker(family, tier), actual_repo.tiers.worker(family, tier))
         cfg, problems = self.load(self.default.replace('review = "large"\nrereview = "medium"\n', ''))
