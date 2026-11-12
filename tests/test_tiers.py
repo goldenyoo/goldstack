@@ -44,6 +44,11 @@ class TiersTest(unittest.TestCase):
                 if family == 'agy':  # 이 레포는 agy를 모든 티어에서 Argon High로 쓴다(기본값과 다르다).
                     self.assertEqual(actual_repo.tiers.worker(family, tier),
                                      (tier, config.ModelEffort('gemini-4-argon-high', '')))
+                elif family == 'codex':  # 이 레포는 codex medium·large를 astra로 쓴다(기본값과 다르다. goldstack-v34 전에 먼저 바꿈)
+                    repo_codex = {'small': ('gpt-6-luna', 'medium'), 'medium': ('gpt-6-astra', 'high'),
+                                  'large': ('gpt-6-astra', 'xhigh')}
+                    self.assertEqual(actual_repo.tiers.worker(family, tier),
+                                     (tier, config.ModelEffort(*repo_codex[tier])))
                 else:
                     self.assertEqual(cfg.tiers.worker(family, tier), actual_repo.tiers.worker(family, tier))
         cfg, problems = self.load(self.default.replace('review = "large"\nrereview = "medium"\n', ''))

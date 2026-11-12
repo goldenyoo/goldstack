@@ -24,8 +24,8 @@ large = "opus/xhigh"
 
 [tiers.codex]
 small = "gpt-6-luna/medium"
-medium = "gpt-6.1-sol/medium"
-large = "gpt-6.1-sol/high"
+medium = "gpt-6-astra/high"
+large = "gpt-6-astra/xhigh"
 
 [tiers.agy]
 small = "gemini-4-argon-high"
@@ -34,6 +34,7 @@ large = "gemini-4-argon-high"
 
 [timeouts]
 review_minutes = 30
+rereview_minutes = 20
 judge_minutes = 10
 summary_seconds = 60
 

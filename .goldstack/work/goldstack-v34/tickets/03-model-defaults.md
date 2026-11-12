@@ -12,7 +12,7 @@ reviewer: claude
 
 ## 완료 조건
 - `DEFAULT_CONFIG`: `models.agy = "gemini-4-carbon-high"`, `[tiers.agy] medium = "gemini-4-carbon-medium"`, `large = "gemini-4-carbon-high"`, `[tiers.codex] medium = "gpt-6-astra/high"`, `large = "gpt-6-astra/xhigh"`. small 칸은 그대로.
-- 이 레포 `.goldstack/config.toml`: `[models] agy = "gemini-4-carbon-high"`, `[tiers.agy] small = medium = large = "gemini-4-carbon-high"`, `[tiers.codex] medium = "gpt-6-astra/high"`, `large = "gpt-6-astra/xhigh"`, `[timeouts] rereview_minutes = 20`. 다른 줄과 주석은 그대로. `tests/test_tiers.py`의 기본값·레포 config 단언(지금 둘의 codex 값이 같다고 본다)을 새 값에 맞춘다.
+- 이 레포 `.goldstack/config.toml`: `[models] agy = "gemini-4-carbon-high"`, `[tiers.agy] small = medium = large = "gemini-4-carbon-high"`. codex 칸(`gpt-6-astra`)과 `rereview_minutes = 20`은 grill 뒤 사람 요청으로 이미 바뀌어 있다(그대로 둔다). 다른 줄과 주석은 그대로. `tests/test_tiers.py`의 기본값·레포 config 단언을 새 값에 맞춘다(지금은 이 레포 codex만 기본값과 다르다고 본다. 기본값이 astra가 되면 다시 같아진다).
 - `src/gs/config.py`에 키별 옛 기본값 이력(예: `OLD_DEFAULTS = {"models.agy": ("gemini-4-argon-high",), "tiers.agy.medium": ("gemini-4-argon-medium",), …}`). 지금 `DEFAULT_CONFIG`의 값은 이력에 없고, 이력의 키는 모두 `DEFAULT_CONFIG`에 있다(시험). 범위는 `[models]`·`[tiers.*]`만.
 - `gs doctor`의 `모델 기본값` 행: 레포 config 값이 그 키의 옛 기본값이면 `tiers.codex.large가 옛 기본값이다 → tiers.codex.large = "gpt-6-astra/xhigh"`. 새 값이 그 머신 목록(02)에 없으면 제안 대신 `새 기본값 …이 이 머신 <계열> 목록에 없다`. 목록을 모르면(None) 제안한다(spec 2-1: 로그인돼 있으면 머신마다 모델 목록이 같다). 그 행 끝에 `(목록 확인 못 함)`을 붙인다. 이력에 없는 값(사람이 고친 값)은 보이지 않는다. 사람이 일부러 옛 기본값과 같은 값을 골랐어도 구별할 수 없어 제안 대상이다(제안만 보이고 쓰기는 사람이 친다).
 - `gs check`: 옛 기본값인 칸이 있으면 `경고: 옛 모델 기본값 N칸(gs doctor로 확인)` 한 줄. 목록은 보지 않는다.

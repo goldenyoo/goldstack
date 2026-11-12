@@ -19,6 +19,7 @@ verify_retries: 1
 | 비교 측정 | 하지 않는다. 사람이 그 모델을 쓰겠다고 정했다. 바꾼 뒤 보고서·`/retro`가 시간·지적을 본다 | goldstack-v33 grill 라운드 3 되물음 |
 | 순서 | goldstack-v33 다음, `/overnight`으로 잇는다. v34는 v33 병합 뒤 main 위에서 돈다 | goldstack-v33 결정 3-3 |
 | 마지막 티켓 | 문서·CHANGELOG·버전(0.2.17 → 0.2.18) 한 장 | 관례 |
+| 이 레포 codex 칸 | grill 커밋 뒤 사람 요청으로 `[tiers.codex] medium = "gpt-6-astra/high"`, `large = "gpt-6-astra/xhigh"`, `rereview_minutes = 20`을 먼저 바꿨다. v33·v34의 codex 구현·리뷰가 astra로 돈다. 03은 agy와 기본값만 남는다 | 2026-11-12 대화("codex 구현 astra로") |
 
 ## 3. 결정
 | # | 항목 | 결정 |
@@ -36,13 +37,13 @@ verify_retries: 1
 ## 5. 티켓 그래프
 | id | 제목 | blocked_by(이유) | wave | tier(이유) | 예상 | 구현 | 수정 | 수리 | 첫 리뷰 | 재리뷰 | touches | verify |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01 | 템플릿 계열 고정값 빼기 | – | 1 | small(템플릿 글) | 10분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `skills/grill/templates/ticket.md`, `spec.md`, `tests/test_skill_grill.py` | grill·skills·plugin 시험 |
-| 02 | 머신 모델 목록 대조 | – | 1 | medium(새 모듈 + doctor·check 행) | 30분 | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | claude opus/xhigh | claude sonnet/high | `src/gs/models.py`, `doctor.py`, `check.py`, `tests/test_models.py`, `test_doctor.py`, `test_check.py`, `test_config.py`, `support.py` | 전체 |
-| 03 | 새 기본값·이 레포 config·옛 기본값 이력·doctor 제안 | 02 같은 파일(`doctor.py`·`check.py`)·앞 결과 필요(목록) | 2 | medium(기본값·config + 시험 고치기) | 30분 | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | claude opus/xhigh | claude sonnet/high | `.goldstack/config.toml`, `src/gs/config.py`, `doctor.py`, `check.py`, 모델 이름을 단언하는 시험 9개, `tests/test_model_defaults.py` | 전체 |
-| 04 | doctor --write 모델 칸·init 폴백 | 03 같은 파일·앞 결과 필요(이력) | 3 | large(사용자 config를 제자리에서 고침) | 70분 | claude opus/xhigh | claude opus/xhigh | claude opus/xhigh | codex gpt-6.1-sol/high + agy gemini-4-argon-high | codex gpt-6.1-sol/medium + agy gemini-4-argon-high | `src/gs/doctor.py`, `config.py`, `tests/test_doctor_write_models.py`, `test_doctor.py`, `test_config.py` | 전체 |
-| 05 | 문서·0.2.18 | 01–04 앞 결과 필요 | 4 | small(문서·버전) | 10분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6.1-sol/high | codex gpt-6.1-sol/medium | `docs/guide.md`, `docs/internals.md`, `docs/research/agy.md`, `CHANGELOG.md`, 버전 파일, `tests/test_version.py` | 버전·문서·plugin 시험 |
+| 01 | 템플릿 계열 고정값 빼기 | – | 1 | small(템플릿 글) | 10분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6-astra/xhigh | codex gpt-6-astra/high | `skills/grill/templates/ticket.md`, `spec.md`, `tests/test_skill_grill.py` | grill·skills·plugin 시험 |
+| 02 | 머신 모델 목록 대조 | – | 1 | medium(새 모듈 + doctor·check 행) | 30분 | codex gpt-6-astra/high | codex gpt-6-astra/high | codex gpt-6-astra/high | claude opus/xhigh | claude sonnet/high | `src/gs/models.py`, `doctor.py`, `check.py`, `tests/test_models.py`, `test_doctor.py`, `test_check.py`, `test_config.py`, `support.py` | 전체 |
+| 03 | 새 기본값·이 레포 config·옛 기본값 이력·doctor 제안 | 02 같은 파일(`doctor.py`·`check.py`)·앞 결과 필요(목록) | 2 | medium(기본값·config + 시험 고치기) | 30분 | codex gpt-6-astra/high | codex gpt-6-astra/high | codex gpt-6-astra/high | claude opus/xhigh | claude sonnet/high | `.goldstack/config.toml`, `src/gs/config.py`, `doctor.py`, `check.py`, 모델 이름을 단언하는 시험 9개, `tests/test_model_defaults.py` | 전체 |
+| 04 | doctor --write 모델 칸·init 폴백 | 03 같은 파일·앞 결과 필요(이력) | 3 | large(사용자 config를 제자리에서 고침) | 70분 | claude opus/xhigh | claude opus/xhigh | claude opus/xhigh | codex gpt-6-astra/xhigh + agy gemini-4-argon-high | codex gpt-6-astra/high + agy gemini-4-argon-high | `src/gs/doctor.py`, `config.py`, `tests/test_doctor_write_models.py`, `test_doctor.py`, `test_config.py` | 전체 |
+| 05 | 문서·0.2.18 | 01–04 앞 결과 필요 | 4 | small(문서·버전) | 10분 | claude sonnet/medium | claude sonnet/medium | claude sonnet/medium | codex gpt-6-astra/xhigh | codex gpt-6-astra/high | `docs/guide.md`, `docs/internals.md`, `docs/research/agy.md`, `CHANGELOG.md`, 버전 파일, `tests/test_version.py` | 버전·문서·plugin 시험 |
 
-계열: 01의 기준대로 골랐다. 02·03은 `touches`가 좁고 완료 조건이 시험으로 닫히는 코드라 codex 구현·claude 리뷰. 01·05(템플릿 글·문서)와 04(사용자 config를 주석 보존하며 고치는 까다로운 편집)는 claude 구현·codex 리뷰. 04에 agy 두 번째 리뷰어(사용자 파일을 고친다). 이 실행은 시작할 때의 config(sol·argon)로 돌고, 03의 Carbon·astra는 다음 실행부터 쓰인다.
+계열: 01의 기준대로 골랐다. 02·03은 `touches`가 좁고 완료 조건이 시험으로 닫히는 코드라 codex 구현·claude 리뷰. 01·05(템플릿 글·문서)와 04(사용자 config를 주석 보존하며 고치는 까다로운 편집)는 claude 구현·codex 리뷰. 04에 agy 두 번째 리뷰어(사용자 파일을 고친다). 이 실행의 codex는 이미 astra(먼저 바꿈, §2)이고 agy는 시작할 때의 Argon이다. 03의 Carbon은 다음 실행부터 쓰인다.
 
 공통 모델: 판단 claude opus · 실패 요약 claude haiku
 
