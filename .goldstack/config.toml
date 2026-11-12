@@ -1,6 +1,9 @@
 [git]
 remote = "origin"
 base = "main"
+# 병합 전에 CI의 linux-only job(Landlock 시험, .github/workflows/tests.yml의 job name)만 기다린다. 전체 시험(tests)은 기다리지 않는다.
+wait_checks = true
+checks = ["linux-only"]
 
 [worktree]
 setup = "uv sync --locked"

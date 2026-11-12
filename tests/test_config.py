@@ -185,6 +185,23 @@ class ConfigTest(unittest.TestCase):
         this_repo, problems = config.load(Path(__file__).resolve().parents[1])
         self.assertEqual((problems, this_repo.worktree.setup_when), ([], ("uv.lock", "pyproject.toml")))
 
+    def test_git_checks_is_optional_name_list(self):
+        """값 없는 옛 config와 `gs init` config는 빈 목록(지금 동작)이다. 값은 빈 값이 아닌 문자열 목록만 받고 중복은 한 번만 둔다."""
+        self.assertEqual(config.load(self.repo)[0].git.checks, ())
+        self.assertIn("\nchecks = []", config.DEFAULT_CONFIG)
+        self.path.write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+        cfg, problems = config.load(self.repo)
+        self.assertEqual((problems, cfg.git.checks), ([], ()))
+        self.path.write_text(CONFIG.replace("[git]\n", '[git]\nchecks = ["linux-only", "lint", "linux-only"]\n'))
+        cfg, problems = config.load(self.repo)
+        self.assertEqual((problems, cfg.git.checks), ([], ("linux-only", "lint")))
+        for bad in ('"linux-only"', "[1]", '[""]', '["  "]', '["a", 2]', '[["a"]]', "true", '{ name = "a" }'):
+            with self.subTest(bad):
+                self.path.write_text(CONFIG.replace("[git]\n", f"[git]\nchecks = {bad}\n"))
+                cfg, problems = config.load(self.repo)
+                self.assertIsNone(cfg)
+                self.assertEqual([(p.level, "`git.checks`" in p.message) for p in problems], [("오류", True)])
+
     def test_worker_tests_section_is_off_without_values(self):
         """`[hook.worker_tests]`가 없거나 값이 비면 꺼짐이고 환경 변수 값은 빈 문자열이다. `gs init`은 절을 쓰지 않는다."""
         off = config.WorkerTestsConfig()
