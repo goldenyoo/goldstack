@@ -15,19 +15,29 @@
 
 차단 장치(spec 3-1): claude는 plugin hook + 도구 차단 옵션(goldstack 밖 플러그인·skill·MCP는 끈다), codex는 `workspace-write` sandbox,
 agy는 deny 규칙 + `gs hook agy-pretooluse`(worktree의 `.agents/hooks.json`) 두 겹. agy hook이 걸리지 않으면 거부한다.
+
+Landlock 모드(goldstack-v32 spec 2-3, 2-6, 3-1): `Sandbox`는 `gs go`가 시작할 때 주 레포에서 한 번 계산한 모드와 CLI별 거부 목록이다
+(go._sandbox. worktree에는 local.env가 없다). 값이 없으면 `os` 모드이고 명령은 그대로다. landlock이면 OS 샌드박스에 기대던 세 경로
+(codex worker, codex·agy 리뷰어: review.reviewer_argv)를 `gs jail`(jail.py)로 감싼다: `jail_argv`가 `<지금 gs의 python> -m gs.cli jail
+--write … --deny … --`를 만들고, 쓰기 목록에는 언제나 `/dev`와 그 CLI의 홈(`cli_home`)이 붙는다. 가둔 프로세스의 환경에서는
+`JAIL_DROP_ENV`(토큰·ssh agent)를 지운다. push·gh 차단 env(worker.guard_exports, review._env)는 그대로다.
+가둘 수 없으면(`jail.JAIL_FAILED` 줄, `jail_failure`) 실행을 멈춘다(go._sandbox_end, review._call).
+agy·claude worker는 가두지 않는다(범위 밖 `landlock-all-workers`).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, git, shellenv, transient
+from . import config, git, jail, shellenv, transient
 
 q = shlex.quote
 
@@ -48,6 +58,79 @@ class WorkerInput:
         return self.brief.parent
 
 
+LANDLOCK = "landlock"
+JAIL_DROP_ENV = ("GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "SSH_AUTH_SOCK")  # 가둔 프로세스에서 지운다
+SHARED_TMP = Path("/tmp")  # 가둔 CLI가 늘 쓸 수 있는 임시 폴더(시험이 바꾼다)
+JAILED_CLIS = ("codex", "agy")  # 가둘 줄 아는 CLI(cli_home)
+
+
+@dataclass
+class Sandbox:
+    """샌드박스 모드(`os` | `landlock`)와 CLI별 Landlock 거부 목록. 기본값은 `os`(옛 호출, 시험)다.
+
+    `gs go`가 시작할 때 주 레포에서 한 번 계산해(go._sandbox) 실행 동안 쓴다. 거부 목록은 sandbox.denies에 다른 가둘 CLI의 홈(cli_home)을 더한 것이다."""
+    mode: str = "os"
+    denies: dict[str, list[Path]] = field(default_factory=dict)
+
+    @property
+    def landlock(self) -> bool:
+        return self.mode == LANDLOCK
+
+    def jails(self, cli: str) -> bool:
+        """이 모드에서 `cli`를 gs jail로 가두는가."""
+        return self.landlock and cli in JAILED_CLIS
+
+
+def jails(sandbox: Sandbox | None, cli: str) -> bool:
+    return sandbox is not None and sandbox.jails(cli)
+
+
+def cli_home(cli: str) -> Path:
+    """가둔 CLI가 쓸 수 있는 홈: codex는 `CODEX_HOME` 또는 `~/.codex`, agy는 `~/.gemini`."""
+    if cli == "codex":
+        return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    if cli == "agy":
+        return Path.home() / ".gemini"
+    raise ValueError(f"가둘 줄 모르는 CLI: {cli}")
+
+
+def jail_writes(cli: str, writes: Iterable[str | os.PathLike]) -> list[Path]:
+    """`writes`에 언제나 쓰는 `/dev`와 그 CLI의 홈을 더한 쓰기 목록(순서 유지, 겹침 없음).
+
+    홈이 없으면 만든다(권한 700). jail은 없는 쓰기 경로에 규칙을 걸지 못해(jail._allow) 가둔 CLI가 홈을 만들 수 없다.
+    만들지 못하면 그대로 둔다(CLI가 제 오류를 낸다)."""
+    home = cli_home(cli)
+    with contextlib.suppress(OSError):
+        home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return list(dict.fromkeys([*(Path(w) for w in writes), Path("/dev"), home]))
+
+
+def jail_argv(cli: str, writes: list[Path], sandbox: Sandbox) -> list[str]:
+    """`<지금 gs의 python> -m gs.cli jail --write … --deny … --`. 뒤에 가둘 명령을 붙인다.
+
+    python은 `agy_hook_command`처럼 지금 도는 gs의 것이다(PATH의 `gs`가 다른 버전이어도 같은 jail)."""
+    argv = [sys.executable, "-m", "gs.cli", "jail"]
+    for path in writes:
+        argv += ["--write", str(path)]
+    for path in sandbox.denies.get(cli, []):
+        argv += ["--deny", str(path)]
+    return argv + ["--"]
+
+
+def jail_failure(text: str) -> str:
+    """줄 처음이 `jail.JAIL_FAILED`인 첫 줄(gs jail이 명령을 띄우지 못했다). 없으면 빈 문자열."""
+    return next((line.strip() for line in text.splitlines() if line.startswith(jail.JAIL_FAILED)), "")
+
+
+def tree_under_writes(tree: Path, writes: Iterable[str | os.PathLike]) -> str:
+    """리뷰 트리가 쓰기 경로와 같거나 그 아래면 그 이유 한 줄, 아니면 빈 문자열. 링크를 푼 경로로 본다(jail과 같다)."""
+    real = Path(os.path.realpath(tree))
+    for path in writes:
+        if real.is_relative_to(os.path.realpath(path)):
+            return f"리뷰 트리 {tree}가 landlock 쓰기 경로 {path} 아래라 읽기 전용으로 가둘 수 없다"
+    return ""
+
+
 def worker_selection(family: str, models: config.ModelsConfig,
                      selection: config.ModelEffort | None = None) -> config.ModelEffort:
     """실행과 표시가 공유하는 worker 선택. 표가 없으면 기존 models 설정을 쓴다."""
@@ -60,10 +143,20 @@ class Adapter:
     isolation_warning = ""
 
     def __init__(self, models: config.ModelsConfig, selection: config.ModelEffort | None = None,
-                 worker_tests: config.WorkerTestsConfig = config.WorkerTestsConfig()):
+                 worker_tests: config.WorkerTestsConfig = config.WorkerTestsConfig(), *, sandbox: Sandbox | None = None):
         self.models = models
         self.selection = worker_selection(self.name, models, selection)
         self.worker_tests = worker_tests
+        self.sandbox = sandbox or Sandbox()  # 가두는 것은 Codex뿐이다(spec 3-1)
+
+    @property
+    def jailed(self) -> bool:
+        """이 worker를 gs jail로 가두는가. 그러면 로그의 `jail.JAIL_FAILED` 줄이 실행 중단 신호다(go._sandbox_end)."""
+        return False
+
+    def drop_env(self) -> tuple[str, ...]:
+        """실행 스크립트가 지울 환경 변수(worker.write_script). 가둔 worker만 JAIL_DROP_ENV다."""
+        return JAIL_DROP_ENV if self.jailed else ()
 
     def model_options(self) -> str:
         options = f"--model {q(self.selection.model)} " if self.selection.model else ""
@@ -194,6 +287,9 @@ class Codex(Adapter):
     `cannot lock ref 'HEAD': unable to create directory`로 커밋이 실패한다(v6 02에서 측정, v8 01).
     열린 디렉터리 자신과 그 아래는 만들 수 있으므로 `gs`를 열어 둔다. push는 네트워크를 꺼서 막는다.
 
+    landlock 모드(`Sandbox`)에서는 OS 샌드박스 대신 gs jail로 가두고 `-s danger-full-access`로 띄운다. 쓰기 목록은 위의 같은 곳
+    (worktree, writable_dirs, `/tmp`, `$TMPDIR`)과 `/dev`, codex 홈이다(jail_writes). 네트워크는 열린다(spec 2-7).
+
     sandbox 안에서 못 도는 시험(네트워크, localhost, 홈 디렉터리 쓰기, ps 실행: ORIGINS 실패 13)은 gs가 verify로 다시 돌린다.
     그 밖의 실패는 sandbox 탓으로 돌리지 말고 고치도록, 그런 실패만으로 멈추지 말고 커밋하라는 한 줄을 brief 앞에 붙인다(brief는 stdin으로 들어가 뒤에 붙는다).
     레포 profile에 sandbox용 시험 명령이 있으면 그것을 쓰라는 말도 같은 줄에 있다. 명령 자체는 레포가 정한다(코드는 도구를 가정하지 않는다).
@@ -220,9 +316,25 @@ class Codex(Adapter):
         except (git.GitError, OSError) as e:
             raise AdapterError(f"codex: worktree의 git 디렉터리를 찾지 못했다: {e}") from e
 
+    @property
+    def jailed(self) -> bool:
+        return self.sandbox.jails(self.name)
+
+    def jail_writes(self, worktree: Path) -> list[Path]:
+        """landlock 모드의 쓰기 목록: worktree, writable_dirs, `/tmp`, `$TMPDIR`(gs의 값, 있으면), `/dev`, codex 홈.
+        `workspace-write`가 쓰게 하던 곳과 같다(spec 2-6)."""
+        tmpdir = os.environ.get("TMPDIR")
+        return jail_writes(self.name, [worktree, *self.writable_dirs(worktree), SHARED_TMP, *([tmpdir] if tmpdir else [])])
+
     def command(self, inp: WorkerInput) -> str:
-        adds = " ".join(f"--add-dir {q(str(d))}" for d in self.writable_dirs(inp.worktree))
+        """os 모드: `-s workspace-write` + `--add-dir` + 네트워크 끔. landlock 모드: gs jail 안에서 `-s danger-full-access`.
+        brief는 어느 쪽이든 stdin이고 로그 리다이렉트는 jail 밖 셸(worker.write_script)이 한다."""
         model = self.model_options()
+        if self.jailed:
+            prefix = shlex.join(jail_argv(self.name, self.jail_writes(inp.worktree), self.sandbox))
+            return (f"{prefix} codex exec --json -s danger-full-access {model}"
+                    f"--skip-git-repo-check -C {q(str(inp.worktree))} {q(self.NOTE)} < {q(str(inp.brief))}")
+        adds = " ".join(f"--add-dir {q(str(d))}" for d in self.writable_dirs(inp.worktree))
         return (f"codex exec --json -s workspace-write {model}-c sandbox_workspace_write.network_access=false "
                 f"--skip-git-repo-check -C {q(str(inp.worktree))} {adds} {q(self.NOTE)} < {q(str(inp.brief))}")
 
@@ -437,12 +549,13 @@ ADAPTERS: dict[str, type[Adapter]] = {"claude": Claude, "codex": Codex, "agy": A
 
 
 def for_model(model: str, models: config.ModelsConfig, selection: config.ModelEffort | None = None, *,
-              worker_tests: config.WorkerTestsConfig = config.WorkerTestsConfig()) -> Adapter:
-    """worker_tests: config `[hook.worker_tests]`. worker를 띄우는 곳(go._worker_adapter)이 넘긴다."""
+              worker_tests: config.WorkerTestsConfig = config.WorkerTestsConfig(),
+              sandbox: Sandbox | None = None) -> Adapter:
+    """worker_tests: config `[hook.worker_tests]`, sandbox: 실행 시작 때 계산한 모드(없으면 os). worker를 띄우는 곳(go._worker_adapter)이 넘긴다."""
     override = os.environ.get("GS_WORKER_CMD")
     if override:
         return Custom(override, worker_tests)
     try:
-        return ADAPTERS[model](models, selection, worker_tests)
+        return ADAPTERS[model](models, selection, worker_tests, sandbox=sandbox)
     except KeyError:
         raise AdapterError(f"model `{model}` 어댑터가 없다({'|'.join(ADAPTERS)})") from None

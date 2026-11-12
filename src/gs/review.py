@@ -48,6 +48,14 @@ reviewer·재리뷰·판단 모델 호출이 실패해도(답의 형식이 틀�
 (spec 2-1). 실패는 state의 리뷰 기록(note: "리뷰 실패…")에 남아 보고서(08)에 나온다. 판단 모델이 실패하면
 모든 지적이 report다.
 
+Landlock 모드(goldstack-v32 03): gs go가 실행 시작 때 계산한 sandbox(adapters.Sandbox)가 landlock이면 codex·agy 리뷰어를 OS 샌드박스 대신
+gs jail로 가둬 띄운다(reviewer_argv, _ask_reviewer). 리뷰 트리가 리뷰어 쓰기 경로 아래이거나 jail이 명령을 띄우지 못하면(JAIL_FAILED 줄)
+리뷰 실패가 아니라 아래 SandboxAbort다.
+
+샌드박스가 명령을 띄우지 못한 것도 실패가 아니다(goldstack-v32 spec 1-8). codex·agy 리뷰어 호출이 끝나면 그 stdout(codex는 `--json` 이벤트,
+agy는 텍스트)을 transient.sandbox_failure로 보고, 걸리면 답이 형식에 맞아도(지적 0건이어도) 버리고 SandboxAbort를 올린다(_call). 리뷰 실패로 적지 않아
+리뷰 없이 병합하지 않는다. 실행은 `중단(샌드박스)`로 멈추고 다음 gs go가 리뷰·재리뷰부터 잇는다.
+
 단 끊긴 것은 실패가 아니다(spec 2-14, 2-15). 호출이 일시 오류(transient.reason)나 시간 초과로 끝나면 대기 일정대로 다시
 부르고(call_waiting), 대기 합계가 `timeouts.network_wait_minutes`를 넘으면 NetworkAbort를 올린다. 끊겼다는 이유로 리뷰 없이
 병합하지 않는다. 다음 gs go가 리뷰·재리뷰부터 잇는다. 호출은 새 프로세스 그룹에서 돌고 끝나면 그룹째 끝낸다(verify.py와 같다).
@@ -341,10 +349,13 @@ def _communicate(p: subprocess.Popen, prompt: str | None, timeout: float, cancel
 
 
 def _call(argv: list[str], *, prompt: str | None, cwd: Path, env: dict[str, str], log: Path, timeout: float,
-          family: str = "", model: str = "", cancel: threading.Event | None = None) -> str:
+          family: str = "", model: str = "", cancel: threading.Event | None = None, jailed: bool = False) -> str:
     """argv를 새 프로세스 그룹에서 한 번 부르고 답을 돌려준다. 돌아올 때 그 그룹에는 프로세스가 남지 않는다.
 
     시간을 넘기면 ReviewTimeout, family의 일시 오류면 ReviewTransient, 그 밖의 실패는 ReviewError. 다시 부르는 것은 call_waiting이다.
+    끝난(시간 초과로 끝낸 것도) 호출의 stdout(codex는 `--json` 이벤트, agy는 텍스트)에 샌드박스가 명령을 띄우지 못한 흔적(transient.sandbox_failure)이 있으면
+    시간 초과·종료 코드·답의 형식에 상관없이 SandboxAbort다. 다시 부르지 않고 리뷰 실패로 적지 않는다.
+    gs jail로 가둔 호출(jailed)은 stderr(log)에 줄 처음이 jail.JAIL_FAILED인 줄이 있어도(가두지 못해 띄우지 못했다) 그보다 먼저 SandboxAbort다. 이유는 그 줄이다.
     cancel이 서면(gs가 루프를 떠난다) 그룹을 끝내고 Cancelled다.
     원본 stdout은 로그 옆 `<로그 이름>[.<호출 번호>].stdout`에 남긴다(실패·시간 초과도 포함).
     """
@@ -361,17 +372,24 @@ def _call(argv: list[str], *, prompt: str | None, cwd: Path, env: dict[str, str]
             p = subprocess.Popen(argv, stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                                  cwd=cwd, env=env, stdout=output, stderr=err, text=True,
                                  start_new_session=True)
+            timed_out = False
             try:
                 _communicate(p, prompt, timeout, cancel)
             except subprocess.TimeoutExpired:
-                raise ReviewTimeout(f"`{argv[0]}`가 {timeout}초 안에 끝나지 않았다(로그 {log})") from None
+                timed_out = True  # 끝낸 뒤 출력의 샌드박스 실패를 먼저 본다
             finally:  # 정상 종료여도 띄워 둔 자손이 다음 호출·수정 worker와 함께 worktree를 건드리지 못하게. 코디네이터가 죽어도 남기지 않는다
                 verify.stop(p)
                 _close(p)
     except OSError as e:
         raise ReviewError(f"`{argv[0]}`를 실행하지 못했다: {e}") from e
+    if jailed and (line := adapters.jail_failure(log.read_text(encoding="utf-8", errors="replace"))):
+        raise transient.SandboxAbort(f"{family} 리뷰어를 landlock으로 가두지 못했다: {line}(로그 {log})")
     # 원본은 바이트 그대로 두고, 파싱용 문자열만 디코드·줄바꿈 변환한다.
     stdout = raw.read_text(encoding="utf-8", errors="replace")
+    if sandbox := transient.sandbox_failure(family, stdout):  # 시간 초과·종료 코드·답의 형식보다 먼저 본다: 지적 0건 답도 버린다
+        raise transient.SandboxAbort(f"`{argv[0]}`({family})의 명령이 샌드박스에서 돌지 못했다: {sandbox}(출력 {raw})")
+    if timed_out:
+        raise ReviewTimeout(f"`{argv[0]}`가 {timeout}초 안에 끝나지 않았다(로그 {log})")
     result = _claude_result(stdout) if family == "claude" else None
     is_error = bool(result and result.get("is_error") is True)
     if p.returncode or is_error:
@@ -543,12 +561,18 @@ def reviewer_selection(reviewer: str, cfg: config.Config, *, rereview: bool = Fa
 
 def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path,
                   models: config.ModelsConfig, selection: config.ModelEffort | None = None, *, on_wait=None,
-                  scratch: Path | None = None) -> tuple[list[str], str | None, bool]:
+                  scratch: Path | None = None, sandbox: adapters.Sandbox | None = None) -> tuple[list[str], str | None, bool]:
     """(명령, stdin 프롬프트, 답이 out 파일에 남는가). 리뷰 대상 worktree는 모두 읽기만 하게 띄운다.
 
     codex는 `-s workspace-write`, 네트워크 끔, `-C <scratch>`다. scratch는 호출마다 새로 만든 빈 임시 폴더라
     리뷰어가 시험 재현에 쓸 임시 파일은 거기와 TMPDIR에만 쓸 수 있고 worktree는 쓰지 못한다
     (docs/research/codex-review-sandbox.md). 만들고 지우는 일은 호출자(`_ask_reviewer`)가 한다.
+
+    sandbox가 landlock이면(goldstack-v32 03) codex·agy를 gs jail로 감싼다(adapters.jail_argv). OS 샌드박스는 쓰지 않는다:
+    codex는 `-s danger-full-access`, `-C <scratch>`, 답은 scratch 안의 `out.name`(`landlock_answer`, 호출자가 out으로 옮긴다).
+    agy는 `--sandbox`만 빼고 deny 규칙과 나머지는 그대로다. 쓰기 목록은 둘 다 scratch(agy도 호출마다 새로 만든다), `/tmp`,
+    그리고 언제나 `/dev`와 그 CLI의 홈이다. 리뷰 트리(worktree)가 그 아래면 띄우지 않고 SandboxAbort다(가두어도 쓸 수 있다).
+    claude와 시험 seam(GS_REVIEWER_CMD)은 가두지 않는다.
     """
     custom = os.environ.get("GS_REVIEWER_CMD")
     if custom:
@@ -564,6 +588,19 @@ def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path,
         return ["claude", "-p", *options, "--output-format", "json",
                 "--permission-mode", "bypassPermissions", "--tools", "Read,Grep,Glob",
                 *_claude_isolation(models, worktree, on_wait)], prompt, False
+    if adapters.jails(sandbox, reviewer):
+        if scratch is None:
+            raise ReviewError(f"가둔 {reviewer} 리뷰에는 빈 임시 폴더(scratch)가 필요하다")
+        writes = adapters.jail_writes(reviewer, [scratch, adapters.SHARED_TMP])
+        if problem := adapters.tree_under_writes(worktree, writes):
+            raise transient.SandboxAbort(problem)
+        if reviewer == "codex":
+            inner = ["codex", "exec", "--json", *options, "-s", "danger-full-access", "--skip-git-repo-check",
+                     "-C", str(scratch), "--output-last-message", str(landlock_answer(scratch, out)), "-"]
+            return adapters.jail_argv(reviewer, writes, sandbox) + inner, prompt, True
+        inner = [adapters.agy_bin(), "-p", prompt, "--dangerously-skip-permissions", "--disable-slash-commands",
+                 "--settings", adapters.Agy.settings(), *options]
+        return adapters.jail_argv(reviewer, writes, sandbox) + inner, None, False
     if reviewer == "codex":
         if scratch is None:
             raise ReviewError("codex 리뷰에는 빈 임시 폴더(scratch)가 필요하다")
@@ -574,6 +611,11 @@ def reviewer_argv(reviewer: str, worktree: Path, prompt: str, out: Path,
                 "--disable-slash-commands", "--settings", adapters.Agy.settings(),
                 *options], None, False
     raise ReviewError(f"reviewer `{reviewer}`를 부르는 법을 모른다")
+
+
+def landlock_answer(scratch: Path, out: Path) -> Path:
+    """가둔 codex 리뷰어가 `--output-last-message`로 답을 쓰는 곳: scratch 안의 같은 이름. 실행 디렉터리(out)는 쓰기 목록 밖이다."""
+    return scratch / out.name
 
 
 WORKER_LAST = "worker-last.txt"
@@ -893,26 +935,38 @@ def classify(rdir: Path, cwd: Path, findings: list[Finding], diff: Path, ticket:
 
 
 def _ask_reviewer(reviewer: str, worktree: Path, prompt: str, rdir: Path, timeout: int, cfg: config.Config, on_wait,
-                  selection: config.ModelEffort, parse=None) -> str:
+                  selection: config.ModelEffort, parse=None, sandbox: adapters.Sandbox | None = None) -> str:
     """reviewer를 부르고 답을 rdir/review.txt에도 남긴다. 끊기면 기다렸다 다시 부른다(call_waiting).
 
-    parse는 호출자가 답을 읽는 함수다. 호출 안에서 먼저 불러 ReviewError면 그 호출의 측정 결과를 format-error로 적고 올린다(재호출하지 않는다)."""
+    parse는 호출자가 답을 읽는 함수다. 호출 안에서 먼저 불러 ReviewError면 그 호출의 측정 결과를 format-error로 적고 올린다(재호출하지 않는다).
+    sandbox가 landlock이면 codex·agy를 gs jail로 가둔다(reviewer_argv): 호출마다 새 임시 폴더(scratch)를 만들어 그 호출의 TMPDIR로 두고
+    호출 뒤 지운다. 환경에서 adapters.JAIL_DROP_ENV를 지운다. codex의 답은 scratch에서 out으로 옮긴다."""
     out = rdir / "review.txt"
-    fresh = reviewer == "codex" and not os.environ.get("GS_REVIEWER_CMD")  # 호출마다 빈 임시 폴더. 재시도도 새로 만든다
+    custom = bool(os.environ.get("GS_REVIEWER_CMD"))
+    jailed = not custom and adapters.jails(sandbox, reviewer)
+    fresh = not custom and (reviewer == "codex" or jailed)  # 호출마다 빈 임시 폴더. 재시도도 새로 만든다
     fixed = None if fresh else reviewer_argv(reviewer, worktree, prompt, out.resolve(), cfg.models, selection, on_wait=on_wait)
     env = {**_env(worktree), "GS_REVIEWER": reviewer}
+    if jailed:
+        for name in adapters.JAIL_DROP_ENV:
+            env.pop(name, None)
 
     def once() -> str:
         scratch = Path(tempfile.mkdtemp(prefix="gs-review-")) if fresh else None
         try:
             argv, stdin, to_file = (reviewer_argv(reviewer, worktree, prompt, out.resolve(), cfg.models, selection,
-                                                  on_wait=on_wait, scratch=scratch) if fresh else fixed)
+                                                  on_wait=on_wait, scratch=scratch, sandbox=sandbox) if fresh else fixed)
+            answer = landlock_answer(scratch, out) if jailed and to_file else out
             with metrics.review_call(on_wait, reviewer, selection, rdir) as call:
                 out.unlink(missing_ok=True)  # 앞 시도·지난 실행의 답을 이번 답으로 읽지 않게
-                text = _call(argv, prompt=stdin, cwd=worktree, env=env, log=rdir / "reviewer.log", timeout=timeout, family=reviewer,
-                             model=selection.model if reviewer == "agy" else "", cancel=getattr(on_wait, "cancel", None))
+                text = _call(argv, prompt=stdin, cwd=worktree, env={**env, "TMPDIR": str(scratch)} if jailed else env,
+                             log=rdir / "reviewer.log", timeout=timeout, family=reviewer,
+                             model=selection.model if reviewer == "agy" else "", cancel=getattr(on_wait, "cancel", None),
+                             jailed=jailed)
                 if to_file:
-                    text = out.read_text(encoding="utf-8") if out.exists() else ""
+                    text = answer.read_text(encoding="utf-8") if answer.exists() else ""
+                    if answer != out and answer.exists():  # 가둔 codex의 답: scratch를 지우기 전에 옮긴다
+                        out.write_text(text, encoding="utf-8")
                 else:
                     out.write_text(text, encoding="utf-8")
                 if parse is not None:
@@ -931,8 +985,12 @@ def _ask_reviewer(reviewer: str, worktree: Path, prompt: str, rdir: Path, timeou
 @metrics.reviewed
 def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticket: Path, spec: Path, model: str,
         reviewer: str, cfg: config.Config, on_wait=None, worker_log: Path | None = None,
-        touches: list[str] | None = None, merged: dict[str, list[str]] | None = None) -> dict:
+        touches: list[str] | None = None, merged: dict[str, list[str]] | None = None,
+        sandbox: adapters.Sandbox | None = None) -> dict:
     """티켓 하나를 리뷰하고 지적을 나눈다. 돌려주는 기록이 state의 `review`다.
+
+    sandbox는 gs go가 실행 시작 때 계산한 샌드박스 모드다(없으면 os). landlock이면 codex·agy 리뷰어를 가둔다(_ask_reviewer).
+    재리뷰·수리 재리뷰도 같다.
 
     touches는 이 티켓 `touches`, merged는 이번 실행에서 이미 병합된 티켓들의 {티켓: touches}다. 판단 모델에 고칠 수 있는 파일로 넘긴다(classify).
 
@@ -957,7 +1015,7 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
     rec.update(tier=tier, actual_model=selection.model, effort=selection.effort)
     try:
         text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.review_minutes * 60, cfg, on_wait, selection,
-                             parse=parse_findings)
+                             parse=parse_findings, sandbox=sandbox)
         findings = parse_findings(text)
         if (checked := parse_checked(text)) is not None:
             rec["checked"] = checked
@@ -979,7 +1037,8 @@ def record(reviewer: str, note: str, rdir: Path | None = None) -> dict:
 @metrics.reviewed
 def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, found: list[dict], ticket: Path, spec: Path,
              reviewer: str, cfg: config.Config, nth: int, on_wait=None, worker_log: Path | None = None,
-             touches: list[str] | None = None, merged: dict[str, list[str]] | None = None) -> dict:
+             touches: list[str] | None = None, merged: dict[str, list[str]] | None = None,
+             sandbox: adapters.Sandbox | None = None) -> dict:
     """수정 커밋 diff(base..head)와 이 리뷰어의 지적(found)을 주고 다시 보게 한다. nth는 몇 번째 재리뷰인가.
 
     found의 앞서 resolved인 지적(is_recheck)에는 목록에 `recheck`를 붙이고 프롬프트에 안내를 넣는다.
@@ -1005,7 +1064,7 @@ def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, fo
     res.update(tier=tier, actual_model=selection.model, effort=selection.effort)
     try:
         text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.rereview_minutes * 60, cfg, on_wait, selection,
-                             parse=lambda t: (parse_verdicts(t), parse_findings(t)))
+                             parse=lambda t: (parse_verdicts(t), parse_findings(t)), sandbox=sandbox)
         res["verdicts"] = parse_verdicts(text)
         new = parse_findings(text)
         if (checked := parse_checked(text)) is not None:
@@ -1025,7 +1084,8 @@ def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, fo
 
 @metrics.reviewed
 def repair_review(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, verify_log: str, ticket: Path, spec: Path,
-                  reviewer: str, cfg: config.Config, on_wait=None, worker_log: Path | None = None) -> dict:
+                  reviewer: str, cfg: config.Config, on_wait=None, worker_log: Path | None = None,
+                  sandbox: adapters.Sandbox | None = None) -> dict:
     """수리 커밋 diff(base..head)를 tiers.rereview 등급으로 리뷰한다. 돌려주는 값은 apply_repair_review가 쓴다: round, dir, base, head, note, failed, findings.
 
     지적은 판단 모델을 부르지 않고 모두 report다. 모델 호출 실패는 failed·note에 남기고 올리지 않는다.
@@ -1042,7 +1102,7 @@ def repair_review(*, repo: Path, worktree: Path, rdir: Path, base: str, head: st
     res.update(tier=tier, actual_model=selection.model, effort=selection.effort)
     try:
         text = _ask_reviewer(reviewer, worktree, prompt, rdir, cfg.timeouts.rereview_minutes * 60, cfg, on_wait, selection,
-                             parse=parse_findings)
+                             parse=parse_findings, sandbox=sandbox)
         new = parse_findings(text)
         if (checked := parse_checked(text)) is not None:
             res["checked"] = checked
