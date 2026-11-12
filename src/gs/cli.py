@@ -93,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="pretooluse: Claude Code(종료 2로 막음), agy-pretooluse: agy(stdout JSON), "
                         "permissionrequest: Claude Code 승인 창(stdout JSON으로 거부)")
 
+    # 내부 진입점(03이 codex·agy를 가둘 때 부른다). 정책은 부르는 쪽이 정하고 여기는 받은 목록만 쓴다
+    p = sub.add_parser("jail", help="내부용: Landlock으로 명령 하나를 가둔다(리눅스)")
+    p.add_argument("--write", action="append", default=[], metavar="경로", help="쓰기를 허용할 경로(여러 번)")
+    p.add_argument("--deny", action="append", default=[], metavar="경로", help="읽지 못하게 할 경로(여러 번)")
+    p.add_argument("command", nargs=argparse.REMAINDER, help="-- 뒤의 명령과 인자")
+    p.error = _jail_usage_error
+
     args = parser.parse_args(argv)
     if args.cmd == "go" and len(args.feature) > 1 and args.only is not None:
         parser.error("여러 feature와 --only는 함께 쓸 수 없다")
@@ -111,6 +118,9 @@ def _run(args: argparse.Namespace) -> int:
             return hook_agy.main()
         from . import hook
         return hook.main([args.event])
+    if args.cmd == "jail":  # 레포를 찾지 않는다. 가둘 명령의 cwd(worktree, scratch)에서 불린다
+        from . import jail
+        return jail.run(args.write, args.deny, args.command, sys.stderr)
     if args.cmd == "self-update":
         from .selfupdate import self_update
         return self_update(args.repo or Path.cwd(), args.source, args.ref, sys.stdout, sys.stderr)
@@ -172,6 +182,13 @@ def _run(args: argparse.Namespace) -> int:
         from .backlog import backlog
         return backlog(repo, args.all, sys.stdout, sys.stderr)
     return 2  # argparse가 막으므로 오지 않는다
+
+
+def _jail_usage_error(message: str):
+    """`gs jail`의 인자 오류도 못 띄운 경우라 `JAIL_FAILED` 한 줄로 쓴다(03이 그 줄로 실행을 멈춘다)."""
+    from .jail import JAIL_FAILED
+    print(f"{JAIL_FAILED}인자를 읽지 못했다({' '.join(message.split())})", file=sys.stderr, flush=True)
+    sys.exit(2)
 
 
 def _ids(raw: str | None) -> list[str] | None:
