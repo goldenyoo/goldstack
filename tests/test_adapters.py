@@ -97,7 +97,8 @@ class CommandTest(Base):
         cmd = adapters.Claude(MODELS).command(self.inp)
         self.assertTrue(cmd.startswith("claude -p --output-format stream-json"))
         self.assertIn("--permission-mode bypassPermissions", cmd)
-        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)"', cmd)
+        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor', cmd)
+        self.assertIn("Monitor", self.argv(cmd))  # 알림마다 깨어나 일을 마친 뒤에도 비용을 쓴다
         self.assertTrue(cmd.endswith(f"< {shlex.quote(str(self.inp.brief))}"), cmd)  # 공백 경로도 인용
 
     def test_codex(self):

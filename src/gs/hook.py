@@ -68,11 +68,16 @@ SHELL_LEADING_WORDS = {"if", "then", "elif", "else", "while", "until", "do", "ti
 SHELL_NO_COMMAND_WORDS = {"for", "select", "function", "in", "fi", "done", "}"}  # 이 말로 시작하는 명령에는 이름이 없다
 
 FORCE_FLAGS = ("--force", "--force-with-lease", "--force-if-includes")
-# worktree 밖(-C, cd)에서 돌면 다른 체크아웃이나 ref를 바꾸는 git 하위 명령
+# worktree 밖(-C, cd)에서 돌면 다른 체크아웃이나 ref를 바꾸는 git 하위 명령.
+# `stash`는 worktree 안에서도 막는다: `refs/stash`는 모든 worktree가 함께 쓴다(`check_shared_git`의 `_stash_write`)
 GIT_WRITES = {
     "add", "am", "apply", "branch", "checkout", "cherry-pick", "clean", "commit", "merge", "mv", "pull",
     "rebase", "reset", "restore", "revert", "rm", "stash", "switch", "tag", "update-ref", "worktree",
 }
+# `git stash`의 읽기 하위 명령. 나머지(`push`, `pop`, 하위 명령 없음 …)는 `refs/stash`를 바꾼다
+GIT_STASH_READS = {"list", "show"}
+GIT_STASH_WRITE = ("`git stash`는 worktree 안에서도 하지 않는다: `refs/stash`는 모든 worktree가 함께 쓴다. "
+                   "작업을 치우려면 임시 커밋을 쓴다(`list`·`show`는 된다)")
 GIT_OPTS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path"}
 
 # `git remote`에서 공용 설정을 바꾸지 않는 하위 명령. 여기 없는 것은 쓰기로 본다
@@ -1267,7 +1272,7 @@ def check_git(args: list[str], ctx: Ctx) -> str | None:
 # worktree는 설정과 ref를 주 레포와 공유한다. gs의 push 목적지, gs의 git 명령이 실행할 hook, 다른 티켓의 브랜치가 거기 있다.
 
 def check_shared_git(sub: str, rest: list[str], gitdir: str, paths: list[str], ctx: Ctx) -> str | None:
-    """공용 설정이나 자기 브랜치 밖의 ref를 바꾸는 명령이면 그 이유. 임시 디렉터리의 버리는 레포는 공유하지 않아 통과한다."""
+    """공용 설정, 자기 브랜치 밖의 ref, `refs/stash`를 바꾸는 명령이면 그 이유. 임시 디렉터리의 버리는 레포는 공유하지 않아 통과한다."""
     here = _at_worktree(gitdir, paths, ctx)
     if sub == "remote":
         reason = _remote_write(rest)
@@ -1282,6 +1287,8 @@ def check_shared_git(sub: str, rest: list[str], gitdir: str, paths: list[str], c
         reason = _branch_write(rest, ctx, here)
     elif sub == "symbolic-ref":
         reason = _symbolic_ref_write(rest, ctx, here)
+    elif sub == "stash":
+        reason = _stash_write(rest)
     else:
         return None
     return None if reason is None or _scratch_repo(gitdir, paths, ctx) else reason
@@ -1419,6 +1426,16 @@ def _branch_write(rest: list[str], ctx: Ctx, here: bool) -> str | None:
         if f"refs/heads/{name}" != own:
             return f"`git branch {' '.join(rest)}`는 자기 브랜치 밖의 ref `{name}`을 옮긴다"
     return None
+
+
+def _stash_write(rest: list[str]) -> str | None:
+    """`git stash`는 `list`·`show`만 통과한다. 하위 명령이 없거나 옵션뿐인 형태(`-u`)는 `push`이므로 막는다.
+
+    git은 첫 인자만 하위 명령으로 읽는다. 첫 인자가 `$X`처럼 풀릴 말이면 무엇인지 모르니 막는다.
+    """
+    if rest and rest[0] in GIT_STASH_READS:
+        return None
+    return GIT_STASH_WRITE
 
 
 def _symbolic_ref_write(rest: list[str], ctx: Ctx, here: bool) -> str | None:
