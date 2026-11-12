@@ -14,12 +14,12 @@ BRANCHES = "diff가 더한 새 분기와 바꾼 호출 지점 모두를 시험�
 
 
 class BriefRulesTest(unittest.TestCase):
-    def briefs(self, blocked_by=None, merged=None) -> dict[str, str]:
+    def briefs(self, blocked_by=None, merged=None, touches=None) -> dict[str, str]:
         """첫·재개 worker는 go.py처럼 merged를 받고, 수정·수리 worker는 받지 않는다."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             ticket = Ticket(id="05", title="t", blocked_by=blocked_by or [], model="claude", reviewer="codex",
-                            path=root / "05-t.md", body="## 목표\n하나")
+                            path=root / "05-t.md", body="## 목표\n하나", touches=touches or [])
             spec = Spec(feature="demo", verify="full", max_workers=1, idle_minutes=20,
                         verify_minutes=20, path=root / "spec.md")
             out = {}
@@ -50,6 +50,45 @@ class BriefRulesTest(unittest.TestCase):
             with self.subTest(brief=name):
                 self.assertIn(BRANCHES, text)
                 self.assertIn(worker.REAL_TEST_RULE, text)
+
+    def test_every_brief_tells_to_write_left_observations(self):
+        self.assertEqual(worker.OBSERVATIONS_HEADING, "## 남긴 관찰")
+        for name, text in self.briefs().items():
+            with self.subTest(brief=name):
+                self.assertIn(worker.OBSERVATIONS_RULE, text)
+                self.assertIn(f"`{worker.OBSERVATIONS_HEADING}` 제목 아래 한 줄에 하나씩 쓴다. 없으면 절을 쓰지 않는다", text)
+                self.assertIn("리뷰가 짚지 않은 의심, 돌리지 못한 확인, touches 밖에서 고쳐야 할 것", text)
+
+    def test_every_brief_tells_to_start_nested_sessions_with_gs_child(self):
+        for name, text in self.briefs().items():
+            with self.subTest(brief=name):
+                self.assertIn("`gs child -- <명령>`으로 띄우고 모델·effort를 명령에 명시한다. `GS_*`를 지우지 않는다", text)
+
+    def test_every_brief_tells_to_split_test_runs_without_dropping_files(self):
+        for name, text in self.briefs().items():
+            with self.subTest(brief=name):
+                self.assertIn("hook이 한 명령의 시험 파일 수를 막으면 명령을 나눠 돌린다. 일부를 빼지 않는다.", text)
+                self.assertNotRegex(text, r"시험 파일 \d+개")  # 상한 숫자는 레포 config 값이라 brief에 적지 않는다
+
+    def test_first_and_resumed_briefs_list_touches(self):
+        briefs = self.briefs(merged=[], touches=["src/a.py", "tests/test_a.py"])
+        for name in ("first", "resumed"):
+            with self.subTest(brief=name):
+                self.assertIn(worker.TOUCHES_LABEL + "`src/a.py`, `tests/test_a.py`. touches 밖 파일은 고치지 않는다. "
+                              "고쳐야 하면 `## 남긴 관찰`에 적는다.", briefs[name])
+
+    def test_ticket_without_touches_has_no_touches_line(self):
+        for name, text in self.briefs(merged=[]).items():
+            with self.subTest(brief=name):
+                self.assertNotIn(worker.TOUCHES_LABEL, text)
+                self.assertNotIn("touches 밖 파일은 고치지 않는다", text)
+
+    def test_fix_and_repair_briefs_do_not_get_the_first_workers_touches_line(self):
+        briefs = self.briefs(merged=[], touches=["src/a.py"])
+        for name in ("fix1", "fix2", "repair"):
+            with self.subTest(brief=name):
+                self.assertNotIn(worker.TOUCHES_LABEL, briefs[name])
+                self.assertNotIn("touches 밖 파일은 고치지 않는다", briefs[name])
 
     def test_base_line_without_merged_tickets(self):
         for name, text in self.briefs(merged=[]).items():
