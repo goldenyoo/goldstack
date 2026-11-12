@@ -23,7 +23,7 @@ v33은 v31·v32 회고에서 나온 결함 몇 가지를 고치고, 리눅스에
 - **skill 안내:** 새 Claude Code 세션에서 SessionStart 안내가 나오는지, 자연어 요청이 skill로 이어지는지는 시험에서 확인할 수 없다. spec도 이것을 병합 뒤 사람이 확인할 일로 남겼다.
 - **오호출:** 모델 호출로 연 skill 4개는 명시적으로 요청하지 않았을 때도 불릴 수 있다. description을 좁혀 두었지만 실제로 막히는지는 확인하지 않았다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/62 병합 · main 검증 통과
 리뷰 지적: 수정됨 3 · 보고만 2
 
 ## Evidence
@@ -124,10 +124,16 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 647.0 |
+| total | 662.0 |
 | verify | 613.738 |
 | summary | 32.433 |
-| report | 0 |
+| report | 0.095 |
+| push | 2.286 |
+| publish | 4.08 |
+| merge-pr | 3.243 |
+| confirm-merge | 0.007 |
+| postmerge | 1.345 |
+| restore-reverts | 0.11 |
 
 ### 티켓별 결과
 
@@ -665,6 +671,29 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.15
+Creating virtual environment at: .venv
+Resolved 1 package in 6ms
+   Building goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v33/run/gs-main-idekvnhm/base
+      Built goldstack @ file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v33/run/gs-main-idekvnhm/base
+Prepared 1 package in 214ms
+Installed 1 package in 1ms
+ + goldstack==0.2.17 (from file:///Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v33/run/gs-main-idekvnhm/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 앞 17044자 생략. 전체 로그: `/Users/goldenyoo/workspace/goldstack/.goldstack/work/goldstack-v33/run/finish/integration-verify.log`
@@ -688,18 +717,30 @@ No digest: .venv/bin/python3 is not a regular file
 종료 코드: 0
 ```
 
+#### finish/main-verify.log
+
+```text
+integration과 같은 코드(4b53fb37bc0f7cdfdb71523016d195b7e7083fa3), 건너뜀
+```
+
 
 agy 사용: 3/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/62
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `577c8319d9caec666b8a2469b8d934cc15512992`
+
+### issue
+
+- #58 닫음: `577c8319d9caec666b8a2469b8d934cc15512992`에 반영
 
 ### 되돌리는 법
 
@@ -709,7 +750,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 577c8319d9caec666b8a2469b8d934cc15512992
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v33/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
