@@ -37,6 +37,8 @@ base 보호  main 직접 push 금지 → git.direct_push = false
 필수 승인  1명 → gs는 PR을 열고 승인을 기다린다(병합 대기)
 필수 검사  build, test → git.wait_checks = true
 검증       spec verify 없음 → 경고: 검증 없음, 리뷰만으로 병합
+모델       tiers.codex.large의 gpt-6-old가 이 머신 codex 모델 목록에 없다
+모델 기본값 models.agy가 옛 기본값이다 → models.agy = "gemini-4-carbon-high"
 ```
 - **병합 방식**: merge 커밋을 허용하면 `merge`를 제안한다(squash도 함께 허용해도). merge가 꺼져 있고 squash가 허용이면 `squash`. 둘 다 꺼져 있으면(rebase만) `경고: gs가 지원하지 않는 병합 방식`이고 제안이 없다.
 - **`모름(<이유>)`**: 읽지 못한 항목이다. 제안도 쓰기도 하지 않으니, 아는 값이면 config를 손으로 고친다. 보호 규칙을 읽는 classic API는 관리자 권한이 필요해 권한이 없으면 rulesets API로 넘어가는데, 거기에도 규칙이 없으면 세 줄이 모두 `모름`이다. 보호가 전혀 없는 브랜치도 classic API가 404라서 같다:
@@ -44,6 +46,8 @@ base 보호  main 직접 push 금지 → git.direct_push = false
   base 보호  모름(gh: Must have admin rights to Repository. (HTTP 403))
   ```
 - **검증**: `.goldstack/work/*/spec.md`마다 한 줄(`검증       csv-export verify = npm test`). spec이 없거나 `verify`가 `true`·`:`면 `spec verify 없음 → 경고: 검증 없음, 리뷰만으로 병합`이다. 시험이 정말 없는 레포는 spec에 `verify: "true"`로 그 사실을 적는다(이 값은 늘 통과하므로 리뷰만으로 병합한다).
+- **모델**: `[models]`·`[tiers.codex]`·`[tiers.agy]`의 모델 이름(`/effort` 제외)을 이 머신의 목록과 대조한다. codex는 `~/.codex/models_cache.json`(`CODEX_HOME`), agy는 `agy models`다. 목록에 없는 칸마다 한 줄이고, 목록을 읽지 못하면 `확인 못 함(<이유>)`이다. 이 행은 값을 고치지 않는다. `gs check`·`gs go`도 codex 목록 파일만 읽어 없는 칸마다 경고한다(agy는 조회하지 않는다).
+- **모델 기본값**: 칸 값이 gs의 옛 기본값과 같으면 새 기본값(Carbon, astra)을 제안한다. 새 모델이 이 머신 목록에 없으면 제안하지 않고, 목록을 읽지 못하면 `(목록 확인 못 함)`을 붙여 제안한다. `gs check`는 `경고: 옛 모델 기본값 N칸(gs doctor로 확인)` 한 줄을 더한다. 한계: 옛 기본값과 같은 값을 일부러 골랐어도 구별할 수 없어 제안에 나온다. 제안이 틀리면 `--write`를 쓰지 않는다. 다른 머신에서 쓰는 레포는 모델 목록이 머신마다 다르니 그 머신에서 `gs doctor`를 친다.
 - 원격이 GitHub가 아니면 첫 줄이 `gs doctor: GitHub 원격 아님 (원격 origin): …`이고 네 줄이 `모름`이다. `gs check`·`gs go`는 이 원격에서 오류로 멈춘다.
 
 **3. `gs doctor --write` 확인·커밋** — 제안을 config에 쓰게 했으면 표 아래에 바뀐 키마다 한 줄이 더 나온다:
@@ -54,6 +58,8 @@ git.merge_method: "merge" → "squash" (squash만 허용(gs 지원 방식 중))
 git.direct_push: true → false (main 직접 push 금지)
 git.wait_checks: false → true (build, test)
 ```
+모델 기본값 행의 칸도 `--write`가 바꾼다. 그 칸만 새 값으로 고치고 `models.agy: "gemini-4-argon-high" → "gemini-4-carbon-high" (옛 기본값)` 같은 줄을 낸다. config에 없는 모델 키는 더하지 않고, 고칠 수 없는 형식이면 그 칸만 `건너뜀: …`으로 알린다. `gs init`은 새 기본값이 이 머신 목록에 없으면 옛 기본값 중 목록에 있는 것을 적고, 없으면 새 값을 두고 경고한다.
+
 쓰는 규칙: `git.merge_method`·`git.direct_push`·`git.wait_checks` 중 **제안이 있는 키만**, 값이 다를 때만 고친다. 다른 줄과 주석은 그대로 둔다. `모름`과 "제안 없음"(직접 push 제한 없음, 필수 검사 없음)은 쓰지 않으니 이미 있는 값을 되돌리지 않는다. 다만 merge가 허용된 저장소에서 config를 손으로 `squash`로 바꿔 두면 `--write`가 `merge`로 되돌린다. 이때는 `--write` 없이 `gs doctor`만 쓴다.
 
 `git diff .goldstack/config.toml`로 확인하고 커밋한다(보호된 main이면 이 커밋은 첫 feature의 grill PR에 함께 올린다. [아래](#예시-보호된-main--필수-승인)):
@@ -305,7 +311,7 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 | `models.judge` | `"opus"` | 판단 모델 `claude -p --model`: 리뷰 분류(1차 재리뷰의 새 지적 포함), 보고서 요약 |
 | `models.failure_summary` | `gs init` `"haiku"`, 키가 없으면 `models.judge` | 재시도 brief용 실패 요약의 `claude -p --model` |
 | `models.claude_review` | `"opus"` | `tiers.claude` 표가 없을 때 claude reviewer(재리뷰 포함) `--model` |
-| `models.agy` | `"gemini-4-argon-high"` | `tiers.agy` 표가 없을 때 agy worker·reviewer `--model`. `/retro`의 로그 요약은 표와 상관없이 이 값 |
+| `models.agy` | `"gemini-4-carbon-high"` | `tiers.agy` 표가 없을 때 agy worker·reviewer `--model`. `/retro`의 로그 요약은 표와 상관없이 이 값 |
 | `models.codex` | `""` | `tiers.codex` 표가 없을 때 codex worker·reviewer `--model`. 비우면 codex 기본 모델 |
 | `tiers.claude`·`tiers.codex`·`tiers.agy`의 `small`·`medium`·`large` | `gs init`이 쓴다, 키가 없으면 표 없음 | `"모델/effort"`(effort 생략 가능). worker·reviewer의 `--model`과 effort 인자. 값·없을 때 동작은 [`tier`](#tier--티켓-크기에-맞는-모델effort) |
 | `tiers.review` | `"large"` | 첫 리뷰의 등급. 리뷰어 계열의 표가 있을 때만 |
@@ -452,8 +458,8 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 실측(지난 실행): small 9분(14) · medium 38분(14) · large 69분(13)
 공통 모델: 판단 claude opus · 실패 요약 claude haiku
 01 small 구현 codex gpt-6-luna/medium · 수정 codex gpt-6-luna/medium · 수리 codex gpt-6-luna/medium · 첫 리뷰 claude opus/xhigh · 재리뷰 claude sonnet/high
-02 medium 구현 claude sonnet/high · 수정 claude sonnet/high · 수리 claude sonnet/high · 첫 리뷰 codex gpt-6.1-sol/high · 재리뷰 codex gpt-6.1-sol/medium
-03 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6.1-sol/high + agy gemini-4-argon-high · 재리뷰 codex gpt-6.1-sol/medium + agy gemini-4-argon-medium
+02 medium 구현 claude sonnet/high · 수정 claude sonnet/high · 수리 claude sonnet/high · 첫 리뷰 codex gpt-6-astra/xhigh · 재리뷰 codex gpt-6-astra/high
+03 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6-astra/xhigh + agy gemini-4-carbon-high · 재리뷰 codex gpt-6-astra/high + agy gemini-4-carbon-medium
 ```
 티켓이 있고 spec에 `### 교차 검토` 제목이 있는데 그 절에 실제 표 행(2–5번째 칸이 모두 찬 행)도 `교차 검토 못 함:` 줄도 없으면 `gs check`가 경고한다: `spec §7 교차 검토 기록이 없다(…)`. 템플릿의 자리표시 행만 있어도 같다. 그 제목이 없는 옛 spec은 조용하다. 경고라 막지는 않으니 교차 검토를 돌려 결과를 적거나, 못 돌렸으면 이유를 `교차 검토 못 함: <이유>`로 적는다.
 
@@ -499,13 +505,13 @@ large = "opus/xhigh"
 
 [tiers.codex]
 small = "gpt-6-luna/medium"
-medium = "gpt-6.1-sol/medium"
-large = "gpt-6.1-sol/high"
+medium = "gpt-6-astra/high"
+large = "gpt-6-astra/xhigh"
 
 [tiers.agy]
 small = "gemini-3.8-flash-medium"   # agy는 모델 이름에 effort가 들어 있어 뒤를 생략했다
-medium = "gemini-4-argon-medium"
-large = "gemini-4-argon-high"
+medium = "gemini-4-carbon-medium"
+large = "gemini-4-carbon-high"
 ```
 모델 이름은 계정·CLI 버전에 달렸다(`agy models`, codex 모델 목록). 쓰는 CLI에 있는 이름으로 고친다. 실제 인자는 `--model <모델>`에 claude·agy면 `--effort <effort>`, codex면 `-c model_reasoning_effort=<effort>`다.
 - **worker**: 티켓 `tier`, 없으면 `medium`. 수정 worker도 그 시도의 등급이다.
@@ -531,6 +537,7 @@ model: claude
 reviewer: codex
 ---
 ```
+여기 `model`·`reviewer`는 예시일 뿐 고정값이 아니다. 티켓마다 고르고, 기준은 grill spec 템플릿 §5 주석에 있다(codex는 좁은 `touches`·시험으로 닫히는 코드, claude는 skill·프롬프트·한국어 문서·코디네이터 상태 전이. "기본"을 이유로 쓰지 않는다). 템플릿의 자리표시(`<claude|codex>`)가 남으면 `gs check`가 오류로 거부한다.
 문서·설정 티켓만 좁힌다. 코드 티켓은 키를 비워 전체 검증을 받는다. 단 spec에 `verify_ticket`이 있으면 코드 티켓도 그 값을 물려받으니, 그 티켓이 전체 검증을 받아야 하면 spec `verify`를 그대로 적는다. 다른 명령을 쓴 티켓은 보고서 verify 출력에 `티켓 검증 명령(05): …`로 보인다.
 
 **`.goldstack/config.toml`을 고치는 티켓은 좁히지 않는다** — 설정은 뒤 티켓과 마무리 전체에 퍼진다. 좁은 검증으로 병합된 설정이 전체 시험을 깨면 그 뒤 티켓이 연쇄로 떨어진다. 티켓 `touches`가 `.goldstack/config.toml`에 닿는데 그 티켓의 검증(티켓 `verify` 또는 spec `verify_ticket`)이 spec `verify`와 다르면 `gs check`가 경고한다:

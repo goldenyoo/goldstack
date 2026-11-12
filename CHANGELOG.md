@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.2.18 — 2026-11-12
+
+### goldstack-v34
+
+- 모델 기본값을 바꿨다: `models.agy = gemini-4-carbon-high`, `[tiers.agy]` medium·large는 Carbon, `[tiers.codex]` medium·large는 `gpt-6-astra/high`·`xhigh`. small 칸은 그대로. 이 레포 config도 Carbon·astra이고 `rereview_minutes = 20`이다. 비교 측정 없이 사람이 정해 옮겼다.
+- `gs doctor`에 `모델` 행(config 모델 이름을 그 머신의 codex 캐시·`agy models` 목록과 대조)과 `모델 기본값` 행(옛 기본값인 칸에 새 값 제안)이 생겼다. `--write`가 그 칸만 바꾼다. 옛 기본값과 같은 값을 일부러 골랐어도 제안에 나오는 것이 한계다. 다른 머신에서 쓰는 레포는 그 머신에서 `gs doctor`를 친다.
+- `gs check`·`gs go`가 codex 목록에 없는 모델 칸을 경고하고 옛 기본값 칸 수를 한 줄로 알린다. `gs init`은 새 기본값이 머신 목록에 없으면 옛 기본값 중 목록에 있는 값을 적는다.
+- 티켓 템플릿의 `model`·`reviewer`를 자리표시로 바꾸고 spec 템플릿 §5에 계열 고르는 기준을 적었다.
+- `docs/guide.md`·`docs/internals.md`·`docs/research/agy.md`를 맞췄다.
+- 버전을 `0.2.18`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.17 — 2026-11-12
 
 ### goldstack-v33
