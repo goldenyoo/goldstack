@@ -256,6 +256,16 @@ class VerifyConfig:
 
 
 @dataclass(frozen=True)
+class SandboxConfig:
+    """`[sandbox]`: Landlock 모드(`GS_SANDBOX=landlock`)에서 읽지 못하게 할 경로를 기본 비밀 목록에 더한다(sandbox.denies).
+
+    secrets: 경로 문자열 목록. `~`로 시작하면 실행하는 머신의 홈으로, 상대 경로는 주 레포 기준으로 푼다. 없는 경로는 건너뛴다.
+    값은 풀지 않고 적힌 그대로 둔다(머신마다 홈이 다르다). 절이 없으면 빈 목록이다.
+    """
+    secrets: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Config:
     git: GitConfig
     models: ModelsConfig
@@ -269,6 +279,7 @@ class Config:
     overnight: OvernightConfig = OvernightConfig()
     hook: HookConfig = HookConfig()
     verify: VerifyConfig = VerifyConfig()
+    sandbox: SandboxConfig = SandboxConfig()
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -296,6 +307,9 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
             continue
         if section == "verify":
             sections[section] = _load_verify(data.get(section, {}), problems)
+            continue
+        if section == "sandbox":
+            sections[section] = _load_sandbox(data.get(section, {}), problems)
             continue
         if section not in data and section not in ("agy", "worktree", "goldstack", "feedback", "overnight"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
@@ -472,6 +486,20 @@ def _load_verify(raw, problems: list[Problem]) -> VerifyConfig:
     if len(problems) > before:
         return VerifyConfig()
     return VerifyConfig(failed_file, rerun, max_files)
+
+
+def _load_sandbox(raw, problems: list[Problem]) -> SandboxConfig:
+    """`[sandbox]`. 절이 없으면 빈 목록이다."""
+    if not isinstance(raw, dict):
+        problems.append(Problem("오류", CONFIG_PATH, "`sandbox`는 테이블이어야 한다"))
+        return SandboxConfig()
+    for key in raw.keys() - {f.name for f in dataclass_fields(SandboxConfig)}:
+        problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `sandbox.{key}`"))
+    secrets = raw.get("secrets", [])
+    if not isinstance(secrets, list) or not all(isinstance(p, str) and p.strip() for p in secrets):
+        problems.append(Problem("오류", CONFIG_PATH, '`sandbox.secrets`는 빈 값이 아닌 경로 문자열 목록이어야 한다. 예: ["~/.hyperdev/token"]'))
+        return SandboxConfig()
+    return SandboxConfig(tuple(secrets))
 
 
 def worker_tests(raw: dict) -> tuple[WorkerTestsConfig, list[str]]:

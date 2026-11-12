@@ -1,6 +1,7 @@
 """연속 실행: 전체 사전 검사 + 실제 state.json의 마무리 phase로 다음 실행 결정."""
 import contextlib
 import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,8 @@ from unittest import mock
 
 from gs import cli, config, state
 from gs.feature import work_dir
+
+os.environ.setdefault("GS_SANDBOX_PROBE", "pass")  # support와 같다: 실행 전 점검이 이 머신의 codex에 기대지 않는다
 
 
 class ChainTest(unittest.TestCase):

@@ -1,4 +1,7 @@
-"""spec과 티켓 그래프 검사. `gs check`와 `gs go`가 같이 쓴다."""
+"""spec과 티켓 그래프 검사. `gs check`와 `gs go`가 같이 쓴다.
+
+이 머신에서 범위 안 티켓을 돌릴 수 없는 이유(샌드박스, `sandbox.problems`)도 오류로 더한다. 그래서 `gs go`는 아무것도 띄우지 않는다.
+"""
 from __future__ import annotations
 
 import re
@@ -12,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from statistics import median
 
 from . import feature as featmod
-from . import adapters, config, git, graph, state, version
+from . import adapters, config, git, graph, sandbox, state, version
 from .review import reviewer_selection
 
 
@@ -354,6 +357,8 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
     feat.problems.extend(agy_problems(cfg, feat, g))
     feat.problems.extend(cross_review_problems(repo, feat))
     feat.problems.extend(environment_problems(repo, cfg, feat, g))
+    feat.problems.extend(featmod.Problem("오류", "", message)
+                         for message in sandbox.problems(repo, cfg, [feat.tickets[tid] for tid in sorted(g)]))
     lines.append("순서: " + " ".join(graph.topo_order(g)))
     lines.append("지금 시작 가능: " + " ".join(graph.frontier(g)))
     lines.append(measured_line(repo, name))
