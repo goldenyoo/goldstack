@@ -8,6 +8,7 @@
 
 모든 worker는 git push와 gh 쓰기가 막힌 환경에서 돈다(spec 3-1, hook·도구 차단·sandbox와 별개인 구조적 장치):
 GIT_CONFIG_* env로 push URL을 만들 수 없는 경로로 바꾸고, GH_TOKEN을 틀린 값으로 둔다. fetch·commit은 그대로 된다.
+gs jail로 가둔 worker(goldstack-v32, landlock 모드의 codex)는 GITHUB_TOKEN 등 토큰과 SSH_AUTH_SOCK도 지운다(Adapter.drop_env).
 gs 자신의 push(integration 게시)는 이 환경 밖에서 돌므로 영향이 없다.
 """
 from __future__ import annotations
@@ -212,15 +213,17 @@ def write_script(job: Job, adapter: Adapter) -> None:
     """worker를 돌리고 종료 코드를 exit 파일에 원자적으로 남기는 bash 스크립트. 명령과 환경은 어댑터가 정한다.
     push·gh 차단은 어댑터 env 뒤에 넣는다(어댑터가 덮어쓰지 못하게).
     hook의 시험 규칙(`GS_WORKER_TESTS`)은 어댑터가 넣지 않았어도 빈 값으로 내보낸다. gs를 띄운 셸의 값이 worker로 새지 않게.
-    같은 이유로 `GS_NOEQUALS`는 지운 뒤 어댑터가 넣었을 때만 내보낸다(전달 폴더를 준비한 worker만 noequals 셸이다)."""
+    같은 이유로 `GS_NOEQUALS`는 지운 뒤 어댑터가 넣었을 때만 내보낸다(전달 폴더를 준비한 worker만 noequals 셸이다).
+    gs jail로 가둔 worker(landlock 모드의 codex)는 어댑터가 고른 토큰·ssh agent 변수(adapters.JAIL_DROP_ENV)도 지운다(drop_env)."""
     q = shlex.quote
     env = {config.WORKER_TESTS_ENV: "", **adapter.env(job.input), "GS_ROLE": "worker", "GS_TICKET": job.ticket.id}
     command = adapter.command(job.input)
     exports = "\n".join(f"export {k}={q(v)}" for k, v in env.items())
+    dropped = "".join(f" {name}" for name in adapter.drop_env())
     job.script.write_text(f"""#!/bin/bash
 # gs가 만든 worker 실행 스크립트. 티켓 값은 모두 shlex.quote로 넣는다(제목이 셸 코드로 실행되지 않게)
 set -o pipefail
-unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT GS_NOEQUALS
+unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT GS_NOEQUALS{dropped}
 {exports}
 # push·gh 차단(모든 worker)
 {guard_exports(job.worktree)}
