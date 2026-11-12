@@ -10,7 +10,7 @@ from . import config
 
 
 def _codex_inventory() -> tuple[set[str] | None, str]:
-    home = Path(os.environ["CODEX_HOME"]) if "CODEX_HOME" in os.environ else Path.home() / ".codex"
+    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     path = home / "models_cache.json"
     try:
         data = json.loads(path.read_text(encoding="utf-8"))

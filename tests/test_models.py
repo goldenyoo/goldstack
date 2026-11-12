@@ -1,4 +1,5 @@
 """실제 홈·CLI 없이 머신 모델 목록과 config 칸을 대조한다."""
+import contextlib
 import dataclasses
 import json
 import os
@@ -52,6 +53,14 @@ class ModelsTest(unittest.TestCase):
         with mock.patch.dict(os.environ, HOME=str(home)):
             self.assertIsNone(models.codex_models())  # 지정한 CODEX_HOME에는 캐시가 없다.
             del os.environ["CODEX_HOME"]
+            self.assertEqual(models.codex_models(), {"home-model"})
+
+    def test_codex_empty_home_uses_dot_codex_instead_of_cwd(self):
+        home = self.root / "home"
+        (home / ".codex").mkdir(parents=True)
+        (home / ".codex/models_cache.json").write_text('{"models": [{"slug": "home-model"}]}')
+        self.cache.write_text('{"models": [{"slug": "cwd-model"}]}')
+        with mock.patch.dict(os.environ, HOME=str(home), CODEX_HOME=""), contextlib.chdir(self.root):
             self.assertEqual(models.codex_models(), {"home-model"})
 
     def test_agy_first_column_and_empty_output(self):
