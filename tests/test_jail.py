@@ -426,6 +426,8 @@ class RealJailTest(TempDirTest):
         writes = [wt, gitdir, common / "objects", common / "refs/heads/gs", common / "logs/refs/heads/gs"]
         for path in writes:
             self.assertTrue(path.is_dir(), path)
+        # git은 /dev/null을 읽기·쓰기로 연다. 실제 경로(adapters.jail_writes)도 언제나 /dev를 붙인다
+        writes.append(Path("/dev"))
         cp = self.jail("sh", "-c", f"echo hi > f.txt && git add f.txt && git {' '.join(QUIET_GIT)} commit -q -m jailed",
                        writes=writes, cwd=wt, env=env)
         self.assertEqual(cp.returncode, 0, cp.stderr)
