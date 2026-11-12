@@ -209,8 +209,8 @@ def _poll_checks(r, url: str, head: str, on_poll) -> tuple[str, list[str]]:
     previous = None
     number = url.rstrip("/").rsplit("/", 1)[-1]
     symbols = {"pass": "✓", "skipping": "✓", "pending": "…", "fail": "✗", "cancel": "✗"}
+    missing: list[str] = []  # 마지막으로 읽은 PR 검사에 없던 적은 이름. 조회가 시간 초과면 그 전 값이 남는다
     while True:
-        missing: list[str] = []
         try:
             if required_names:
                 reported = _checks(r, url=url, required=False, deadline=deadline)
@@ -225,6 +225,10 @@ def _poll_checks(r, url: str, head: str, on_poll) -> tuple[str, list[str]]:
             # checks는 현재 PR을 읽으므로 조회 뒤 head를 대조한다. 병합도 --match-head-commit으로 고정한다.
             view = _view(r, url, deadline=deadline)
         except subprocess.TimeoutExpired:
+            # 유예가 대기 제한과 같으면 유예 뒤 조회가 제한에 걸린다. 그때도 마지막으로 읽은 없는 이름으로 멈춘다.
+            if named and missing and time.monotonic() >= grace:
+                print(f"■ PR #{number}: CI 검사 없음({', '.join(missing)}) → 병합 안 함", flush=True)
+                return "missing", missing
             return "timeout", []
         if view.get("state") != "OPEN" or view.get("headRefOid") != head:
             raise git.GitError("CI 대기 중 PR 상태 또는 head가 바뀌었다. 다음 gs go에서 다시 확인한다")

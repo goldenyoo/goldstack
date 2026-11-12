@@ -344,6 +344,38 @@ class WaitChecksTest(unittest.TestCase):
         self.assertEqual(labels, ["main"])
         self.assertEqual(self.calls(), ["01"])
 
+    def run_go_grace_is_deadline(self):
+        """checks_minutes = 1, checks_grace_seconds = 60(기본값): 유예가 끝나는 때가 대기 제한이다."""
+        real_load = config.load
+
+        def load(repo):
+            cfg, problems = real_load(repo)
+            return replace(cfg, timeouts=replace(cfg.timeouts, checks_minutes=1)), problems
+
+        with mock.patch("gs.go.config.load", side_effect=load):
+            return self.run_go_clock()
+
+    def test_named_check_missing_when_grace_equals_deadline(self):
+        self.name_checks("linux-only")
+        self.checks(("tests", "pending"))
+        code, out, err, elapsed = self.run_go_grace_is_deadline()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(elapsed, 60)
+        self.assertEqual(self.finish()["phase"], "checks_missing")
+        self.assertEqual(self.finish()["outcome"], "CI 검사 없음: linux-only")
+        self.assertIn("CI 검사 없음(linux-only) → 병합 안 함", out)
+        self.assertEqual(self.merges(), [])
+
+    def test_named_check_pending_when_grace_equals_deadline_times_out(self):
+        self.name_checks("linux-only")
+        self.checks(("linux-only", "pending"))
+        code, out, err, elapsed = self.run_go_grace_is_deadline()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(elapsed, 60)
+        self.assertEqual(self.finish()["phase"], "checks_timeout")
+        self.assertEqual(self.finish()["outcome"], "CI 대기 시간 초과")
+        self.assertEqual(self.merges(), [])
+
     def test_head_changes_during_check_query_blocks_merge(self):
         self.checks(("test", "pass"))
         real_checks = finish._checks
