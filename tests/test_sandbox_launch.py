@@ -473,6 +473,41 @@ class LandlockGoTest(support.GoTest):
         self.assertTrue(ts.network_resume["done"])  # 다음 gs go가 리뷰부터 잇는다
         self.assertFalse((self.bin / "agy.calls").exists())
 
+    def test_every_review_round_gets_the_run_value(self):
+        """첫 리뷰·재리뷰·수리 재리뷰 모두 실행 시작 때 계산한 값을 받는다(seam 리뷰어라 실제로 가두지는 않는다)."""
+        (self.bin / "worker.sh").write_text(textwrap.dedent('''\
+            if grep -q "^## 검증 실패(고칠 것)" "$GS_BRIEF"; then git rm -q BROKEN; git commit -qm repair; exit $?; fi
+            if grep -q "^## 리뷰 지적(고칠 것)" "$GS_BRIEF"; then echo fixed > fix_file; git add -A; git commit -qm fix; exit 0; fi
+            touch BROKEN; echo x > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
+        '''))
+        (self.bin / "reviewer.sh").write_text(textwrap.dedent('''\
+            here="$(dirname "$0")"
+            prompt="$(cat)"
+            if grep -q '"verdicts"' <<< "$prompt"; then
+              echo '{"verdicts": [{"id": 1, "status": "resolved", "evidence": "확인"}], "findings": []}'
+            elif [ ! -f "$here/reviewed" ]; then
+              touch "$here/reviewed"
+              echo '{"findings": [{"severity": "high", "location": "f", "claim": "FIX 값", "evidence": "재현"}]}'
+            else echo '{"findings": []}'; fi
+        '''))
+        real, seen = review._ask_reviewer, []
+
+        def spy(*args, **kwargs):
+            seen.append((args[0], kwargs.get("sandbox")))
+            return real(*args, **kwargs)
+
+        with self.review_with([]), mock.patch.object(review, "_ask_reviewer", side_effect=spy):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual([p["phase"] for p in ts.phases],
+                         ["worker", "review", "fix", "rereview", "verify", "repair", "rereview", "verify", "finish"])
+        self.assertEqual(len(seen), 3, seen)  # 첫 리뷰, 재리뷰, 수리 재리뷰
+        for reviewer, box in seen:
+            self.assertEqual(reviewer, "codex")
+            self.assertEqual(box.mode, "landlock")
+            self.assertIn(self.repo / ".goldstack" / "local.env", box.denies["codex"])
+
     def test_report_head_line_in_landlock_mode(self):
         code, out, err = self.go("--only", "01")  # seam(GS_WORKER_CMD, GS_REVIEWER_CMD)은 가두지 않는다
         self.assertEqual(code, 0, out + err)
