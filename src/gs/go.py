@@ -1480,7 +1480,7 @@ def _resume(r: Run, t: Ticket, runner, mark: dict) -> Active | None:
         _set(r, t.id, status=state.RUNNING, attempts=ts.attempts + (0 if nth or repair else 1), branch=branch, pane="",
              worktree=str(wt), log=str(job.log), started_at=state.now(), ended_at="", reason="")
         worker.write_brief(job, r.feat.spec, r.name, branch, "" if nth or repair else _failure_summary(r, ts), resumed=True,
-                           merged=_base_tickets(r, base))
+                           merged=None if nth or repair else _base_tickets(r, base))
         if nth or repair:
             with job.brief.open("a", encoding="utf-8") as f:
                 f.write(review.repair_brief(ts.repairs[-1]["verify_log"]) if repair else review.fix_brief(_todo(r, t, nth), nth, t.touches, _merged_touches(r, t)))

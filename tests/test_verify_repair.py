@@ -907,6 +907,7 @@ class ResumeTest(Base):
             brief = (self.rundir / "01/1/repair-net1/brief.md").read_text()
             self.assertIn(f"`{self.rundir / '01/1/verify.log'}`", brief)
             self.assertIn(worker.NETWORK_RESUME, brief)
+            self.assertNotIn("base에 이미 병합된 티켓", brief)  # 이은 수리 worker는 base 줄이 없다
             self.assertEqual(self.reviewers(), ["codex", "codex"])
         finally:
             if old:
