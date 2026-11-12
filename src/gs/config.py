@@ -296,6 +296,16 @@ class Config:
     sandbox: SandboxConfig = SandboxConfig()
 
 
+def model_setting(cfg: Config, key: str) -> str | None:
+    """`models.agy`·`tiers.codex.large` 같은 칸의 config 값(등급표는 `모델/effort`). 등급표가 없으면 None."""
+    value = cfg
+    for part in key.split("."):
+        value = value.get(part) if isinstance(value, dict) else getattr(value, part, None)
+    if isinstance(value, ModelEffort):
+        value = value.model + (f"/{value.effort}" if value.effort else "")
+    return value
+
+
 def old_model_defaults(cfg: Config) -> dict[str, str]:
     """키별 옛 기본값과 같은 칸의 새 기본값. 의도적으로 옛 값을 고른 경우도 구별할 수 없다.
 
@@ -304,16 +314,44 @@ def old_model_defaults(cfg: Config) -> dict[str, str]:
     defaults = tomllib.loads(DEFAULT_CONFIG.format(base='"main"'))
     upgrades = {}
     for key, history in OLD_DEFAULTS.items():
-        value = cfg
         default = defaults
         for part in key.split("."):
-            value = value.get(part) if isinstance(value, dict) else getattr(value, part, None)
             default = default[part]
-        if isinstance(value, ModelEffort):
-            value = value.model + (f"/{value.effort}" if value.effort else "")
-        if value in history:
+        if model_setting(cfg, key) in history:
             upgrades[key] = default
     return upgrades
+
+
+def _machine_models(text: str) -> tuple[str, list[str]]:
+    """`gs init` config의 codex·agy 모델 칸을 이 머신 목록(models)과 맞춘다. claude는 별칭이라 보지 않는다.
+
+    새 기본값이 목록에 있거나 목록을 모르면 그대로 둔다. 없으면 OLD_DEFAULTS를 최근 것부터 보며 목록에 있는 첫 값을 적는다.
+    이력에도 목록에 있는 값이 없으면(이력 없는 칸 포함) 새 기본값을 두고 경고한다. effort는 대조하지 않는다.
+    """
+    from . import models
+    from .doctor import _edit
+
+    defaults = tomllib.loads(text)
+    lines = []
+    for family in ("codex", "agy"):
+        cells = [(f"models.{family}", defaults["models"][family])]
+        cells += [(f"tiers.{family}.{tier}", value) for tier, value in defaults["tiers"][family].items()]
+        cells = [(key, value) for key, value in cells if value]  # 빈 값은 CLI 기본 모델이다
+        if not cells:
+            continue
+        names = models.codex_models() if family == "codex" else models.agy_models(timeout=15)
+        if names is None:
+            continue
+        for key, value in cells:
+            if value.split("/", 1)[0] in names:
+                continue
+            fallback = next((old for old in OLD_DEFAULTS.get(key, ()) if old.split("/", 1)[0] in names), None)
+            if fallback is None:
+                lines.append(f"경고: {key}: {value}가 이 머신 {family} 목록에 없다. 직접 고친다")
+            else:
+                text = _edit(text, key, fallback)
+                lines.append(f"{key}: {value}가 이 머신 {family} 목록에 없어 {fallback}로 적었다")
+    return text, lines
 
 
 def load(repo: Path) -> tuple[Config | None, list[Problem]]:
@@ -602,7 +640,11 @@ def read_local_env(repo: Path) -> dict[str, str]:
 
 
 def init(repo: Path, out: TextIO) -> None:
-    """없는 파일만 만든다. gitignore에는 빠진 규칙만 덧붙이고 커밋하지 않는다."""
+    """없는 파일만 만든다. gitignore에는 빠진 규칙만 덧붙이고 커밋하지 않는다.
+
+    config를 만들 때 codex·agy 모델 칸의 새 기본값이 이 머신 목록에 없으면 옛 기본값 이력에서 목록에 있는 가장 최근 값을
+    적고 알린다. 이력에도 없으면 새 기본값을 적고 경고한다. 목록을 모르면 새 기본값이다(_machine_models).
+    """
     (repo / ".goldstack").mkdir(exist_ok=True)
     path = repo / CONFIG_PATH
     if path.exists():
@@ -617,8 +659,11 @@ def init(repo: Path, out: TextIO) -> None:
         else:
             base = "main"
             print(f"{remote}/HEAD를 찾지 못해 git.base를 main으로 쓴다", file=out)
-        path.write_text(DEFAULT_CONFIG.format(base=json.dumps(base, ensure_ascii=False)), encoding="utf-8")
+        text, lines = _machine_models(DEFAULT_CONFIG.format(base=json.dumps(base, ensure_ascii=False)))
+        path.write_text(text, encoding="utf-8")
         print(f"만듦: {CONFIG_PATH}", file=out)
+        for line in lines:
+            print(line, file=out)
 
     example = repo / ".goldstack/local.env.example"
     if example.exists():
