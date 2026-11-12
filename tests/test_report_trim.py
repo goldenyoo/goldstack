@@ -137,6 +137,16 @@ class PassedLineTest(Base):
         self.record(call("ticket-05"), call("ticket-05-repair", code=1, ok=False, result="failed"))
         self.assert_tail_kept("FAILED one")
 
+    def test_ticket_whose_id_extends_another_does_not_decide_for_it(self):
+        self.add_ticket("01").write_text(PASS)  # 로그만 봐서는 통과처럼 보인다: 측정 기록의 시간 초과가 가른다
+        self.record(call("ticket-01", code=0, ok=False, result="timeout"), call("ticket-01-extra"))
+        self.assert_tail_kept()
+
+    def test_repair_and_interrupted_labels_of_the_same_ticket_decide(self):
+        self.add_ticket("05").write_text(FAIL)
+        self.record(call("ticket-05"), call("ticket-05-repair-끊김", code=1, ok=False, result="failed"))
+        self.assert_tail_kept("FAILED one")
+
     def test_mixed_logs_each_decide_alone(self):
         self.add_ticket("05").write_text(PASS)
         self.add_ticket("06").write_text(FAIL)

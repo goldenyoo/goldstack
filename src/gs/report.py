@@ -207,7 +207,7 @@ def _validation_calls(validations: list) -> list[list[dict]]:
 
 
 def _log_owner(r, log: Path) -> tuple[str, str] | None:
-    """verify 로그를 쓴 검증의 (라벨, 종류). 티켓 로그는 (`ticket-<id>`, "ticket": 그 접두어로 시작하는 라벨 모두), 마무리 로그는 (로그 이름의 라벨, "finish"). 아니면 None."""
+    """verify 로그를 쓴 검증의 (라벨, 종류). 티켓 로그는 (`ticket-<id>`, "ticket": 라벨이 그것이거나 `-repair`·`-끊김`이 붙은 것만. 접두어만 같은 다른 티켓 `ticket-<id>-x`는 아니다), 마무리 로그는 (로그 이름의 라벨, "finish"). 아니면 None."""
     try:
         parts = log.relative_to(r.rundir).parts
     except ValueError:
@@ -238,8 +238,9 @@ def passed_line(r, log: Path) -> str | None:
         if owner is None:
             return None
         name, kind = owner
-        calls = [c for c in _validation_calls(r.st.metrics.get("validations", []))
-                 if (c[0].get("label", "") == name or (kind == "ticket" and c[0].get("label", "").startswith(name + "-")))]
+        suffixes = ("", "-repair", "-끊김", "-repair-끊김") if kind == "ticket" else ("",)
+        labels = {name + x for x in suffixes}
+        calls = [c for c in _validation_calls(r.st.metrics.get("validations", [])) if c[0].get("label", "") in labels]
         if not calls or len(calls[-1]) != 1 or not _clean_pass(calls[-1][0]):
             return None
         lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
