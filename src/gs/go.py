@@ -59,8 +59,8 @@ worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 �
 돌던 worker와 리뷰어를 끝내고, 마무리 없이 종료 코드 3으로 끝나고, 티켓마다 남긴 network_resume으로 다음 `gs go`가 같은 worktree에서 잇는다. 합계는 그때 새로 센다.
 어떻게 루프를 떠나든(중단, Ctrl-C·SIGTERM·SIGHUP, 뜻밖의 오류) 돌던 리뷰어의 프로세스 그룹을 끝낸다(_stop_reviews). 리뷰 단계의 티켓은 network_resume이 있어 다음 `gs go`가 리뷰를 다시 한다.
 실행 전 점검을 지나서도 샌드박스가 명령을 띄우지 못하면(transient.sandbox_failure: codex `command_execution`의 bwrap 실패, agy의 sandbox server 연결 실패) `중단(샌드박스)`다.
-codex는 그래도 종료 0으로 끝나니 그대로 두면 `커밋 없음` 실패와 같은 실패의 재시도, 또는 지적 0건 리뷰 뒤의 병합으로 지나간다. 그래서 worker는 결과 확인(_check_worker)이
-성공·실패·커밋 없음 판정 전에 로그를 보고(_sandbox_end), codex·agy 리뷰·재리뷰·수리 재리뷰는 리뷰어 호출(review._call)이 끝날 때 그 출력을 본다.
+codex는 그래도 종료 0으로 끝나니 그대로 두면 `커밋 없음` 실패와 같은 실패의 재시도, 또는 지적 0건 리뷰 뒤의 병합으로 지나간다. 그래서 worker는 결과 확인(_check_worker, 시간 초과·확인 오류로 끝낸
+구현 worker는 _loop)이 성공·실패·커밋 없음 판정 전에 로그를 보고(_sandbox_end), codex·agy 리뷰·재리뷰·수리 재리뷰는 리뷰어 호출(review._call)이 끝날 때(시간 초과로 끝낼 때도) 그 출력을 본다.
 걸리면 SandboxAbort(NetworkAbort의 하위)를 올려 위 중단과 같은 길을 간다: worker 시도는 실패로 세지 않고, 리뷰 답은 형식에 맞아도(지적 0건이어도) 버리고 리뷰 실패로 적지 않아
 병합하지 않는다. 다음 `gs go`가 같은 worktree에서 worker나 리뷰부터 잇는다. 중단 종류는 state의 network kind(sandbox|network)에 남고, `■ 샌드박스 중단 이유:` 줄,
 끝 안내(SANDBOX_ABORT_LINE), 티켓 이유, 결과(_outcome)·요약·알림이 그것을 따른다(abort_label). kind가 없는 옛 state는 네트워크 중단으로 읽는다.
@@ -919,6 +919,8 @@ def _loop(r: Run) -> None:
             a = active[tid]
             if error and not (a.fix or a.repair):  # 이 worker를 확인하다 오류가 났다. 이 티켓만 실패시킨다
                 a.proc.stop()
+                if sandbox := _sandbox_end(a):  # 시간 초과여도 샌드박스 실패면 실패로 세지 않고 멈춘다(_check_worker와 같다)
+                    raise transient.SandboxAbort(f"[{tid}] worker{sandbox}")
                 a.proc.finish(False)
                 _fail(r, a.t, error)
                 active.pop(tid)

@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import textwrap
 import unittest
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from unittest import mock
 import support
 from support import sh
 
-from gs import config, feedback, go, state, transient
+from gs import config, feedback, go, review, state, transient
 
 BWRAP = "bwrap: Failed to make / slave: Permission denied"
 AGY_DOWN = "Command failed to run: connecting to sandbox server: read unix @->@: recvmsg: connection reset by peer."
@@ -258,6 +259,45 @@ class SandboxAbortGoTest(support.GoTest):
         self.assert_sandbox_abort(code, out, err, "11")
         self.assertEqual(self.lines("codex.calls"), ["11"])
         self.assertEqual(self.lines("review.calls"), [])  # 리뷰로도 가지 않았다
+
+    def test_codex_worker_bwrap_then_timeout_stops_without_retry(self):
+        """시간 초과로 끝낸 구현 worker도 실패로 세기 전에 로그를 본다. 시간 초과는 끝난 worker의 결과를 바꿔 낸다(실제 시간 없음)."""
+        self.codex_worker([command("git status", BWRAP + "\n", 1)])
+        self.tickets(**{"11": codex_ticket("11")})
+        real = go._wait_any
+
+        def timed_out(*args, **kwargs):
+            ended = real(*args, **kwargs)
+            if ended and ended[0] == "11":
+                return "11", None, "시간 초과: 30분 동안 로그 출력·새 커밋 없음"
+            return ended
+
+        with mock.patch("gs.go._wait_any", side_effect=timed_out):
+            code, out, err = self.go("--only", "11")
+        _, ts = self.assert_sandbox_abort(code, out, err, "11")
+        self.assertIn(f"■ 샌드박스 중단 이유: [11] worker(codex)의 명령이 샌드박스에서 돌지 못했다: {BWRAP}", out)
+        self.assertEqual(self.lines("codex.calls"), ["11"])  # 재시도하지 않았다
+        self.assertEqual(ts.attempts, 1)
+        self.assertEqual(ts.network_resume["worktree"], str(self.rundir / "wt/11"))
+
+    def test_codex_reviewer_bwrap_then_timeout_stops_without_retry(self):
+        """시간 초과로 끝낸 리뷰어 호출도 그 출력을 본다: 다시 부르지 않고 네트워크 중단으로 적지 않는다."""
+        os.environ["GS_NETWORK_MINUTE"] = "0.001"  # 고치기 전에는 다시 부르다 네트워크 중단이 된다. 그 대기를 줄인다
+        self.reviewer()
+        self.review_out("codex", command("cat diff.patch", BWRAP + "\n", 1), NO_FINDINGS)
+        real = review._communicate
+
+        def timed_out(p, *args):
+            real(p, *args)  # 출력을 다 쓰게 둔 뒤 시간 초과로 낸다
+            raise subprocess.TimeoutExpired(p.args, 1)
+
+        with mock.patch("gs.review._communicate", side_effect=timed_out):
+            code, out, err = self.go("--only", "01")
+        _, ts = self.assert_sandbox_abort(code, out, err, "01")
+        self.assertIn(BWRAP, out)
+        self.assertEqual(self.lines("review.calls"), ["codex"])  # 시간 초과로 다시 부르지 않았다
+        self.assertEqual(ts.review, {})
+        self.assertTrue(ts.network_resume["done"])
 
     def test_codex_reviewer_bwrap_discards_clean_answer_then_next_go_reviews_again(self):
         self.reviewer()
