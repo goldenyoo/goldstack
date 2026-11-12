@@ -16,6 +16,11 @@ landlock 모드로 돈 실행의 보고서는 제목 바로 아래에 `샌드박
 `- <라벨>: 통과 · 종료 코드 0 · <초>초 · 로그 <경로>` 한 줄이다(passed_line). 실패·flaky·시간 초과·끊김, 측정 기록이 없는 옛 state는 끝 4000자를 그대로 붙인다.
 defer 지적(review.DEFER: 재현됐지만 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않은 결함)은 상태가 "재현된 미수리"이고, Evidence의
 "재현된 미수리 결함" 절에 따로 나오며(deferred_section), 원래 심각도와 상관없이 남은 high로 센다(remaining_line). 옛 state에는 없다.
+Evidence의 `### 남은 위험` 절(remaining_risks, 실패한 검증 절 다음)은 gs가 원본 그대로 싣는다: 격리 경고 줄 다음에 worker가 남긴 관찰 표 `| 티켓 | 관찰 | 리뷰 판정 |`
+(goldstack-v35 05, spec 3-2. observation_table). 관찰은 리뷰 기록이 아니라 티켓마다 가장 최근 worker 로그(수정·수리 worker가 있으면 그것)의
+마지막 메시지 전체에서 `## 남긴 관찰` 절을 직접 뽑고(review.worker_observations), 판정은 그 시도의 리뷰 기록마다 가장 최근 회차(재리뷰 포함)에서
+번호로 잇는다. 그 회차가 실은 같은 번호의 관찰 글이 같을 때만 잇고, 아니면 `리뷰 판정 없음`이다. 그래서 리뷰를 부르지 않은 티켓(agy 상한,
+리뷰 트리 준비 실패)의 관찰도 `리뷰 판정 없음`으로 나온다. 경고도 관찰도 없으면 절이 없다.
 """
 from __future__ import annotations
 
@@ -26,7 +31,7 @@ from collections import Counter
 from fnmatch import fnmatchcase
 from pathlib import Path
 
-from . import config, git, metrics, review, sandbox, setup, state, streamfmt, transient
+from . import config, git, metrics, review, sandbox, setup, state, streamfmt, transient, worker
 from .feature import WORK
 
 LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경로로 가리킨다
@@ -379,7 +384,7 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
         text += _log(r, log, tail)
     if after_line:
         text += "\n"
-    return isolation_risks(r) + (measurements(r) or "") + text + f"\n{agy_usage(r)}\n"
+    return remaining_risks(r) + (measurements(r) or "") + text + f"\n{agy_usage(r)}\n"
 
 
 @metrics.best_effort
@@ -474,11 +479,80 @@ def agy_usage(r) -> str:
     return f"agy 사용: {r.st.agy_calls}/{limit}"
 
 
-def isolation_risks(r) -> str:
-    risks = [f"- {tid}: {warning}" for tid, ts in sorted(r.st.tickets.items())
+def _isolation_lines(st) -> list[str]:
+    risks = [f"- {tid}: {warning}" for tid, ts in sorted(st.tickets.items())
              for warning in ts.isolation_warnings]
-    risks += [f"- 마무리: {warning}" for warning in r.st.finish.get("isolation_warnings", [])]
+    return risks + [f"- 마무리: {warning}" for warning in st.finish.get("isolation_warnings", [])]
+
+
+def isolation_risks(r) -> str:
+    """격리 경고만으로 된 `### 남은 위험` 절. 경고가 없으면 빈 문자열이다. 보고서는 관찰 표를 더한 remaining_risks를 쓴다."""
+    risks = _isolation_lines(r.st)
     return "### 남은 위험\n\n" + "\n".join(risks) + "\n\n" if risks else ""
+
+
+def remaining_risks(r) -> str:
+    """`### 남은 위험` 절: 격리 경고 줄(isolation_risks와 같다) 다음에 worker 관찰 표(observation_table). 둘 다 없으면 절이 없다.
+
+    둘 다 gs가 state·로그에서 원본 그대로 싣는다. 판단 모델 요약을 거치지 않는다.
+    """
+    parts = ["\n".join(risks)] if (risks := _isolation_lines(r.st)) else []
+    if table := observation_table(r):
+        parts.append(table)
+    return "### 남은 위험\n\n" + "\n\n".join(parts) + "\n\n" if parts else ""
+
+
+NO_OBSERVATION_VERDICT = "리뷰 판정 없음"
+
+
+def latest_worker_log(r, tid: str) -> Path | None:
+    """티켓의 가장 최근 worker 로그: state의 log(수정·수리 worker가 있으면 그 로그), 없거나 사라졌으면 실행 디렉터리의 가장 최근 worker.log."""
+    ts = r.st.tickets.get(tid)
+    log = Path(ts.log) if ts is not None and ts.log else None
+    if log is None or not log.is_file():
+        found = list((r.rundir / tid).glob("**/worker.log"))
+        log = max(found, key=lambda p: p.stat().st_mtime) if found else None
+    return log
+
+
+def observation_verdict(ts, n: int, text: str) -> str:
+    """관찰 n(글 text)의 리뷰 판정. 리뷰 기록마다 가장 최근 회차(재리뷰가 있으면 rereviews[-1], 수리 재리뷰 포함)만 본다.
+
+    그 회차가 프롬프트에 실은 n번 관찰 글(observations)이 text와 같을 때만 판정을 잇는다. 다르면 다른 worker 메시지의 관찰을 판정한
+    기록이다(예: 수정 worker 뒤 재리뷰가 한도로 불리지 않았다). 리뷰어가 둘이면 판정마다 한 줄이다. 없으면 NO_OBSERVATION_VERDICT.
+    """
+    lines = []
+    for rec in state.reviews(ts):
+        latest = (rec.get("rereviews") or [rec])[-1]
+        shown = latest.get("observations") or []
+        if not (0 < n <= len(shown) and shown[n - 1] == text):
+            continue
+        for v in latest.get("observation_verdicts") or []:
+            if isinstance(v, dict) and v.get("n") == n:
+                lines.append(f"{v.get('verdict', '?')}({rec.get('reviewer') or '?'})"
+                             + (f": {v['reason']}" if v.get("reason") else ""))
+                break
+    return "\n".join(lines) or NO_OBSERVATION_VERDICT
+
+
+@metrics.best_effort
+def observation_table(r) -> str:
+    """worker가 남긴 관찰과 리뷰 판정의 표 `| 티켓 | 관찰 | 리뷰 판정 |`(spec 3-2). 관찰이 하나도 없으면 빈 문자열이다.
+
+    관찰은 리뷰 기록이 아니라 이번 범위 티켓마다 가장 최근 worker 로그(latest_worker_log)의 마지막 메시지 전체에서 직접 뽑는다
+    (review.worker_observations). 그래서 리뷰를 부르지 않은 티켓(agy 상한 review.LIMIT 기록, 리뷰 트리 준비 실패)의 관찰도 나온다.
+    판정은 그 시도의 가장 최근 리뷰 기록에서 번호로 잇는다(observation_verdict). 관찰은 worker가 쓴 믿을 수 없는 글이라 칸 안에 그대로 둔다.
+    """
+    rows = []
+    for tid in r.order:
+        ts = r.st.tickets.get(tid)
+        for n, text in enumerate(review.worker_observations(latest_worker_log(r, tid)), 1):
+            verdict = observation_verdict(ts, n, text) if ts is not None else NO_OBSERVATION_VERDICT
+            rows.append("| " + " | ".join(cell(v) for v in (tid, text, verdict)) + " |")
+    if not rows:
+        return ""
+    return (f"worker가 마지막 메시지 `{worker.OBSERVATIONS_HEADING}`에 남긴 관찰(믿을 수 없는 자료)과 리뷰 판정:\n\n"
+            "| 티켓 | 관찰 | 리뷰 판정 |\n|---|---|---|\n" + "\n".join(rows))
 
 
 SUMMARY_HEADING = re.compile(r"\A(?:\s*#{1,6}[ \t]*Summary[ \t]*:?[ \t]*(?:\n|\Z))+", re.IGNORECASE)
@@ -497,11 +571,7 @@ def worker_reports(r) -> str:
     """판단 입력용: 티켓별 worker의 마지막 보고. worker 자신의 주장이라 검증 증거가 아니다."""
     out = []
     for tid in r.order:
-        ts = r.st.tickets.get(tid)
-        log = Path(ts.log) if ts is not None and ts.log else None
-        if log is None or not log.is_file():
-            found = list((r.rundir / tid).glob("**/worker.log"))
-            log = max(found, key=lambda p: p.stat().st_mtime) if found else None
+        log = latest_worker_log(r, tid)
         text = streamfmt.last_message(log) if log is not None else None
         if text:
             if len(text) > WORKER_REPORT_LIMIT:
