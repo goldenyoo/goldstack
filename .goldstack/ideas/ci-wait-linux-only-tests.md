@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "high"
 source: "/retro goldstack-v32"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v33"
 ---
 리눅스에서만 도는 시험이 한 번도 돌지 않은 채 PR이 병합됐다. 범위 밖 `linux-ci-blocking`(`git.wait_checks = true`)을 다시 본다.
 

@@ -2,9 +2,9 @@
 date: "2026-11-10"
 severity: "high"
 source: "/retro goldstack-v31"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v33"
 ---
 보고서 "남은 위험"이 worker의 병합 상태 주장을 확인 없이 옮겨 없는 위험을 적었다.
 

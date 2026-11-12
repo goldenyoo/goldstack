@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "medium"
 source: "/retro goldstack-v32"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v33"
 ---
 [반복] 판별(`[verify]`)이 결정적 실패라고 가린 뒤에도 `verify_retries`가 전체 검증을 한 번 더 돌린다.
 

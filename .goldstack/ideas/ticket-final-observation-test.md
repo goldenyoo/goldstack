@@ -2,9 +2,9 @@
 date: "2026-11-10"
 severity: "medium"
 source: "/retro goldstack-v31"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v33"
 ---
 코드 티켓 4개 중 3개가 안쪽 함수만 고치고 최종 관측점을 시험하지 않아 같은 유형의 리뷰 지적을 받았다.
 

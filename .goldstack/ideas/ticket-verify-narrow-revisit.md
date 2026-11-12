@@ -2,7 +2,7 @@
 date: "2026-11-10"
 severity: "medium"
 source: "/retro goldstack-v31"
-status: "open"
+status: "dropped"
 issues: []
 feature: ""
 ---

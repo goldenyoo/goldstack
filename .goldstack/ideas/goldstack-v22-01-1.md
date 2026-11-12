@@ -2,7 +2,7 @@
 date: "2026-11-08"
 severity: "medium"
 source: "goldstack-v22 리뷰 01"
-status: "open"
+status: "dropped"
 feature: ""
 ---
 verify가 `exec`를 사용하면 표지가 사라져 다음 gs go가 살아남은 검증을 정리하지 못한다. 예를 들어 `exec sleep 300`은 허용되는 검증 명령이지만, 덧붙인 `exit $?`가 실행되기 전에 표지가 있는 bash를 대체하므로 새 검증과 동시에 남는다.

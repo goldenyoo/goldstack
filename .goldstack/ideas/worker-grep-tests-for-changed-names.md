@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "medium"
 source: "/retro goldstack-v32"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v33"
 ---
 worker가 바꾼 함수의 호출부를 `src/`에서만 찾아, 그 함수에 닿는 기존 시험을 돌리지 않고 병합 검증에서 실패했다.
 

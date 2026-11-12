@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "medium"
 source: "/retro goldstack-v32"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v33"
 ---
 claude worker가 `Monitor`를 걸면 일을 마친 뒤에도 알림마다 다시 깨어나 비용을 쓰고 최종 보고를 여러 번 쓴다.
 

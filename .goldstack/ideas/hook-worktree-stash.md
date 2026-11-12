@@ -2,9 +2,9 @@
 date: "2026-11-10"
 severity: "high"
 source: "/retro goldstack-v31"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v33"
 ---
 hook이 worktree 안의 `git stash`를 막지 않는다. `refs/stash`는 모든 worktree가 함께 쓴다.
 
