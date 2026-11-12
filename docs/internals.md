@@ -338,11 +338,13 @@ git 오류나 herdr 오류(`HerdrError`)로 루프를 떠나도 `gs go: … 오�
 | phase | 뜻 | `outcome` | 다음 |
 |---|---|---|---|
 | `checks_pending` | 기다리는 중. 진행 바 `CI 대기 중` | `CI 검사 대기 중` | 모두 통과 → `merge_requested` → 병합 |
+| `checks_missing` | `git.checks`에 적은 검사가 `checks_grace_seconds` 뒤에도 PR에 없다. 병합 안 함, PR은 열어 둠, 종료 1, 알림 | `CI 검사 없음: <이름>` | 다음 `gs go`가 다시 읽는다 |
 | `checks_failed` | 실패·취소한 검사가 있다. 병합 안 함, PR은 열어 둠, 종료 1, 알림 | `CI 실패: <이름>, …` | 다음 `gs go`가 다시 읽는다 |
 | `checks_timeout` | `timeouts.checks_minutes`를 넘겼다. 병합 안 함, PR은 열어 둠, 종료 1, 알림 | `CI 대기 시간 초과` | 다음 `gs go`가 다시 읽는다(시간도 새로 잰다) |
 
 - **어떤 검사**(`_poll_checks`, revert·보고서 PR도 같다): 먼저 base의 필수 검사 이름을 읽는다(`_required_checks`: `repos/<o>/<r>/branches/<base>/protection`과 `rules/branches/<base>`, `gs doctor`와 같은 해석, 호출 하나 20초). 이름을 알면 `gh pr checks <url> --json name,bucket`에서 그 이름만 보고, 아직 없는 이름은 `pending`으로 친다. 그래서 등록이 늦어도 `timeouts.checks_minutes`까지 기다리고 필수가 아닌 검사의 실패에 막히지 않는다. 두 API 중 하나라도 못 읽으면(부분 목록을 전체로 치지 않는다) 또는 이름이 없으면 gh 판정을 쓴다: `--required`, 없으면(`no required checks reported`) `--required` 없이 전부. `no checks reported`만 빈 목록이고, 그 밖의 gh 오류는 `GitError`다(검사 없음으로 치지 않는다). bucket `pass`·`skipping`은 통과, `fail`·`cancel`은 실패, `pending`은 대기이고 pending이 남아도 실패가 하나 있으면 바로 끝낸다.
 - **CI grace**(`timeouts.checks_grace_seconds`, 기본 60, 0 허용): 목록이 비었을 때만 쓴다. 대기를 시작한 때부터 그 시간이 지날 때까지 다시 읽고(`■ PR #N: CI 검사 대기 중(검사 없음)`), 그 안에 검사가 나타나면 평소처럼 끝날 때까지 기다린다. 지나도 비었으면 `■ PR #N: 검사 없음 → 병합`을 쓰고 병합을 시도한다. `gs go`마다 새로 재고, `checks_minutes`를 넘기면 `checks_timeout`이 먼저다. 필수 검사 이름을 알면 목록이 비지 않으므로 grace는 쓰이지 않는다.
+- **`git.checks`**(v33 05): 비어 있지 않으면 보호·rulesets 필수 검사 대신 그 이름만 기다린다(`gh pr checks`의 `name`). `checks_grace_seconds`가 지나도 적은 이름이 PR에 없으면 `checks_missing`: `CI 검사 없음: <이름>`으로 병합 안 하고 PR을 연 채 멈춘다(revert·보고서 PR도 같다). `gs doctor`는 `필수 검사` 행에 이 목록을 보이고 `wait_checks = false`면 `CI 대기` 경고 행을 더한다.
 - **10초마다** 다시 읽고(`CHECK_INTERVAL`), 목록이 바뀔 때만 `■ PR #N: CI 검사 대기 중(build ✓, test …)`을 쓴다. 변화가 없어도 `finish.checks`를 저장해 진행 바 경과가 간다.
 - **head 고정**: 조회할 때마다 PR 상태·head를 대조한다. 대기 중 닫히거나 head가 바뀌면 `GitError`다. 병합도 `--match-head-commit`으로 고정한다. 기다리는 동안 보고서를 다시 쓰거나 base를 합치지 않는다(`merge_base`는 `CHECK_PHASES`에서 바로 돌아간다). 그래서 이 사이 report.md의 마무리 줄은 `preparing`이다. 지금 상태는 `■ 마무리:`, 알림, `state.finish`로 본다.
 - **재개**: PR head가 `merge_head`와 같으면 재검증 없이 다시 읽는다. 사람이 고쳐 head가 바뀌었으면 그 head를 받아 `integration-recheck`로 `verify`한 뒤 기다린다(`_refresh_check_head`). 실패면 `not_merged`.
@@ -521,7 +523,7 @@ worker의 모델·effort는 `.goldstack/config.toml`의 `[tiers.claude]`, `[tier
 
 | model | 명령 | 차단 장치 |
 |---|---|---|
-| claude | `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools "Bash(git push *)" "Bash(gh *)" --settings '{"enabledPlugins":{<goldstack 밖 플러그인>:false,…}}' --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands < brief` | plugin hook + 도구 차단 |
+| claude | `claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor --settings '{"enabledPlugins":{<goldstack 밖 플러그인>:false,…}}' --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disable-slash-commands < brief` | plugin hook + 도구 차단 |
 | codex | `codex exec --json -s workspace-write [--model <models.codex>] -c sandbox_workspace_write.network_access=false --skip-git-repo-check -C <wt> --add-dir … "<안내>" < brief` | sandbox(네트워크 꺼짐, worktree 밖 쓰기 불가) |
 | agy | `agy -p "$(cat brief)" --output-format stream-json --dangerously-skip-permissions --disable-slash-commands --settings '<deny 규칙>' --model <models.agy>` | deny 규칙 + `gs hook agy-pretooluse`(두 겹) |
 
@@ -546,13 +548,14 @@ worker의 모델·effort는 `.goldstack/config.toml`의 `[tiers.claude]`, `[tier
 
 이 레포가 곧 plugin이자 로컬 marketplace다(`.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json`, `hooks/hooks.json`, `skills/`). 설치는 [README](../README.md#설치). plugin 검사는 `claude plugin validate .`(spec verify에 들어 있다).
 
-`hooks/hooks.json`에는 셋이 있다: PreToolUse command hook(matcher `Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob`), PermissionRequest hook(`gs hook permissionrequest`. 역할과 상관없이 불리고 `gs overnight arm`을 친 세션이면 창 대신 거부를 낸다. `gs`가 없거나 판정이 실패하면 창으로 돌아간다), 진행 바 mod(`"modules": ["./register.tsx"]`).
+`hooks/hooks.json`에는 넷이 있다: SessionStart command hook(`GS_ROLE=worker`가 아니면 닫힌 skill 안내 문구를 `printf`로 낸다. 위 "skill" 단락), PreToolUse command hook(matcher `Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob`), PermissionRequest hook(`gs hook permissionrequest`. 역할과 상관없이 불리고 `gs overnight arm`을 친 세션이면 창 대신 거부를 낸다. `gs`가 없거나 판정이 실패하면 창으로 돌아간다), 진행 바 mod(`"modules": ["./register.tsx"]`).
 
 PreToolUse hook 명령은 `GS_ROLE`이 `worker`가 아니면 바로 `exit 0`이다(입력도 읽지 않고 `gs`도 부르지 않는다. 일반 세션에 영향 없고 `gs`가 없어도 조용하다). worker면 `exec gs hook pretooluse`, PATH에 `gs`가 없으면 막는다(종료 2). `gs go`는 worker 실행 스크립트에 `GS_ROLE=worker`, `GS_WORKTREE`를 넣는다. worker일 때 막는 것은 되돌릴 수 없는 일뿐이다:
 - `git push`(모든 형태: `-C`, `cd .. &&`, `bash -c`, `$(…)` 안), force 계열(`--force`, `--force-with-lease`, `--force-if-includes`, `push -f`, `+refspec`)
 - `gh` 쓰기 명령(`pr create`·`merge`·`close`, `release …`, `repo …`, 쓰기 `gh api` 등). 읽기(`pr view`, `run view` …)는 통과
 - worktree 밖 쓰기(Write·Edit 도구, 셸 리다이렉션·`rm`·`mv`·`cp`·`tee`, 밖에서 하는 `git commit` 등). 임시 디렉터리(`/tmp`, `/var/folders`, `$TMPDIR`)와 `/dev`는 통과
 - 비밀 파일 읽기: `~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`·`.env.*`(`.env.example`·`.sample`·`.template`·`.dist` 제외), `.netrc`, `.git-credentials`, `.pypirc`, 개인 키(`id_rsa` 등), `.goldstack/local.env`, gh `hosts.yml`, `.kube/config`, `.docker/config.json`, `gh auth token`
+- `git stash`(worktree 안에서도): `refs/stash`는 모든 worktree가 함께 쓰니 다른 티켓의 stash를 건드린다. `list`·`show`는 통과, 나머지(`push`·`pop`·`apply`·하위 명령 없음 …)는 막고 이유로 임시 커밋을 쓰라고 한다(`hook._stash_write`). 임시 디렉터리의 버리는 레포는 통과
 - 이름으로 프로세스를 끄는 `pkill`·`killall`(기계 전체의 같은 이름 프로세스를 끄니 다른 티켓의 검증도 죽는다. `sudo`·`xargs`·`bash -c` 뒤에서도 막는다). `kill <PID>`와 `pgrep`은 통과
 - 따옴표 없이 `=`로 시작하는 두 글자 이상 단어(`echo ===`, `[ a == a ]`). zsh의 `=` 확장이 `== not found`로 명령 묶음을 끊는다. `"==="`·`'==='`·`[ a = a ]`·`[[ a == a ]]`·heredoc 본문·주석은 통과(`hook.equals_word`, 따옴표가 남은 `scan` 결과에서 판정). 같은 zsh에서 도는 `eval`·`zsh -c` 본문과 `$(...)` 치환 속도 본다. `bash -c`·`sh -c` 속은 `=` 확장이 없어 보지 않는다(`Ctx.zsh`). 빈 따옴표는 글자를 남기지 않으므로 `""===`는 막고 `=""`는 `=` 한 글자라 통과한다. heredoc 끝말은 따옴표가 있으면 숫자로 시작해도 읽고(`<<'123'`), 산술식(`(( ))`, `$(( ))`)과 `${ }` 속의 `<<`는 heredoc이 아니라서 뒤 명령을 삼키지 않는다
   **`GS_NOEQUALS` worker**(v28): `shellenv.prepare`가 실행 디렉터리의 `zdotdir/.zshenv`(worktree 밖)를 만든다. 이 파일은 `ZDOTDIR`을 원래 값으로 되돌리고(없으면 `unset`) `${ZDOTDIR:-$HOME}/.zshenv`를 읽은 뒤 `setopt noequals`를 켠다. `shellenv.worker_env`를 부르는 `adapters.Adapter.env`가 실측 통과 CLI(`shellenv.NOEQUALS_CLIS` = claude, agy)에만 `ZDOTDIR=<폴더>`와 `GS_NOEQUALS=1`을 넣고, 준비 실패·목록 밖 CLI(codex)는 둘 다 넣지 않는다. `worker.py`의 run.sh는 gs를 띄운 셸의 `GS_NOEQUALS`를 지운 뒤 어댑터가 넣었을 때만 내보낸다. hook 판정은 `Ctx.noequals`로 바뀐다: `GS_NOEQUALS=1`이면 맨 바깥 셸과 그 셸이 읽는 `eval`·치환·`( )` 속의 `equals_word` 판정을 건너뛰고, 새 zsh 프로세스 본문(`zsh -c`, `zsh -f -c`, `zsh -o equals -c`)은 `Ctx.noequals`를 끄고 계속 본다. 남는 오차단 2건은 `zsh -f -c "echo \$(echo a)==="`(shlex가 큰따옴표 속 `\$`를 남겨 `( )`로 읽는다)와 `echo ';' zsh -c 'echo ==='`(따옴표 속 `;`를 명령 구분으로 읽는다)다. 근거와 CLI별 실측: [research/worker-noequals.md](research/worker-noequals.md), 시험 `tests/test_shellenv.py`·`tests/test_hook_equals_cases.py`.
@@ -571,7 +574,7 @@ worker worktree는 주 레포의 `.goldstack/work/<f>/run/wt/` 아래에 있지�
 
 **`/adopt`와 profile** — `/adopt`는 `.goldstack/profile.md`를 쓴다(절: 구조, 빌드·시험, 관례, 주의점, CI). 커밋하지 않는다. `/grill` 1단계가 가장 먼저 읽고, `/grill` 6단계·`/go` 2단계의 커밋 경로에 들어 있다. worker brief에는 내용 대신 포인터 한 줄 "먼저 `.goldstack/profile.md`를 읽어라"가 들어간다(`worker.py`, 그 worktree에 파일이 있을 때만).
 
-skill은 `skills/<이름>/SKILL.md`다. `diagnosing-bugs`만 모델 호출이고 나머지는 `disable-model-invocation: true`(사용자 호출)라 description이 늘 문맥에 실리지 않는다. 옮겨 온 다섯 skill의 출처는 [skills/NOTICE-mattpocock.md](../skills/NOTICE-mattpocock.md).
+skill은 `skills/<이름>/SKILL.md`다. `diagnosing-bugs`와 대화형 네 개(`grill`·`handoff`·`idea`·`retro`)는 모델 호출이라 이름만 말해도 돈다. 네 개의 description은 "사람이 명시적으로 요청할 때만 쓴다"로 좁혔다. 나머지 여섯(`go`·`overnight`·`feedback`·`adopt`·`wait-what`·`writing-for-agents`)은 `disable-model-invocation: true`(사용자 호출, `/goldstack:<이름>`)라 description이 늘 문맥에 실리지 않는다. 닫힌 여섯은 `hooks/hooks.json`의 SessionStart hook이 고정 문구를 `printf`로 문맥에 넣어 "사용자 호출 skill이니 흉내 내지 말고 슬래시 명령을 안내하라"고 알린다(`GS_ROLE=worker`면 내지 않는다. gs가 없는 머신에서도 나와야 해서 `gs hook`이 아니다). `tests/test_skills.py` `test_invocation`의 `MODEL_INVOKED`가 이 구분을 단언한다. 옮겨 온 다섯 skill의 출처는 [skills/NOTICE-mattpocock.md](../skills/NOTICE-mattpocock.md).
 
 ## 실행 디렉터리
 
@@ -595,7 +598,11 @@ finish/               summary.md, report-input.md, diff-stat.txt, report-judge.l
 
 ## Actions 시험(리눅스)
 
-`.github/workflows/tests.yml`이 `main` push와 PR마다 ubuntu-latest에서 `uv run python -m unittest discover -s tests`를 돈다(시간 제한 30분, 사용자 이름·이메일은 job에서 git 전역 설정으로 넣는다). 리눅스에서도 시험이 통과하는지 보는 용도이고 병합을 막지 않는다: 이 레포의 `git.wait_checks`는 `false`이고 필수 검사도 없다. 실패하면 PR·커밋의 검사 표시와 Actions 로그에서 보고 고친다. macOS 전용 동작(`caffeinate` 등)은 코드가 아니라 `/overnight` skill의 안내에만 있다.
+`.github/workflows/tests.yml`이 `main` push와 PR마다 ubuntu-latest에서 job 둘을 돈다(사용자 이름·이메일은 job에서 git 전역 설정으로 넣는다):
+- `tests`(시간 제한 30분): 전체 시험을 파일별 병렬 프로세스로 돈다(`xargs -P "$(nproc)" -n 1`로 파일마다 `unittest discover -p`). 리눅스에서도 시험이 통과하는지 보는 용도이고 병합 전에 기다리지 않는다.
+- `linux-only`(`name: linux-only`, 시간 제한 15분): 리눅스에서만 실제로 도는 `test_jail.py`, `test_sandbox_launch.py`만 돈다. `GS_REQUIRE_LANDLOCK=1`이라 Landlock을 못 쓰면 skip 대신 실패한다.
+
+이 레포의 `.goldstack/config.toml`은 `git.wait_checks = true`, `git.checks = ["linux-only"]`라 gs는 병합 전에 `linux-only`만 기다린다. 필수 검사는 없다. 전체 `tests`의 실패는 PR·커밋의 검사 표시와 Actions 로그에서 보고 고친다. macOS 전용 동작(`caffeinate` 등)은 코드가 아니라 `/overnight` skill의 안내에만 있다.
 
 ## 시험 seam
 

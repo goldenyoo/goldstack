@@ -110,19 +110,19 @@ PR https://github.com/you/tally/pull/7
 
 ## skill
 
-모두 이 plugin에 들어 있다. "사용자"는 사람이 `/이름`으로 부를 때만 돈다. "모델"은 Claude가 상황을 보고 스스로 부른다.
+모두 이 plugin에 들어 있다. "사용자"는 사람이 `/goldstack:<이름>`(예: `/goldstack:go`)으로 칠 때만 돈다. "모델"은 Claude가 상황을 보고 스스로 부른다. `/grill`·`/handoff`·`/idea`·`/retro`는 모델 호출이라 이름만 말해도 돌고(사람이 명시적으로 요청할 때만 쓰도록 description을 좁혔다), 세션 시작 때 plugin이 나머지 닫힌 skill의 슬래시 명령을 Claude에게 알려 준다.
 
 | skill | 무엇 | 언제 쓰나 | 예시 | 호출 |
 |---|---|---|---|---|
-| `/grill` | 라운드 질문으로 결정을 모두 받아 spec·티켓·범위 밖을 쓰고 `gs check`를 통과시킨다. 열린 아이디어가 있으면 라운드 1 첫 질문이 "이번 feature에 넣을 후보"이고, 고른 것은 `taken`이 된다 | 새 feature를 시작할 때, 이어서 정할 것이 남았을 때 | `/grill csv-export` → 첫 질문 `1. 이번 feature에 넣을 후보: 1) codex-worker-hook 2) status-review-count` 에 `1. 2`로 답 | 사용자 |
+| `/grill` | 라운드 질문으로 결정을 모두 받아 spec·티켓·범위 밖을 쓰고 `gs check`를 통과시킨다. 열린 아이디어가 있으면 라운드 1 첫 질문이 "이번 feature에 넣을 후보"이고, 고른 것은 `taken`이 된다 | 새 feature를 시작할 때, 이어서 정할 것이 남았을 때 | `/grill csv-export` → 첫 질문 `1. 이번 feature에 넣을 후보: 1) codex-worker-hook 2) status-review-count` 에 `1. 2`로 답 | 모델 |
 | `/go` | `gs go`로 티켓 실행부터 main 병합·재검증까지 돌리고 세 줄 요약과 PR을 보인다. feature를 여러 개 주면 앞 것이 `verified`일 때만 다음을 돌린다 | grill이 끝나 커밋된 feature를 실행할 때, 밤새 둘 이상을 이어 돌릴 때 | `/go csv-export`, `/go csv-export csv-import` | 사용자 |
 | `/adopt` | 처음 들이는 레포를 훑어 `gs init`·`gs doctor`를 거치고 레포 요약 `.goldstack/profile.md`를 쓴다(있으면 갱신하고 바뀐 점을 보인다). `/grill`과 worker가 이것을 먼저 읽는다. 커밋 안 함 | 레포에 goldstack을 처음 들일 때, 레포 구조·시험 명령이 바뀌었을 때 | `/adopt` → `gs doctor` 표를 보고 "제안대로 config에 쓸까"에 답 | 사용자 |
-| `/idea` | 생각 하나를 `.goldstack/ideas/<slug>.md` 아이디어 파일로 쓴다. 비슷한 열린 아이디어가 있으면 거기 덧붙일지 묻는다. 커밋 안 함 | 실행·대화 중 다음에 할 일이 떠올랐을 때 | `/idea gs status가 끝난 티켓의 리뷰 지적 수를 보이면 좋겠다` | 사용자 |
+| `/idea` | 생각 하나를 `.goldstack/ideas/<slug>.md` 아이디어 파일로 쓴다. 비슷한 열린 아이디어가 있으면 거기 덧붙일지 묻는다. 커밋 안 함 | 실행·대화 중 다음에 할 일이 떠올랐을 때 | `/idea gs status가 끝난 티켓의 리뷰 지적 수를 보이면 좋겠다` | 모델 |
 | `/overnight` | 자러 가기 전에 한 번 부르면 feature 여러 개를 밤사이 병합까지 잇는다. 시작할 때 순서·독립 여부·사소한 수정 허락·텔레그램을 한 번에 받아 `.goldstack/overnight/<날짜>.md`에 적고, 사전 점검 뒤에는 묻지 않는다. 맥은 `caffeinate`, 리눅스는 `systemd-inhibit`으로 깨어 있게 하고 아침에 결과 한 장을 남긴다 | 여러 feature를 자는 동안 돌릴 때 | `/overnight csv-export csv-import`, 죽었으면 `/overnight resume` | 사용자 |
 | `/feedback` | 사람이 쓴 한 줄을 `gs feedback`으로 goldstack 저장소 issue로 보낸다(`list`는 초안 상태, `send`는 쌓인 것 전송). `[feedback] mode = "off"`면 거부한다. gs 결함 자동 수집은 [guide](docs/guide.md#피드백-gs-결함을-goldstack에-알리기) | gs가 이상하게 동작했을 때, 불편을 알리고 싶을 때 | `/feedback gs status가 끝난 실행을 실행 중으로 보여` | 사용자 |
 | `/wait-what` | 방금 설명을 맥락부터, 쉬운 말로, 선택지마다 예시를 붙여 다시 하게 한다 | Claude의 말을 못 따라갔을 때(grill 질문 포함) | `/wait-what` | 사용자 |
-| `/handoff` | 지금 대화를 다른 agent가 이어받을 인계 문서로 줄여 임시 디렉터리에 쓴다 | 세션을 바꾸거나 곁가지 일을 떼어 줄 때 | `/handoff 03 실패 원인을 이어서 찾는다` | 사용자 |
-| `/retro` | feature 실행 기록(report.md, state.json, worker 로그·리뷰, 다른 feature 보고서와의 반복)이나 세션 하나를 돌아보고 agent 환경(검사, 포인터, 리뷰 기준, 도구, goldstack 자체)을 고칠 후보를 심각한 순으로 제안한다. worker 로그 합계가 200KB 이상이면 먼저 한 줄로 알리고 `gs retro-log`가 모은 파일 하나를 Gemini(agy)에게 주어 요약을 맡긴다. feature면 고른 후보를 아이디어 함에 쓴다. 고르기 전에는 아무것도 바꾸지 않는다 | `/go`가 끝난 뒤, 실행이 꼬였거나 같은 실수가 반복될 때 | `/retro csv-export`(feature), `/retro`(지금 세션) | 사용자 |
+| `/handoff` | 지금 대화를 다른 agent가 이어받을 인계 문서로 줄여 임시 디렉터리에 쓴다 | 세션을 바꾸거나 곁가지 일을 떼어 줄 때 | `/handoff 03 실패 원인을 이어서 찾는다` | 모델 |
+| `/retro` | feature 실행 기록(report.md, state.json, worker 로그·리뷰, 다른 feature 보고서와의 반복)이나 세션 하나를 돌아보고 agent 환경(검사, 포인터, 리뷰 기준, 도구, goldstack 자체)을 고칠 후보를 심각한 순으로 제안한다. worker 로그 합계가 200KB 이상이면 먼저 한 줄로 알리고 `gs retro-log`가 모은 파일 하나를 Gemini(agy)에게 주어 요약을 맡긴다. feature면 고른 후보를 아이디어 함에 쓴다. 고르기 전에는 아무것도 바꾸지 않는다 | `/go`가 끝난 뒤, 실행이 꼬였거나 같은 실수가 반복될 때 | `/retro csv-export`(feature), `/retro`(지금 세션) | 모델 |
 | `/writing-for-agents` | agent가 읽는 문서(skill, `CLAUDE.md`·`AGENTS.md`)의 글쓰기 기준을 문맥에 싣는다 | skill이나 `CLAUDE.md`를 새로 쓰거나 고칠 때 | `/writing-for-agents` 뒤 "이 skill description을 다듬어 줘" | 사용자 |
 | `diagnosing-bugs` | 실패 신호(피드백 루프)를 먼저 만들고 재현 → 가설 → 계측 → 수정 → 회귀 시험으로 버그를 잡는다 | 무언가 깨졌다·실패한다·느리다고 말할 때 | "`gs status`가 끝난 실행을 실행 중으로 보여. 진단해" | 모델 |
 
