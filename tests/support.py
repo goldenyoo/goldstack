@@ -21,6 +21,11 @@ from gs import adapters, cli, config, state, worker
 # CI에는 codex가 없고, GoTest의 가짜 codex는 종료 1이다.
 os.environ.setdefault("GS_SANDBOX_PROBE", "pass")
 
+# check의 가짜 모델 이름을 실제 홈 캐시와 대조하지 않는다. 목록 시험은 CODEX_HOME을 따로 덮어쓴다.
+_model_home = tempfile.TemporaryDirectory(prefix="gs-test-models-")
+atexit.register(_model_home.cleanup)
+os.environ["CODEX_HOME"] = _model_home.name
+
 REQUIRE_LANDLOCK = "GS_REQUIRE_LANDLOCK"
 
 

@@ -107,6 +107,32 @@ class CheckTest(unittest.TestCase):
         self.assertIn("순서: 01 02", out)
         self.assertIn("지금 시작 가능: 01", out)
 
+    def test_missing_codex_models_warn_per_cell_without_calling_agy(self):
+        self.write("01-a.md", ticket("01"))
+        path = self.repo / config.CONFIG_PATH
+        path.write_text(path.read_text().replace('codex = ""', 'codex = "missing-worker/high"')
+                        .replace('gpt-6.1-sol/high', 'missing-large/xhigh'))
+        cache = self.repo / "models_cache.json"
+        cache.write_text(json.dumps({"models": [{"slug": "gpt-6-luna"}, {"slug": "gpt-6.1-sol"}]}))
+        fake = self.bin / "agy"
+        fake.write_text(f'#!/bin/sh\n: > "{self.repo / "agy-called"}"\nexit 1\n')
+        with mock.patch.dict(os.environ, CODEX_HOME=str(self.repo), GS_AGY=str(fake)):
+            code, out, err = self.run_check()
+            self.assertEqual(code, 0, out + err)
+            self.assertEqual(err.splitlines(), [
+                "경고: .goldstack/config.toml: models.codex의 missing-worker가 이 머신 codex 모델 목록에 없다",
+                "경고: .goldstack/config.toml: tiers.codex.large의 missing-large가 이 머신 codex 모델 목록에 없다",
+            ])
+            for contents in ("{", None):
+                if contents is None:
+                    cache.unlink()
+                else:
+                    cache.write_text(contents)
+                code, out, err = self.run_check()
+                self.assertEqual((code, err), (0, ""))
+                self.assertNotIn("경고:", out)
+        self.assertFalse((self.repo / "agy-called").exists())
+
     def model_lines(self, out):
         return [line for line in out.splitlines() if " · 첫 리뷰 " in line]
 
