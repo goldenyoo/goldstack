@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import cli, config, doctor, git
+from gs import cli, config, doctor, git, sandbox
 import test_check
 import test_config
 from support import isolate_git_env
@@ -266,6 +266,41 @@ else:
         self.assertIn("모름(", out)
         self.assertFalse((self.repo / "calls").exists())
         self.assertEqual(self.path.read_text(), self.original)
+
+    def test_sandbox_machine_row(self):
+        bwrap = "bwrap: Failed to make / slave: Permission denied"
+        codex = self.repo / "codex-bwrap"
+        codex.write_text(f'#!/bin/sh\necho "{bwrap}" >&2\nexit 1\n')
+        codex.chmod(0o755)
+        apparmor = self.repo / "attr-current"
+        real = {"GS_SANDBOX_PROBE": "", "GS_CODEX": str(codex)}
+        code, out = self.command("doctor")  # support의 seam 기본값 pass
+        self.assertEqual(code, 0, out)
+        self.assertIn("\n샌드박스  os: codex 샌드박스 동작함\n", out)
+        for profile in ("", "cri-containerd.apparmor.d (enforce)"):
+            apparmor.write_text(profile)
+            with self.subTest(profile=profile), mock.patch.dict(os.environ, real), \
+                    mock.patch.object(sandbox, "APPARMOR", apparmor):
+                code, out = self.command("doctor")
+                self.assertEqual(code, 0, out)
+                self.assertIn(f"\n샌드박스  os: 빠짐 — 이 머신에서 codex 샌드박스가 동작하지 않는다({bwrap})\n", out)
+                self.assertEqual(f"AppArmor 프로필({profile})이 mount를 막는다" in out, bool(profile))
+                self.assertIn(sandbox.LANDLOCK_HINT, out)
+        (self.repo / ".goldstack/local.env").write_text("GS_SANDBOX=landlock\n")
+        with mock.patch.dict(os.environ, real), mock.patch("gs.jail.abi", return_value=1):
+            self.assertIn("\n샌드박스  landlock(네트워크 열림): 사용 가능 (ABI 1)\n", self.command("doctor")[1])
+        with mock.patch.dict(os.environ, real), mock.patch("gs.jail.abi", return_value=0), \
+                mock.patch("sys.platform", "linux"):
+            self.assertIn("\n샌드박스  landlock(네트워크 열림): 빠짐 — GS_SANDBOX=landlock인데 "
+                          "이 머신은 landlock을 쓸 수 없다(커널이 지원하지 않음)\n", self.command("doctor")[1])
+
+    def test_sandbox_row_without_github_remote(self):
+        git.run(self.repo, "remote", "set-url", "upstream", "https://gitlab.com/owner/project.git")
+        (self.repo / ".goldstack/local.env").write_text("GS_SANDBOX=landlock # 주석\n")
+        code, out = self.command("doctor")
+        self.assertEqual(code, 0, out)
+        self.assertIn("GitHub 원격 아님", out)
+        self.assertIn("\n샌드박스  빠짐 — .goldstack/local.env의 GS_SANDBOX는 비우거나 landlock이다", out)
 
     def test_write_overwrites_only_proposals_preserving_comments_order_and_crlf(self):
         self.protect()

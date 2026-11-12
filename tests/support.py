@@ -17,6 +17,10 @@ from unittest import mock
 
 from gs import adapters, cli, config, state, worker
 
+# 실행 전 샌드박스 점검(gs.sandbox)이 이 머신의 codex·Landlock에 기대지 않게 한다. 점검을 시험하는 시험은 값을 직접 넣는다.
+# CI에는 codex가 없고, GoTest의 가짜 codex는 종료 1이다.
+os.environ.setdefault("GS_SANDBOX_PROBE", "pass")
+
 APPLE_GIT_SHIM = "/usr/bin/git"
 _shim_dir = None  # import 때 만든 링크 디렉터리. 프로세스가 끝날 때 지운다
 

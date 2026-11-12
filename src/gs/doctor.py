@@ -1,4 +1,7 @@
-"""GitHub 설정을 읽어 제안한다. --write도 제안한 config 값만 바꾼다."""
+"""GitHub 설정을 읽어 제안한다. --write도 제안한 config 값만 바꾼다.
+
+머신 행(`샌드박스`)은 GitHub 원격과 무관하게 이 머신의 샌드박스 모드와 점검 결과를 보인다(sandbox.doctor_row). 제안은 없다.
+"""
 from __future__ import annotations
 
 import copy
@@ -11,7 +14,7 @@ from pathlib import Path
 from typing import TextIO
 from urllib.parse import quote
 
-from . import config, frontmatter, git, version
+from . import config, frontmatter, git, sandbox, version
 
 
 class ReadError(ValueError):
@@ -263,6 +266,7 @@ def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
            and not re.search(r"--(?:frozen-lockfile|immutable)(?![\w-])", command)
            for command in re.split(r"[;&|\n]", cfg.worktree.setup)):
         row("setup", "lockfile을 바꾸지 않는 명령 권장: npm ci · yarn --frozen-lockfile · uv sync --locked")
+    row("샌드박스", sandbox.doctor_row(repo))
     if write:
         try:
             _write(repo, cfg, proposals, out)
