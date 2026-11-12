@@ -42,7 +42,7 @@ skill 글(`skills/*/SKILL.md`)을 고치는 티켓: 완료 조건에 `tests/test
 일렬 경로: 예상 합이 가장 긴 blocked_by 사슬. 평균 동시: 전체 예상 합 ÷ 일렬 경로 예상. 표 아래에 둘을 함께 보인다. 예: `일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1` -->
 | id | 제목 | blocked_by(이유) | wave | tier(이유) | 예상 | 구현 | 수정 | 수리 | 첫 리뷰 | 재리뷰 | touches | verify |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 01 | <제목> | – | 1 | small(<이유. 예: 좁은 코드 수정>) | 20분 | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | claude opus/high | claude sonnet/high | `<경로>` | `<좁은 명령>` |
+| 01 | <제목> | – | 1 | small(<이유. 예: 좁은 코드 수정>) | 20분 | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | codex gpt-6.1-sol/medium | claude opus/high | claude sonnet/high | `<경로>` | 전체 |
 | 02 | <제목> | 01 앞 결과 필요 | 2 | large(<이유. 예: 재개 흐름>) | 60분 | codex gpt-6.1-sol/high | codex gpt-6.1-sol/high | codex gpt-6.1-sol/high | claude opus/xhigh + agy gemini-4-argon-high | claude sonnet/high + agy gemini-4-argon-medium | `<경로>` | 전체 |
 
 계열: <구현·리뷰 계열을 고른 이유 한 줄>
