@@ -64,7 +64,7 @@ codex는 그래도 종료 0으로 끝나니 그대로 두면 `커밋 없음` 실
 걸리면 SandboxAbort(NetworkAbort의 하위)를 올려 위 중단과 같은 길을 간다: worker 시도는 실패로 세지 않고, 리뷰 답은 형식에 맞아도(지적 0건이어도) 버리고 리뷰 실패로 적지 않아
 병합하지 않는다. 다음 `gs go`가 같은 worktree에서 worker나 리뷰부터 잇는다. 중단 종류는 state의 network kind(sandbox|network)에 남고, `■ 샌드박스 중단 이유:` 줄,
 끝 안내(SANDBOX_ABORT_LINE), 티켓 이유, 결과(_outcome)·요약·알림이 그것을 따른다(abort_label). kind가 없는 옛 state는 네트워크 중단으로 읽는다.
-샌드박스 모드(goldstack-v32 03): 시작할 때 주 레포에서 `sandbox.mode`와 가둘 CLI별 `sandbox.denies`를 한 번 계산해(_sandbox, Run.sandbox) 실행 동안 쓴다.
+샌드박스 모드(goldstack-v32 03): 시작할 때 주 레포에서 `sandbox.mode`와 가둘 CLI별 거부 목록(`sandbox.denies`와 다른 가둘 CLI의 홈)을 한 번 계산해(_sandbox, Run.sandbox) 실행 동안 쓴다.
 worktree에서 다시 읽지 않는다(local.env는 gitignore라 worktree에 없다). landlock이면 codex worker(_worker_adapter)와 codex·agy 리뷰·재리뷰·수리 재리뷰
 (리뷰 job의 sandbox)를 gs jail로 가둬 띄운다(adapters.Sandbox). 가두지 못한 흔적(`jail.JAIL_FAILED` 줄: worker 로그는 _sandbox_end, 리뷰어 stderr는 review._call)과
 리뷰 트리가 리뷰어 쓰기 경로 아래인 것(review.reviewer_argv)도 SandboxAbort다. 보고서 머리에 `샌드박스: landlock(네트워크 열림)` 줄이 붙는다(report._render).
@@ -278,12 +278,17 @@ def go(repo: Path, name: str, only: list[str] | None = None) -> int:
 
 
 def _sandbox(repo: Path, cfg: config.Config) -> adapters.Sandbox:
-    """샌드박스 모드와 가둘 CLI별 거부 목록(sandbox.denies)을 주 레포에서 한 번 계산한다. 실행 동안 이 값을 쓰고 worktree에서 다시 읽지 않는다
-    (local.env는 gitignore라 worktree에 없다). os 모드면 거부 목록이 없다. 모드 값이 틀렸으면 ValueError."""
+    """샌드박스 모드와 가둘 CLI별 거부 목록을 주 레포에서 한 번 계산한다. 실행 동안 이 값을 쓰고 worktree에서 다시 읽지 않는다
+    (local.env는 gitignore라 worktree에 없다). 거부 목록은 sandbox.denies에 다른 가둘 CLI의 홈(adapters.cli_home)을 더한 것이다:
+    sandbox.denies는 기본 위치(`~/.codex`)만 알아서, 그것만으로는 `CODEX_HOME`을 옮긴 codex 홈을 agy가 읽는다.
+    os 모드면 거부 목록이 없다. 모드 값이 틀렸으면 ValueError."""
     mode = sandbox.mode(repo)
     if mode != adapters.LANDLOCK:
         return adapters.Sandbox()
-    return adapters.Sandbox(mode, {cli: sandbox.denies(cli, cfg, repo) for cli in adapters.JAILED_CLIS})
+    return adapters.Sandbox(mode, {
+        cli: list(dict.fromkeys([*sandbox.denies(cli, cfg, repo),
+                                 *(adapters.cli_home(other) for other in adapters.JAILED_CLIS if other != cli)]))
+        for cli in adapters.JAILED_CLIS})
 
 
 def _issue_failures(r: Run) -> list[str]:

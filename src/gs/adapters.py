@@ -26,6 +26,7 @@ agy·claude worker는 가두지 않는다(범위 밖 `landlock-all-workers`).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shlex
@@ -67,7 +68,7 @@ JAILED_CLIS = ("codex", "agy")  # 가둘 줄 아는 CLI(cli_home)
 class Sandbox:
     """샌드박스 모드(`os` | `landlock`)와 CLI별 Landlock 거부 목록. 기본값은 `os`(옛 호출, 시험)다.
 
-    `gs go`가 시작할 때 주 레포에서 한 번 계산해(go._sandbox) 실행 동안 쓴다. 거부 목록은 sandbox.denies의 결과다."""
+    `gs go`가 시작할 때 주 레포에서 한 번 계산해(go._sandbox) 실행 동안 쓴다. 거부 목록은 sandbox.denies에 다른 가둘 CLI의 홈(cli_home)을 더한 것이다."""
     mode: str = "os"
     denies: dict[str, list[Path]] = field(default_factory=dict)
 
@@ -94,8 +95,14 @@ def cli_home(cli: str) -> Path:
 
 
 def jail_writes(cli: str, writes: Iterable[str | os.PathLike]) -> list[Path]:
-    """`writes`에 언제나 쓰는 `/dev`와 그 CLI의 홈을 더한 쓰기 목록(순서 유지, 겹침 없음)."""
-    return list(dict.fromkeys([*(Path(w) for w in writes), Path("/dev"), cli_home(cli)]))
+    """`writes`에 언제나 쓰는 `/dev`와 그 CLI의 홈을 더한 쓰기 목록(순서 유지, 겹침 없음).
+
+    홈이 없으면 만든다(권한 700). jail은 없는 쓰기 경로에 규칙을 걸지 못해(jail._allow) 가둔 CLI가 홈을 만들 수 없다.
+    만들지 못하면 그대로 둔다(CLI가 제 오류를 낸다)."""
+    home = cli_home(cli)
+    with contextlib.suppress(OSError):
+        home.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return list(dict.fromkeys([*(Path(w) for w in writes), Path("/dev"), home]))
 
 
 def jail_argv(cli: str, writes: list[Path], sandbox: Sandbox) -> list[str]:

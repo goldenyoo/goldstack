@@ -202,6 +202,38 @@ class LandlockCommandTest(Fixture):
         (self.repo / ".goldstack" / "local.env").unlink()
         self.assertEqual(go._sandbox(self.repo, NO_SECRETS), adapters.Sandbox())  # 없으면 os, 거부 목록도 없다
 
+    def test_agy_denies_custom_codex_home(self):
+        codex_home = self.root / "codex-profile"
+        codex_home.mkdir()
+        (codex_home / "auth.json").write_text("{}\n")
+        os.environ["CODEX_HOME"] = str(codex_home)
+        box = self.landlock()
+        self.assertIn(codex_home, box.denies["agy"])  # 기본 ~/.codex 밖의 codex 홈도 agy는 읽지 못한다
+        self.assertIn(self.home / ".codex", box.denies["agy"])
+        self.assertNotIn(codex_home, box.denies["codex"])  # codex는 자기 홈을 읽는다
+        scratch = self.root / "scratch"
+        scratch.mkdir()
+        with mock.patch.object(adapters, "SHARED_TMP", self.shared):
+            argv, _, _ = review.reviewer_argv("agy", self.wt, "P", self.out, MODELS, scratch=scratch, sandbox=box)
+        _, writes, denies, _ = split_jail(argv)
+        self.assertIn(str(codex_home), denies)
+        self.assertEqual(jail.overlap(writes, denies), "")  # 가둘 수 있는 목록이다
+        self.assertNotIn(codex_home, jail.read_cover(denies, self.root))
+
+    def test_missing_cli_home_is_created_before_jailing(self):
+        os.environ["CODEX_HOME"] = str(self.root / "new-codex-home")
+        box = self.landlock()
+        scratch = self.root / "scratch"
+        scratch.mkdir()
+        homes = (Path(os.environ["CODEX_HOME"]), self.home / ".gemini")
+        for home in homes:
+            self.assertFalse(home.exists())
+        adapters.Codex(MODELS, sandbox=box).command(self.inp)
+        with mock.patch.object(adapters, "SHARED_TMP", self.shared):
+            review.reviewer_argv("agy", self.wt, "P", self.out, MODELS, scratch=scratch, sandbox=box)
+        for home in homes:  # 없는 쓰기 경로에는 jail이 규칙을 걸지 못해 가둔 CLI가 홈을 만들 수 없다
+            self.assertTrue(home.is_dir(), home)
+
     def test_codex_worker_command(self):
         os.environ["TMPDIR"] = str(self.root / "tmpdir")
         box = self.landlock()
