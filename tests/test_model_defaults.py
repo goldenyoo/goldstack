@@ -1,4 +1,4 @@
-"""모델 기본값 이력과 doctor 제안·check 요약. 목록을 모르면 제안하되 config는 쓰지 않는다."""
+"""모델 기본값 이력과 doctor 제안·check 요약. 목록을 모르면 제안한다. --write는 test_doctor_write_models가 본다."""
 import tomllib
 import unittest
 from unittest import mock
@@ -117,7 +117,7 @@ class DoctorDefaultsTest(unittest.TestCase):
                 codex.assert_not_called()
                 agy.assert_not_called()
 
-    def test_non_github_repo_still_proposes_without_writing_models(self):
+    def test_non_github_repo_still_proposes_and_writes_models(self):
         git.run(self.repo, 'remote', 'set-url', 'upstream', 'https://gitlab.com/owner/project.git')
         text = old_config(self.original)
         self.path.write_text(text)
@@ -125,7 +125,8 @@ class DoctorDefaultsTest(unittest.TestCase):
             code, out = self.command('doctor', '--write')
         self.assertEqual(code, 0, out)
         self.assertIn('모델 기본값  tiers.codex.large가 옛 기본값이다 → tiers.codex.large = "gpt-6-astra/xhigh" (목록 확인 못 함)\n', out)
-        self.assertEqual(self.path.read_text(), text)
+        self.assertIn('tiers.codex.large: "gpt-6.1-sol/high" → "gpt-6-astra/xhigh" (옛 기본값)\n', out)
+        self.assertEqual(self.path.read_text(), self.original)  # GitHub 원격이 아니어도 모델 칸은 쓴다(04)
 
 
 class CheckDefaultsTest(unittest.TestCase):
