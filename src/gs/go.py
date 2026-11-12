@@ -495,7 +495,9 @@ def _worker_adapter(r: Run, t: Ticket) -> adapters.Adapter:
     hook의 시험 규칙(config `[hook.worker_tests]`)도 여기서 어댑터에 실어 worker 환경 변수로 넘긴다."""
     ts = r.st.ticket(t.id)
     tier, selection = r.cfg.tiers.worker(t.model, t.tier, failures=ts.failures)
-    adapter = adapters.for_model(t.model, r.cfg.models, selection, worker_tests=r.cfg.hook.worker_tests, sandbox=r.sandbox)
+    # sandbox가 없는 Run(옛 호출, 시험)은 os 모드다(adapters.Sandbox 기본값, report.py와 같다).
+    adapter = adapters.for_model(t.model, r.cfg.models, selection, worker_tests=r.cfg.hook.worker_tests,
+                                 sandbox=getattr(r, "sandbox", None))
     # model은 진행·계열별 소요 통계가 쓰므로 계열로 유지한다. 빈 값은 CLI 사용자 기본값이다.
     chosen = getattr(adapter, "selection", None)
     metrics.worker_selection(ts, tier, chosen)
