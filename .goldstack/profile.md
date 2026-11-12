@@ -1,5 +1,5 @@
 # goldstack profile
-갱신: 2026-11-05 (goldstack-v11 grill. 줄 수·시험 수처럼 환경에서 찾을 수 있는 값은 지웠다)
+갱신: 2026-11-12 (goldstack-v33. CI 절). 2026-11-05 (goldstack-v11 grill. 줄 수·시험 수처럼 환경에서 찾을 수 있는 값은 지웠다)
 
 ## 구조
 - `src/gs/`: `gs` CLI(Python, 외부 의존성 없음). 큰 파일은 `go.py`(코디네이터), `finish.py`(마무리·병합·재개), `feedback.py`(결함 수집·전송), `hook.py`(worker 차단), `review.py`, `adapters.py`(claude·codex·agy 실행). 모듈 표는 `docs/internals.md`.
@@ -42,4 +42,5 @@
 - `hooks/register.tsx`는 시험 파일(`register.test.tsx`)이 있지만 `tests/`와 verify에 들어가지 않는다.
 
 ## CI
-- `.github/workflows/tests.yml`: ubuntu에서 전체 시험. PR #16(2026-11-05) 이후 통과 중이다. 병합을 막지 않는다(`wait_checks = false`). 저장소 public.
+- `.github/workflows/tests.yml`: ubuntu에서 job 둘. `tests`는 전체 시험을 파일별 병렬로 돈다(병합 전에 기다리지 않는다). `linux-only`(job `name: linux-only`)는 리눅스에서만 도는 `test_jail.py`·`test_sandbox_launch.py`만 `GS_REQUIRE_LANDLOCK=1`로 돈다. 저장소 public.
+- 이 레포 `.goldstack/config.toml`: `wait_checks = true`, `checks = ["linux-only"]`. gs는 병합 전에 `linux-only`만 기다린다. main은 보호되지 않았고 필수 검사도 없다.
