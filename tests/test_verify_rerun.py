@@ -3,6 +3,7 @@
 전체 명령과 판별 명령은 가짜 bash 조각이다. n번째 전체 실행이 무엇을 할지는 full.sh의 case가 정하고, 판별 명령은 받은 값을 rerun.calls에 적는다.
 시간 초과와 시간 예산은 실제 시간에 기대지 않고 verify._run_once·_launch·_clock을 바꿔 본다.
 """
+import errno
 import io
 import os
 import subprocess
@@ -182,6 +183,29 @@ class TriageTest(Case):
                          [("failed", "test_a"), ("failed", "test_a")])
         self.assertEqual(log.count("판별 시간(1분)을 다 써서 돌리지 않았다"), 2)
         self.assertEqual(log.count("검증 재시도 1"), 1)
+
+    def test_triage_launch_failure_keeps_retries(self):
+        real = subprocess.Popen
+        for error in (errno.EAGAIN, errno.ENOMEM, errno.EMFILE):
+            with self.subTest(error=error):
+                (self.dir / "full.count").unlink(missing_ok=True)
+
+                def popen(args, **kwargs):
+                    if args[2] == "bash full.sh" + verify.KEEP_BASH:
+                        return real(args, **kwargs)
+                    raise OSError(error, os.strerror(error))
+
+                with mock.patch.object(verify.subprocess, "Popen", side_effect=popen) as launch, \
+                        mock.patch.object(verify, "_clock", return_value=0):
+                    res, log = self.run_verify(self.full(fail("test_a")), self.triage(), retries=1)
+                self.assertEqual(self.count(), 2)
+                self.assertEqual((res.ok, res.code, res.retries, res.triaged), (False, 1, 1, ()))
+                self.assertEqual(launch.call_count, 4)
+                self.assertEqual(self.calls(), [])
+                self.assertEqual([(s["triage"], s["triage_reason"]) for s in res.samples],
+                                 [("failed", "test_a"), ("failed", "test_a")])
+                self.assertEqual(log.count("검증 명령 실행 실패:"), 2)
+                self.assertEqual(log.count("검증 재시도 1"), 1)
 
     def assert_skipped(self, output, reason, triage=None, files=()):
         (self.dir / "full.count").unlink(missing_ok=True)

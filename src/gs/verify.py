@@ -68,6 +68,7 @@ class Result:
     samples: tuple[dict, ...] = field(default=(), compare=False)  # 재시도까지 각 명령의 시간·결과
     interrupted: bool = False  # 이 실행이 신호로 끊긴 것처럼 보인다. 시간 초과는 timed_out이고 끊김이 아니다
     triaged: tuple[str, ...] = ()  # 따로 돌려 통과한 시험 파일. 있으면 이 결과는 판별 뒤 전체를 한 번 더 돈 것이다
+    launch_failed: bool = False
 
     @property
     def ok(self) -> bool:
@@ -202,7 +203,7 @@ def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result,
         if not res.ok:
             stream.write(f"\n판별 실패: {name}" + (" 시간 초과" if res.timed_out else "") + ". 전체 검증은 다시 돌리지 않는다\n")
             metrics.triage(samples, "failed", files, name, start)
-            return _TriageResult(deterministic_failure=not res.timed_out and not res.interrupted)
+            return _TriageResult(deterministic_failure=not res.timed_out and not res.interrupted and not res.launch_failed)
     if not unchanged():
         stream.write("\n판별 통과, 전체 검증은 다시 돌리지 않는다: 판별 중 트리가 바뀌었다\n")
         metrics.triage(samples, "passed", files, "tree_changed", start)
@@ -233,7 +234,7 @@ def _launch(command: str, seconds: float, cwd: Path, stream: IO[str]) -> Result:
                              stdout=stream, stderr=subprocess.STDOUT, env=env(), start_new_session=True)
     except OSError as e:
         stream.write(f"검증 명령 실행 실패: {e}\n")
-        return Result(1, False, limit)
+        return Result(1, False, limit, launch_failed=True)
     try:
         code = p.wait(timeout=seconds)
         interrupted = _interrupted(code, stream, start)
