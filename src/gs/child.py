@@ -31,4 +31,8 @@ def run(command: list[str]) -> int:
     env = os.environ.copy()
     for name in SESSION_VARIABLES:
         env.pop(name, None)
-    os.execvpe(command[0], command, env)
+    try:
+        os.execvpe(command[0], command, env)
+    except OSError as exc:
+        print(f"오류: 명령을 띄우지 못했다({command[0]}: {exc})", file=sys.stderr)
+        return 2

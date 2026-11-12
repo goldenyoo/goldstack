@@ -1,6 +1,8 @@
 """측정용 자식 명령의 환경과 exec 전달을 확인한다."""
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -8,8 +10,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import support  # noqa: F401
+from gs import cli
 
 
 GS = Path(sys.executable).parent / "gs"
@@ -105,6 +109,30 @@ class ChildTest(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertIn("usage: gs child --", result.stderr)
                 self.assertEqual(result.stdout, "")
+
+    def test_exec_failure_reports_one_line_and_exit_code(self):
+        denied = Path(self.cwd) / "not-executable"
+        denied.write_text("#!/bin/sh\nexit 0\n")
+        denied.chmod(0o600)
+        env = {**os.environ, "PATH": self.cwd}
+        for command in ("missing-command", str(denied)):
+            with self.subTest(command=command):
+                result = self.run_child("--", command, env=env)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(len(result.stderr.splitlines()), 1, result.stderr)
+                self.assertIn("명령을 띄우지 못했다", result.stderr)
+                self.assertIn(command, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+
+    def test_exec_failure_does_not_collect_internal_exception(self):
+        command = str(Path(self.cwd) / "missing-command")
+        with mock.patch.object(cli, "_collect_exception") as collect, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            result = cli.main(["--repo", self.cwd, "child", "--", command])
+        collect.assert_not_called()
+        self.assertEqual(result, 2)
+        self.assertIn("명령을 띄우지 못했다", err.getvalue())
 
     def test_help_explains_purpose_and_lists_removed_variables(self):
         result = self.run_child("--help")
