@@ -43,7 +43,8 @@ def _show(rundir: Path, name: str, out) -> None:
     if pid:
         head = f"{name}: 실행 중(pid {pid})"
     elif st.finished_at and st.network.get("aborted"):
-        head = f"{name}: 중단(네트워크)({_clock(state.parse_time(st.finished_at), now)}) · 다음 gs go가 이어 간다"
+        from .go import abort_label  # 중단 종류(network kind)를 따른다. 옛 state는 네트워크 중단이다
+        head = f"{name}: {abort_label(st)}({_clock(state.parse_time(st.finished_at), now)}) · 다음 gs go가 이어 간다"
     elif st.finished_at:
         head = f"{name}: 끝남({_clock(state.parse_time(st.finished_at), now)})"
     else:

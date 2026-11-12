@@ -48,6 +48,10 @@ reviewer·재리뷰·판단 모델 호출이 실패해도(답의 형식이 틀�
 (spec 2-1). 실패는 state의 리뷰 기록(note: "리뷰 실패…")에 남아 보고서(08)에 나온다. 판단 모델이 실패하면
 모든 지적이 report다.
 
+샌드박스가 명령을 띄우지 못한 것도 실패가 아니다(goldstack-v32 spec 1-8). codex·agy 리뷰어 호출이 끝나면 그 stdout(codex는 `--json` 이벤트,
+agy는 텍스트)을 transient.sandbox_failure로 보고, 걸리면 답이 형식에 맞아도(지적 0건이어도) 버리고 SandboxAbort를 올린다(_call). 리뷰 실패로 적지 않아
+리뷰 없이 병합하지 않는다. 실행은 `중단(샌드박스)`로 멈추고 다음 gs go가 리뷰·재리뷰부터 잇는다.
+
 단 끊긴 것은 실패가 아니다(spec 2-14, 2-15). 호출이 일시 오류(transient.reason)나 시간 초과로 끝나면 대기 일정대로 다시
 부르고(call_waiting), 대기 합계가 `timeouts.network_wait_minutes`를 넘으면 NetworkAbort를 올린다. 끊겼다는 이유로 리뷰 없이
 병합하지 않는다. 다음 gs go가 리뷰·재리뷰부터 잇는다. 호출은 새 프로세스 그룹에서 돌고 끝나면 그룹째 끝낸다(verify.py와 같다).
@@ -345,6 +349,8 @@ def _call(argv: list[str], *, prompt: str | None, cwd: Path, env: dict[str, str]
     """argv를 새 프로세스 그룹에서 한 번 부르고 답을 돌려준다. 돌아올 때 그 그룹에는 프로세스가 남지 않는다.
 
     시간을 넘기면 ReviewTimeout, family의 일시 오류면 ReviewTransient, 그 밖의 실패는 ReviewError. 다시 부르는 것은 call_waiting이다.
+    끝난(시간 초과로 끝낸 것도) 호출의 stdout(codex는 `--json` 이벤트, agy는 텍스트)에 샌드박스가 명령을 띄우지 못한 흔적(transient.sandbox_failure)이 있으면
+    시간 초과·종료 코드·답의 형식에 상관없이 SandboxAbort다. 다시 부르지 않고 리뷰 실패로 적지 않는다.
     cancel이 서면(gs가 루프를 떠난다) 그룹을 끝내고 Cancelled다.
     원본 stdout은 로그 옆 `<로그 이름>[.<호출 번호>].stdout`에 남긴다(실패·시간 초과도 포함).
     """
@@ -361,10 +367,11 @@ def _call(argv: list[str], *, prompt: str | None, cwd: Path, env: dict[str, str]
             p = subprocess.Popen(argv, stdin=subprocess.PIPE if prompt is not None else subprocess.DEVNULL,
                                  cwd=cwd, env=env, stdout=output, stderr=err, text=True,
                                  start_new_session=True)
+            timed_out = False
             try:
                 _communicate(p, prompt, timeout, cancel)
             except subprocess.TimeoutExpired:
-                raise ReviewTimeout(f"`{argv[0]}`가 {timeout}초 안에 끝나지 않았다(로그 {log})") from None
+                timed_out = True  # 끝낸 뒤 출력의 샌드박스 실패를 먼저 본다
             finally:  # 정상 종료여도 띄워 둔 자손이 다음 호출·수정 worker와 함께 worktree를 건드리지 못하게. 코디네이터가 죽어도 남기지 않는다
                 verify.stop(p)
                 _close(p)
@@ -372,6 +379,10 @@ def _call(argv: list[str], *, prompt: str | None, cwd: Path, env: dict[str, str]
         raise ReviewError(f"`{argv[0]}`를 실행하지 못했다: {e}") from e
     # 원본은 바이트 그대로 두고, 파싱용 문자열만 디코드·줄바꿈 변환한다.
     stdout = raw.read_text(encoding="utf-8", errors="replace")
+    if sandbox := transient.sandbox_failure(family, stdout):  # 시간 초과·종료 코드·답의 형식보다 먼저 본다: 지적 0건 답도 버린다
+        raise transient.SandboxAbort(f"`{argv[0]}`({family})의 명령이 샌드박스에서 돌지 못했다: {sandbox}(출력 {raw})")
+    if timed_out:
+        raise ReviewTimeout(f"`{argv[0]}`가 {timeout}초 안에 끝나지 않았다(로그 {log})")
     result = _claude_result(stdout) if family == "claude" else None
     is_error = bool(result and result.get("is_error") is True)
     if p.returncode or is_error:

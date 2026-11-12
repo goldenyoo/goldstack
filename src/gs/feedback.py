@@ -135,7 +135,7 @@ _WORDS = frozenset("""
     네트워크 중단 종료 코드 명령 실행 수 못 못했다 읽을 쓸 찾을 찾지 만들 없는 잘못된 알 모름 다시 끊김 대기 일시 내부 예외
 """.split()) | {name.lower() for name in _BUILTIN_EXCEPTIONS}
 # 오류 종류(gs 코드가 정한 값)에만 쓰는 gs 자신의 낱말.
-_KIND_WORDS = _WORDS | frozenset("adapter frontmatter herdr review reviewer worker runner judge setup feedback note settings preparing".split())
+_KIND_WORDS = _WORDS | frozenset("adapter frontmatter herdr review reviewer worker runner judge setup feedback note settings preparing sandbox".split())
 
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -879,7 +879,8 @@ ADAPTER_PATTERNS = (
 # 이름은 없지만 어댑터가 낸 오류의 모양: `agy: …`(종료 코드 뒤 괄호 안 포함), 어댑터 없음, worker를 띄우다 난 예기치 않은 예외.
 # "agy 차단 장치가 없다"는 넣지 않는다. worker를 띄우기 전의 의도된 거부이고 `gs check`가 미리 경고하는 이 머신의 설정 문제다.
 _ADAPTER_ERROR = re.compile(r"(?:^|\()(?:agy|codex|claude): |어댑터가 없다|^`claude plugin list|^worker를 (?:다시 )?띄우지 못했다")
-# 일시 오류 판별(transient)에 없는 대상 환경의 오류: 인증·권한·보호 규칙, git·gh의 연결 실패, worker나 검증이 바꾼 push 설정, 없는 모델.
+# 일시 오류 판별(transient)에 없는 대상 환경의 오류: 인증·권한·보호 규칙, git·gh의 연결 실패, worker나 검증이 바꾼 push 설정, 없는 모델,
+# 머신의 샌드박스가 명령을 띄우지 못한 것(transient.sandbox_failure의 문구: bwrap, agy sandbox server).
 _ENVIRONMENTAL = re.compile(
     r"authentication|auth(?:orization)? failed|not logged in|gh auth|permission denied|not authorized|"
     r"could not resolve to|\bHTTP (?:401|403|404)\b|protected branch|required status check|review required|"
@@ -887,7 +888,8 @@ _ENVIRONMENTAL = re.compile(
     r"i/o timeout|dial tcp|tls handshake|push 설정이|invalid model selection|"
     r"resource not accessible|must have admin rights|permission to \S+ denied|could not read (?:username|password)|"
     r"repository not found|repository '[^'\n]*' not found|host key verification failed|ssl certificate problem|"
-    r"error connecting to|check your internet connection|context deadline exceeded|unexpected disconnect", re.I)
+    r"error connecting to|check your internet connection|context deadline exceeded|unexpected disconnect|"
+    r"\bbwrap: |requires bubblewrap|connecting to sandbox server", re.I)
 # 운영체제가 gs의 일을 거부했다: 디스크·파일 권한. gs가 받은 오류(마무리 오류, worker를 띄우다 난 실패 이유)에만 본다.
 # worker 로그에는 쓰지 않는다: sandbox가 worker의 ref 쓰기를 막은 것은 gs가 고칠 어댑터 실패다.
 _OS_REFUSED = re.compile(r"no space left on device|read-only file system|operation not permitted", re.I)

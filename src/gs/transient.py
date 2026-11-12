@@ -5,6 +5,7 @@ error/turn.failed, agy는 오류 이벤트와 시작 실패의 stderr만 본다.
 
 대기 일정(Backoff), 그것을 다 쓴 호출이 던지는 중단 예외(NetworkAbort), 죽지 않고 재연결만 하는 codex를 보는
 ReconnectWatch도 여기 있다. 시간 상수는 모두 "분"이고 GS_NETWORK_MINUTE(1분의 초, 시험 seam)로 줄인다.
+샌드박스가 명령을 띄우지 못한 흔적(sandbox_failure)과 그때 올리는 중단 예외(SandboxAbort, NetworkAbort의 하위)도 여기 있다.
 """
 from __future__ import annotations
 
@@ -190,7 +191,75 @@ def reason(family: str, text: str, *, model: str = "", cwd: Path | None = None) 
 
 
 class NetworkAbort(Exception):
-    """대기 합계가 상한을 넘었다. 호출 실패로 삼키지 말고 `go._loop`까지 올린다. 실행이 `중단(네트워크)`로 멈춘다."""
+    """대기 합계가 상한을 넘었다. 호출 실패로 삼키지 말고 `go._loop`까지 올린다. 실행이 `중단(네트워크)`로 멈춘다.
+
+    kind는 중단 종류다. `go`가 state의 `network["kind"]`에 남기고 사람에게 보이는 문구를 그것으로 고른다.
+    """
+    kind = "network"
+
+
+class SandboxAbort(NetworkAbort):
+    """codex·agy 샌드박스가 명령을 띄우지 못했다(sandbox_failure). 같은 실패로 재시도하거나 리뷰 없이 병합하지 않는다.
+
+    NetworkAbort의 하위라 그것을 처리하는 모든 곳을 그대로 지난다: 돌던 worker·리뷰어를 끝내고, 마무리 없이 종료 코드 3으로 끝나고,
+    티켓마다 남긴 network_resume으로 다음 `gs go`가 잇는다. 실행은 `중단(샌드박스)`로 멈춘다.
+    """
+    kind = "sandbox"
+
+
+# agy 도구가 샌드박스 서버에 붙지 못했다(#55 측정: `…: read unix @->@: recvmsg: connection reset by peer.`)
+AGY_SANDBOX_ERROR = "Command failed to run: connecting to sandbox server"
+
+
+def sandbox_failure(family: str, text: str) -> str:
+    """샌드박스가 명령을 띄우지 못한 흔적이 있으면 그 이유 한 줄, 없으면 빈 문자열. codex는 그래도 종료 0으로 끝난다.
+
+    파일 내용이나 모델 답에 같은 문구가 있어도 걸리지 않게 아래 자리만 본다.
+    - codex(`--json` 이벤트): 0이 아닌 종료 코드로 끝난(item.completed) `command_execution`의 출력 첫 줄이 `bwrap: `로 시작하거나
+      `requires bubblewrap`을 담는다. 이유는 그 첫 줄이다. 성공한 명령의 출력(`cat`이 읽은 파일 등)과 출력 중간의 줄은 보지 않는다.
+    - agy stream-json(worker): `step_update` 중 `step_type`이 tool, `state`가 ERROR이고 `tool_info.error.message`가
+      AGY_SANDBOX_ERROR로 시작하는 것(streamfmt.py가 읽는 필드). DONE 도구의 출력과 모델 답은 보지 않는다.
+    - agy 텍스트 출력(리뷰): 줄 처음이 AGY_SANDBOX_ERROR인 줄. JSON 줄과 리뷰 답(JSON 지적 목록) 안의 문자열은 줄 처음에 오지 않는다.
+    그 밖의 계열은 빈 문자열이다.
+    """
+    if family == "codex":
+        return _codex_sandbox(text)
+    if family == "agy":
+        return _agy_sandbox(text)
+    return ""
+
+
+def _codex_sandbox(text: str) -> str:
+    for event in _events(text):
+        item = event.get("item")
+        if event.get("type") != "item.completed" or not isinstance(item, dict) or item.get("type") != "command_execution":
+            continue
+        code, output = item.get("exit_code"), item.get("aggregated_output")
+        if not isinstance(code, int) or isinstance(code, bool) or code == 0 or not isinstance(output, str):
+            continue
+        first = (output.splitlines() or [""])[0].strip()
+        if first.startswith("bwrap: ") or "requires bubblewrap" in first:
+            return first
+    return ""
+
+
+def _agy_sandbox(text: str) -> str:
+    for line in text.splitlines():
+        if line.startswith(AGY_SANDBOX_ERROR):  # 텍스트 출력. JSON 줄은 `{`로 시작한다
+            return line.strip()
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        su = event.get("step_update") if isinstance(event, dict) and event.get("event") == "step_update" else None
+        if not isinstance(su, dict) or su.get("step_type") != "tool" or su.get("state") != "ERROR":
+            continue
+        info = su.get("tool_info")
+        error = info.get("error") if isinstance(info, dict) else None
+        message = error.get("message") if isinstance(error, dict) else None
+        if isinstance(message, str) and message.startswith(AGY_SANDBOX_ERROR):
+            return message.splitlines()[0].strip()
+    return ""
 
 
 def minute_seconds() -> float:
