@@ -98,6 +98,8 @@ class NetworkTest(support.GoTest):
         self.assertIn(worker.NETWORK_RESUME, (self.bin / "brief_2").read_text())
         self.assertIn("지난 시도가 네트워크로 끊겼다. `git status`와 `git diff`로 남은 변경을 보고 이어라",
                       (self.bin / "brief_2").read_text())
+        # 재개한 worker도 base 줄을 받는다. 아무것도 병합되지 않은 base라 `없음`이다
+        self.assertIn("- base에 이미 병합된 티켓: 없음\n", (self.bin / "brief_2").read_text())
         self.assertIn("일시 오류(", out)
         # 분 값은 보지 않는다: 시각이 초 단위라 0.05초 대기가 초 경계를 넘으면 "20분 뒤"가 된다
         self.assertRegex(out, r"네트워크 대기\(1회, \d+분 뒤\)")
@@ -324,6 +326,7 @@ class NetworkTest(support.GoTest):
         self.assertEqual(ts.review["findings"][0]["fix_attempt"], review.ATTEMPTED)
         self.assertIn(worker.NETWORK_RESUME, (self.bin / "fix_brief").read_text())
         self.assertIn("FIX 이것", (self.bin / "fix_brief").read_text())
+        self.assertNotIn("base에 이미 병합된 티켓", (self.bin / "fix_brief").read_text())  # 이은 수정 worker는 base 줄이 없다
         self.assertTrue((self.rundir / "01/1/fix-net1/worker.log").exists())
         self.assertIn("fixed", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
 

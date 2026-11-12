@@ -38,6 +38,20 @@ def out(cwd: Path, *args: str) -> str:
     return run(cwd, *args).stdout.strip()
 
 
+def _ticket_marks(cwd: Path, feature: str, revs: tuple[str, ...], merges_only: bool,
+                  base_ref: str | None) -> list[tuple[str, str]]:
+    """(커밋, 티켓 id)를 `git log` 순서(최근 것부터)로. 세는 커밋은 `ticket_trailers`의 규칙을 따른다."""
+    revs = revs or ("HEAD",)
+    eligible = set(out(cwd, "rev-list", "--min-parents=2", *revs).split())
+    if base_ref is not None and not merges_only:
+        eligible.update(out(cwd, "rev-list", "--first-parent", "--max-parents=1", base_ref).split())
+    records = run(cwd, "log", "--format=%H%x00%b%x00", *revs).stdout.split("\0")
+    pattern = re.compile(rf"gs-ticket: {re.escape(feature)}/(\S+)[ \t]*")
+    return [(sha.strip(), match.group(1))
+            for sha, body in zip(records[::2], records[1::2]) if sha.strip() in eligible
+            for line in body.splitlines() if (match := pattern.fullmatch(line))]
+
+
 def ticket_trailers(cwd: Path, feature: str, *revs: str, merges_only: bool = False,
                     base_ref: str | None = None) -> set[str]:
     """integration의 병합과 base 첫 부모의 squash에서 정확한 티켓 줄을 읽는다.
@@ -45,15 +59,19 @@ def ticket_trailers(cwd: Path, feature: str, *revs: str, merges_only: bool = Fal
     worker 일반 커밋은 표시가 있어도 세지 않는다. base_ref가 없거나 merges_only면
     부모가 둘 이상인 integration 커밋만 읽는다. revs는 squash에도 그대로 적용한다.
     """
-    revs = revs or ("HEAD",)
-    eligible = set(out(cwd, "rev-list", "--min-parents=2", *revs).split())
-    if base_ref is not None and not merges_only:
-        eligible.update(out(cwd, "rev-list", "--first-parent", "--max-parents=1", base_ref).split())
-    records = run(cwd, "log", "--format=%H%x00%b%x00", *revs).stdout.split("\0")
-    pattern = re.compile(rf"gs-ticket: {re.escape(feature)}/(\S+)[ \t]*")
-    return {match.group(1)
-            for sha, body in zip(records[::2], records[1::2]) if sha.strip() in eligible
-            for line in body.splitlines() if (match := pattern.fullmatch(line))}
+    return {tid for _, tid in _ticket_marks(cwd, feature, revs, merges_only, base_ref)}
+
+
+def merged_tickets(cwd: Path, feature: str, rev: str, base_ref: str | None = None) -> list[tuple[str, str]]:
+    """rev에서 닿는 이번 feature의 티켓 병합 커밋을 (티켓 id, 짧은 커밋 해시)로, 최근 것부터 돌려준다.
+
+    `ticket_trailers`와 같은 규칙으로 읽는다(`gs-ticket: <feature>/<id>` 줄이 있는 병합 커밋, base_ref가 있으면 그 첫 부모의 squash도).
+    같은 티켓이 여러 번 보이면 가장 최근 커밋 하나만 센다. worker brief의 base 줄과 보고서 요약이 같은 함수로 병합 사실을 읽는다.
+    """
+    seen: dict[str, str] = {}
+    for sha, tid in _ticket_marks(cwd, feature, (rev,), False, base_ref):
+        seen.setdefault(tid, out(cwd, "rev-parse", "--short", sha))
+    return list(seen.items())
 
 
 def _github_repo_url(url: str) -> str | None:
