@@ -1,8 +1,7 @@
 ---
 name: handoff
-description: "지금 대화를 다른 agent가 이어받을 인계 문서로 줄여 임시 디렉터리에 쓴다. 하네스·디렉터리를 바꾸거나 곁가지 일을 떼어 줄 때. 사용: /handoff [다음 세션이 할 일]"
+description: "사람이 인계 문서를 명시적으로 요청할 때만 쓴다. 지금 대화를 다른 agent가 이어받을 인계 문서로 줄여 임시 디렉터리에 쓴다. 하네스·디렉터리를 바꾸거나 곁가지 일을 떼어 줄 때. 사용: /handoff [다음 세션이 할 일]"
 argument-hint: "[다음 세션이 할 일]"
-disable-model-invocation: true
 ---
 지금 대화를 새 agent가 이어서 일할 수 있게 인계 문서 하나로 줄인다.
 
