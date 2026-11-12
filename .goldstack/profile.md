@@ -36,7 +36,7 @@
 - **gs가 자기 자신을 고친다.** 실행 중인 gs는 설치본이라 병합된 변경을 쓰지 않는다. 다음 실행 전에 `git pull`과 `gs self-update`가 필요하다. `/go a b` 연속 실행은 다시 읽지 않는다.
 - 시험 프로세스는 스레드로 나눌 수 없다. 시험이 `os.environ`·cwd를 바꾼다.
 - 느린 시험은 임시 git 레포를 만들어 도는 통합 시험이다.
-- 코드 곳곳의 사실이 docstring에도 적혀 있다(`go.py`, `review.py`, `finish.py`, `metrics.py`). 동작을 바꾸면 docstring과 `docs/internals.md`도 고친다.
+- 코드 곳곳의 사실이 docstring에도 적혀 있다(`go.py`, `review.py`, `finish.py`, `metrics.py`). 동작을 바꾸면 docstring은 고친다. `docs/internals.md`는 touches에 있을 때만 고친다.
 - `go.py`·`finish.py`의 병합·재개 흐름은 상태 전이가 얽혀 있다. 상태(`state.json`)의 옛 형식을 읽을 수 있어야 한다.
 - flaky: 부하가 걸리면 짧은 제한 시간과 초 단위 시각에 기댄 시험이 떨어진 적이 있다(v9 `test_network_wait`, v10 `test_review_network`). 시험을 새로 쓸 때 실제 시간에 기대지 않는다.
 - `hooks/register.tsx`는 시험 파일(`register.test.tsx`)이 있지만 `tests/`와 verify에 들어가지 않는다.

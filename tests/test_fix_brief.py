@@ -72,6 +72,21 @@ class FixBriefTest(unittest.TestCase):
                                "사람에게 묻지 않는다", "완료 조건이 이 티켓의 명세다"):
                     self.assertIn(phrase, text)
 
+    def test_every_brief_has_observations_heading_gs_child_and_split_rule(self):
+        for name, text in self.briefs().items():
+            with self.subTest(brief=name):
+                self.assertIn(worker.OBSERVATIONS_HEADING, text)
+                self.assertIn("`gs child -- <명령>`", text)
+                self.assertIn("명령을 나눠 돌린다. 일부를 빼지 않는다", text)
+
+    def test_fix_brief_fixable_files_do_not_repeat_the_first_workers_touches_line(self):
+        touches, merged = ["src/a.py", "tests/test_a.py"], {"02": ["src/b.py", "tests/test_b.py"]}
+        text = review.fix_brief([FINDING], 1, touches, merged)
+        self.assertIn("고칠 수 있는 파일(이 티켓 touches와 이번 실행에서 이미 병합된 티켓들의 touches):", text)
+        self.assertIn("  - 이 티켓 touches: `src/a.py`, `tests/test_a.py`", text)
+        self.assertIn("  - 이번 실행에서 병합된 티켓 02의 touches: `src/b.py`, `tests/test_b.py`", text)
+        self.assertNotIn(worker.TOUCHES_LABEL, text)
+
     def test_review_prompts_exempt_ps(self):
         p = Path("x")
         for name, text in (("review", review.review_prompt(p, p, p, p)),
