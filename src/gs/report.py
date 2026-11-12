@@ -231,6 +231,7 @@ def passed_line(r, log: Path) -> str | None:
 
     그 로그를 쓴 마지막 검증 호출(티켓은 그 티켓 라벨 중 마지막, 마무리는 로그 이름의 라벨)이 측정 기록상 표본 하나에 깨끗한 통과이고
     (재시도 0, 판별 없음, 트리 그대로), 로그에도 gs가 쓴 종료 코드 줄이 `종료 코드: 0` 하나뿐일 때만이다.
+    라벨이 다른 티켓의 라벨과 겹치면(티켓 `01`과 `01-repair`) 어느 티켓의 줄인지 몰라 None이다.
     그래서 건너뜀 로그, 끊긴 검증을 이어 쓴 로그, flaky 줄이 있는 로그, 측정 기록이 없는 옛 state는 모두 None이다.
     출력 형식은 보지 않는다(unittest 같은 도구를 가정하지 않는다). 읽다 실패해도 None이다."""
     try:
@@ -240,6 +241,8 @@ def passed_line(r, log: Path) -> str | None:
         name, kind = owner
         suffixes = ("", "-repair", "-끊김", "-repair-끊김") if kind == "ticket" else ("",)
         labels = {name + x for x in suffixes}
+        if kind == "ticket" and any(f"ticket-{o}{x}" in labels for o in r.st.tickets if f"ticket-{o}" != name for x in suffixes):
+            return None  # 다른 티켓(`01`과 `01-repair`)의 라벨과 겹쳐 측정 줄이 누구 것인지 모른다: 끝부분을 붙인다
         calls = [c for c in _validation_calls(r.st.metrics.get("validations", [])) if c[0].get("label", "") in labels]
         if not calls or len(calls[-1]) != 1 or not _clean_pass(calls[-1][0]):
             return None
