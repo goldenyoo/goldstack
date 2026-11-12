@@ -31,8 +31,8 @@ class ChecksGraceTest(unittest.TestCase):
     def poll(self, frames, *, required=(), grace=3):
         elapsed = [0]
         observed, queries = [], []
-        r = SimpleNamespace(cfg=SimpleNamespace(timeouts=SimpleNamespace(checks_minutes=1,
-                                                                        checks_grace_seconds=grace)))
+        r = SimpleNamespace(cfg=SimpleNamespace(git=config.GitConfig("origin", "main"),  # checks 없음: 보호 규칙 → gh 판정
+                                                timeouts=SimpleNamespace(checks_minutes=1, checks_grace_seconds=grace)))
 
         def checks(r, **kwargs):
             queries.append(kwargs)
@@ -136,8 +136,8 @@ class ChecksGraceTest(unittest.TestCase):
 
     def test_partial_protection_uses_gh_required_checks_to_gate_merge(self):
         r = SimpleNamespace(repo="repo", remote="origin", base="main",
-                            cfg=SimpleNamespace(timeouts=SimpleNamespace(checks_minutes=1,
-                                                                         checks_grace_seconds=3)))
+                            cfg=SimpleNamespace(git=config.GitConfig("origin", "main"),
+                                                timeouts=SimpleNamespace(checks_minutes=1, checks_grace_seconds=3)))
         for endpoint, unknown in ((0, "build"), (1, "lint")):
             for bucket in ("fail", "pending", "pass"):
                 with self.subTest(endpoint=endpoint, bucket=bucket):
