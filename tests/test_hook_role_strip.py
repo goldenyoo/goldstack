@@ -40,6 +40,11 @@ CORE = [
     "export GS_ROLE=",
     "export FOO=1 GS_ROLE=other",
     "export -n GS_ROLE",
+    "export -n GS_ROLE=worker",
+    "declare +x GS_ROLE=worker",
+    "typeset +x GS_ROLE=worker",
+    "env FOO.BAR=1 GS_ROLE=other claude -p hi",
+    "env a-b=1 env -u GS_ROLE claude -p hi",
     "readonly GS_ROLE=other",
     "GS_ROLE+=x claude -p hi",
     "declare +x GS_ROLE",
@@ -74,6 +79,16 @@ SHELLS = [
     "nohup {}",
     "setsid {}",
     "setsid nohup timeout 5 {}",
+    "setsid bash -c '{}'",
+    "setsid nohup bash -c '{}'",
+    "env -u CLAUDE_EFFORT bash -c '{}'",
+    "env -C /tmp sh -c '{}'",
+    "timeout -s KILL 5 bash -c '{}'",
+    "timeout 0.5 zsh -c '{}'",
+    "exec -a x bash -c '{}'",
+    "setsid eval '{}'",
+    "gs child -- {}",
+    "gs --repo /x child -- {}",
     "command {}",
     "xargs -n 1 {}",
 ]
@@ -101,6 +116,9 @@ PASSED = [
     "unset GS_ROLES",
     "gs child -- claude -p hi",
     "gs child -- env -u CLAUDE_EFFORT claude -p hi",
+    "setsid bash -c 'echo $GS_ROLE'",
+    "env -u CLAUDE_EFFORT bash -c 'env | grep GS_'",
+    "export -n FOO=1",
     "grep GS_ROLE src/gs/hook.py",
     'git commit -m "unset GS_ROLE 막기"',
     "git commit -m 'env -u GS_ROLE claude -p hi'",
@@ -164,6 +182,12 @@ class RoleStripTest(unittest.TestCase):
                               ("export -n GS_ROLE", "export -n GS_ROLE"), ("GS_ROLE=x y", "GS_ROLE=<값> <명령>")]:
             with self.subTest(command=command):
                 self.assertIn(form, self.verdict(command))
+
+    def test_gs_child_command_gets_the_same_verdict(self):
+        """`gs child -- <명령>`은 `<명령>`을 그대로 exec한다. 그 명령도 기존 hook 판정을 받는다."""
+        self.assertIsNotNone(self.verdict("gs child -- git push"))
+        self.assertIsNotNone(self.verdict("gs --repo /x child -- setsid bash -c 'git push'"))
+        self.assertIsNone(self.verdict("gs child"))
 
     def test_passed_forms(self):
         for command in PASSED:
