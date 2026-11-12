@@ -39,11 +39,19 @@ class SkillTest(unittest.TestCase):
                 self.assertLess(len(body.split()), limit, f"{name}: skill 글이 길다(상한 {limit})")
 
     def test_user_invoked(self):
-        for name in ("grill", "go"):
+        for name in ("go",):
             data, _ = skill_frontmatter((SKILLS / name / "SKILL.md").read_text(encoding="utf-8"))
             self.assertEqual(data["name"], name)
             self.assertEqual(data["disable-model-invocation"], "true")  # 사용자 호출 skill
             self.assertIn(f"/{name} <feature>", data["description"])
+
+    def test_model_invoked_conversational_skills(self):
+        for name in ("grill", "handoff", "idea", "retro"):
+            with self.subTest(name):
+                data, _ = skill_frontmatter((SKILLS / name / "SKILL.md").read_text(encoding="utf-8"))
+                self.assertNotIn("disable-model-invocation", data)
+                self.assertIn("명시적으로 요청할 때만 쓴다", data["description"])
+                self.assertIn(f"사용: /{name}", data["description"])
 
     def test_every_skill_named_after_its_directory(self):
         names = sorted(path.parent.name for path in SKILLS.glob("*/SKILL.md"))
@@ -86,7 +94,7 @@ MATT_SKILLS = {  # goldstack 이름 → 원본 레포 안 경로
     "retro": "skills/engineering/retro/SKILL.md",
     "writing-for-agents": "skills/productivity/writing-for-agents/SKILL.md",
 }
-MODEL_INVOKED = {"diagnosing-bugs"}  # 나머지는 문맥 비용 때문에 사용자 호출(spec 범위 ④)
+MODEL_INVOKED = {"diagnosing-bugs", "grill", "handoff", "idea", "retro"}  # 나머지는 문맥 비용 때문에 사용자 호출(spec 범위 ④)
 MIT_LINE = "MIT License, Copyright (c) 2026 Matt Pocock, goldstack에 맞게 번역·수정"
 
 

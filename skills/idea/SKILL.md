@@ -1,8 +1,7 @@
 ---
 name: idea
-description: "생각 하나를 .goldstack/ideas/에 아이디어 파일로 적는다. 비슷한 열린 아이디어가 있으면 거기에 덧붙일지 묻는다. 커밋하지 않는다. 사용: /idea <한 줄>"
+description: "사람이 아이디어를 적어 달라고 명시적으로 요청할 때만 쓴다. 생각 하나를 .goldstack/ideas/에 아이디어 파일로 적는다. 비슷한 열린 아이디어가 있으면 거기에 덧붙일지 묻는다. 커밋하지 않는다. 사용: /idea <한 줄>"
 argument-hint: <한 줄>
-disable-model-invocation: true
 ---
 # /idea $ARGUMENTS
 

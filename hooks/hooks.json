@@ -1,9 +1,19 @@
 {
-  "description": "goldstack worker 차단(GS_ROLE=worker일 때만) + 무인 세션의 승인 창 거부(`gs overnight arm`을 친 세션에서만) + 진행 바 mod(`gs go` 실행 중 프롬프트 위에 progress.line)",
+  "description": "세션 시작 때 닫힌 skill 안내(GS_ROLE=worker가 아닐 때) + goldstack worker 차단(GS_ROLE=worker일 때만) + 무인 세션의 승인 창 거부(`gs overnight arm`을 친 세션에서만) + 진행 바 mod(`gs go` 실행 중 프롬프트 위에 progress.line)",
   "modules": [
     "./register.tsx"
   ],
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ \"${GS_ROLE:-}\" = worker ]; then exit 0; fi; printf '%s\\n' 'goldstack의 닫힌 skill 6개(/goldstack:go, /goldstack:overnight, /goldstack:feedback, /goldstack:adopt, /goldstack:wait-what, /goldstack:writing-for-agents)는 사용자 호출이다. 사람이 이 이름이나 그 일로 요청하면 직접 흉내 내지 말고 해당 슬래시 명령을 안내한다.'"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob",
