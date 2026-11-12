@@ -1,5 +1,7 @@
 """GitHub 설정을 읽어 제안한다. --write도 제안한 config 값만 바꾼다.
 
+`필수 검사` 행은 config `git.checks`가 있으면 GitHub 대신 그 목록과 출처를 보이고 제안하지 않는다. `git.wait_checks = false`인데
+`git.checks`가 있으면 `CI 대기` 경고 행을 더한다.
 머신 행(`샌드박스`)은 GitHub 원격과 무관하게 이 머신의 샌드박스 모드와 점검 결과를 보인다(sandbox.doctor_row). 제안은 없다.
 """
 from __future__ import annotations
@@ -222,12 +224,15 @@ def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
         if key:
             proposals[key] = value, description
 
+    # 있으면 gs는 보호 규칙 대신 이 이름만 기다린다(finish._poll_checks). 필수 검사 행은 GitHub 조회 대신 이 목록이다.
+    named = f"{', '.join(cfg.git.checks)} (출처: config git.checks)" if cfg.git.checks else ""
     try:
         repository = git.github_repo(repo, cfg.git.remote)
     except (git.GitError, OSError) as e:
         print(f"gs doctor: GitHub 원격 아님 (원격 {cfg.git.remote}): {e}", file=out)
-        for label in ("병합 방식", "base 보호", "필수 승인", "필수 검사"):
+        for label in ("병합 방식", "base 보호", "필수 승인"):
             row(label, _unknown(str(e)))
+        row("필수 검사", named or _unknown(str(e)))
     else:
         print(f"gs doctor: {repository} (원격 {cfg.git.remote})", file=out)
         try:
@@ -254,12 +259,16 @@ def doctor(repo: Path, out: TextIO, *, write: bool = False) -> int:
             row("필수 승인", _unknown(reason))
         else:
             row("필수 승인", f"{approvals}명" + (" → gs는 PR을 열고 승인을 기다린다(병합 대기)" if approvals else ""))
-        if checks is None:
+        if named:
+            row("필수 검사", named)
+        elif checks is None:
             row("필수 검사", _unknown(reason))
         elif checks:
             row("필수 검사", ", ".join(checks), "wait_checks", True)
         else:
             row("필수 검사", "없음")
+    if named and not cfg.git.wait_checks:
+        row("CI 대기", "경고: git.checks가 있지만 git.wait_checks = false라 기다리지 않는다")
     _verify_rows(repo, out)
     if any(re.search(r"\bnpm\s+(?:install|i)\b", command)
            or re.search(r"\byarn(?=\s*(?:$|--|install\b))", command)
