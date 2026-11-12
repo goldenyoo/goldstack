@@ -1109,6 +1109,37 @@ claude    # 여기서 /go 나 /overnight
 ```
 `gs go`가 죽었으면 다시 치면 같은 자리에서 잇는다. 설치는 README와 같고 `uv`, `git`, `gh`, `claude`가 필요하다. 이 레포의 시험은 GitHub Actions ubuntu에서도 돈다.
 
+### 샌드박스가 없는 머신
+
+codex worker·codex 리뷰·agy 리뷰는 OS 샌드박스(리눅스는 bubblewrap)로 돈다. 그 머신에서 되는지는 모델을 부르지 않고 확인한다:
+```sh
+bwrap --ro-bind / / --dev /dev true
+codex sandbox -c sandbox_mode=workspace-write -- true
+```
+둘 다 종료 0이면 된다. 실패하면 `gs check`·`gs go`가 멈추고 `gs doctor`의 `샌드박스` 행이 이유를 보인다:
+```console
+이 머신에서 codex 샌드박스가 동작하지 않는다(bwrap: Failed to make / slave: Permission denied). codex를 쓰는 티켓: 01(worker·리뷰)
+  추정 원인: 컨테이너 AppArmor 프로필(cri-containerd.apparmor.d (enforce))이 mount를 막는다 → pod spec securityContext.appArmorProfile: {type: Unconfined}(검증 안 됨)
+  또는 .goldstack/local.env에 GS_SANDBOX=landlock(네트워크가 열린다, …)
+```
+컨테이너 AppArmor가 원인이면 pod spec에 `securityContext.appArmorProfile: {type: Unconfined}`를 넣는 것이 고치는 길이다(검증 안 됨). pod을 못 바꾸면 아래 `landlock` 모드를 쓴다.
+
+**`GS_SANDBOX=landlock`** — `.goldstack/local.env`에 한 줄을 적는다. 값 뒤에 주석을 붙이지 않는다(`local.env`는 인라인 주석을 지우지 않아 주석까지 값이 되고 오류다):
+```
+GS_SANDBOX=landlock
+```
+codex worker·codex 리뷰·agy 리뷰를 OS 샌드박스 대신 `gs jail`(커널 Landlock)로 가둬 띄운다. 커널이 Landlock을 지원해야 하고 아니면 점검이 실패한다. agy·claude worker는 원래 이 샌드박스를 쓰지 않아 그대로다.
+
+- **막는 것**: 비밀 경로 읽기(홈의 `.ssh`, `.config/gh`, `.gnupg`, `.aws`, `.netrc`, `.git-credentials`, `.kube`, `.docker`, 그 CLI 것이 아닌 `.claude`·`.gemini`·`.codex`, 주 레포의 `.goldstack/local.env`), 쓰기 목록(worktree, 그 git 디렉터리, `/tmp`, `$TMPDIR`, 그 CLI 홈) 밖 파일을 열어 쓰기, sudo(`no new privileges`).
+- **못 막는 것**: 네트워크. 바깥으로 보내는 것은 막지 못한다. 커널 Landlock ABI 1에서는 경로로 부르는 `truncate(2)`와 `chmod`도 쓰기 목록 밖에서 통과한다(`landlock-truncate`, 범위 밖).
+- **push·gh 쓰기가 막히는 근거**: 파일 자격 증명(`~/.config/gh`, `~/.ssh` 등)을 가리고 `GH_TOKEN`·`GITHUB_TOKEN`·`SSH_AUTH_SOCK`를 지운다. 그 밖의 방법으로 인증이 남은 머신이면 막지 못한다.
+- **경로 더하기**: `.goldstack/config.toml`의 `[sandbox] secrets = ["~/.hyperdev/token"]`. `~`는 실행하는 머신의 홈, 상대 경로는 주 레포 기준이고, 없는 경로는 건너뛴다. 기본 목록에 더해진다.
+- 이 모드로 돈 실행의 보고서 머리에 `샌드박스: landlock(네트워크 열림)`이 붙는다.
+
+샌드박스를 끄고 쓰는 우회(codex `danger-full-access`를 가두지 않고 쓰기)는 쓰지 않는다. gh 인증이 살아 있으면 push·병합을 막는 장치가 환경 변수뿐이고 `unset`으로 풀린다.
+
+실행 중에 샌드박스가 명령을 띄우지 못하면 `중단(샌드박스)`로 멈춘다(종료 코드 3). 리뷰는 지적 0건이어도 버리고 리뷰 없이 병합하지 않는다. 머신의 샌드박스를 고치거나 `GS_SANDBOX=landlock`을 켠 뒤 다시 `gs go`를 치면 같은 자리에서 잇는다.
+
 ## 원격 머신에서 돌리기(`gs remote`)
 
 맥북이 바쁠 때 herdr에 저장된 다른 머신(예: `mac_mini`)에서 `/go`를 끝까지 돌린다. 원격 pane에 claude를 띄워 `/go <feature>`를 보내고 바로 돌아온다. 이후 실행은 원격의 레포에서 일어난다. 필요한 `herdr`는 로컬에 있어야 하고 머신은 `herdr machine status`에 `reachable`로 보여야 한다.
