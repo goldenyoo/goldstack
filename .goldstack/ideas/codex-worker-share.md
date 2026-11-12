@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "medium"
 source: "2026-11-12 대화(템플릿 기본값 model: claude, reviewer: codex 때문에 구현에 codex가 거의 쓰이지 않는다)"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v34"
 ---
 grill이 티켓마다 구현 계열을 고르게 하고, 그 근거를 쌓도록 codex 구현을 다시 시험한다. 지금은 템플릿 기본값(`model: claude`, `reviewer: codex`)이 그대로 남아 v20 이후 구현이 전부 claude다.
 

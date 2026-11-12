@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "medium"
 source: "2026-11-12 대화(agy에 Gemini 4 Carbon이 생겼으면 그것을 기본 agy 모델로)"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v34"
 ---
 agy 기본 모델을 Gemini 4 Argon에서 Carbon으로 바꾼다. 이 레포 config는 짧은 비교 뒤 바꾸고, `gs init` 기본값은 `agy models`에 Carbon이 있을 때만 쓴다.
 

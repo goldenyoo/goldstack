@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "medium"
 source: "2026-11-12 대화(codex 한도가 많이 남는데 리뷰가 가장 좋은 codex 모델로 도는가 → astra로 바꾼다)"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v34"
 ---
 codex 리뷰를 `gpt-6.1-sol`에서 최상위 모델 `gpt-6-astra`로 바꾼다. 첫 리뷰는 `gpt-6-astra/xhigh`, 재리뷰는 `gpt-6-astra/high`로 한다. codex 한도는 많이 남는데 리뷰는 "workhorse" 모델의 `high`로 돌고 있다.
 

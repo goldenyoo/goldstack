@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "medium"
 source: "2026-11-12 대화(Carbon·astra를 이 레포뿐 아니라 goldstack을 쓰는 모든 곳에 적용하려면)"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v34"
 ---
 `gs init` 기본 모델을 바꾸면 이미 goldstack을 쓰는 레포에도 알리고, 사람이 승인하면 옛 기본값 그대로인 칸만 새 값으로 바꾼다. 지금은 기본값을 바꿔도 새로 `gs init`하는 레포에만 들어간다.
 
