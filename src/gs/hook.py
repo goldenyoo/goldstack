@@ -1140,11 +1140,11 @@ def role_scan(words: list[str]) -> tuple[str | None, list[str]]:
 
 def gs_child_command(words: list[str]) -> list[str] | None:
     """`gs [--repo <경로>] child -- <명령> …`의 `<명령> …`. `gs child`가 아니면 None. 그 명령은 그대로 exec되므로 같은 판정을 받는다."""
-    if not words or os.path.basename(words[0]) != "gs":
+    if not words or os.path.basename(words[0]).lstrip("\\") != "gs":
         return None
     i = 1
     while i < len(words) and words[i].startswith("-"):
-        i += 2 if words[i] == "--repo" else 1
+        i += 2 if _is_long(words[i], "--repo") and "=" not in words[i] else 1
     if i >= len(words) or words[i] != "child":
         return None
     i += 1
@@ -1252,8 +1252,6 @@ def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None,
             if _role_assign_blocks(w):
                 return f"`{base} GS_ROLE=<값>`이 `GS_ROLE`을 바꾼다", i
             i += 1
-        elif "=" in w or re.fullmatch(r"\d+[smhd]?", w) or TIMEOUT_DURATION.fullmatch(w):
-            i += 1
         elif w.startswith("-") and w != "-":
             if base == "exec" and not w.startswith("--") and "c" in w[1:]:
                 return "`exec -c`가 `GS_ROLE`을 포함해 환경을 비운다", i
@@ -1262,6 +1260,8 @@ def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None,
                                                                   or (not w.startswith("--") and w[-1] in "sk"))))
                      or (base == "exec" and w == "-a"))
             i += 2 if takes else 1
+        elif "=" in w or re.fullmatch(r"\d+[smhd]?", w) or TIMEOUT_DURATION.fullmatch(w):
+            i += 1
         else:
             break
     return None, i
@@ -1277,18 +1277,23 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     prefix = argv[:len(argv) - len(rest)]
     seg = replace(ctx, cwd=cwd, xargs_fill=(*ctx.xargs_fill, *_xargs_fill(prefix)))
 
-    # `setsid bash -c '…'`·`env -u X bash -c '…'`·`gs child -- …`: `strip_prefix`가 못 건너뛰는 앞붙이 뒤의 명령
+    # `setsid bash -c '…'`·`env -u X bash -c '…'`·`gs child -- …`: `strip_prefix`가 못 건너뛰는 앞붙이 뒤의 명령.
+    # 본문이 통과해도 반환하지 않는다. 아래의 xargs 치환·리다이렉션 판정도 이 segment에 걸린다.
     _, tail = role_scan(list(argv))
+    tail_seg = replace(seg, xargs_fill=(*ctx.xargs_fill, *_xargs_fill(argv[:len(argv) - len(tail)])))
     inner = gs_child_command(tail)
-    if inner is not None:
-        return check_segment(inner, redirects, cwd, ctx, depth) if inner else None
-    if tail and os.path.basename(tail[0].lstrip("\\`(")) in ("bash", "sh", "zsh", "dash", "eval"):
+    if inner and depth <= 3:
+        lead = argv[:len(argv) - len(tail)]  # 바깥 `xargs`가 `<명령>` 뒤에 입력을 붙인다
+        reason = check_segment([*lead, *inner], redirects, cwd, ctx, depth + 1)
+        if reason:
+            return reason
+    elif inner is None and tail and os.path.basename(tail[0].lstrip("\\`(")) in ("bash", "sh", "zsh", "dash", "eval"):
         shell = os.path.basename(tail[0].lstrip("\\`("))
-        if shell == "eval":
-            return check_bash(_as_script(" ".join(tail[1:])), seg, depth + 1)
-        script = shell_c_script(tail[1:])
+        script = " ".join(tail[1:]) if shell == "eval" else shell_c_script(tail[1:])
         if script is not None:
-            return check_bash(_as_script(script), replace(seg, zsh=shell == "zsh", noequals=False), depth + 1)
+            reason = check_bash(_as_script(script), replace(tail_seg, zsh=shell == "zsh", noequals=False) if shell != "eval" else tail_seg, depth + 1)
+            if reason:
+                return reason
 
     if _xargs_filled(rest[:1], seg.xargs_fill) == [XARGS_INPUT]:  # GNU xargs는 명령 이름도 바꾼다
         return f"`xargs`의 치환 문자열이 명령 이름 `{rest[0]}`에 들어 있어 어떤 명령을 돌리는지 볼 수 없다. `{{}}`처럼 겹치지 않는 문자열을 쓴다"

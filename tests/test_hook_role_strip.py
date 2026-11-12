@@ -45,6 +45,11 @@ CORE = [
     "typeset +x GS_ROLE=worker",
     "env FOO.BAR=1 GS_ROLE=other claude -p hi",
     "env a-b=1 env -u GS_ROLE claude -p hi",
+    "exec -ca=1 claude -p hi",
+    "exec -cafoo=bar claude -p hi",
+    "gs --rep /x child -- env -u GS_ROLE claude -p hi",
+    "gs --re /x child -- env -u GS_ROLE claude -p hi",
+    "\\gs child -- env -u GS_ROLE claude -p hi",
     "readonly GS_ROLE=other",
     "GS_ROLE+=x claude -p hi",
     "declare +x GS_ROLE",
@@ -188,6 +193,25 @@ class RoleStripTest(unittest.TestCase):
         self.assertIsNotNone(self.verdict("gs child -- git push"))
         self.assertIsNotNone(self.verdict("gs --repo /x child -- setsid bash -c 'git push'"))
         self.assertIsNone(self.verdict("gs child"))
+
+    def test_outer_checks_still_run_after_wrapped_shell_or_gs_child(self):
+        """앞붙이 뒤 셸 본문·`gs child`를 본 뒤에도 바깥 리다이렉션·xargs 치환 판정이 돈다."""
+        out = "/gs-test-nowhere/outside.txt"
+        secret = "/gs-test-nowhere/home/.ssh/id_ed25519"
+        for command in [f"env -u CLAUDE_EFFORT bash -c 'echo ok' > {out}",
+                        f"setsid bash -c 'echo ok' < {secret}",
+                        f"gs child > {out}", f"gs child 2> {out}", f"gs child < {secret}",
+                        f"gs child -- echo ok > {out}",
+                        "echo git | xargs -I eval eval push",
+                        "echo git | xargs -I bash bash -c push",
+                        "echo pkill | xargs -I gs gs child",
+                        "echo push | xargs gs child -- git",
+                        "echo pu | setsid xargs -I X bash -c 'git Xsh origin'"]:
+            with self.subTest(command=command):
+                self.assertIsNotNone(self.verdict(command), command)
+
+    def test_gs_child_repeated_does_not_recurse_forever(self):
+        self.assertIsNone(self.verdict("gs child -- " * 1000 + "echo ok"))
 
     def test_passed_forms(self):
         for command in PASSED:
