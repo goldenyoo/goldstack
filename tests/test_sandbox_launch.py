@@ -584,14 +584,14 @@ echo x > jailed.txt && git add jailed.txt && git commit -qm jailed && echo COMMI
 """
 
 
-@unittest.skipUnless(jail.abi() >= 1, "Landlock을 쓸 수 없는 머신(리눅스가 아니거나 커널이 지원하지 않음)")
+@support.requires_landlock(jail.abi())  # GS_REQUIRE_LANDLOCK=1이면 skip 대신 실패한다
 class RealLandlockTest(unittest.TestCase):
     """실제 Landlock(리눅스 CI). ABI 1은 경로 `truncate(2)`·`chmod`를 막지 못하므로 쓰기는 `open` 기준으로만 본다."""
 
     def setUp(self):
         base = outside_writes()
         if base is None:
-            self.skipTest("쓰기 목록(/tmp, $TMPDIR) 밖에 시험 디렉터리를 둘 곳이 없다")
+            support.skip_or_fail_landlock(self, "쓰기 목록(/tmp, $TMPDIR) 밖에 시험 디렉터리를 둘 곳이 없다")
         support.isolate_git_env(self)
         tmp = tempfile.TemporaryDirectory(dir=base)
         self.addCleanup(tmp.cleanup)
