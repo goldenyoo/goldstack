@@ -179,6 +179,36 @@ else:
         self.assertIn("2명 → gs는 PR을 열고 승인을 기다린다", out)
         self.assertIn("build, test → git.wait_checks = true", out)
 
+    def test_config_checks_replace_required_check_row_and_warn_when_not_waiting(self):
+        """`git.checks`가 있으면 gs가 기다릴 이름은 그 목록이다. 보호 규칙의 이름으로 제안하지 않는다."""
+        self.protect()
+        text = self.original.replace("checks = []", 'checks = ["linux-only", "lint"]')
+        self.path.write_text(text)
+        code, out = self.command("doctor", "--write")
+        self.assertEqual(code, 0, out)
+        self.assertIn("\n필수 검사  linux-only, lint (출처: config git.checks)\n", out)
+        self.assertNotIn("build, test", out)
+        self.assertIn("\nCI 대기  경고: git.checks가 있지만 git.wait_checks = false라 기다리지 않는다\n", out)
+        self.assertNotIn("git.wait_checks:", out)
+        cfg, _ = config.load(self.repo)
+        self.assertEqual((cfg.git.wait_checks, cfg.git.checks), (False, ("linux-only", "lint")))
+        self.assertFalse(cfg.git.direct_push)  # 다른 제안은 그대로 쓴다
+
+        self.path.write_text(text.replace("wait_checks = false", "wait_checks = true"))
+        code, out = self.command("doctor")
+        self.assertEqual(code, 0, out)
+        self.assertIn("\n필수 검사  linux-only, lint (출처: config git.checks)\n", out)
+        self.assertNotIn("CI 대기", out)
+
+        self.responses[self.protection] = {"error": "HTTP 403"}  # GitHub 조회가 실패해도 config 목록은 안다
+        self.assertIn("\n필수 검사  linux-only, lint (출처: config git.checks)\n", self.command("doctor")[1])
+        git.run(self.repo, "remote", "set-url", "upstream", "https://gitlab.com/owner/project.git")
+        code, out = self.command("doctor")
+        self.assertEqual(code, 0, out)
+        self.assertIn("GitHub 원격 아님", out)
+        self.assertIn("\n필수 검사  linux-only, lint (출처: config git.checks)\n", out)
+        self.assertNotIn("필수 검사  모름(", out)
+
     def test_rulesets_fallback_combines_required_approvals_and_checks(self):
         self.responses[self.protection] = {"error": "HTTP 403: Resource not accessible"}
         self.responses[self.rules] = [

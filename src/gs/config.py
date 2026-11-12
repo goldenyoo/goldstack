@@ -26,6 +26,7 @@ base = {base}
 merge_method = "merge"
 direct_push = true
 wait_checks = false
+checks = []  # wait_checks일 때 기다릴 검사 이름. 비우면 base 보호·rulesets 필수 검사 → gh 판정
 
 [worktree]
 setup = ""
@@ -92,11 +93,14 @@ TG_CHAT_ID=
 
 @dataclass(frozen=True)
 class GitConfig:
+    """checks: `wait_checks`일 때 기다릴 PR 검사 이름(`gh pr checks`의 name). 비면(기본, 옛 config) base 보호·rulesets
+    필수 검사 → gh `--required` → 모든 검사 순으로 고른다. 있으면 그 이름만 기다린다(finish._poll_checks)."""
     remote: str
     base: str
     merge_method: str = "merge"
     direct_push: bool = True
     wait_checks: bool = False
+    checks: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -334,6 +338,12 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 else:
                     problems.append(Problem("오류", CONFIG_PATH, "`worktree.setup_when`는 레포 루트 기준 경로 glob"
                                                                  '(앞에 `/` 없이) 문자열 목록이어야 한다. 예: ["uv.lock"]'))
+            elif section == "git" and key == "checks":
+                if isinstance(raw[key], (list, tuple)) and all(isinstance(n, str) and n.strip() for n in raw[key]):
+                    values[key] = tuple(dict.fromkeys(raw[key]))
+                else:
+                    problems.append(Problem("오류", CONFIG_PATH, "`git.checks`는 빈 값이 아닌 검사 이름 문자열 목록이어야 한다."
+                                                                 ' 예: ["linux-only"]'))
             elif type(raw[key]) is not kind:  # bool은 int의 하위형이지만 정수 설정으로 받지 않는다
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 {names[kind]}이어야 한다"))
             elif section == "goldstack" and key in data.get(section, {}) and not version.valid_requirement(raw[key]):

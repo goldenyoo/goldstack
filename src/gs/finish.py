@@ -10,6 +10,12 @@ squash는 squash 커밋(부모 하나)의 tree가 `merge_head`의 tree와 같은
 그 뒤 `sync_issues`가 issue를 base의 지금 상태에 맞춘다: 반영된 티켓의 issue는 고정 문구 댓글을 달고 닫고(앞 PR이 있어도), 되돌린 티켓의 issue는 다시 연다.
 squash 커밋 본문에는 티켓별 `gs-ticket: <f>/NN` 줄을 남겨 base에서도 병합된 티켓·이 feature의 병합을 알아본다.
 
+`git.wait_checks`면 병합 전에 PR 검사를 기다린다(`_poll_checks`). 기다릴 이름은 `git.checks`가 있으면 그 이름만이고 base 보호·rulesets는
+읽지 않는다. 비었으면 보호·rulesets 필수 검사 → gh `--required` 판정 → 보고된 모든 검사다. 기능 PR·revert PR·보고서 PR이 같은 규칙을 쓴다.
+통과가 아니면 병합하지 않고 PR을 열어 둔다. 기능 PR은 phase `checks_failed`(`CI 실패: <이름>`), `checks_timeout`(`CI 대기 시간 초과`),
+`checks_missing`(`git.checks`의 이름이 `checks_grace_seconds`가 지나도 PR에 없음, `CI 검사 없음: <이름>`)으로, revert·보고서 PR은
+`<kind>_pending`에 같은 글로 멈춘다. 다음 `gs go`가 같은 head의 검사를 새 대기 시간으로 다시 읽는다.
+
 보호된 base(`git.direct_push = false`)에는 아무것도 직접 push하지 않는다. revert는 `gs/<f>/revert`, 병합 뒤 최종
 보고서는 `gs/<f>/report` 브랜치의 PR로 올려 같은 병합 방식(`wait_checks`면 그 PR의 검사도)으로 병합을 시도한다.
 승인 등 보호 규칙에 막히면 PR을 열어 둔 채 phase `revert_pending`·`report_pending`("사람 승인 필요: <url>")으로
@@ -63,7 +69,8 @@ from .feature import WORK
 
 # 이 phase로 마무리가 끝나면 최종 report.md를 base에도 남긴다(spec 2-6).
 BASE_REPORT_PHASES = ("verified", "reverted")
-CHECK_PHASES = ("checks_pending", "checks_failed", "checks_timeout")
+# CI를 기다리거나 기다리다 멈춘 phase. checks_missing: `git.checks`에 적은 검사가 유예 뒤에도 PR에 없다.
+CHECK_PHASES = ("checks_pending", "checks_failed", "checks_timeout", "checks_missing")
 # 보호된 base에서 gs의 revert·보고서 PR이 사람을 기다린다. 다음 gs go가 그 PR을 다시 읽는다.
 PENDING_PHASES = ("revert_pending", "report_pending")
 # gs go가 새 worker보다 먼저 마무리를 회복하는 phase. revert_closing: 재검증을 통과했고 revert PR 닫기가 남았다. main_retry: 첫 base 검증이 실패했고 코드가 같아 재시도가 남았다.
@@ -185,25 +192,32 @@ def _required_checks(r, deadline: float) -> set[str]:
 
 
 def _poll_checks(r, url: str, head: str, on_poll) -> tuple[str, list[str]]:
-    """PR url의 검사를 끝날 때까지 읽는다. ("pass"|"fail"|"timeout", 실패한 검사 이름).
+    """PR url의 검사를 끝날 때까지 읽는다. ("pass"|"fail"|"timeout"|"missing", 이름).
+    이름은 "fail"이면 실패·취소한 검사, "missing"이면 유예(`checks_grace_seconds`)가 지나도 PR에 없는 `git.checks` 이름(적은 순서)이다.
+
+    기다릴 검사: `git.checks`가 있으면 그 이름만 기다리고 base 보호·rulesets는 읽지 않는다. 없으면 보호·rulesets 필수 검사,
+    그것도 없으면 gh `--required` 판정, 그것도 비면 보고된 모든 검사다. 기능 PR과 `_side_pr`(revert·보고서 PR)이 함께 쓴다.
     재실행에는 새 대기 시간을 주고 검사를 다시 읽는다. PR이 닫히거나 head가 바뀌면 GitError."""
     started = time.monotonic()
     deadline = started + r.cfg.timeouts.checks_minutes * 60
     grace = started + r.cfg.timeouts.checks_grace_seconds
+    named = r.cfg.git.checks
     try:
-        required_names = _required_checks(r, deadline)
+        required_names = set(named) or _required_checks(r, deadline)
     except subprocess.TimeoutExpired:
         return "timeout", []
     previous = None
     number = url.rstrip("/").rsplit("/", 1)[-1]
     symbols = {"pass": "✓", "skipping": "✓", "pending": "…", "fail": "✗", "cancel": "✗"}
     while True:
+        missing: list[str] = []
         try:
             if required_names:
                 reported = _checks(r, url=url, required=False, deadline=deadline)
                 checks = [c for c in reported if c["name"] in required_names]
-                missing = required_names - {c["name"] for c in checks}
-                checks += [{"name": name, "bucket": "pending"} for name in sorted(missing)]
+                seen = {c["name"] for c in checks}
+                missing = [name for name in (named or sorted(required_names)) if name not in seen]
+                checks += [{"name": name, "bucket": "pending"} for name in missing]
                 checks.sort(key=lambda c: (c["name"], c["bucket"]))
             else:
                 checks = (_checks(r, url=url, required=True, deadline=deadline)
@@ -225,25 +239,38 @@ def _poll_checks(r, url: str, head: str, on_poll) -> tuple[str, list[str]]:
         if checks and all(c["bucket"] in ("pass", "skipping") for c in checks):
             return "pass", []
         now = time.monotonic()
+        # 적은 이름이 PR에 없으면 설정 오류일 수 있다. 시간 초과까지 기다리지 않고 유예 뒤 병합 없이 멈춘다.
+        # 보호·rulesets의 필수 이름은 지금처럼 끝까지 기다린다(missing은 pending으로 보인다).
+        if named and missing and now >= grace:
+            print(f"■ PR #{number}: CI 검사 없음({', '.join(missing)}) → 병합 안 함", flush=True)
+            return "missing", missing
         if not checks and now >= grace:
             print(f"■ PR #{number}: 검사 없음 → 병합", flush=True)
             return "pass", []
         remaining = deadline - now
         if remaining <= 0:
             return "timeout", []
-        time.sleep(min(CHECK_INTERVAL, remaining, grace - now) if not checks else min(CHECK_INTERVAL, remaining))
+        early = not checks or bool(named and missing)  # 유예가 끝나는 때에 맞춰 다시 읽는다
+        time.sleep(min(CHECK_INTERVAL, remaining, grace - now) if early else min(CHECK_INTERVAL, remaining))
+
+
+def _checks_outcome(status: str, names: list[str]) -> str:
+    """`_poll_checks`가 병합하지 않고 끝난 결과의 outcome 글(기능 PR과 `_side_pr`이 같은 글을 쓴다)."""
+    if status == "fail":
+        return f"CI 실패: {', '.join(names)}"
+    if status == "missing":
+        return f"CI 검사 없음: {', '.join(names)}"
+    return "CI 대기 시간 초과"
 
 
 @metrics.stage("checks")
 def _wait_checks(r) -> bool:
-    """보고서까지 검증한 head만 기다린다."""
+    """보고서까지 검증한 head만 기다린다. 통과가 아니면 PR을 열어 둔 채 결과별 phase로 멈추고 다음 gs go가 다시 읽는다."""
     _save(r, phase="checks_pending", outcome="CI 검사 대기 중")
-    status, failed = _poll_checks(r, r.st.finish["url"], r.st.finish["merge_head"], lambda c: _save(r, checks=c))
-    if status == "timeout":
-        _save(r, phase="checks_timeout", outcome="CI 대기 시간 초과")
-        return False
-    if status == "fail":
-        _save(r, phase="checks_failed", outcome=f"CI 실패: {', '.join(failed)}")
+    status, names = _poll_checks(r, r.st.finish["url"], r.st.finish["merge_head"], lambda c: _save(r, checks=c))
+    if status != "pass":
+        phase = {"fail": "checks_failed", "missing": "checks_missing"}.get(status, "checks_timeout")
+        _save(r, phase=phase, outcome=_checks_outcome(status, names))
         return False
     _save(r, phase="merge_requested", outcome="CI 검사 통과, 병합 대기")
     return True
@@ -789,10 +816,9 @@ def _side_pr(r, kind: str, sha: str, title: str, body: str) -> bool:
     refused = ""
     if view.get("state") == "OPEN":
         if r.cfg.git.wait_checks:
-            status, failed = _poll_checks(r, url, sha, lambda c: _save(r, **{f"{kind}_checks": c}))
+            status, names = _poll_checks(r, url, sha, lambda c: _save(r, **{f"{kind}_checks": c}))
             if status != "pass":
-                why = f"CI 실패: {', '.join(failed)}" if status == "fail" else "CI 대기 시간 초과"
-                _save(r, phase=f"{kind}_pending", outcome=f"{kind} PR {why}: {url}")
+                _save(r, phase=f"{kind}_pending", outcome=f"{kind} PR {_checks_outcome(status, names)}: {url}")
                 return False
         try:
             _side_merge(r, url, sha)
