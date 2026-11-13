@@ -245,26 +245,32 @@ class SecondFixTest(Base):
         self.assertEqual([x["round"] for x in self.ts().review["rereviews"]], [1, 2])
         self.assertTrue((self.rundir / "01/1/fix2/verify.log").exists())
 
-    def test_still_unresolved_after_second_fix_merges_without_third(self):
+    def test_still_unresolved_high_after_second_fix_fails_without_third(self):
+        """2차 재리뷰도 high를 unresolved로 판정하면 3차 수정 없이 그 시도를 병합하지 않는다(goldstack-v36 03). 재시도도 같으면 실패다."""
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         self.answer("codex", 1, [(1, "unresolved", "그대로다")])
         self.answer("codex", 2, [(1, "unresolved", "또 그대로다")])
+        self.answer("codex", 3, [(1, "unresolved", "그대로다")])
+        self.answer("codex", 4, [(1, "unresolved", "끝내 그대로다")])
         code, out, err = self.go("--only", "01")
-        self.assertEqual(code, 0, out + err)
-        self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
-        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
-        self.assertEqual(self.merged(), ["01"])
-        rec = self.ts().review
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2", "fix 01 3", "fix 01 4"])  # 시도마다 수정은 2회다
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3", "codex 4"])
+        self.assertEqual(self.merged(), [])
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("failed", 2, 2))
+        self.assertEqual(ts.reason, "남은 high: file_01 FIX A: 값이 틀렸다 (미해결)")
+        rec = ts.review
         [a] = rec["findings"]
-        self.assertEqual((a["fix_round"], a["rereview"], a["rereview_evidence"]), (2, review.UNRESOLVED, "또 그대로다"))
+        self.assertEqual((a["fix_round"], a["rereview"], a["rereview_evidence"]), (2, review.UNRESOLVED, "끝내 그대로다"))
         self.assertEqual(len(review.remaining(rec)), 1)
-        self.assertIn("남은 리뷰 지적 1", out)
+        self.assertIn("[01] 실패: 남은 high: file_01 FIX A: 값이 틀렸다 (미해결)", out)
 
     def test_new_fix_finding_of_first_rereview_goes_to_second_fix(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         self.answer("codex", 1, [(1, "resolved", "고침")], [finding("FIX N: 수정이 낳은 버그"), finding("이름이 길다", "low")])
         self.answer("codex", 2, [(1, "resolved", "A는 그대로 고쳐져 있다"), (2, "resolved", "N 고침")],
-                    [finding("FIX Z: 또 새 문제")])
+                    [finding("FIX Z: 또 새 문제", "low")])  # high면 병합하지 않는다(test_final_high)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
@@ -277,6 +283,7 @@ class SecondFixTest(Base):
                          [(1, 0, "fix", 1, review.RESOLVED), (2, 1, "fix", 2, review.RESOLVED), (3, 1, "report", 0, ""),
                           (4, 2, "report", 0, "")])  # 2차 재리뷰의 새 지적은 FIX라도 보고만
         self.assertIn("2차 재리뷰의 새 지적", fs[3]["why"])
+        self.assertEqual((self.ts().status, self.ts().failures), ("merged", 0))
         self.assertFalse((self.rundir / "01/1/rereview2-codex/findings.json").exists())  # 판단 모델을 부르지 않았다
         self.assertTrue((self.rundir / "01/1/rereview1-codex/findings.json").exists())
         self.assertIn("수정 커밋 diff", (self.rundir / "01/1/rereview1-codex/judge-prompt.md").read_text())
@@ -288,7 +295,7 @@ class SecondFixTest(Base):
         self.answer("codex", 1, [(1, "resolved", "고침")])
         self.answer("agy", 1, [(1, "unresolved", "그대로다")])
         self.answer("agy", 2, [(1, "resolved", "고침")])
-        self.answer("codex", 2, [(1, "resolved", "그대로 고쳐져 있다")], [finding("FIX Z: 다시 보다 찾은 문제")])
+        self.answer("codex", 2, [(1, "resolved", "그대로 고쳐져 있다")], [finding("FIX Z: 다시 보다 찾은 문제", "low")])
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(sorted(self.lines("rereview.calls")), ["agy 1", "agy 2", "codex 1", "codex 2"])
