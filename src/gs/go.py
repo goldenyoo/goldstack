@@ -18,11 +18,18 @@ defer로 고치지 않고 보고서의 "재현된 미수리 결함" 절과 high 
 unresolved로 판정했으면(unchecked는 세지 않는다. review.final_highs) 그 시도는 _fail로 티켓 실패다(_final_high). 이유는 `남은 high: <파일:줄> <지적 요약>`이고
 그 지적 전문(review.FINAL_HIGH_FILE)을 failure.log에 싣는다. 첫 실패면 다른 실패처럼 같은 실행에서 등급을 올려 재시도하고 두 번째면 실패다. 판단 모델은 더 부르지 않는다.
 판정은 리뷰 단계가 티켓 head까지 닿은 뒤(병합 전 대조로 늦은 커밋을 다시 본 뒤) 한다: MergeBlocked로 리뷰 단계를 끊고 _review_tick이 _fail만 부른다
-(_leave_review·_merge_stage로 가지 않는다). 판정은 state의 리뷰 기록에서 읽으므로 결과를 저장한 뒤 gs가 죽어도 다음 gs go가 같은 판정을 한다:
+(_leave_review·_merge_stage로 가지 않는다). 병합 전 대조가 같은 기준(a.base)에서 그 회차를 새 head로 다시 봤으면 앞 head가 그 회차에 낸 새 지적은
+대체됨으로 세지 않는다(goldstack-v38 01, review._supersede, 기록에는 남는다). catch-up이 기준을 옮겼으면(_catch_up_reviewed) 옮기기 전 기준에서 낸 지적은 대체하지 않는다.
+판정은 state의 리뷰 기록에서 읽으므로 결과를 저장한 뒤 gs가 죽어도 다음 gs go가 같은 판정을 한다:
 리뷰부터 이으면 이미 본 head의 리뷰어를 다시 부르지 않고 실패를 적고(_review_stage), 병합 단계로 이으면(재개의 reviewed·REPAIR_VERIFY·verify_again, 옛 gs가 남긴 결과)
 _merge_stage가 늦은 커밋 대조 뒤에 같은 판정으로 병합하지 않는다. 실패는 _fail이 한 번 센다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
 worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 보고, 그 지적을 낸 리뷰어도 부른다.
+두 번째 리뷰어(second_reviewer)를 어느 재리뷰까지 부를지는 config `[review] second_reviewer_rereview`가 정한다(goldstack-v38 04): all(기본, 키가 없어도)은
+모든 재리뷰, first는 1차 재리뷰까지(2차 재리뷰·수리 재리뷰에서 빠진다), none은 모든 재리뷰에서 빠진다. 빠진 회차에는 그 리뷰어 기록의 판정할 지적(수리 재리뷰는
+defer 지적)을 첫 리뷰어 재리뷰에 함께 싣는다(_rereview_slots). 지적 id는 기록마다 겹치므로 호출용 id를 주고(_lent_ids) 판정은 (원래 기록, 원래 id)의 지적에
+판정한 리뷰어와 함께 적는다. 첫 리뷰어도 부를 수 없으면(agy 상한, 구현과 같은 계열) 그 지적은 unchecked다. 빠진 회차의 호출은 agy 상한에 세지 않는다.
+회차와 config로만 고르므로 재개·병합 전 대조로 같은 회차를 다시 해도 같은 리뷰어를 부른다(_second_skipped).
 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 위의 마지막 재리뷰 high 말고는 병합을 막지 않는다.
 순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(통과할 때 한 번, 실패하면 아래 수리 뒤 한 번 더, 끊기면 바로 한 번 더) → 병합.
 티켓 검증이 실패하면(_verify_failed) 시도 하나에 한 번 새 시도 대신 수리 worker가 같은 브랜치·worktree에서 돈다(_start_repair, brief에 verify.log 경로, 단계 repair).
@@ -103,6 +110,7 @@ from concurrent.futures import wait as wait_futures
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from statistics import median
 
 from . import adapters, clean, config, failure, feedback, finish, git, graph, herdr, metrics, notify, report, review, sandbox, setup, state, streamfmt, transient, verify, worker
 from .check import check
@@ -169,6 +177,7 @@ class Run:
     merges: Merges | None = None  # 병합·검증의 자리와 줄, 루프 밖 검증 호출. _loop가 만든다
     no_merge: bool = False  # 지난 마무리를 회복하지 않는 --only 실행이다. 마무리 없이 멈추고, 지난 마무리의 기록을 이번 결과로 보이지 않는다
     sandbox: adapters.Sandbox = field(default_factory=adapters.Sandbox)  # 실행 시작 때 주 레포에서 계산한 모드·거부 목록(_sandbox). 기본 os
+    tier_medians_s: dict[str, float] = field(default_factory=dict)  # 실행 시작에 읽은 tier별 ETA 중앙값
 
     @property
     def name(self) -> str:
@@ -200,7 +209,9 @@ class Run:
         self.st.progress = state.calculate_progress(
             self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
             models={tid: self.feat.tickets[tid].model for tid in self.order},
-            history_median_s=self.history_median_s, deps=self.g, finish_median_s=self.finish_median_s)
+            history_median_s=self.history_median_s, deps=self.g, finish_median_s=self.finish_median_s,
+            tiers={tid: getattr(self.feat.tickets[tid], "tier", None) for tid in self.order},
+            tier_medians_s=self.tier_medians_s)
         state.save(self.rundir, self.st)
         self.saved = time.monotonic()
 
@@ -455,6 +466,7 @@ def _begin(r: Run) -> None:
     metrics.runtime(r)
     r.history_median_s = state.load_eta_history(r.repo, r.name)
     r.finish_median_s = state.load_finish_history(r.repo, r.name)
+    r.tier_medians_s = {tier: median(samples) for tier, samples in state.tier_samples(r.repo, r.name).items()}
     r.save()
 
 
@@ -2170,6 +2182,7 @@ def _catch_up_reviewed(r: Run, a: Active, head: str) -> None:
 
     기준(a.base)도 옮긴다: 뒤에 늦은 커밋을 재리뷰하면 그 diff에 다른 티켓의 변경이 들지 않는다. 표시에도 적는다: 다음 gs go가 catch-up을 늦은 커밋으로 보지 않게.
     그 뒤의 늦은 커밋이 비어 diff가 없어도 앞 재리뷰의 판정은 그대로다(_empty_rereview). 수정 전 기준은 남기지 않는다(재리뷰 전용 기준은 범위 밖 rereview-diff-base).
+    그 뒤의 늦은 커밋을 다시 본 재리뷰는 옮기기 전 기준에서 그 회차에 낸 새 지적을 대체하지 않는다(review._supersede): 기준이 달라 그 diff에 앞 변경이 없다.
     """
     a.target = a.base = head
     mark = r.st.ticket(a.t.id).network_resume
@@ -2400,6 +2413,8 @@ def _review_again(r: Run, a: Active, call: Callable[[Run, Active], ReviewFlow], 
 
     표시에 먼저 남긴다: 호출 도중 멈추면 다음 gs go가 끊긴 호출만 다시 하고 더 부르지 않는다(_finish).
     기다리는 사이의 대조면 앞 리뷰가 끝났다는 표시(reviewed)가 있다. 지운다: 남으면 이 호출도 끝난 것으로 읽어(_resume) 대조를 건너뛴다. 끝나면 다시 적힌다(_resume_flow).
+    기준(a.base)은 그대로 둔다: 다시 본 diff가 앞 head의 변경을 품는다. 그래서 2차 재리뷰·수리 재리뷰를 다시 보면 앞 head가 그 회차에 낸 새 지적은
+    대체됨이고 병합 판정(_final_high)은 새 head의 지적으로 한다(review._supersede). catch-up이 기준을 옮겼으면(_catch_up_reviewed) 옮기기 전 기준의 지적은 대체하지 않는다.
     """
     a.reviewed_again = True
     mark = r.st.ticket(a.t.id).network_resume
@@ -2840,11 +2855,14 @@ def _repair_review(r: Run, a: Active) -> ReviewFlow:
     """수리 커밋(a.base..head)을 리뷰어들이 tiers.rereview 등급으로 다시 본다. 고칠 지적은 돌려주지 않는다: 지적은 보고만 하고 수리 뒤에는 고치지 않는다.
 
     호출은 루프 밖 스레드에서 돈다(_review_stage). 받은 지적이 없으니 지적을 낸 리뷰어만이 아니라 구현과 다른 계열의 리뷰어를 모두 부른다.
+    단 config `[review] second_reviewer_rereview`가 first·none이면 두 번째 리뷰어는 부르지 않고 그 defer 지적은 첫 리뷰어가 함께 판정한다(_plan_repair_reviews).
     _rereview처럼 재리뷰 자체의 오류는 병합을 막지 않는다. 중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 수리 재리뷰부터 잇고, 뒤는 티켓 실패다.
     순서는 준비(_plan_repair_reviews) → 호출(경계는 _call_repair_reviewers) → 반영(_apply_repair_reviews)이다.
     반영한 지적의 high는 여기서 보지 않는다: 병합 전 대조 뒤에 _review_stage가 MergeBlocked로 끊는다(_final_high). 포괄 예외 처리 밖이라 삼켜지지 않는다.
     """
     t = a.t
+    for rec in state.reviews(r.st.ticket(t.id)):  # 새 head의 판정만 남긴다: 트리 준비 실패·상한·빈 diff처럼 부르지 못한 길에서 앞 resolved가 남지 않게
+        review.clear_defer_verdicts(rec)
     try:
         head = a.target = git.sha(r.repo, a.branch)
         if git.out(r.repo, "diff", "--no-ext-diff", "--name-only", f"{a.base}..{head}"):
@@ -2867,31 +2885,47 @@ def _repair_review(r: Run, a: Active) -> ReviewFlow:
     return []
 
 
-def _plan_repair_reviews(r: Run, a: Active, head: str) -> tuple[list[dict], list[dict]]:
-    """수리 재리뷰 준비: 구현과 다른 계열의 리뷰 기록마다 그 리뷰어를 부른다. agy는 상한에 닿았으면 부르지 않고 기록에 남긴다. 부를 리뷰어를 세고 단계를 적는다. (부를 기록, 호출 값)."""
+def _plan_repair_reviews(r: Run, a: Active, head: str) -> tuple[list[tuple[dict, Lent]], list[dict]]:
+    """수리 재리뷰 준비: 구현과 다른 계열의 리뷰 기록마다 그 리뷰어를 부른다. agy는 상한에 닿았으면 부르지 않고 기록에 남긴다. 부를 리뷰어를 세고 단계를 적는다.
+    (부를 (기록, 함께 판정할 defer 지적), 호출 값).
+
+    config `[review] second_reviewer_rereview`가 first·none이면 두 번째 리뷰어는 수리 재리뷰에 부르지 않는다(_rereview_slots): 띄우지도 agy 호출로 세지도
+    않고 그 기록에 메모를 남긴다. 그 리뷰어의 defer 지적은 첫 리뷰어 호출의 defer에 호출용 id와 원래 리뷰어(`reviewer`)를 달아 함께 싣는다(_lent_ids).
+    첫 리뷰어도 부를 수 없으면(agy 상한, 구현과 같은 계열) 그 defer 지적은 판정 없이 남는다(재현된 미수리). 두 번째 리뷰어를 대신 부르지 않는다.
+    """
     t = a.t
     ts = r.st.ticket(t.id)
     launch = []
-    for rec in state.reviews(ts):
+    if _second_skipped(r, t, review.REPAIR_ROUND) and ts.review and ts.second_review:
+        msg = (f"수리 재리뷰: 부르지 않았다(second_reviewer_rereview = {r.cfg.review.second_reviewer_rereview})"
+               + (f". defer 지적은 {ts.review['reviewer']}가 판정한다" if review.deferred(ts.second_review) else ""))
+        _append_fix(ts.second_review, msg)
+        say(f"[{t.id}] {msg} ({ts.second_review['reviewer']})")
+    for rec, _, lent in _rereview_slots(r, t, [(rec, review.deferred(rec)) for rec in state.reviews(ts)], review.REPAIR_ROUND):
         who = rec["reviewer"]
+        why = ""
         if review.family(who) == review.family(t.model):  # 첫 리뷰에서도 거부됐다
-            continue
-        if _is_agy(who) and state.agy_reached(r.st, _agy_limit(r)):
+            why = f"판정을 맡을 {who}가 구현과 같은 계열이라 부르지 않는다"
+        elif _is_agy(who) and state.agy_reached(r.st, _agy_limit(r)):
             msg = f"수리 재리뷰 {review.LIMIT}: 이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다"
             _append_fix(rec, msg)
             say(f"[{t.id}] {msg} ({who})")
+            why = f"판정을 맡을 {who}가 {review.LIMIT}"
+        if why:
+            for src, _ in lent:
+                _append_fix(src, f"수리 재리뷰: defer 지적을 판정하지 못했다({why})")
             continue
         _count_agy(r, who)
-        launch.append(rec)
+        launch.append((rec, _lent_ids(rec, lent)))
     if not launch:
         return [], []
-    names = "+".join(rec["reviewer"] for rec in launch)
+    names = "+".join(rec["reviewer"] for rec, _ in launch)
     _phase(r, t.id, "rereview", names)
     say(f"[{t.id}] 수리 재리뷰: {names}")
     wait = _review_wait(r, t.id)
     jobs = [dict(repo=r.repo, rdir=_repair_review_dir(a, rec), base=a.base, head=head, verify_log=ts.repairs[-1]["verify_log"],
                  ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), reviewer=rec["reviewer"], cfg=r.cfg, on_wait=wait,
-                 worker_log=a.proc.job.log, sandbox=r.sandbox) for rec in launch]
+                 worker_log=a.proc.job.log, sandbox=r.sandbox, defer=review.deferred(rec) + _lent_copies(lent)) for rec, lent in launch]
     return launch, jobs
 
 
@@ -2900,20 +2934,28 @@ def _call_repair_reviewers(jobs: list[dict], tree: Path) -> list:
     return review.run_together([{**job, "worktree": tree} for job in jobs], review.repair_review)
 
 
-def _apply_repair_reviews(r: Run, a: Active, launch: list[dict], results: list, head: str) -> None:
-    """수리 재리뷰 반영: 결과를 리뷰 기록에 적는다. 중단은 올린다."""
+def _apply_repair_reviews(r: Run, a: Active, launch: list[tuple[dict, Lent]], results: list, head: str) -> None:
+    """수리 재리뷰 반영: 결과를 리뷰 기록에 적는다. 중단은 올린다. 함께 판정한 defer 지적(lent)은 원래 기록의 지적에 적고(review.apply_repair_review) 그 기록에 메모를 남긴다."""
     t = a.t
     _raise_network_abort(results)
-    for rec, res in zip(launch, results):
+    for (rec, lent), res in zip(launch, results):
         if isinstance(res, BaseException):
             res = {"dir": "", "base": a.base, "head": head, "note": f"뜻밖의 오류 {_err(res)}", "failed": review.REASON_FAILED, "findings": []}
-        review.apply_repair_review(rec, res)
+        review.apply_repair_review(rec, res, **({"lent": lent} if lent else {}))
         rec["reviewed_head"] = head
         highs = sum(f.get("severity") == "high" for f in res["findings"])
         msg = "수리 재리뷰: " + (f"실패 — {res['note']}" if res["failed"] else f"지적 {len(res['findings'])}개"
                                 + (f"(high {highs}: 병합하지 않는다)" if highs else "(보고만)"))
         _append_fix(rec, msg)
         say(f"[{t.id}] {msg} ({rec['reviewer']})")
+        for src in _lent_recs(lent):
+            mine = [f for x, f, _ in lent if x is src]
+            src["reviewed_head"] = head
+            msg = (f"수리 재리뷰({src['reviewer']}는 부르지 않고 {rec['reviewer']}가 defer 지적 판정): "
+                   + (f"실패 — {res['note']}" if res["failed"] else
+                      f"resolved {sum(f.get('repair_review') == review.RESOLVED for f in mine)} / {len(mine)}"))
+            _append_fix(src, msg)
+            say(f"[{t.id}] {msg}")
 
 
 def _repair_review_dir(a: Active, rec: dict) -> Path:
@@ -2924,6 +2966,7 @@ def _repair_review_dir(a: Active, rec: dict) -> Path:
 
 def _rereview(r: Run, a: Active) -> ReviewFlow:
     """지적을 낸 리뷰어들에게 수정 커밋을 다시 보게 하고, 결과를 지적에 적는다. 2차 수정이 고칠 지적을 돌려준다.
+    두 번째 리뷰어를 부르지 않는 회차(config `[review] second_reviewer_rereview`)에는 그 지적을 첫 리뷰어가 함께 판정한다(_plan_rereviews).
 
     호출은 루프 밖 스레드에서 돈다(_review_stage). 재리뷰 자체의 오류는 병합을 막지 않는다: 이 head의 결과가 없는 지적은 unchecked(재리뷰 실패)다.
     중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 재리뷰부터 잇고, 뒤는 티켓 실패다: 확인 없이 병합하지 않는다.
@@ -2949,7 +2992,7 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
     except Exception as e:  # noqa: BLE001 — verify가 병합 관문이다
         say(f"[{t.id}] 재리뷰 {nth}차 실패: {_err(e)}")
         for rec, found in targets:
-            done = rec.get("rereviews", [])
+            done = _judge_rec(r, t, rec, nth).get("rereviews", [])  # 함께 판정한 지적은 판정한 리뷰어의 기록으로 가린다
             if not done or done[-1].get("head") != head:  # 먼저 끝난 다른 리뷰어의 결과는 그대로 둔다
                 review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_FAILED, f"뜻밖의 오류 {_err(e)}")
                 rec.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
@@ -3036,34 +3079,119 @@ def _run_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]], he
         _apply_rereviews(r, a, launch, results, head)
 
 
+Lent = list[tuple[dict, dict, int]]  # 첫 리뷰어가 함께 판정할 다른 기록의 지적: (원래 기록, 원래 지적, 호출 id). _lent_ids
+
+
+def _second_skipped(r: Run, t: Ticket, nth: int | str) -> bool:
+    """nth 회차(1·2 재리뷰, review.REPAIR_ROUND 수리 재리뷰)에 두 번째 리뷰어를 부르지 않나(config `[review] second_reviewer_rereview`, goldstack-v38 04).
+
+    회차 이름과 config로만 정한다: 다음 gs go가 그 회차부터 이어도(재개, 병합 전 대조) 같은 리뷰어를 고른다.
+    """
+    return bool(t.second_reviewer) and not r.cfg.review.calls_second(nth)
+
+
+def _rereview_slots(r: Run, t: Ticket, pairs: list[tuple[dict, list[dict]]],
+                    nth: int | str) -> list[tuple[dict, list[dict], list[tuple[dict, list[dict]]]]]:
+    """재리뷰 회차의 자리: (부를 기록, 그 기록의 판정할 지적, 그 리뷰어가 함께 판정할 다른 기록의 (기록, 지적)). pairs는 (기록, 판정할 지적)이다.
+
+    이 회차에 두 번째 리뷰어를 부르지 않으면(_second_skipped) 그 기록의 자리를 빼고, 판정할 지적이 있으면 첫 리뷰 기록(ts.review)의 자리에 싣는다.
+    첫 리뷰어에게 자기 판정할 지적이 없어도 그 자리를 만든다(맨 앞). 첫 리뷰 기록이 없으면(만들어지지 않는다) 빼지 않는다: 판정할 리뷰어가 없다.
+    그 밖의 자리는 pairs 그대로다(all이면 지금과 같다).
+    """
+    ts = r.st.ticket(t.id)
+    first, second = ts.review, ts.second_review
+    if not _second_skipped(r, t, nth) or not second or not first:
+        return [(rec, found, []) for rec, found in pairs]
+    slots = [(rec, found, []) for rec, found in pairs if rec is not second]
+    lent = [(rec, found) for rec, found in pairs if rec is second and found]
+    if lent:
+        at = next((i for i, (rec, _, _) in enumerate(slots) if rec is first), None)
+        if at is None:
+            slots.insert(0, (first, [], lent))
+        else:
+            slots[at] = (first, slots[at][1], lent)
+    return slots
+
+
+def _lent_ids(rec: dict, lent: list[tuple[dict, list[dict]]]) -> Lent:
+    """rec의 리뷰어가 함께 판정할 다른 기록의 지적에 호출용 id를 준다. (원래 기록, 원래 지적, 호출 id).
+
+    지적 id는 기록마다 1부터라 겹친다(review.parse_verdicts는 겹치는 id를 오류로 본다). 그래서 rec의 지적 id 가운데 가장 큰 것 뒤로 이어 매긴다.
+    rec 자기 지적은 원래 id 그대로다. 판정은 호출 id로 찾아 원래 지적에 되돌려 적는다(review.apply_rereview, review.apply_repair_review).
+    """
+    start = max((f["id"] for f in rec.get("findings", []) if isinstance(f.get("id"), int)), default=0) + 1
+    ids: Lent = []
+    for src, found in lent:
+        for f in found:
+            ids.append((src, f, start + len(ids)))
+    return ids
+
+
+def _lent_copies(lent: Lent) -> list[dict]:
+    """호출 값에 실을 함께 판정할 지적의 사본: id는 호출 id, `reviewer`는 그 지적을 낸 리뷰어."""
+    return [{**f, "id": i, "reviewer": src["reviewer"]} for src, f, i in lent]
+
+
+def _lent_recs(lent: Lent) -> list[dict]:
+    """lent의 원래 기록들(순서대로 한 번씩)."""
+    return list({id(src): src for src, _, _ in lent}.values())
+
+
+def _judge_rec(r: Run, t: Ticket, rec: dict, nth: int) -> dict:
+    """nth번째 재리뷰에서 rec의 지적을 판정하는 리뷰어의 기록(_rereview_slots). 두 번째 리뷰어를 부르지 않는 회차의 두 번째 리뷰 기록이면 첫 리뷰 기록이다."""
+    ts = r.st.ticket(t.id)
+    return ts.review if rec is ts.second_review and ts.review and _second_skipped(r, t, nth) else rec
+
+
 def _plan_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]],
-                    head: str) -> tuple[list[tuple[dict, list[dict]]], list[dict]]:
-    """재리뷰 준비: 상한에 닿은 리뷰어는 unchecked(한도)로 적고, 부를 리뷰어를 세고, 단계를 적는다. (부를 (기록, 지적), 호출 값)."""
+                    head: str) -> tuple[list[tuple[dict, list[dict], Lent]], list[dict]]:
+    """재리뷰 준비: 부를 리뷰어를 정하고(_rereview_slots), 부르지 못하는 리뷰어의 지적은 unchecked로 적고, 부를 리뷰어를 세고, 단계를 적는다.
+    (부를 (기록, 지적, 함께 판정할 지적), 호출 값).
+
+    두 번째 리뷰어를 이 회차에 부르지 않으면(config `[review] second_reviewer_rereview`가 first면 2차, none이면 1·2차) 그 리뷰어를 띄우지도
+    agy 호출로 세지도 않는다. 그 판정할 지적은 첫 리뷰어 호출에 함께 싣는다: 호출 값의 found에 호출용 id와 원래 리뷰어(`reviewer`)를 달아 붙인다(_lent_ids).
+    agy 상한에 닿은 리뷰어는 자기 지적과 함께 판정할 지적을 모두 unchecked(한도)로 적는다. 첫 리뷰어가 구현과 같은 계열이면(첫 리뷰를 거부했다)
+    함께 판정할 지적만 unchecked(재리뷰 실패)다. 어느 쪽이든 두 번째 리뷰어를 대신 부르지 않는다.
+    """
     t, nth = a.t, a.fix
     launch = []
-    for rec, found in targets:
+    for rec, found, lent in _rereview_slots(r, t, targets, nth):
         who = rec["reviewer"]
+        if lent and review.family(who) == review.family(t.model):
+            detail = f"두 번째 리뷰어 대신 판정할 첫 리뷰어 {who}가 구현과 같은 계열이라 부르지 않는다"
+            for src, others in lent:
+                review.mark_rereview(others, nth, review.UNCHECKED, review.REASON_FAILED, detail)
+                src.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
+                _append_fix(src, f"재리뷰 {nth}차: {detail}")
+            say(f"[{t.id}] 재리뷰 {nth}차: {detail}")
+            lent = []
+            if not found:
+                continue
         if _is_agy(who) and state.agy_reached(r.st, _agy_limit(r)):
             detail = f"이번 실행의 agy 호출이 상한 {_agy_usage(r)}에 닿았다"
-            review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_LIMIT, detail)
-            rec.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
-            _append_fix(rec, f"재리뷰 {nth}차 {review.LIMIT}: {detail}")
+            for x, xs in [(rec, found), *lent]:
+                review.mark_rereview(xs, nth, review.UNCHECKED, review.REASON_LIMIT, detail)
+                x.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
+                _append_fix(x, f"재리뷰 {nth}차 {review.LIMIT}: {detail}" + (f"(판정을 맡을 {who})" if x is not rec else ""))
             say(f"[{t.id}] 재리뷰 {nth}차({who}) {review.LIMIT}: {detail}")
             continue
         _count_agy(r, who)
-        launch.append((rec, found))
+        launch.append((rec, found, _lent_ids(rec, lent)))
     if not launch:
         return [], []
-    names = "+".join(rec["reviewer"] for rec, _ in launch)
+    names = "+".join(rec["reviewer"] for rec, _, _ in launch)
     _phase(r, t.id, "rereview", names)
-    say(f"[{t.id}] 재리뷰 {nth}차: {names}")
+    say(f"[{t.id}] 재리뷰 {nth}차: {names}" + "".join(
+        f" ({rec['reviewer']}가 {', '.join(src['reviewer'] for src in _lent_recs(lent))}의 지적 {len(lent)}개를 함께 판정한다)"
+        for rec, _, lent in launch if lent))
     wait = _review_wait(r, t.id)
     # found는 사본이다: 호출이 읽는 지적과 반영이 고치는 state의 지적이 섞이지 않게
     merged = _merged_touches(r, t)  # 1차 재리뷰의 새 지적을 나눌 판단 모델의 고칠 수 있는 파일(_plan_review와 같다)
-    jobs = [dict(repo=r.repo, rdir=_rereview_dir(a, rec, nth), base=a.base, head=head, found=[dict(f) for f in found],
+    jobs = [dict(repo=r.repo, rdir=_rereview_dir(a, rec, nth), base=a.base, head=head,
+                 found=[dict(f) for f in found] + _lent_copies(lent),
                  ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), reviewer=rec["reviewer"], cfg=r.cfg, nth=nth,
                  on_wait=wait, worker_log=a.proc.job.log, touches=list(t.touches), merged=merged, sandbox=r.sandbox)
-            for rec, found in launch]
+            for rec, found, lent in launch]
     return launch, jobs
 
 
@@ -3075,21 +3203,31 @@ def _call_rereviewers(jobs: list[dict], tree: Path) -> list:
     return review.run_together([{**job, "worktree": tree} for job in jobs], review.rereview)
 
 
-def _apply_rereviews(r: Run, a: Active, launch: list[tuple[dict, list[dict]]], results: list, head: str) -> None:
-    """재리뷰 반영: 결과를 지적과 리뷰 기록에 적는다. 중단은 올린다."""
+def _apply_rereviews(r: Run, a: Active, launch: list[tuple[dict, list[dict], Lent]], results: list, head: str) -> None:
+    """재리뷰 반영: 결과를 지적과 리뷰 기록에 적는다. 중단은 올린다.
+
+    함께 판정한 지적(lent)은 원래 기록의 지적에 적고(review.apply_rereview) 그 기록에도 판정한 head와 경과 메모(판정한 리뷰어)를 남긴다.
+    """
     t, nth = a.t, a.fix
     _raise_network_abort(results)
-    for (rec, found), res in zip(launch, results):
+    for (rec, found, lent), res in zip(launch, results):
         if isinstance(res, BaseException):
             res = {"dir": "", "base": a.base, "head": head, "note": f"뜻밖의 오류 {_err(res)}",
                    "failed": review.REASON_FAILED, "verdicts": {}, "findings": []}
-        review.apply_rereview(rec, found, res, nth)
-        rec["reviewed_head"] = head
-        rec.pop("kept_round", None)  # 유지한 뒤 새로 판정했다(_empty_rereview)
+        review.apply_rereview(rec, found, res, nth, **({"lent": lent} if lent else {}))  # 함께 판정한 지적이 없으면 부르는 모양이 전과 같다
+        for x in (rec, *_lent_recs(lent)):
+            x["reviewed_head"] = head
+            x.pop("kept_round", None)  # 유지한 뒤 새로 판정했다(_empty_rereview)
         msg = f"재리뷰 {nth}차: {review.rereview_counts(found, len(res['findings']))}" \
             + (f" — {res['note']}" if res["note"] else "")
         _append_fix(rec, msg)
         say(f"[{t.id}] {msg} ({rec['reviewer']})")
+        for src in _lent_recs(lent):
+            mine = [f for x, f, _ in lent if x is src]
+            msg = (f"재리뷰 {nth}차({src['reviewer']}는 부르지 않고 {rec['reviewer']}가 판정): {review.rereview_counts(mine, 0)}"
+                   + (f" — {res['note']}" if res["note"] else ""))
+            _append_fix(src, msg)
+            say(f"[{t.id}] {msg}")
 
 
 def _rereview_dir(a: Active, rec: dict, nth: int) -> Path:
@@ -3099,7 +3237,8 @@ def _rereview_dir(a: Active, rec: dict, nth: int) -> Path:
 
 
 def _final_high(r: Run, a: Active) -> MergeBlocked | None:
-    """이 시도의 리뷰 기록에 마지막 재리뷰의 high가 남았으면 병합을 막는 MergeBlocked(이유, 지적 전문 파일), 없으면 None. 판정은 review.final_highs다.
+    """이 시도의 리뷰 기록에 마지막 재리뷰의 high가 남았으면 병합을 막는 MergeBlocked(이유, 지적 전문 파일), 없으면 None. 판정은 review.final_highs다
+    (병합 전 대조가 같은 기준에서 다시 봐 대체한 앞 head의 지적은 세지 않는다).
 
     state에서만 읽으므로 재개해도 같은 판정이다. 지적 전문은 이 자리의 실행 디렉터리(_fail의 failure.log 옆)에 review.FINAL_HIGH_FILE로 쓰고 _fail이 failure.log에 싣는다.
     파일을 못 쓰면 경고만 하고 그 파일 없이 막는다: 병합하지 않는 것이 먼저다.

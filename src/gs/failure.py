@@ -22,11 +22,18 @@ def record(directory: Path, reason: str, paths: list[Path]) -> Path:
         if not path.is_file():
             continue
         with path.open("rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - LOG_TAIL_BYTES))
-            tail = f.read().decode("utf-8", errors="replace")
-        parts.append(f"\n## {path} (마지막 {LOG_TAIL_BYTES} bytes)\n{tail}\n")
+            content = f.read()
+        if path.name == review.FINAL_HIGH_FILE:
+            excerpt = content[:LOG_TAIL_BYTES]
+            text = excerpt.decode("utf-8", errors="replace")
+            header = f"처음 {LOG_TAIL_BYTES} bytes"
+            omitted = len(content) - len(excerpt)
+            omission = f"뒤 {omitted} bytes 생략, 전문: {path.resolve()}\n" if omitted else ""
+            parts.append(f"\n## {path} ({header})\n{text}\n{omission}")
+        else:
+            excerpt = content[-LOG_TAIL_BYTES:]
+            text = excerpt.decode("utf-8", errors="replace")
+            parts.append(f"\n## {path} (마지막 {LOG_TAIL_BYTES} bytes)\n{text}\n")
     log.write_text("".join(parts), encoding="utf-8")
     return log
 

@@ -168,6 +168,82 @@ def running(st, tid, start, phase="worker"):
     return ts
 
 
+class TierProgressTest(unittest.TestCase):
+    def progress(self, elapsed, *, tier="large", **kwargs):
+        st = state.State(feature="f", started_at=clock(0))
+        running(st, "01", 0)
+        return state.calculate_progress(st, ["01"], 1, at=clock(elapsed * 60),
+                                        tiers={"01": tier}, tier_medians_s={"large": 48 * 60},
+                                        finish_median_s=0, **kwargs)
+
+    def test_large_uses_tier_median_for_remaining_time(self):
+        p = self.progress(30, history_median_s=25 * 60)
+        self.assertEqual(p["eta_s"], 18 * 60)
+        self.assertIn("약 18분 남음(이전 실행 기준)", p["line"])
+        self.assertNotIn("넘김", p["line"])
+        self.assertNotIn("예상 넘긴 티켓 있음", p["line"])
+
+    def test_large_overrun_displays_estimate_and_growing_excess(self):
+        for elapsed, excess in ((60, 12), (65, 17)):
+            with self.subTest(elapsed=elapsed):
+                p = self.progress(elapsed, history_median_s=25 * 60)
+                self.assertIn(f"01 예상 48분 넘김(+{excess}분)", p["line"])
+                self.assertIn("예상 넘긴 티켓 있음", p["line"].split(" · ")[-1])
+        p = self.progress(48, history_median_s=25 * 60)
+        self.assertNotIn("넘김", p["line"])
+        self.assertNotIn("예상 넘긴 티켓 있음", p["line"])
+
+    def test_missing_tier_uses_overall_median(self):
+        for tier in (None, "", "small"):
+            with self.subTest(tier=tier):
+                p = self.progress(10, tier=tier, history_median_s=25 * 60)
+                self.assertEqual(p["eta_s"], 15 * 60)
+
+    def test_tier_history_without_overall_history(self):
+        self.assertEqual(self.progress(30)["eta_s"], 18 * 60)
+
+    def test_current_tier_average_precedes_history_and_overall_average(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "large1", 0, 40 * 60)
+        merged(st, "large2", 0, 60 * 60)
+        merged(st, "small", 0, 5 * 60)
+        # 범위 밖·이전 실행의 같은 tier 기록은 표본에 넣지 않는다.
+        merged(st, "outside", 0, 100 * 60)
+        merged(st, "prior", 0, 200 * 60)
+        st.ticket("next")
+        tiers = {tid: "large" for tid in st.tickets}
+        tiers["small"] = "small"
+        p = state.calculate_progress(st, ["large1", "large2", "small", "prior", "next"], 1,
+                                     prior={"prior"}, at=clock(200 * 60), tiers=tiers,
+                                     tier_medians_s={"large": 48 * 60}, history_median_s=25 * 60,
+                                     finish_median_s=0)
+        self.assertEqual(p["eta_s"], 50 * 60)
+        self.assertNotIn("이전 실행 기준", p["line"])
+
+    def test_tier_history_precedes_current_overall_average_and_falls_back(self):
+        st = state.State(feature="f", started_at=clock(0))
+        merged(st, "done", 0, 10 * 60)
+        running(st, "next", 10 * 60)
+        for tier, expected, historical in (("large", 43, True), ("small", 5, False), (None, 5, False)):
+            with self.subTest(tier=tier):
+                p = state.calculate_progress(st, ["done", "next"], 1, at=clock(15 * 60),
+                                             tiers={"done": "medium", "next": tier},
+                                             tier_medians_s={"large": 48 * 60}, history_median_s=25 * 60,
+                                             finish_median_s=0)
+                self.assertEqual(p["eta_s"], expected * 60)
+                self.assertEqual("이전 실행 기준" in p["line"], historical)
+
+    def test_unknown_estimate_keeps_calculating_but_shows_known_overrun(self):
+        st = state.State(feature="f", started_at=clock(0))
+        running(st, "01", 0, phase="network")
+        st.ticket("02")
+        p = state.calculate_progress(st, ["01", "02"], 2, at=clock(60 * 60),
+                                     tiers={"01": "large"}, tier_medians_s={"large": 48 * 60})
+        self.assertIsNone(p["eta_s"])
+        self.assertIn("01 예상 48분 넘김(+12분)", p["line"])
+        self.assertTrue(p["line"].endswith("남은 시간 계산 중(예상 넘긴 티켓 있음)"))
+
+
 class ScheduleTest(unittest.TestCase):
     """남은 시간 = 의존과 max_workers로 흉내 낸 일정 + 마무리."""
 
@@ -209,11 +285,11 @@ class ScheduleTest(unittest.TestCase):
         state.begin_phase(st.ticket("02"), "network", "codex", at=clock(700))
         self.assertEqual(self.eta(st, ["01", "02", "03"], 2, 840, deps=deps, finish_median_s=0), (960, "약 16분 남음"))
 
-    def test_running_ticket_over_average_counts_one_minute(self):
+    def test_running_ticket_over_average_marks_overrun(self):
         st = state.State(feature="f", started_at=clock(0))
         merged(st, "01", 0, 600)
         running(st, "02", 600)
-        self.assertEqual(self.eta(st, ["01", "02"], 1, 600 + 1500, finish_median_s=0), (60, "약 1분 남음"))
+        self.assertEqual(self.eta(st, ["01", "02"], 1, 600 + 1500, finish_median_s=0), (60, "약 1분 남음(예상 넘긴 티켓 있음)"))
 
     def test_running_ticket_just_under_average_counts_remainder(self):
         st = state.State(feature="f", started_at=clock(0))
