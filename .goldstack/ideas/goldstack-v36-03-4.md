@@ -2,7 +2,7 @@
 date: "2026-11-13"
 severity: "high"
 source: "goldstack-v36 리뷰 03"
-status: "open"
+status: "dropped"
 feature: ""
 ---
 새 high 차단 동작과 충돌하는 기존 시험 9개가 남아 있어 spec의 전체 검증 통과 조건을 충족하지 못한다. test_recheck_resolved.py 6개, test_review_target.py 2개, test_async_review.py 1개의 기대나 fixture를 새 동작에 맞춰야 한다.
@@ -12,3 +12,5 @@ feature: ""
 판단: 리뷰어가 9개 시험을 돌려 9개 모두 실패하는 것을 재현했고 티켓이 요구한 high 차단 동작과 맞지 않는 실제 결함이지만, 고쳐야 할 test_recheck_resolved.py·test_review_target.py·test_async_review.py가 모두 고칠 수 있는 파일 밖이다.
 재현된 미수리 결함(defer): 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않았다. 원래 심각도: medium
 보고서: .goldstack/work/goldstack-v36/report.md
+
+- 닫음(2026-11-13, goldstack-v38 grill 1-2): v36 수리 커밋이 fixture를 고쳐 해소됐다. 세 시험 파일 174개 통과.

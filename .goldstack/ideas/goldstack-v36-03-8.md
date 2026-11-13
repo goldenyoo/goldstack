@@ -2,8 +2,8 @@
 date: "2026-11-13"
 severity: "medium"
 source: "goldstack-v36 리뷰 03"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v38"
 ---
 apply_rereview와 apply_repair_review가 _add_found로 새 지적을 rec['findings'] 끝에 덧붙이기만 하고 final_highs가 found_round in (2, REPAIR_ROUND)인 모든 high를 세어, 병합 전 대조(-again)가 새 커밋(h2)을 다시 리뷰해 새 high가 사라져도(findings: []) 이전 커밋(h1)의 2차·수리 재리뷰 새 high가 그대로 남아 병합을 막는다.
 

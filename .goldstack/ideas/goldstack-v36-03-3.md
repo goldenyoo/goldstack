@@ -2,8 +2,8 @@
 date: "2026-11-13"
 severity: "high"
 source: "goldstack-v36 리뷰 03"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v38"
 ---
 high 지적들을 하나의 evidence 파일로 넘기면 합계가 64 KiB를 넘을 때 failure.log에서 앞부분이 잘려, 지적 전문을 실패 요약 입력에 넣는 완료 조건을 충족하지 못합니다.
 

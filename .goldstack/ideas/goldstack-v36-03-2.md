@@ -2,7 +2,7 @@
 date: "2026-11-13"
 severity: "high"
 source: "goldstack-v36 리뷰 03"
-status: "open"
+status: "dropped"
 feature: ""
 ---
 새 high 실패 처리에 맞춰야 할 기존 시험 9개가 그대로 남아 spec의 전체 검증을 실패시킵니다. test_recheck_resolved.py, test_async_review.py, test_review_target.py의 해당 fixture나 단언을 함께 갱신해야 합니다.
@@ -12,3 +12,5 @@ feature: ""
 판단: The reviewer reproduced it: 9 existing tests fail because their default-high fixtures now hit the new 'remaining high' failure, and the spec requires full verification to pass. The tests to update (test_recheck_resolved.py, test_async_review.py, test_review_target.py) are outside the fixable files.
 재현된 미수리 결함(defer): 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않았다. 원래 심각도: medium
 보고서: .goldstack/work/goldstack-v36/report.md
+
+- 닫음(2026-11-13, goldstack-v38 grill 1-2): v36 수리 커밋이 fixture를 고쳐 해소됐다. 세 시험 파일 174개 통과.
