@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from gs import git, review, worker
+from gs import replay
 from gs.feature import Spec, Ticket
 import support
 
@@ -124,6 +125,22 @@ class BriefRulesTest(unittest.TestCase):
 
     def test_replay_style_call_without_merged_still_works(self):
         text = self.briefs()["first"]
+        self.assertNotIn("base에 이미 병합된 티켓", text)
+
+    def test_replay_worker_brief_lists_touches_without_adding_a_base_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ticket = Ticket(id="05", title="t", blocked_by=[], model="claude", reviewer="codex",
+                            path=root / "05-t.md", body="## 목표\n하나", touches=["src/a.py", "tests/test_a.py"])
+            spec = Spec(feature="demo", verify="full", max_workers=1, idle_minutes=20,
+                        verify_minutes=20, path=root / "spec.md")
+            job = worker.Job(ticket=ticket, worktree=root, rundir=root / "replay")
+            job.rundir.mkdir()
+            worker.write_brief(job, spec, "demo", replay.DETACHED, touches=ticket.touches)
+            text = job.brief.read_text(encoding="utf-8")
+
+        self.assertIn(worker.TOUCHES_LABEL + "`src/a.py`, `tests/test_a.py`. touches 밖 파일은 고치지 않는다. "
+                      "고쳐야 하면 `## 남긴 관찰`에 적는다.", text)
         self.assertNotIn("base에 이미 병합된 티켓", text)
 
 
