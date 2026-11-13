@@ -147,7 +147,8 @@ def base_lines(merged: list[tuple[str, str]], blocked_by: list[str]) -> str:
 
 
 def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary: str = "",
-                resumed: bool = False, merged: list[tuple[str, str]] | None = None) -> None:
+                resumed: bool = False, merged: list[tuple[str, str]] | None = None,
+                touches: list[str] | None = None) -> None:
     """worker brief를 쓴다. 첫 worker, 재개한 worker, 수정·수리 worker 모두 같은 규칙을 받는다(계열 분기 없음):
     전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 돌리므로 worker는 고친 곳에 닿는 좁은 시험만 돌린다.
     같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없애려는 것이다. 티켓 `verify`가 좁아도 같다.
@@ -158,7 +159,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     merged는 첫·재개 worker만 넘긴다: worktree의 base에 이미 병합된 이번 실행의 티켓 (id, 커밋). 주면 base 줄이 붙고(없으면 `없음`), 이 티켓의 `blocked_by` 중 병합되지 않은 것은 따로 적는다(`base_lines`). None이면(수정·수리 worker, replay) 줄이 없다.
     한 명령의 시험 파일 수를 hook이 막으면 명령을 나눠 돌리고 일부를 빼지 않는다는 규칙(`SPLIT_RUN_RULE`), 측정용 claude·codex 세션은 `gs child`로 띄운다는 규칙(`NESTED_SESSION_RULE`),
     고치지 않고 남긴 관찰을 마지막 메시지 끝의 `OBSERVATIONS_HEADING` 절에 쓴다는 규칙(`OBSERVATIONS_RULE`)도 모든 brief에 붙는다. 상한 숫자는 적지 않는다(레포 config 값이다).
-    첫·재개 worker brief(merged가 있을 때)에는 이 티켓의 touches 목록과 touches 밖 파일은 고치지 않는다는 줄도 붙는다(`TOUCHES_LABEL`). touches가 없는 티켓은 이 줄이 없다.
+    첫·재개 worker brief(merged가 있을 때)와 replay brief(touches를 넘길 때)에는 이 티켓의 touches 목록과 touches 밖 파일은 고치지 않는다는 줄도 붙는다(`TOUCHES_LABEL`). touches가 없는 티켓은 이 줄이 없다.
     수정·수리 worker는 이 줄을 받지 않는다: 고칠 수 있는 파일은 `review._fixable_lines`가 병합된 티켓의 touches까지 합쳐 알린다.
     같은 티켓의 앞 시도 로그가 있고 거기 성공한 명령이 있으면 그 목록이 믿을 수 없는 자료로 표시되어 붙는다(`prior_commands`). 첫 시도나 기록이 없으면 이 부분이 없다."""
     t = job.ticket
@@ -170,9 +171,10 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     ticket_rel = f"{work_rel(feature)}/tickets/{t.path.name}"
     # worktree는 base(integration) 위에 새로 만든 것이라, 여기 있으면 base에 커밋된 profile이다
     base = f"\n{base_lines(merged, t.blocked_by)}" if merged is not None else ""
-    touches = (f"\n{TOUCHES_LABEL}{', '.join(f'`{p}`' for p in t.touches)}. "
-               f"touches 밖 파일은 고치지 않는다. 고쳐야 하면 `{OBSERVATIONS_HEADING}`에 적는다.") \
-        if merged is not None and t.touches else ""
+    allowed_touches = touches if touches is not None else (t.touches if merged is not None else [])
+    touches_line = (f"\n{TOUCHES_LABEL}{', '.join(f'`{p}`' for p in allowed_touches)}. "
+                    f"touches 밖 파일은 고치지 않는다. 고쳐야 하면 `{OBSERVATIONS_HEADING}`에 적는다.") \
+        if allowed_touches else ""
     profile = f"\n먼저 `{PROFILE_REL}`를 읽어라(레포 요약: 구조, 빌드·시험 명령, 관례, 주의점).\n" \
         if (job.worktree / PROFILE_REL).is_file() else ""
     job.brief.write_text(f"""# 티켓 {t.id}: {t.title}
@@ -180,7 +182,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 너는 goldstack worker다. 이 worktree(`{job.worktree}`, 브랜치 `{branch}`)에서 아래 티켓 하나를 구현한다.
 
 규칙:
-- 이 worktree 안의 파일만 바꾼다.{touches}
+- 이 worktree 안의 파일만 바꾼다.{touches_line}
 - 끝나면 변경을 이 브랜치에 커밋한다(여러 커밋 가능). 커밋이 없으면 실패로 처리된다.
 - push, PR 생성, 병합은 하지 않는다. gs가 한다.
 {verify_rule}
