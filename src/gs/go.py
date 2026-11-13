@@ -776,7 +776,7 @@ class Active:
     # catch-up이 합친 커밋으로 옮겨 간다(_merge_stage). 재개 표시에 남는다(network_resume의 target). 비어 있으면 옛 state라 대조할 것이 없다
     target: str = ""
     ends: streamfmt.ResultWatch | None = None  # 로그의 끝 이벤트를 이어 읽는다(result_seconds). 처음 볼 때 만든다
-    result_at: float | None = None  # 성공 끝 이벤트를 처음 본 시각(time.monotonic). 로그가 더 자라도 옮기지 않는다
+    result_at: float | None = None  # 성공 끝 이벤트를 처음 본 시각(time.monotonic). 로그가 더 자라도 옮기지 않는다. 마지막 끝 이벤트가 실패면 None
 
     def quiet_seconds(self) -> float:
         """일시 오류 없이 돈 시간. 시작 이후 마지막 Reconnecting부터 잰다. Reconnecting 뒤 다른 이벤트가 아직 없으면 0이다."""
@@ -794,10 +794,12 @@ class Active:
         """로그의 마지막 끝 이벤트가 성공이면 그 이벤트를 처음 본 뒤 지난 초, 아니면 None(_wait_any의 유예 정리).
 
         시계는 처음 본 때부터다: 그 뒤 로그가 자라도(성공 끝 이벤트가 또 나와도) 다시 시작하지 않는다.
+        마지막 끝 이벤트가 실패가 되면 시계를 지운다. 그 뒤 성공 끝 이벤트가 다시 나오면 그것을 처음 본 때부터 잰다.
         """
         if self.ends is None:
             self.ends = streamfmt.ResultWatch(self.proc.job.log)
         if self.ends.success_end() is None:
+            self.result_at = None
             return None
         if self.result_at is None:
             self.result_at = time.monotonic()

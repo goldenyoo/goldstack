@@ -26,8 +26,11 @@ def result(is_error: bool) -> str:
                        "is_error": is_error, "result": "끝"})
 
 
-def worker_script(end: str, child: float) -> str:
-    """커밋 → 끝 이벤트 → 자식 sleep을 띄우고 기다린다. 자식 pid는 child.pid에 남긴다."""
+def worker_script(end: str, child: float, orphan: bool = False) -> str:
+    """커밋 → 끝 이벤트 → 자식 sleep을 띄우고 기다린다. 자식 pid는 child.pid에 남긴다.
+
+    orphan이면 기다리지 않고 먼저 끝난다: 고아가 된 자식(PPID 1)이 stdout을 쥐고 있어 run.sh의 파이프가 끝나지 않는다.
+    """
     return textwrap.dedent(f'''\
         here="$(dirname "$0")"
         echo "$GS_TICKET" >> "$here/calls.log"
@@ -35,13 +38,13 @@ def worker_script(end: str, child: float) -> str:
         echo '{end}'
         sleep {child} &
         echo $! > "$here/child.pid"
-        wait
+        {"exit 0" if orphan else "wait"}
     ''')
 
 
 class ResultGraceGoTest(support.GoTest):
-    def run_go(self, end: str, child: float, runner: str = "subprocess", grace: float | None = GRACE):
-        (self.bin / "worker.sh").write_text(worker_script(end, child))
+    def run_go(self, end: str, child: float, runner: str = "subprocess", grace: float | None = GRACE, orphan: bool = False):
+        (self.bin / "worker.sh").write_text(worker_script(end, child, orphan))
         env = {"GS_RUNNER": runner}
         if runner == "herdr":
             path = self.bin / "herdr"
@@ -68,8 +71,8 @@ class ResultGraceGoTest(support.GoTest):
     def attempt(self) -> Path:
         return self.rundir / "01" / "1"
 
-    def assert_cleaned_and_reviewed(self, runner: str):
-        code, out, err = self.run_go(result(False), HANG, runner)
+    def assert_cleaned_and_reviewed(self, runner: str, orphan: bool = False):
+        code, out, err = self.run_go(result(False), HANG, runner, orphan=orphan)
         self.assertEqual(code, 0, out + err)
         self.assertIn(f"[01] result 뒤 {GRACE:g}초 지나도 끝나지 않아 정리: 남은 프로세스 ", out)
         self.assertNotIn("시간 초과", out)
@@ -97,6 +100,10 @@ class ResultGraceGoTest(support.GoTest):
     def test_success_result_then_hang_is_cleaned_after_grace_and_reviewed(self):
         self.assert_cleaned_and_reviewed("subprocess")
 
+    def test_orphaned_child_holding_the_pipe_is_listed_and_cleaned(self):
+        """worker는 끝났는데 고아가 된 자식(PPID 1)이 stdout을 쥐고 있어 run.sh가 끝나지 않는다. 부모 관계로는 못 찾고 그룹으로 찾는다."""
+        self.assert_cleaned_and_reviewed("subprocess", orphan=True)
+
     def test_herdr_runner_cleans_the_same_way(self):
         self.assert_cleaned_and_reviewed("herdr")
         cmds = (self.bin / "herdr.log").read_text().splitlines()
@@ -117,6 +124,44 @@ class ResultGraceGoTest(support.GoTest):
         self.assertEqual(code, 0, out + err)
         self.assertNotIn("result 뒤", out)
         self.assertFalse((self.attempt / worker.LEFTOVER_PROCS).exists())
+
+
+class TreeTest(unittest.TestCase):
+    """worker._tree: run.sh 명령줄 → 자손, 그리고 그룹 리더면 그 그룹(고아 포함)."""
+    SCRIPT = Path("/r/01/1/run.sh")
+
+    def tree(self, table, mine: int = 9):
+        with mock.patch.object(worker.os, "getpid", return_value=9), mock.patch.object(worker.os, "getpgrp", return_value=mine):
+            return sorted(worker._tree(table, self.SCRIPT))
+
+    def test_leader_group_brings_orphans_and_setsid_descendants(self):
+        table = {
+            9: (1, 9, "S", "python -m gs.cli go"),  # gs
+            100: (9, 100, "S", f"bash {self.SCRIPT}"),  # run.sh: 그룹 리더
+            101: (100, 100, "S", f"bash {self.SCRIPT}"),  # 서브셸
+            102: (100, 100, "S", "tee -a worker.log"),
+            200: (1, 100, "S", "sleep 37"),  # 부모가 먼저 끝난 자식
+            201: (200, 100, "Z", "(sh)"),
+            300: (101, 300, "Ss", "nohup poll"),  # setsid로 떼어 낸 자손
+            301: (1, 300, "S", "sleep 99"),
+            400: (1, 400, "S", "sleep 5"),  # 상관없는 프로세스
+            500: (9, 9, "S", "bash /r/02/1/run.sh"),  # 다른 시도
+            501: (1, 9, "S", "sleep 7"),  # gs 그룹의 고아
+        }
+        self.assertEqual(self.tree(table), [100, 101, 102, 200, 201, 300, 301])
+        self.assertEqual(self.tree(table, mine=100), [100, 101, 102, 300, 301])  # gs 자신의 그룹은 넣지 않는다
+
+    def test_group_of_a_root_that_is_not_its_leader_is_not_taken(self):
+        table = {
+            9: (1, 9, "S", "python -m gs.cli go"),
+            800: (1, 800, "Ss", "-zsh"),  # pane 셸: 작업마다 그룹을 나누지 않으면 run.sh가 이 그룹에 든다
+            801: (800, 800, "S", f"bash {self.SCRIPT}"),
+            802: (801, 800, "S", "tee -a worker.log"),
+            803: (1, 800, "S", "sleep 37"),
+            900: (9, 9, "S", f"bash {self.SCRIPT}"),  # gs 그룹 안의 run.sh
+            901: (1, 9, "S", "sleep 7"),
+        }
+        self.assertEqual(self.tree(table), [801, 802, 900])
 
 
 class ResultWatchTest(unittest.TestCase):
@@ -184,6 +229,24 @@ class ResultClockTest(unittest.TestCase):
         waited = self.a.result_seconds()
         self.assertEqual(self.a.result_at, first)
         self.assertGreaterEqual(waited, 0.02)
+
+    def test_failure_end_clears_the_clock_and_a_new_success_starts_it_again(self):
+        clock = [100.0]
+        with mock.patch.object(go.time, "monotonic", lambda: clock[0]):
+            with self.log.open("a") as f:
+                f.write(result(False) + "\n")
+            self.assertEqual(self.a.result_seconds(), 0)
+            clock[0] = 150.0
+            with self.log.open("a") as f:
+                f.write(result(True) + "\n")
+            self.assertIsNone(self.a.result_seconds())
+            self.assertIsNone(self.a.result_at)
+            clock[0] = 200.0
+            with self.log.open("a") as f:
+                f.write(result(False) + "\n")
+            self.assertEqual(self.a.result_seconds(), 0)  # 취소된 첫 성공(100)부터 재지 않는다
+            clock[0] = 205.0
+            self.assertEqual(self.a.result_seconds(), 5)
 
     def test_grace_comes_from_config(self):
         r = SimpleNamespace(cfg=SimpleNamespace(timeouts=config.TimeoutsConfig(30, 10, 60, result_grace_seconds=7)))
