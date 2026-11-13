@@ -258,7 +258,7 @@ class RepairTest(Base):
         self.assertEqual(ts.repairs[0]["reason"], f"검증 중 worktree가 바뀌었다(로그 {self.rundir / '01/1/verify.log'})")
 
     def test_repair_after_a_fix_worker_runs_in_the_attempt_directory(self):
-        patch = self.review_with([{"severity": "high", "location": "file_01", "claim": "FIX A", "evidence": "e"}])
+        patch = self.review_with([{"severity": "medium", "location": "file_01", "claim": "FIX A", "evidence": "e"}])  # 가짜 리뷰어는 수리 재리뷰에도 이 지적을 낸다. high면 병합하지 않는다(test_final_high)
         (self.bin / "worker.sh").write_text(textwrap.dedent('''\
             here="$(dirname "$0")"
             echo "$GS_TICKET" >> "$here/calls.log"
@@ -293,9 +293,10 @@ class RepairReviewTest(Base):
         '''))
 
     def test_findings_of_the_repair_review_are_report_only(self):
+        """high가 아닌 지적은 보고만이다. high는 병합하지 않고 티켓 실패다(test_final_high)."""
         self.worker(BREAKS, REPAIRS)
         patch = self.review_with([])  # 판단 모델을 부르면 FIX를 fix로 나눈다. 부르지 않아야 한다
-        self.reviewer({"severity": "high", "location": "file_01", "claim": "FIX 시험을 지웠다", "evidence": "e"})
+        self.reviewer({"severity": "medium", "location": "file_01", "claim": "FIX 시험을 지웠다", "evidence": "e"})
         with patch:
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
