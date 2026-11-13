@@ -2,8 +2,8 @@
 date: "2026-11-13"
 severity: "high"
 source: "goldstack-v35 리뷰 02"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v36"
 ---
 gs child 내부 명령에 바깥 래퍼를 다시 붙이면서 기존 git push 차단을 우회하게 된다. env -u CLAUDE_EFFORT 또는 setsid 뒤의 gs child가 해당한다.
 

@@ -2,8 +2,8 @@
 date: "2026-11-13"
 severity: "medium"
 source: "goldstack-v35 리뷰 02"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v36"
 ---
 `gs child` 앞붙이를 반복문으로 벗기지 않고 `if inner and depth <= 3:` 재귀 한도에 태워 fail-open 시켜, 수정 전(`32111a9`)에는 차단되던 평탄한 반복 호출(`gs child -- ` 5회, 또는 중첩 `bash -c` 안의 3회)만으로 `GS_ROLE` 제거와 `git push` 차단이 모두 우회된다(`gs child --`는 셸 재해석이나 따옴표 이스케이프 없이 그대로 다음 인자를 `exec`하므로 평탄하게 이어 쓰는 것만으로 실제로 실행된다).
 

@@ -2,9 +2,9 @@
 date: "2026-11-13"
 severity: "low"
 source: "/retro goldstack-v33 /retro goldstack-v34"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v36"
 ---
 codex worker 로그에 해가 없지만 worker를 헷갈리게 하는 환경 잡음 세 가지가 매번 나온다.
 
@@ -17,3 +17,4 @@ codex worker 로그에 해가 없지만 worker를 헷갈리게 하는 환경 잡
 - sandbox 안에서 `.venv/bin/gs check <f>`가 `오류: 이 머신에서 codex 샌드박스가 동작하지 않는다(WARNING: proceeding, even though we could not create PATH aliases…)`로 실패한다. worker가 `GS_SANDBOX_PROBE=pass`로 다시 쳐서 넘어갔다(v34 03 L37, L45).
 
 고칠 곳: codex worker용 안내 한 줄(profile 또는 brief): "sandbox 안 `gs check`는 `GS_SANDBOX_PROBE=pass`로, 위 hooks·packed-refs 경고는 무시해도 된다". hooks 파싱 실패는 codex 쪽이라 기록만.
+- 2026-11-13 goldstack-v35 03(codex worker·수정 worker): 커밋 때 `packed-refs.lock` 경고로 브랜치 반영을 `git rev-parse`로 다시 확인(`run/retro-log.md` L560, L592). `/`부터 상위 디렉터리를 돌며 없는 `AGENTS.md`를 찾음(L542–544) (출처: /retro goldstack-v35)

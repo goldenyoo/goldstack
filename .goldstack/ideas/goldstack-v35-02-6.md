@@ -2,8 +2,8 @@
 date: "2026-11-13"
 severity: "high"
 source: "goldstack-v35 리뷰 02"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v36"
 ---
 새 gs child 재귀 깊이 제한이 한도에 도달한 명령을 허용하여, 이전에 차단하던 GS_ROLE 제거가 통과한다.
 
