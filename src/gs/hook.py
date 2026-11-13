@@ -44,7 +44,8 @@
 
 명령 이름은 앞붙이(대입, `sudo`·`env`·`timeout`·`setsid`·`nice`·`stdbuf`·`exec`·`xargs` …)와 그 옵션의 값(`env -u X`,
 `timeout -s KILL 5`, `exec -a x`, `nice -n +5`, `stdbuf -o L`)을 벗겨 찾는다(`strip_prefix`, `WRAPPER_VALUED`). `env -S` 문자열은 펼쳐
-그 안의 명령을 본다. 표에 없는 옵션은 값을 받지 않는다고 보고, 모른다는 이유로 막지는 않는다.
+그 안의 명령을 본다. env가 셸과 다르게 푸는 글자(`#`·`\\`·`$`)가 든 문자열은 풀지 않고 막는다. 표에 없는 옵션은 값을 받지 않는다고
+보고, 모른다는 이유로 막지는 않는다. 건너뛴 앞붙이 단어(옵션 값, 대입 이름)에 xargs 치환 문자열이 들어 있으면 막는다(`xargs -I@ env -u @ …`).
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
@@ -271,6 +272,8 @@ SHELL_COMMAND_WORD = re.compile(r"[\w./+][\w./+-]*")  # 따옴표·escape·치�
 SHELL_ANSI_QUOTED = re.compile(r"\$'(?:[^'\\]|\\.)*'", re.DOTALL)
 SHELL_BACKTICK = re.compile(r"`((?:[^`\\]|\\.)*)`", re.DOTALL)
 TIMEOUT_DURATION = re.compile(r"\d+(\.\d+)?[smhd]?")
+# `timeout`의 시간 자리로 읽는 단어(`5`, `0.5`, `.5`, `1e3`, `inf`, `$T`). 아니면 명령으로 본다(`timeout git push`는 GNU에서는 실패하지만 막는다)
+TIMEOUT_SLOT = re.compile(r"(\d|\.\d).*|inf(inity)?[smhd]?|.*[$`].*", re.S)
 
 
 def _command_of(words: list[str]) -> str | None:
@@ -1036,6 +1039,19 @@ def _xargs_fill(prefix: list[str]) -> tuple[str, ...]:
     return tuple(s for s in fill if s)
 
 
+def _xargs_subject(prefix: list[str]) -> list[str]:
+    """앞붙이 단어 중 xargs가 입력으로 바꿔 넣을 수 있는 것. `xargs`와 그 옵션·값(`-I @`)은 뺀다."""
+    words: list[str] = []
+    k = 0
+    while k < len(prefix):
+        if _is_xargs(prefix[k]):
+            k = _role_wrapper_opts(prefix, k, "xargs")[1]
+            continue
+        words.append(prefix[k])
+        k += 1
+    return words
+
+
 def _xargs_filled(words: list[str], fill: tuple[str, ...]) -> list[str]:
     """xargs가 바꿔 넣은 뒤의 단어들. 글자가 들어 있는 단어는 통째로 모르는 값이다(`HEAD`가 다른 ref가 되고 `-X`가 `-m`이 된다)."""
     return [XARGS_INPUT if any(s in word for s in fill) else word for word in words]
@@ -1128,6 +1144,9 @@ ROLE_EXPORTERS = {"export", "declare", "typeset", "readonly"}  # 변수를 내�
 ROLE_ADVICE = ("`GS_ROLE`은 worker가 지우거나 바꿀 수 없다(바꾸면 worker 차단이 풀린다). "
                "중첩 세션은 `gs child -- <명령>`으로 띄운다(GS_*는 남고 Claude Code 세션 변수만 지운다)")
 ENV_VALUED_SHORT = "uCSPa"  # 값을 받는 `env` 짧은 옵션. 붙이거나(`-uX`) 다음 단어로 준다
+ENV_SPLIT_UNSURE = "#\\$"  # env -S가 셸과 다르게 푸는 글자(`#` 주석, `\_`·`\c`, `${VAR}`)
+ENV_SPLIT_UNREADABLE = ("`env -S` 문자열을 env와 같게 풀 수 없어(`#` 주석, `\\_` 공백, `\\c`, `${VAR}`, 닫히지 않은 따옴표) "
+                        "그 안의 명령을 판정할 수 없다. `-S` 없이 단어로 쓴다")
 
 
 def check_role_strip(argv: list[str]) -> str | None:
@@ -1140,6 +1159,8 @@ def check_role_strip(argv: list[str]) -> str | None:
     같은 판독으로 앞붙이를 벗기므로 `check_segment`가 본문을 읽는다.
     """
     reason = role_scan(argv)
+    if reason == ENV_SPLIT_UNREADABLE:  # `GS_ROLE`을 지우는지 볼 수 없다. 지운다고 단정하지 않으니 안내가 다르다
+        return reason
     return f"{reason}. {ROLE_ADVICE}" if reason else None
 
 
@@ -1197,7 +1218,10 @@ def _role_export(base: str, args: list[str]) -> str | None:
 
 
 def _env_split(value: str) -> list[str] | None:
-    """`env -S`의 문자열을 단어로 나눈다. 나누지 못하면 None."""
+    """`env -S`의 문자열을 단어로 나눈다. env와 같게 나눈다고 보장하지 못하면 None.
+    env는 `#`(주석), `\\`(`\\_` 공백, `\\c` 끝), `${VAR}`(펼침)를 셸(`shlex`)과 다르게 푼다. 이 글자가 있으면 나누지 않는다."""
+    if any(c in value for c in ENV_SPLIT_UNSURE):
+        return None
     try:
         return shlex.split(value)
     except ValueError:
@@ -1206,8 +1230,8 @@ def _env_split(value: str) -> list[str] | None:
 
 def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
     """`words[i]`가 `env`다. (막을 이유, 단어들, `env` 옵션·대입 뒤 명령이 시작하는 자리). 이유가 있어도 끝까지 읽는다.
-    `-S` 문자열은 단어로 풀어 `words`에 끼워 넣으므로 단어들을 새로 돌려준다. 풀지 못하는 문자열은 `env`도 읽지 못해
-    명령이 돌지 않는다. 그 옵션과 값만 건너뛴다."""
+    `-S` 문자열은 단어로 풀어 `words`에 끼워 넣으므로 단어들을 새로 돌려준다. 풀지 못하는 문자열(`_env_split`)은
+    그 안의 명령을 판정할 수 없어 막는다(`ENV_SPLIT_UNREADABLE`). 그 옵션과 값을 건너뛰고 끝까지 읽는다."""
     words = list(words)
     reason = None
     j = i + 1
@@ -1236,6 +1260,7 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
                 value = value if eq else (words[j + 1] if j + 1 < len(words) else "")
                 parts = _env_split(value)
                 if parts is None:
+                    reason = reason or ENV_SPLIT_UNREADABLE
                     j += span
                 else:
                     words[j:j + span] = parts
@@ -1257,7 +1282,9 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
                         reason = reason or "`env -u GS_ROLE`이 `GS_ROLE`을 지운다"
                     if ch == "S":
                         parts = _env_split(value)
-                        if parts is not None:
+                        if parts is None:
+                            reason = reason or ENV_SPLIT_UNREADABLE
+                        else:
                             words[j:j + consumed] = parts
                             expanded = True
                     break
@@ -1280,7 +1307,7 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
 
 def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None, int]:
     """`words[i]`가 앞붙이(`sudo`·`timeout`·`setsid` …)다. (막을 이유, 그 옵션·값·대입을 지난 자리). 이유가 있어도 끝까지 읽는다.
-    값을 받는 옵션(`WRAPPER_VALUED`)의 값은 건너뛴다. `timeout`은 옵션 뒤의 첫 단어가 시간이다(`5`, `0.5`, `1m`, `$T`)."""
+    값을 받는 옵션(`WRAPPER_VALUED`)의 값은 건너뛴다. `timeout`은 옵션 뒤의 첫 단어가 시간이다(`5`, `0.5`, `1m`, `$T`. `TIMEOUT_SLOT`)."""
     reason = None
     i += 1
     while i < len(words):
@@ -1302,7 +1329,7 @@ def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None,
             i += 1
         else:
             break
-    if base == "timeout" and i < len(words):
+    if base == "timeout" and i < len(words) and TIMEOUT_SLOT.fullmatch(words[i]):
         i += 1
     return reason, i
 
@@ -1329,6 +1356,13 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
 
     if _xargs_filled(rest[:1], seg.xargs_fill) == [XARGS_INPUT]:  # GNU xargs는 명령 이름도 바꾼다
         return f"`xargs`의 치환 문자열이 명령 이름 `{rest[0]}`에 들어 있어 어떤 명령을 돌리는지 볼 수 없다. `{{}}`처럼 겹치지 않는 문자열을 쓴다"
+    # 앞붙이 옵션의 값도 바꾼다(`xargs -I@ env -u @ claude`의 `@`가 `GS_ROLE`이 된다). 대입은 이름만 본다(`f={}`는 값만 바뀐다).
+    # `GS_ROLE=worker`는 값이 바뀌면 `worker`가 아니게 되니 단어 전체를 본다
+    for word in _xargs_subject(prefix):
+        target = word.partition("=")[0] if ANY_ASSIGN.match(word) and not ROLE_ASSIGN.fullmatch(word) else word
+        if _xargs_filled([target], seg.xargs_fill) == [XARGS_INPUT]:
+            return (f"`xargs`의 치환 문자열이 앞붙이 단어 `{word}`에 들어 있어 어떤 환경에서 어떤 명령을 돌리는지 볼 수 없다. "
+                    "치환 문자열은 명령의 인자에만 쓴다")
 
     # 셸 본문이 통과해도 반환하지 않는다. 아래의 리다이렉션 판정도 이 segment에 걸린다(`setsid bash -c '…' > 밖`)
     if name in ("bash", "sh", "zsh", "dash"):

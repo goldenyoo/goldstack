@@ -191,6 +191,45 @@ class GsChildTest(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertIn("`GS_ROLE`", self.verdict(command) or "", command)
 
+    def test_xargs_replace_string_in_a_prefix_word(self):
+        """앞붙이 옵션의 값을 건너뛰면 그 값 속 xargs 치환 문자열이 보이지 않게 된다. `@`가 `GS_ROLE`이 되면 `env -u GS_ROLE`이다."""
+        for command in ("echo GS_ROLE | xargs -I@ env -u @ claude -p hi", "echo GS_ROLE | xargs -I{} env --unset {} claude -p hi",
+                        "echo GS_ROLE | xargs -i env -u {} claude -p hi", "echo GS_ROLE | xargs -J@ env -u @ claude -p hi",
+                        "echo ROLE | xargs -I@ env -u GS_@ claude -p hi", "echo x | xargs -I@ env -C @ rm -rf x",
+                        "echo GS_ROLE | xargs -I@ bash -c 'env -u @ claude -p hi'",
+                        "echo GS_ROLE | xargs -I@ sh -c 'gs child -- env -u @ claude -p hi'",
+                        "echo KILL | xargs -I@ timeout -s @ 5 git status",
+                        "echo ROLE | xargs -I X sh -c 'GS_X=other claude -p hi'",  # 이름에 든 치환 문자열
+                        "echo x | xargs -I w sh -c 'GS_ROLE=worker claude -p hi'"):  # `worker`가 `xorker`가 된다
+            with self.subTest(command=command):
+                self.assertIn("`xargs`의 치환 문자열이 앞붙이 단어", self.verdict(command) or "", command)
+        for command in ("echo f | xargs -I {} timeout 5 git status {}", "echo f | xargs -I {} env FOO=1 echo {}",
+                        "echo f | xargs -I {} setsid echo {}", "echo f | xargs -n 1 env -u CLAUDE_EFFORT echo",
+                        "echo f | xargs -I {} sh -c 'f={}; cat \"$f\"'", "echo f | xargs -I {} env FOO={} echo hi"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.verdict(command), command)
+
+    def test_env_split_string_that_env_reads_differently_is_blocked(self):
+        """env -S는 `#`(주석), `\\_`(공백), `\\c`(끝), `${VAR}`를 셸과 다르게 푼다. 같게 풀지 못하면 판정하지 않고 막는다."""
+        for command in ("env -S '#' git push", "env -S '\\c' git push", "env -S '\\_' git push", "env -S 'git\\_push'",
+                        "env -S '${NOPE}' git push", "env -S '#' env -u GS_ROLE claude -p hi",
+                        "env -S '-u\\_GS_ROLE' claude -p hi", "env -S '#' gs child -- claude -p hi",
+                        "env -S 'gs\\_child -- claude -p hi'", "env --split-string='#' git status",
+                        "env -S \"'unclosed\" git status", "env -iS '#' claude -p hi", "setsid env -S '#' git push"):
+            with self.subTest(command=command):
+                self.assertEqual(self.verdict(command), hook.ENV_SPLIT_UNREADABLE, command)
+        self.assertIsNone(self.verdict("env -S 'FOO=1 BAR=2' git status"))
+
+    def test_timeout_duration_slot_takes_only_a_duration(self):
+        """`timeout` 옵션 뒤의 시간처럼 생긴 단어만 시간으로 건너뛴다. 아니면 그 단어가 명령이다."""
+        for command in ("timeout git push", "timeout 5 git push", "timeout 0.5 git push", "timeout .5 git push",
+                        "timeout 1e3 git push", "timeout inf git push", "timeout $T git push", "timeout ${T}s git push",
+                        "timeout -s KILL git push"):
+            with self.subTest(command=command):
+                self.assertEqual(self.verdict(command), PUSH, command)
+        self.assertEqual(hook.strip_prefix(["timeout", "git", "push"]), ["git", "push"])
+        self.assertEqual(hook.strip_prefix(["timeout", "5", "git", "push"]), ["git", "push"])
+
     def test_unknown_options_do_not_block(self):
         for command in UNKNOWN_OPTIONS:
             with self.subTest(command=command):
