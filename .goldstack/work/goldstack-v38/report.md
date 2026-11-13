@@ -23,7 +23,7 @@ v36이 넣은 high 차단은 실제로 남은 결함이 아닌데도 병합을 �
   - 2차·수리 재리뷰에 agy가 불리지 않는다.
   - 남은 high가 실제 미해결만 센다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/73 병합 · main 검증 통과
 리뷰 지적: 수정됨 6 · 보고만 2
 
 ## Evidence
@@ -123,10 +123,17 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 666.0 |
+| total | 712.0 |
 | verify | 637.044 |
 | summary | 28.706 |
-| report | 0 |
+| report | 0.084 |
+| push | 7.302 |
+| publish | 3.326 |
+| checks | 24.863 |
+| merge-pr | 3.998 |
+| confirm-merge | 0.009 |
+| postmerge | 1.253 |
+| restore-reverts | 0.09 |
 
 ### 티켓별 결과
 
@@ -434,20 +441,55 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 0.52ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v38/run/gs-main-u267tz9j/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v38/run/gs-main-u267tz9j/base
+Prepared 1 package in 185ms
+Installed 1 package in 1ms
+ + goldstack==0.2.22 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v38/run/gs-main-u267tz9j/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 - integration: 통과 · 종료 코드 0 · 637.0초 · 로그 /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v38/run/finish/integration-verify.log
+
+#### finish/main-verify.log
+
+```text
+integration과 같은 코드(e6e671261262d15f1b179ceae9cf3c7d0e3179db), 건너뜀
+```
 
 
 agy 사용: 2/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/73
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `d05c220fa9d9213ecb1db12dfd059ce98039974a`
+
+### issue
+
+- #70 닫음: `d05c220fa9d9213ecb1db12dfd059ce98039974a`에 반영
 
 ### 되돌리는 법
 
@@ -457,7 +499,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 d05c220fa9d9213ecb1db12dfd059ce98039974a
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v38/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
