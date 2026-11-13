@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import support  # noqa: F401
 from gs import adapters, cli, hook
 
 REPO = Path(__file__).resolve().parents[1]

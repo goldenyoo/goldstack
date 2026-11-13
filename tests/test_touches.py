@@ -6,6 +6,7 @@ import shutil
 import unittest
 from pathlib import Path
 
+import support  # noqa: F401
 from gs import cli, feature
 import test_check
 

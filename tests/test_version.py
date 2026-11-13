@@ -11,6 +11,7 @@ from importlib import metadata
 from pathlib import Path
 from unittest import mock
 
+import support  # noqa: F401
 from gs import cli
 
 

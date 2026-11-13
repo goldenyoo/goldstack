@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import support  # noqa: F401
 from gs import config
 
 from gs.backlog import read_idea
