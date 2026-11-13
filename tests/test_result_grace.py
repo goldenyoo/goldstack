@@ -194,6 +194,7 @@ class ResultGraceGoTest(support.GoTest):
         """성공 result 뒤 로그가 자랄 때마다 시계가 다시 시작한다. 자라는 사이 시계는 0.75*유예씩만 올라 합이 유예를 넘어도 정리하지 않고,
         다 자란 뒤(`grew`) 침묵이 유예를 넘으면 정리한다. 시계 재시작이 없으면 둘째 증가 뒤에 정리돼 `grew`가 생기지 않는다."""
         grew = self.bin / "grew"
+        pid_file = self.bin / "child.pid"
         state_ = {"steps": 0, "size": -1}
 
         def drive(orig, offset):
@@ -207,7 +208,7 @@ class ResultGraceGoTest(support.GoTest):
                     offset[0] += 0.75 * DRIVEN
                     state_["steps"] += 1
                     (self.bin / f"step{state_['steps']}").touch()
-                elif grew.exists():
+                elif grew.exists() and pid_file.exists() and pid_file.read_text().strip():  # 자식이 뜨고 pid가 기록된 뒤에 올린다
                     offset[0] += 2 * DRIVEN
                 return cleaned
             return wrapper
