@@ -90,6 +90,14 @@ class OutsideTouchesTest(unittest.TestCase):
         rec, prompt = self.run_review(["src/*.py", "old.py"])
         self.assertEqual(rec["touches_outside"], ["src/deep/c.py"])
 
+    def test_unnormalized_touches_do_not_flag_declared_paths(self):
+        # check._touches_overlap처럼 `./`·`//`·끝 `/`가 있어도 같은 경로로 본다(tests/test_touches.py)
+        rec, prompt = self.run_review(["./src//a.py", "src/b.py", "src/deep/**", "old.py"])
+        self.assertNotIn(review.OUTSIDE_TITLE, prompt)
+        self.assertNotIn("touches_outside", rec)
+        rec, _ = self.run_review(["./src/a.py", "src//b.py", "./src/deep//", "./old.py"])
+        self.assertNotIn("touches_outside", rec)
+
     def test_no_touches_means_no_section_and_unchanged_prompt(self):
         for touches in (None, []):
             with self.subTest(touches=touches):
@@ -121,6 +129,11 @@ class PromptTest(unittest.TestCase):
         self.assertFalse(review.in_touches("docs2/guide.md", ["docs"]))
         self.assertFalse(review.in_touches("src/x/a.py", ["src/*.py"]))
         self.assertFalse(review.in_touches("src/b.py", ["src/a.py"]))
+        self.assertTrue(review.in_touches("src/a.py", ["./src/a.py"]))
+        self.assertTrue(review.in_touches("src/a.py", ["src//a.py"]))
+        self.assertTrue(review.in_touches("src/a.py", ["./src//*.py"]))
+        self.assertTrue(review.in_touches("docs/guide.md", ["./docs//"]))
+        self.assertFalse(review.in_touches("src/b.py", ["./src/a.py"]))
 
 
 class ReportLineTest(unittest.TestCase):

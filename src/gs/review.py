@@ -110,7 +110,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, TypeVar
 
 from . import adapters, config, git, metrics, setup, state, streamfmt, transient, verify, worker
@@ -817,7 +817,8 @@ def _observation_lines(found: list[str] | None, *, rereview: bool = False) -> tu
 
 def in_touches(path: str, touches: list[str]) -> bool:
     """레포 루트 기준 경로가 touches 항목 하나에라도 맞나. 항목은 glob(setup.matches: `*`는 `/`를 넘지 않는다), 정확한 경로, 디렉터리(`docs/`)다."""
-    return setup.matches(touches, path) or any(path.startswith(t.rstrip("/") + "/") for t in touches if t.rstrip("/"))
+    norm = [PurePosixPath(t).as_posix() for t in touches]  # check._touches_overlap처럼 `./`·`//`·끝 `/`를 정리한다
+    return setup.matches(norm, path) or any(path.startswith(t + "/") for t in norm if t != ".")
 
 
 def outside_touches(repo: Path, base: str, branch: str, touches: list[str] | None) -> list[str]:
