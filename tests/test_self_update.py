@@ -9,6 +9,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from unittest import mock
 
+import support  # noqa: F401
 from gs import cli, selfupdate
 
 

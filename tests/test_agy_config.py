@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import support  # noqa: F401
 from gs import cli, config, feature
 import test_check
 import test_config
