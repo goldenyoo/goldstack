@@ -2,9 +2,9 @@
 date: "2026-11-13"
 severity: "medium"
 source: "/retro goldstack-v36"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v39"
 ---
 동작을 바꾸는 티켓의 touches에 그 동작과 충돌하는 기존 시험 파일이 빠진다. worker가 충돌을 알려도 수정 루프를 끝까지 돌아 시간이 샌다.
 

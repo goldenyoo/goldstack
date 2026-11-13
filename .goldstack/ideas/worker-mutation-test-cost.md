@@ -2,9 +2,9 @@
 date: "2026-11-13"
 severity: "medium"
 source: "/retro goldstack-v37"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v39"
 ---
 worker가 brief의 변이 지시("되돌려 실패를 본다")를 넓은 시험 묶음으로 돌려 시간을 쓰고, `.pyc` 재사용으로 거짓 통과까지 봤다.
 

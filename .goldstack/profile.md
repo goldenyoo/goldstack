@@ -1,5 +1,5 @@
 # goldstack profile
-갱신: 2026-11-13 (goldstack-v36 grill. macOS·zsh와 codex sandbox 메모). 2026-11-12 (goldstack-v33. CI 절). 2026-11-05 (goldstack-v11 grill. 줄 수·시험 수처럼 환경에서 찾을 수 있는 값은 지웠다)
+갱신: 2026-11-13 (goldstack-v39 grill. 변이 확인 명령). 2026-11-13 (goldstack-v36 grill. macOS·zsh와 codex sandbox 메모). 2026-11-12 (goldstack-v33. CI 절). 2026-11-05 (goldstack-v11 grill. 줄 수·시험 수처럼 환경에서 찾을 수 있는 값은 지웠다)
 
 ## 구조
 - `src/gs/`: `gs` CLI(Python, 외부 의존성 없음). 큰 파일은 `go.py`(코디네이터), `finish.py`(마무리·병합·재개), `feedback.py`(결함 수집·전송), `hook.py`(worker 차단), `review.py`, `adapters.py`(claude·codex·agy 실행). 모듈 표는 `docs/internals.md`.
@@ -20,6 +20,7 @@
 - sandbox(codex worker)에서 쓸 한 파일 시험: `.venv/bin/python -m unittest discover -s tests -p test_x.py`. `.venv`는 worktree setup(`uv sync --locked`)이 sandbox 전에 만든다. `uv run`은 `~/.cache/uv` 쓰기 차단으로 sandbox에서 실패한다.
 - 그 밖의 검증: `claude plugin validate .`, `uv build -q -o "$(mktemp -d)"`(레포 안에 `dist/`를 만들면 verify가 "worktree 바뀜"으로 실패한다).
 - `verify_ticket`은 쓰지 않는다. 코드 티켓은 전체 검증을 쓴다.
+- 고친 코드를 잠깐 되돌려 새 시험의 실패를 볼 때(변이 확인): `PYTHONPYCACHEPREFIX="$(mktemp -d)" .venv/bin/python -m unittest discover -s tests -p test_x.py -k <시험 이름>`. 옛 `.pyc`를 재사용해 거짓 통과를 본 일이 있다(goldstack-v37 01). `PYTHONDONTWRITEBYTECODE=1`은 쓰기만 막고 옛 `.pyc`를 그대로 읽는다(2026-11-13 확인). 시험 파일 하나만 돌린다.
 - macOS·zsh에서 돌면(맥미니·맥북) GNU 도구를 가정하지 않는다: `timeout` 없음, `sed -i`는 BSD라 `perl -pi -e`를 쓴다. 명령 출력 목록을 돌 때는 `for f in $(…)` 대신 `… | while read -r f`(zsh는 단어를 나누지 않는다). 여러 시험 파일은 `xargs -n 1`로(macOS `xargs -I`는 긴 명령 줄을 거부한다). 빈 글로브는 zsh에서 오류다. 리눅스 pod에서는 해당 없음(goldstack-v35 회고).
 - codex worker(sandbox 안): `gs check`가 샌드박스 탐지로 실패하면 `GS_SANDBOX_PROBE=pass gs check …`로 돌린다. 매 호출 첫 줄의 `failed to parse plugin hooks config … unknown field \`modules\``와 커밋 때의 `Unable to create '…/packed-refs.lock'`는 무시해도 된다(커밋은 된다. `git rev-parse`로 다시 확인할 필요 없다). 없는 `AGENTS.md`를 상위 디렉터리에서 찾지 않는다(goldstack-v33–v35 회고).
 
