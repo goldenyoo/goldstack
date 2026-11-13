@@ -25,7 +25,7 @@ v35는 현장 보고 넷(#59·#60/#63/#66·#61·#65)과 회고 아이디어를 �
   - 03: `gs child`가 `os.execvpe`로 띄우면서 Python이 무시해 둔 SIGPIPE 설정이 자식에게 넘어간다. 셸 파이프라인으로 된 측정 하네스는 사람이 셸에서 띄울 때와 다르게 돈다.
   - 07: `tests/test_chain.py`에 쓰이지 않는 `import os`가 남았다.
 
-마무리: preparing · 병합 전 · 남은 high 3(보고만 3)
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/67 병합 · main 검증 통과 · 남은 high 3(보고만 3)
 리뷰 지적: 수정됨 16 · 보고만 8
 
 ## Evidence
@@ -125,10 +125,17 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 612.0 |
+| total | 659.0 |
 | verify | 580.159 |
 | summary | 31.552 |
-| report | 0 |
+| report | 0.138 |
+| push | 2.24 |
+| publish | 4.059 |
+| checks | 24.494 |
+| merge-pr | 3.701 |
+| confirm-merge | 0.012 |
+| postmerge | 1.253 |
+| restore-reverts | 0.092 |
 
 ### 티켓별 결과
 
@@ -457,20 +464,45 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v35/run/integration/1/setup.log`
 
+#### finish/setup.log
+
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v35/run/finish/setup.log`
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v35/run/finish/integration-final-verify.log`
+
 - integration: 통과 · 종료 코드 0 · 580.1초 · 로그 /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v35/run/finish/integration-verify.log
+
+#### finish/main-verify.log
+
+전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v35/run/finish/main-verify.log`
 
 
 agy 사용: 5/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/67
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `06baa343af4b0286c25b1b77e64c0a4e2716e087`
+
+### issue
+
+- #59 닫음: `06baa343af4b0286c25b1b77e64c0a4e2716e087`에 반영
+- #60 닫음: `06baa343af4b0286c25b1b77e64c0a4e2716e087`에 반영
+- #61 닫음: `06baa343af4b0286c25b1b77e64c0a4e2716e087`에 반영
+- #63 닫음: `06baa343af4b0286c25b1b77e64c0a4e2716e087`에 반영
+- #65 닫음: `06baa343af4b0286c25b1b77e64c0a4e2716e087`에 반영
+- #66 닫음: `06baa343af4b0286c25b1b77e64c0a4e2716e087`에 반영
 
 ### 되돌리는 법
 
@@ -480,9 +512,6 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
-# report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
-#   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v35/report.md && git -C "$dir" revert --continue --no-edit
-git -C "$dir" push origin HEAD:refs/heads/main
-git worktree remove "$dir"
-```
+git -C "$dir" rever
+
+…(보고서가 길어 잘랐다. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v35/run`)
