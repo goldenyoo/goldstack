@@ -324,7 +324,7 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 | `timeouts.network_wait_minutes` | `60` | 끊김 하나의 대기 합계(분), codex `Reconnecting`을 참는 시간. 넘기면 [`중단(네트워크)`](#네트워크가-끊겼을-때). 시간 초과까지 쓴 호출 시간은 합계에 들지 않는다 |
 | `timeouts.checks_minutes` | `60` | PR 하나의 CI 대기 한 번(`gs go`마다 새로 잰다). `git.wait_checks`일 때만 |
 | `timeouts.checks_grace_seconds` | `60` | CI 대기에서 검사가 하나도 안 보일 때 등록을 기다리는 시간. 지나면 검사 없음으로 보고 병합을 시도한다. `0`이면 기다리지 않는다. 필수 검사 이름을 읽었으면 쓰지 않는다. `git.wait_checks`일 때만 |
-| `timeouts.result_grace_seconds` | `60` | worker가 성공 끝 이벤트(claude `result`의 `is_error: false`, codex `turn.completed`)를 낸 뒤에도 남은 자식 때문에 끝나지 않을 때 정리하기 전에 기다리는 시간. 지나면 [정리하고 끝난 것으로 본다](#성공-result-뒤-끝나지-않는-worker). `0`이면 끈다(유휴 시간 초과를 기다린다) |
+| `timeouts.result_grace_seconds` | `60` | worker가 성공 끝 이벤트(claude `result`의 `is_error: false`, codex `turn.completed`)를 낸 뒤에도 남은 자식 때문에 끝나지 않을 때 정리하기 전에 기다리는 시간. 지나면 [정리하고 끝난 것으로 본다](#성공-result-뒤-끝나지-않는-worker). 그 사이 로그가 자라거나 브랜치 커밋이 바뀌면 시계가 다시 시작하고, 배경 작업이 남아 있으면 쓰지 않는다. `0`이면 끈다(유휴 시간 초과를 기다린다) |
 | `timeouts.setup_minutes` | `15` | `worktree.setup` 한 번 |
 | `notify.telegram` | `false` | `gs go`가 끝날 때 한 통, `gs check`(값이 비면 경고) |
 | `goldstack.requires` | 없음(검사 안 함) | `gs check`·`gs go`: 설치한 gs가 이 최소 버전(`">=0.1"`)보다 낮으면 오류로 거부하고 `gs self-update`를 안내한다. 형식이 틀리면 config 오류 |
@@ -623,6 +623,7 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 2. **재리뷰** — 지적을 낸 리뷰어가 수정 커밋의 diff만 다시 본다: 지적마다 고쳐졌는가(근거와 함께), 수정이 새로 만든 문제가 있는가. `second_reviewer`까지 둘 다 지적했으면 동시에 각자 자기 지적을, 한쪽만 냈으면 그쪽만 본다. 한 번의 상한은 `timeouts.rereview_minutes`(기본 10분)다.
 3. **2차 수정** — 아직 안 고쳐진 지적이 있거나, 새 문제 중 판단 모델이 `fix`로 본 것이 있으면 한 번 더 고친다. 둘 다 없으면 바로 5로 간다.
 4. **2차 재리뷰** — 2차 수정이 받은 지적과 함께, 앞서 `수정됨`이던 지적도 최종 커밋에서 다시 확인한다(그 지적을 낸 리뷰어도 부른다). 2차 수정이 1차 수정을 되돌렸으면 그 지적은 `미해결`이 되고, 최종 커밋을 보지 못하면 `확인 못 함`이 된다. 2차 수정이 없던 티켓은 이 재확인이 없고 호출 수도 그대로다. 여기서 나온 새 문제는 고치지 않고 `보고만`으로 남긴다.
+   **마지막 재리뷰의 high는 병합하지 않는다(v36)** — 2차 재리뷰(또는 [수리](#검증-실패-수리) 재리뷰)에서 리뷰어 하나라도 새 high 지적을 내거나, 2차 재리뷰가 앞서 high였던 지적을 `미해결`로 판정하면 그 티켓은 병합되지 않고 티켓 실패(`남은 high: <파일:줄> <지적 요약>`, 여럿이면 `외 n개`, 미해결이면 끝에 ` (미해결)`)가 된다. 첫 실패면 등급을 올려 재시도하고 두 번째면 실패다. `확인 못 함`은 세지 않는다. 첫 리뷰에서 `report`·`defer`로 갈린 high와 medium·low는 그대로 보고만 한다.
 5. **병합** — 더 고치지 않는다(수정은 티켓당 최대 2회). 최신 integration을 합쳐 티켓 검증을 통과하면 남은 지적이 있어도 병합한다.
 
 수정 worker가 실패하면(종료 코드, 멈춤, 커밋 없음) 그 수정만 버리고 재리뷰를 건너뛰어 병합·검증으로 간다. 2차 수정이 실패해도 1차 수정은 남는다. 어느 경우든 티켓 실패로 세지 않는다.
@@ -646,7 +647,7 @@ worker가 고치지 않고 남긴 것이 있으면 마지막 메시지 끝에 `#
 관찰은 worker가 쓴 글이라 확인되지 않은 자료다. 표의 판정이 `수용`이어도 사람이 한 번 읽는다.
 
 ### 성공 result 뒤 끝나지 않는 worker
-worker가 성공 끝 이벤트를 냈는데 남긴 자식 프로세스(`setsid nohup … &` 같은 것) 때문에 worker 프로세스가 끝나지 않으면, 예전에는 `idle_minutes`(기본 20분) 동안 출력·커밋이 없다는 시간 초과로 재시도했다. 지금은 성공 끝 이벤트를 처음 본 뒤 `[timeouts] result_grace_seconds`(기본 60초)가 지나면 프로세스 그룹을 정리하고 끝난 것(종료 코드 0)으로 보고 리뷰로 넘긴다. 출력에 `[04] result 뒤 60초 지나도 끝나지 않아 정리: 남은 프로세스 N개`가 나오고, 정리 때 남아 있던 프로세스 목록은 그 시도의 실행 디렉터리 `leftover-procs.txt`에 남는다. 실패 끝 이벤트(`is_error: true`)는 이 유예를 쓰지 않는다. `0`이면 끈다.
+worker가 성공 끝 이벤트를 냈는데 남긴 자식 프로세스(`setsid nohup … &` 같은 것) 때문에 worker 프로세스가 끝나지 않으면, 예전에는 `idle_minutes`(기본 20분) 동안 출력·커밋이 없다는 시간 초과로 재시도했다. 지금은 성공 끝 이벤트를 본 뒤 `[timeouts] result_grace_seconds`(기본 60초) 동안 로그도 브랜치 커밋도 그대로면 프로세스 그룹을 정리하고 끝난 것(종료 코드 0)으로 보고 리뷰로 넘긴다. 출력에 `[04] result 뒤 60초 지나도 끝나지 않아 정리: 남은 프로세스 N개`가 나오고, 정리 때 남아 있던 프로세스 목록은 그 시도의 실행 디렉터리 `leftover-procs.txt`에 남는다. 실패 끝 이벤트(`is_error: true`)는 이 유예를 쓰지 않는다. 그 끝 이벤트 시점에 배경 작업(claude `background_tasks_changed`의 `tasks`)이 남아 있으면 그 worker는 작업 알림에 다시 깨어나므로 유예 정리를 하지 않고 `idle_minutes`만 본다. 작업이 끝나 빈 목록이 되고 성공 끝 이벤트가 다시 나오면 그때부터 잰다. 유예 중에 로그가 자라거나 브랜치 커밋이 바뀌면 유예 시계가 다시 시작한다(활동이 있는 worker는 정리하지 않는다). `0`이면 끈다.
 
 리뷰어·판단 모델 호출이 끊기거나 시간을 넘기면 실패가 아니다: 기다렸다 다시 부르고, 상한을 넘기면 [`중단(네트워크)`](#네트워크가-끊겼을-때)로 멈춘다. 끊겼다는 이유로 리뷰 없이 병합하지 않는다.
 
@@ -742,7 +743,7 @@ setopt noequals
 
 ### worker가 띄우는 중첩 세션(`gs child`)과 `GS_ROLE`
 worker가 측정을 하려고 `claude -p`를 자식으로 띄울 때가 있다. 사람이 셸에서 띄운 세션과 같은 조건으로 재려면 Claude Code가 Bash 자식에 넣어 주는 세션 변수가 없어야 한다. 그렇다고 `env -u GS_ROLE claude -p …`로 `GS_ROLE`을 지우면 자식에게는 worker 차단 hook이 판정하지 않으므로(`claude -p "git push"`가 통과한다) 막힌다.
-- **`gs child -- <명령> [인자…]`** — Claude Code 세션 변수(`CLAUDECODE`, `CLAUDE_EFFORT`, `CLAUDE_PID`, `CLAUDE_CODE_ENTRYPOINT`·`_EXECPATH`·`_SESSION_ID`·`_CHILD_SESSION`·`_SESSION_ATTENDED`·`_MESSAGING_SOCKET`·`_MESSAGING_TOKEN`)만 지우고 그 명령으로 프로세스를 바꾼다. 접두어가 아니라 이 목록이라 인증 변수는 지우지 않고, `GS_*`는 남아 자식에도 hook이 판정한다. 모델·effort는 플래그로 고정한다: `gs child -- claude -p --model <모델> --effort <effort> "…"`. worker brief가 이 형태를 안내한다. 레포 밖에서도 돈다.
+- **`gs child -- <명령> [인자…]`** — Claude Code 세션 변수(`CLAUDECODE`, `CLAUDE_EFFORT`, `CLAUDE_PID`, `CLAUDE_CODE_ENTRYPOINT`·`_EXECPATH`·`_SESSION_ID`·`_CHILD_SESSION`·`_SESSION_ATTENDED`·`_MESSAGING_SOCKET`·`_MESSAGING_TOKEN`)만 지우고 그 명령으로 프로세스를 바꾼다. 접두어가 아니라 이 목록이라 인증 변수는 지우지 않고, `GS_*`는 남아 자식에도 hook이 판정한다. 모델·effort는 플래그로 고정한다: `gs child -- claude -p --model <모델> --effort <effort> "…"`. worker brief가 이 형태를 안내한다. 레포 밖에서도 돈다. **`gs child`는 명령 맨 앞에 한 번만 쓴다.** `env`·`setsid`·`timeout`·`exec`·`xargs`·대입 같은 앞붙이는 `gs child --` 뒤에 둔다(`gs child -- timeout 600 claude -p …`). 앞붙이 뒤의 `gs child`와 `gs child -- gs child …`는 hook이 막는다. 안쪽 명령(`--` 뒤)은 새 명령으로 처음부터 판정한다. 셸 중첩이 hook의 재귀 한도를 넘게 깊으면 통과시키지 않고 막으니("셸 중첩이 깊어 판정할 수 없다") 펼쳐서 쓴다.
 - **worker는 `GS_ROLE`을 못 바꾼다** — worker hook이 Bash 명령에서 `GS_ROLE`을 지우거나 worker가 아닌 값으로 바꾸는 형태(`env -u GS_ROLE`, `env -i`, `unset GS_ROLE`, `export GS_ROLE=…`, `GS_ROLE=… <명령>`)를 막는다. 차단 메시지가 "중첩 세션은 `gs child -- …`로 띄운다"를 안내한다. `echo $GS_ROLE`, `env | grep GS_`, `GS_ROLE=worker …`는 통과한다. 알려진 오차단: `echo ';' unset GS_ROLE`처럼 따옴표 속 `;`를 명령 구분으로 읽는 경우.
 
 ### worker의 전체 시험을 막기(`[hook.worker_tests]`)
