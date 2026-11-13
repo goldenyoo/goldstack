@@ -173,6 +173,9 @@ class ResultWatch:
     """worker 로그를 이어 읽어 마지막 끝 이벤트(end_of)를 기억한다. go._wait_any의 유예 정리가 쓴다.
 
     로그는 몇 MB일 수 있어 지난번 뒤로 쓴 다 쓴 줄만 읽는다. 아직 다 쓰지 않은 끝 줄은 다음에 읽는다.
+    마지막 끝 이벤트를 읽은 시점의 배경 작업 수(`tasks`)도 기억한다: claude는 배경 작업을 기다리려고 턴을 끝내고(성공 `result`)
+    작업 알림이 오면 다시 깨어난다. 직전 `system background_tasks_changed`의 `tasks` 목록 길이이며 그 이벤트가 없으면 0이다.
+    codex 로그에는 그 이벤트가 없어 늘 0이다.
     """
 
     def __init__(self, log: Path):
@@ -180,6 +183,8 @@ class ResultWatch:
         self.offset = 0
         self.last: dict | None = None  # 마지막 끝 이벤트
         self.ok = False  # 그 이벤트가 성공이다
+        self.tasks = 0  # 마지막 끝 이벤트를 읽은 때의 배경 작업 수
+        self._running = 0  # 지금까지 읽은 마지막 background_tasks_changed의 작업 수
 
     def success_end(self) -> dict | None:
         """로그의 마지막 끝 이벤트가 성공이면 그 이벤트. 끝 이벤트가 없거나(계열이 끝을 알리지 않는 agy 포함) 마지막 것이 실패면 None.
@@ -199,9 +204,15 @@ class ResultWatch:
                 ev = json.loads(line)
             except ValueError:
                 continue
-            ok = end_of(ev) if isinstance(ev, dict) else None
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("type") == "system" and ev.get("subtype") == "background_tasks_changed":
+                tasks = ev.get("tasks")
+                self._running = len(tasks) if isinstance(tasks, list) else 0
+                continue
+            ok = end_of(ev)
             if ok is not None:
-                self.last, self.ok = ev, ok
+                self.last, self.ok, self.tasks = ev, ok, self._running
         return self.last if self.ok else None
 
 

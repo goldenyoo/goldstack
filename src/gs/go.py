@@ -50,8 +50,9 @@ worker를 띄우기 전에 push 설정을 state에 기록한다(_begin). 재개�
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
 worker가 성공 끝 이벤트(claude `result`의 `is_error: false`, codex `turn.completed`)를 낸 뒤에도 남은 자식 때문에 끝나지 않으면 유휴 시간 초과(`idle_minutes`)를
-기다리지 않는다: 처음 본 뒤 config `[timeouts] result_grace_seconds`(기본 60, 0이면 끔)가 지나면 남은 프로세스를 실행 디렉터리의 `leftover-procs.txt`에 쓰고
-정리한 뒤 종료 코드 0으로 끝난 것처럼 어댑터 판정 → 리뷰로 넘긴다(_wait_any, 실행기와 상관없이 같다). 측정의 종료 시각은 정리한 때다.
+기다리지 않는다: 처음 본 뒤 config `[timeouts] result_grace_seconds`(기본 60, 0이면 끔) 동안 로그가 자라지도 브랜치 커밋이 바뀌지도 않으면(유예 시계는 그때마다 다시 시작한다)
+남은 프로세스를 실행 디렉터리의 `leftover-procs.txt`에 쓰고 정리한 뒤 종료 코드 0으로 끝난 것처럼 어댑터 판정 → 리뷰로 넘긴다(_wait_any, 실행기와 상관없이 같다). 측정의 종료 시각은 정리한 때다.
+마지막 끝 이벤트 때 claude `background_tasks_changed`의 배경 작업이 남아 있으면 그 worker는 작업 알림에 다시 깨어나므로 유예를 쓰지 않는다(`idle_minutes`만 본다).
 
 worker는 config 등급표와 티켓 tier(기본 medium)로 모델·effort를 고른다. 첫 실패 뒤에는 한 단계 올리고 수정 worker도 그 등급을 쓴다.
 worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 않고 등급도 올리지 않는다. 간격을 늘려 기다렸다가 같은 worktree·브랜치에서 새 시도
@@ -776,7 +777,7 @@ class Active:
     # catch-up이 합친 커밋으로 옮겨 간다(_merge_stage). 재개 표시에 남는다(network_resume의 target). 비어 있으면 옛 state라 대조할 것이 없다
     target: str = ""
     ends: streamfmt.ResultWatch | None = None  # 로그의 끝 이벤트를 이어 읽는다(result_seconds). 처음 볼 때 만든다
-    result_at: float | None = None  # 성공 끝 이벤트를 처음 본 시각(time.monotonic). 로그가 더 자라도 옮기지 않는다. 마지막 끝 이벤트가 실패면 None
+    result_at: float | None = None  # 성공 끝 이벤트를 처음 본 시각(time.monotonic). 시계는 이것과 last_activity 중 늦은 때부터다. 마지막 끝 이벤트가 실패이거나 배경 작업이 있으면 None
 
     def quiet_seconds(self) -> float:
         """일시 오류 없이 돈 시간. 시작 이후 마지막 Reconnecting부터 잰다. Reconnecting 뒤 다른 이벤트가 아직 없으면 0이다."""
@@ -791,19 +792,21 @@ class Active:
         return time.monotonic() - max(self.started, self.watch.last or 0.0)
 
     def result_seconds(self) -> float | None:
-        """로그의 마지막 끝 이벤트가 성공이면 그 이벤트를 처음 본 뒤 지난 초, 아니면 None(_wait_any의 유예 정리).
+        """로그의 마지막 끝 이벤트가 성공이고 그 시점의 배경 작업이 없으면 지난 초, 아니면 None(_wait_any의 유예 정리).
 
-        시계는 처음 본 때부터다: 그 뒤 로그가 자라도(성공 끝 이벤트가 또 나와도) 다시 시작하지 않는다.
-        마지막 끝 이벤트가 실패가 되면 시계를 지운다. 그 뒤 성공 끝 이벤트가 다시 나오면 그것을 처음 본 때부터 잰다.
+        시계는 성공 끝 이벤트를 처음 본 때와 마지막 활동(idle이 읽는 로그 증가·브랜치 커밋 변경) 중 늦은 때부터 잰다:
+        유예 중 로그가 자라거나 커밋이 바뀌면 다시 시작한다. 그래서 _wait_any는 이것을 부르기 전에 idle을 먼저 부른다.
+        마지막 끝 이벤트가 실패이거나 그 시점의 배경 작업(background_tasks_changed의 tasks)이 있으면 시계를 지우고 None이다(idle 시간 초과만 본다).
+        배경 작업이 비고 성공 끝 이벤트가 다시 나오면 그것을 처음 본 때부터 잰다.
         """
         if self.ends is None:
             self.ends = streamfmt.ResultWatch(self.proc.job.log)
-        if self.ends.success_end() is None:
+        if self.ends.success_end() is None or self.ends.tasks > 0:
             self.result_at = None
             return None
         if self.result_at is None:
             self.result_at = time.monotonic()
-        return time.monotonic() - self.result_at
+        return time.monotonic() - max(self.result_at, self.last_activity)
 
     def idle(self, repo: Path) -> float:
         """로그 출력 또는 브랜치 커밋이 바뀌면 유휴 시계를 다시 시작한다."""
@@ -1380,9 +1383,10 @@ def _wait_any(r: Run, active: dict[str, Active], runner, *, once: bool = False) 
     once면 한 번만 보고 끝난 worker가 없으면 None이다(끊김·리뷰 중: 루프가 대기 시계와 리뷰 호출의 끝을 본다).
     codex worker가 Reconnecting만 상한 넘게 이어 가면 NetworkAbort를 올린다.
     유예 정리(issue #65): 아직 도는 worker의 로그에 성공 끝 이벤트(streamfmt.end_of: claude `result`의 `is_error: false`, codex `turn.completed`)가 있고
-    처음 본 뒤 `timeouts.result_grace_seconds`(_result_grace, 0이면 끔)가 지났으면 남은 자식 때문에 끝나지 않는 것으로 본다.
-    남은 프로세스를 실행 디렉터리의 `leftover-procs.txt`에 쓰고 끝낸 뒤 종료 코드 0으로 끝난 것처럼 돌려준다(worker.Proc.end_after_result).
-    그다음은 다른 끝난 worker와 같다(_finish: 어댑터 판정 → 리뷰). 성공 끝 이벤트가 없거나 마지막 끝 이벤트가 실패면 유휴 시간 초과만 본다.
+    그 뒤 `timeouts.result_grace_seconds`(_result_grace, 0이면 끔) 동안 로그가 자라지도 브랜치 커밋이 바뀌지도 않았으면 남은 자식 때문에 끝나지 않는 것으로 본다
+    (활동은 정리 판정 전에 idle이 읽는다). 남은 프로세스를 실행 디렉터리의 `leftover-procs.txt`에 쓰고 끝낸 뒤 종료 코드 0으로 끝난 것처럼 돌려준다(worker.Proc.end_after_result).
+    그다음은 다른 끝난 worker와 같다(_finish: 어댑터 판정 → 리뷰). 성공 끝 이벤트가 없거나 마지막 끝 이벤트가 실패이거나
+    그 시점에 배경 작업(claude `background_tasks_changed`의 tasks)이 있으면 유휴 시간 초과만 본다: 그 worker는 작업 알림에 다시 깨어난다.
     """
     while True:
         result = timed_out = None
@@ -1390,9 +1394,10 @@ def _wait_any(r: Run, active: dict[str, Active], runner, *, once: bool = False) 
             if tid in active:
                 try:
                     code = active[tid].proc.poll()
+                    idle = active[tid].idle(r.repo) if code is None else 0.0  # 활동을 먼저 읽는다: 유예 시계가 그 신호로 다시 시작한다
                     if code is None and _overdue_result(r, tid, active[tid]):
                         code = active[tid].proc.poll()
-                    if code is None and active[tid].idle(r.repo) >= _idle_seconds(r):
+                    if code is None and idle >= _idle_seconds(r):
                         timed_out = timed_out or (
                             tid, None, f"시간 초과: {r.feat.spec.idle_minutes}분 동안 로그 출력·새 커밋 없음")
                     watch = active[tid].watch
