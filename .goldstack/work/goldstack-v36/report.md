@@ -30,7 +30,7 @@ goldstack-v36은 v35 회고에서 나온 high 결함 세 가지를 고친다. �
   - 0.2.20 설치본에서 spec §6의 우회 명령이 모두 막히는지
   - v37에서 `result_grace_seconds = 0`을 지운 뒤, `result`를 두 번 낸 worker가 정리되지 않는지
 
-마무리: preparing · 병합 전 · 남은 high 8(재현된 미수리 8)
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/68 병합 · main 검증 통과 · 남은 high 8(재현된 미수리 8)
 리뷰 지적: 수정됨 16 · 보고만 13 · 재현된 미수리 8
 - flaky: 03 티켓 검증 test_verify (따로 돌려 통과, 전체 다시 통과)
 
@@ -152,10 +152,17 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 645.0 |
+| total | 684.0 |
 | verify | 601.144 |
 | summary | 43.716 |
-| report | 0 |
+| report | 1.243 |
+| push | 2.088 |
+| publish | 3.731 |
+| checks | 24.669 |
+| merge-pr | 3.419 |
+| confirm-merge | 0.013 |
+| postmerge | 1.245 |
+| restore-reverts | 0.095 |
 
 ### 티켓별 결과
 
@@ -342,14 +349,6 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 ```text
 [
-  "새 high·미해결 high·unchecked 및 결과 저장 직후/ reviewed / REPAIR_VERIFY 재개 관련 선택 시험 7개 통과.",
-  "worker 보고와 실행 기록을 대조했으며, 실행하지 못한 단계의 사유를 허위로 설명한 근거는 발견하지 못함.",
-  "전체 시험은 실행하지 않았고, 구현 worktree의 git status --short는 변경 없음."
-]
-```
-
-- 03 리뷰(codex) 재리뷰(1) checked(믿을 수 없는 자료):
-
-`
+  "새 high·미해결 high·unchecked 및 결과 저장 직후/ reviewed
 
 …(보고서가 길어 잘랐다. 전체 로그: `/Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v36/run`)
