@@ -250,6 +250,45 @@ class GsChildTest(unittest.TestCase):
         self.assertIsNone(self.verdict("env -- FOO.BAR=1 git status"))
         self.assertEqual(hook.strip_prefix(["env", "--", "a-b=1", "git", "push"]), ["git", "push"])
 
+    def test_dash_assignments_after_double_dash_are_still_prefix(self):
+        """`--` 뒤의 `-a=1`·`--a=1`도 env에게는 대입이다(`=`이 든 인자). 옵션으로 읽거나 명령으로 읽고 멈추지 않는다."""
+        for command in ("env -- -a=1 git push", "env -- --a=1 git push", "env -S '-- -a=1 git push'",
+                        "env -i -- GS_ROLE=worker -X=1 git push", "gs child -- env -i -- GS_ROLE=worker -X=1 git push"):
+            with self.subTest(command=command):
+                self.assertEqual(self.verdict(command), PUSH, command)
+        self.assertIn("`env -u GS_ROLE`", self.verdict("env -i -- GS_ROLE=worker -X=1 env -u GS_ROLE claude -p hi") or "")
+        self.assertIn("`env GS_ROLE=<값>`", self.verdict("env -- -=1 GS_ROLE=other claude -p hi") or "")
+        self.assertEqual(self.verdict("env -- -a=1 gs child -- git push"), hook.GS_CHILD_FRONT)
+        self.assertIsNone(self.verdict("env -i -- -a=1 GS_ROLE=worker claude -p hi"))  # `-a=1` 뒤의 `GS_ROLE=worker`도 읽는다
+        for command in ("env -- -i=1 claude -p hi", "env -- --unset=GS_ROLE claude -p hi"):  # 옵션이 아니라 대입이다
+            with self.subTest(command=command):
+                self.assertIsNone(self.verdict(command), command)
+        self.assertEqual(hook.strip_prefix(["env", "--", "-a=1", "git", "push"]), ["git", "push"])
+
+    def test_xargs_replace_string_in_a_word_only_env_sudo_shell_assign(self):
+        """`=`이 든 단어를 대입으로 읽는 것은 셸(맨 앞)·`env`·`sudo`뿐이다. 다른 앞붙이(`nohup`·`command`·`timeout`·`xargs`) 뒤에서는
+        명령 이름이라 치환 문자열이 값 자리에 있어도 막는다. 대입이라도 치환 문자열이 이름이나 `=`에 걸치면 단어가 통째로 바뀐다.
+        xargs 옵션 뒤의 단어(`--` 뒤, 숫자)는 xargs 옵션이 아니다."""
+        for command in ('printf "pkill\\n" | xargs -I "a-b=1" -- a-b=1 python', 'printf "git\\n" | xargs -I "a-b=1" -- a-b=1 push',
+                        "printf git | xargs -I 5 5 push",
+                        "printf x | xargs -I a=1 sh -c 'command -- a=1 echo ok'", "printf git | xargs -I a=1 sh -c 'command -- a=1 push'",
+                        "printf pkill | xargs -I a=1 sh -c 'command -- a=1 python'",
+                        "printf gs | xargs -I a=1 sh -c 'command -- a=1 child -- git push'",
+                        "printf git | xargs -I a=1 sh -c 'command a=1 push'", "printf git | xargs -I a=1 nohup a=1 push",
+                        "echo /../../../../usr/bin/git | xargs -I {} FOO={} push",
+                        "echo /../../../../usr/bin/git | xargs -I {} nohup FOO={} push",
+                        "echo /../../../../usr/bin/git | xargs -I {} timeout 5 FOO={} push",
+                        "echo /../../../../usr/bin/git | xargs -I {} sh -c 'command FOO={} push'",
+                        "printf 'git push #' | xargs -I a=1 sh -c 'a=1 echo ok'", "printf 'git push #' | xargs -I a=1 env a=1 echo ok",
+                        "printf 'git push #' | xargs -I a=1 sudo a=1 echo ok"):
+            with self.subTest(command=command):
+                self.assertIn("`xargs`의 치환 문자열이 앞붙이 단어", self.verdict(command) or "", command)
+        for command in ("echo f | xargs -I {} sudo FOO={} echo hi", "echo f | xargs -I {} sudo -- FOO={} echo hi",
+                        "echo f | xargs -I {} sh -c 'FOO={} echo hi'",
+                        "echo f | xargs -I {} nohup env FOO={} echo hi"):
+            with self.subTest(command=command):
+                self.assertIsNone(self.verdict(command), command)
+
     def test_xargs_replace_string_in_env_split_string(self):
         """xargs는 `env -S` 문자열을 env가 나누기 전에 바꾼다. 펼친 뒤의 대입 이름만 보면 `FOO=@`의 `@`를 놓친다."""
         for command in ('echo "a GS_ROLE=other" | xargs -I @ env -S "FOO=@" claude -p hi',
@@ -258,6 +297,11 @@ class GsChildTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIn("`xargs`의 치환 문자열이 앞붙이 단어 `FOO=@`", self.verdict(command) or "", command)
         self.assertIsNone(self.verdict("echo f | xargs -I {} env -S 'FOO=1' echo {}"))
+        # `env -S` 문자열은 그 앞의 xargs만 바꾼다. 문자열 안이나 뒤의 xargs 치환 문자열은 그 문자열에 닿지 않는다
+        self.assertIsNone(self.verdict('echo hi | env -S "xargs -I {}" echo {}'))
+        self.assertIsNone(self.verdict('echo hi | env -S "FOO={}" xargs -I {} echo {}'))
+        self.assertIn("`xargs`의 치환 문자열이 앞붙이 단어 `FOO=@`",
+                      self.verdict('echo "a git push" | env -S "xargs -I @" env -S "FOO=@"') or "")
 
     def test_env_split_string_that_env_reads_differently_is_blocked(self):
         """env -S는 `#`(주석), `\\_`(공백), `\\c`(끝), `${VAR}`를 셸과 다르게 푼다. 같게 풀지 못하면 판정하지 않고 막는다."""

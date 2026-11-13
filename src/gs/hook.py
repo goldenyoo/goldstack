@@ -1041,17 +1041,23 @@ def _xargs_fill(prefix: list[str]) -> tuple[str, ...]:
     return tuple(s for s in fill if s)
 
 
-def _xargs_subject(prefix: list[str]) -> list[str]:
-    """앞붙이 단어 중 xargs가 입력으로 바꿔 넣을 수 있는 것. `xargs`와 그 옵션·값(`-I @`)은 뺀다."""
-    words: list[str] = []
+def _xargs_subject(prefix: list[str]) -> list[int]:
+    """앞붙이 단어 중 xargs가 입력으로 바꿔 넣을 수 있는 것의 자리. `xargs`와 그 옵션·값(`-I @`)만 뺀다.
+    xargs 옵션 뒤의 단어는 `=`이 들었거나 숫자여도 xargs가 바꿔 넣는 명령 단어다(`xargs -I a-b=1 -- a-b=1 push`)."""
+    found: list[int] = []
     k = 0
     while k < len(prefix):
-        if _is_xargs(prefix[k]):
-            k = _role_wrapper_opts(prefix, k, "xargs")[1]
+        if not _is_xargs(prefix[k]):
+            found.append(k)
+            k += 1
             continue
-        words.append(prefix[k])
         k += 1
-    return words
+        while k < len(prefix) and prefix[k].startswith("-") and prefix[k] != "-":
+            if prefix[k] == "--":
+                k += 1
+                break
+            k += 2 if _xargs_takes_next(prefix[k]) else 1
+    return found
 
 
 def _xargs_filled(words: list[str], fill: tuple[str, ...]) -> list[str]:
@@ -1089,13 +1095,18 @@ def _wrapper_takes_next(base: str, word: str) -> bool:
     return False
 
 
-def _prefix_scan(words: list[str]) -> tuple[str | None, list[str], int, list[str]]:
+def _prefix_scan(words: list[str]) -> tuple[str | None, list[str], int, list[tuple[int, str]], set[int]]:
     """앞붙이(`!`·`{`, 대입, 앞붙이 명령과 그 옵션·값)를 지나 명령이 시작하는 자리를 찾는다.
-    (`GS_ROLE`을 바꾸는 첫 이유, `env -S` 문자열을 단어로 펼친 단어들, 명령 자리, 펼치기 전 `env -S` 문자열들). 이유가 있어도 끝까지 읽는다.
+    (`GS_ROLE`을 바꾸는 첫 이유, `env -S` 문자열을 단어로 펼친 단어들, 명령 자리, (펼친 자리, 펼치기 전 `env -S` 문자열)들,
+    셸·`env`·`sudo`가 대입으로 읽는 단어 자리들). 이유가 있어도 끝까지 읽는다.
+    앞붙이 명령 뒤의 `FOO=1`도 건너뛰지만(`nohup FOO=1 git push`) 그 명령에게는 명령 이름이라 대입 자리에 넣지 않는다
+    (`env`·`sudo`가 읽는 대입은 `_role_env`·`_role_wrapper_opts`가 넣는다).
     `strip_prefix`와 `check_role_strip`이 같은 판독을 쓴다(둘이 다르게 읽으면 한쪽이 명령 이름을 놓친다)."""
     words = list(words)
     reason = None
-    split: list[str] = []
+    split: list[tuple[int, str]] = []
+    assigns: set[int] = set()
+    wrapped = False  # 앞붙이 명령을 지났다. 그 뒤의 `FOO=1`은 대입 자리로 보지 않는다
     i = 0
     while i < len(words):
         word = words[i]
@@ -1107,22 +1118,28 @@ def _prefix_scan(words: list[str]) -> tuple[str | None, list[str], int, list[str
                 reason = reason or "같은 줄 대입 `GS_ROLE=<값> <명령>`이 `GS_ROLE`을 바꾼다"
             i += 1
         elif ANY_ASSIGN.match(word):
+            if not wrapped:
+                assigns.add(i)
             i += 1
         elif base == "env":
-            why, words, i, values = _role_env(words, i)
+            why, words, i, values, read = _role_env(words, i)
             reason = reason or why
             split += values
+            assigns.update(read)
+            wrapped = True
         elif base in WRAPPERS:
-            why, i = _role_wrapper_opts(words, i, base)
+            why, i, read = _role_wrapper_opts(words, i, base)
             reason = reason or why
+            assigns.update(read)
+            wrapped = True
         else:
             break
-    return reason, words, i, split
+    return reason, words, i, split, assigns
 
 
 def split_prefix(argv: list[str]) -> tuple[list[str], list[str]]:
     """(앞붙이 단어들, 명령과 인자). 둘을 이으면 `env -S`를 펼친 argv다. 원래 argv에서 길이로 자르지 않는다(`-S`가 길이를 바꾼다)."""
-    _, words, i, _ = _prefix_scan(argv)
+    _, words, i, _, _ = _prefix_scan(argv)
     return words[:i], words[i:]
 
 
@@ -1186,7 +1203,7 @@ def _role_assign_blocks(word: str) -> bool:
 
 def role_scan(words: list[str]) -> str | None:
     """막을 이유. 앞붙이·대입·`env` 옵션(`_prefix_scan`)과 그 뒤 명령 자리의 `unset`·`export` 들을 본다."""
-    reason, words, i, _ = _prefix_scan(words)
+    reason, words, i, _, _ = _prefix_scan(words)
     if reason or i >= len(words):
         return reason
     base = os.path.basename(words[i]).lstrip("\\")
@@ -1241,13 +1258,15 @@ def _env_split(value: str) -> list[str] | None:
         return None
 
 
-def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int, list[str]]:
-    """`words[i]`가 `env`다. (막을 이유, 단어들, `env` 옵션·대입 뒤 명령이 시작하는 자리, 펼친 `-S` 문자열들). 이유가 있어도 끝까지 읽는다.
+def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int, list[tuple[int, str]], list[int]]:
+    """`words[i]`가 `env`다. (막을 이유, 단어들, `env` 옵션·대입 뒤 명령이 시작하는 자리, (펼친 자리, 펼친 `-S` 문자열)들,
+    env가 대입으로 읽는 단어 자리들). 이유가 있어도 끝까지 읽는다.
     `-S` 문자열은 단어로 풀어 `words`에 끼워 넣으므로 단어들을 새로 돌려준다. 풀지 못하는 문자열(`_env_split`)은
     그 안의 명령을 판정할 수 없어 막는다(`ENV_SPLIT_UNREADABLE`). 그 옵션과 값을 건너뛰고 끝까지 읽는다."""
     words = list(words)
     reason = None
-    split: list[str] = []
+    split: list[tuple[int, str]] = []
+    assigns: list[int] = []
     j = i + 1
     cleared = False  # `-i`: 환경을 비운다
     kept = False  # `GS_ROLE=worker`를 다시 줬다
@@ -1260,9 +1279,7 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int, lis
         elif w == "--" and not ended:
             ended = True
             j += 1
-        elif ended and w.startswith("-"):
-            break
-        elif w.startswith("--"):
+        elif w.startswith("--") and not ended:
             _, eq, value = w.partition("=")
             span = 1 if eq else 2
             if _is_long(w, "--ignore-environment"):
@@ -1280,13 +1297,13 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int, lis
                     reason = reason or ENV_SPLIT_UNREADABLE
                     j += span
                 else:
-                    split.append(value)
+                    split.append((j, value))
                     words[j:j + span] = parts
             elif _is_long(w, "--chdir", "--argv0") and not eq:
                 j += 2
             else:
                 j += 1
-        elif w.startswith("-") and len(w) > 1:
+        elif w.startswith("-") and len(w) > 1 and not ended:
             k, consumed, expanded = 1, 1, False
             while k < len(w):
                 ch = w[k]
@@ -1303,7 +1320,7 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int, lis
                         if parts is None:
                             reason = reason or ENV_SPLIT_UNREADABLE
                         else:
-                            split.append(value)
+                            split.append((j, value))
                             words[j:j + consumed] = parts
                             expanded = True
                     break
@@ -1314,20 +1331,26 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int, lis
             if _role_assign_blocks(w):
                 reason = reason or "`env GS_ROLE=<값>`이 `GS_ROLE`을 바꾼다"
             kept = True
+            assigns.append(j)
             j += 1
-        elif "=" in w:  # `env`는 식별자가 아닌 이름(`FOO.BAR=1`)도 대입으로 받는다
+        elif "=" in w:  # `env`는 식별자가 아닌 이름(`FOO.BAR=1`)도 대입으로 받는다. `--` 뒤에는 `-a=1`도 대입이다
+            assigns.append(j)
             j += 1
         else:
             break
     if cleared and not kept:
         reason = reason or "`env -i`가 `GS_ROLE`을 포함해 환경을 비운다"
-    return reason, words, j, split
+    return reason, words, j, split, assigns
 
 
-def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None, int]:
-    """`words[i]`가 앞붙이(`sudo`·`timeout`·`setsid` …)다. (막을 이유, 그 옵션·값·대입을 지난 자리). 이유가 있어도 끝까지 읽는다.
-    값을 받는 옵션(`WRAPPER_VALUED`)의 값은 건너뛴다. `timeout`은 옵션 뒤의 첫 단어가 시간이다(`5`, `0.5`, `1m`, `$T`. `TIMEOUT_SLOT`)."""
+def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None, int, list[int]]:
+    """`words[i]`가 앞붙이(`sudo`·`timeout`·`setsid` …)다. (막을 이유, 그 옵션·값·대입을 지난 자리, 앞붙이가 대입으로 읽는 단어 자리들).
+    이유가 있어도 끝까지 읽는다. 값을 받는 옵션(`WRAPPER_VALUED`)의 값은 건너뛴다. `timeout`은 옵션 뒤의 첫 단어가 시간이다
+    (`5`, `0.5`, `1m`, `$T`. `TIMEOUT_SLOT`). `=`이 든 단어를 건너뛰어도 대입 자리로 보는 앞붙이는 `sudo`뿐이다.
+    다른 앞붙이(`nohup`·`command`·`xargs` …)에게 그 단어는 명령 이름이다. 셸 키워드 `time`은 대입으로 읽지만
+    `/usr/bin/time`과 구별하지 않고 명령 이름으로 본다(xargs 치환 문자열을 더 넓게 막는다)."""
     reason = None
+    assigns: list[int] = []
     ended = False  # `--` 뒤: 옵션은 끝났고 대입은 계속 받는다(`sudo -- FOO=1 git push`)
     i += 1
     while i < len(words):
@@ -1348,12 +1371,14 @@ def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None,
         elif base == "timeout":
             break
         elif "=" in w or re.fullmatch(r"\d+[smhd]?", w) or TIMEOUT_DURATION.fullmatch(w):
+            if base == "sudo" and "=" in w:
+                assigns.append(i)
             i += 1
         else:
             break
     if base == "timeout" and i < len(words) and TIMEOUT_SLOT.fullmatch(words[i]):
         i += 1
-    return reason, i
+    return reason, i, assigns
 
 
 def _xargs_in_name(word: str) -> str:
@@ -1394,7 +1419,7 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     reason = check_role_strip(argv)  # `strip_prefix` 전 argv로 본다. `strip_prefix`가 `GS_ROLE` 대입과 `env -i`를 지운다
     if reason:
         return reason
-    _, words, i, split = _prefix_scan(argv)
+    _, words, i, split, assigns = _prefix_scan(argv)
     prefix, rest = words[:i], words[i:]
     if gs_child_command(rest) is not None:  # 앞붙이 뒤의 `gs child`(`setsid gs child …`, `env -S 'gs child …'`)
         return GS_CHILD_FRONT
@@ -1404,15 +1429,22 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
 
     if _xargs_filled(rest[:1], seg.xargs_fill) == [XARGS_INPUT]:  # GNU xargs는 명령 이름도 바꾼다
         return _xargs_in_name(rest[0])
-    # 앞붙이 옵션의 값도 바꾼다(`xargs -I@ env -u @ claude`의 `@`가 `GS_ROLE`이 된다). 대입은 이름만 본다(`f={}`는 값만 바뀐다).
-    # `GS_ROLE=worker`는 값이 바뀌면 `worker`가 아니게 되니 단어 전체를 본다
-    for word in _xargs_subject(prefix):
-        target = word.partition("=")[0] if ANY_ASSIGN.match(word) and not ROLE_ASSIGN.fullmatch(word) else word
-        if _xargs_filled([target], seg.xargs_fill) == [XARGS_INPUT]:
+    # 앞붙이 옵션의 값도 바꾼다(`xargs -I@ env -u @ claude`의 `@`가 `GS_ROLE`이 된다). 셸·`env`·`sudo`가 읽는 대입은
+    # 값 안의 치환 문자열이면 값만 바뀐다(`f={}`). 이름이나 `=`에 걸치면(`-I a=1`의 `a=1`) 단어가 통째로 바뀐다.
+    # 다른 앞붙이 뒤의 `a=1`은 명령 이름이다(`command -- a=1 push`). `GS_ROLE=worker`는 값이 바뀌면 `worker`가 아니게 되니 단어 전체를 본다
+    for k in _xargs_subject(prefix):
+        word = prefix[k]
+        assign = ANY_ASSIGN.match(word) if k in assigns and not ROLE_ASSIGN.fullmatch(word) else None
+        if assign:
+            touched = any(0 <= word.find(s) < assign.end() for s in seg.xargs_fill)
+        else:
+            touched = _xargs_filled([word], seg.xargs_fill) == [XARGS_INPUT]
+        if touched:
             return _xargs_in_prefix(word)
-    # `env -S` 문자열은 xargs가 먼저 바꿔 넣고 env가 나눈다(`xargs -I@ env -S "FOO=@"`의 `@`가 새 대입·명령이 된다). 펼치기 전 문자열 전체를 본다
-    for value in split:
-        if _xargs_filled([value], seg.xargs_fill) == [XARGS_INPUT]:
+    # `env -S` 문자열은 그 앞의 xargs가 먼저 바꿔 넣고 env가 나눈다(`xargs -I@ env -S "FOO=@"`의 `@`가 새 대입·명령이 된다).
+    # 펼치기 전 문자열 전체를 본다. 그 뒤의 xargs(`env -S "xargs -I {}" echo {}`)는 이 문자열을 바꾸지 못한다
+    for pos, value in split:
+        if _xargs_filled([value], (*ctx.xargs_fill, *_xargs_fill(words[:pos]))) == [XARGS_INPUT]:
             return _xargs_in_prefix(value)
 
     # 셸 본문이 통과해도 반환하지 않는다. 아래의 리다이렉션 판정도 이 segment에 걸린다(`setsid bash -c '…' > 밖`)
