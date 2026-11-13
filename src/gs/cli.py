@@ -20,6 +20,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, help="레포 루트(기본: 현재 디렉터리에서 위로 .git을 찾는다)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    from . import child
+    p = sub.add_parser(
+        "child", help="측정용 중첩 세션을 사람이 띄운 것과 같은 조건으로 실행한다",
+        description="측정용 중첩 세션을 사람이 띄운 것과 같은 조건으로 실행한다. GS_*와 인증 변수는 남긴다.",
+        epilog="지우는 변수:\n" + "\n".join(child.SESSION_VARIABLES),
+        formatter_class=argparse.RawDescriptionHelpFormatter, usage=child.USAGE,
+    )
+    p.add_argument("command", nargs=argparse.REMAINDER, help="-- 뒤의 명령과 인자")
+
     from .selfupdate import LIMIT
     p = sub.add_parser("self-update", help="CLI와 플러그인을 갱신한다", epilog=LIMIT)
     p.add_argument("--from", dest="source", help="설치 기록 대신 사용할 git 주소")
@@ -118,6 +127,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(args: argparse.Namespace) -> int:
+    if args.cmd == "child":  # 측정 명령은 레포 밖에서도 실행한다
+        from . import child
+        return child.run(args.command)
     if args.cmd == "hook":  # 레포를 찾지 않는다. 일반 세션에서 아무 디렉터리에서나 불린다
         if args.event == "agy-pretooluse":
             from . import hook_agy

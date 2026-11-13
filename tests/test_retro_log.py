@@ -6,6 +6,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
+import support  # noqa: F401
 from gs import retrolog, review, state
 from gs.cli import main
 

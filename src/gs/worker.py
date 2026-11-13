@@ -28,6 +28,7 @@ from .adapters import Adapter, WorkerInput
 from .feature import Spec, Ticket, work_rel
 
 POLL_SECONDS = 2.0
+LEFTOVER_PROCS = "leftover-procs.txt"  # 유예 정리(Proc.end_after_result) 때 남아 있던 프로세스. 실행 디렉터리에 둔다
 PUSH_BLOCKED = "/dev/null/gs-worker-push-blocked/"  # 만들 수 없는 경로: push가 여기로 바뀌면 반드시 실패한다
 GH_BLOCKED = "gs-worker-no-gh"  # gh는 GH_TOKEN을 keyring보다 먼저 쓴다. 틀린 토큰이라 쓰기도 읽기도 못 한다
 PROFILE_REL = ".goldstack/profile.md"  # /adopt가 쓰는 레포 요약. brief에는 포인터 한 줄만(내용은 넣지 않는다)
@@ -41,6 +42,15 @@ REAL_TEST_RULE = (
 CHANGED_NAMES_RULE = (
     "- 서명이나 읽는 속성을 바꾼 함수·클래스는 그 이름을 시험 폴더(이 레포는 profile을 본다. 예: `tests/`)에서도 grep한다. "
     "나온 시험 파일을 모두 파일마다 따로 돌리고, 돌린 파일 목록을 마지막 메시지에 적는다.")
+SPLIT_RUN_RULE = "- hook이 한 명령의 시험 파일 수를 막으면 명령을 나눠 돌린다. 일부를 빼지 않는다."
+OBSERVATIONS_HEADING = "## 남긴 관찰"  # worker가 마지막 메시지 끝에 쓰는 절의 제목. 05가 이 제목으로 절을 뽑는다
+OBSERVATIONS_RULE = (
+    "- 고치지 않고 남긴 관찰(리뷰가 짚지 않은 의심, 돌리지 못한 확인, touches 밖에서 고쳐야 할 것)이 있으면 "
+    f"마지막 메시지 끝에 `{OBSERVATIONS_HEADING}` 제목 아래 한 줄에 하나씩 쓴다. 없으면 절을 쓰지 않는다.")
+NESTED_SESSION_RULE = (
+    "- 측정용으로 claude·codex 세션을 띄우면 `gs child -- <명령>`으로 띄우고 모델·effort를 명령에 명시한다. "
+    "`GS_*`를 지우지 않는다.")
+TOUCHES_LABEL = "- 이 티켓의 touches: "
 BASE_TICKETS_LABEL = "- base에 이미 병합된 티켓: "
 PENDING_BLOCKERS_LABEL = "- base에 아직 병합되지 않은 blocked_by 티켓: "
 MACHINE_RULE = (
@@ -146,6 +156,10 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     시험은 완료 조건의 동작을 지우면 실패하게 쓰고(diff가 더한 새 분기와 바꾼 호출 지점 모두) 기존 단언을 약하게 하지 않는다는 규칙도 모든 brief에 붙는다(`REAL_TEST_RULE`).
     서명이나 읽는 속성을 바꾼 이름을 시험 폴더에서도 grep해 나온 시험 파일을 모두 따로 돌리고 목록을 적으라는 규칙도 모든 brief에 붙는다(`CHANGED_NAMES_RULE`).
     merged는 첫·재개 worker만 넘긴다: worktree의 base에 이미 병합된 이번 실행의 티켓 (id, 커밋). 주면 base 줄이 붙고(없으면 `없음`), 이 티켓의 `blocked_by` 중 병합되지 않은 것은 따로 적는다(`base_lines`). None이면(수정·수리 worker, replay) 줄이 없다.
+    한 명령의 시험 파일 수를 hook이 막으면 명령을 나눠 돌리고 일부를 빼지 않는다는 규칙(`SPLIT_RUN_RULE`), 측정용 claude·codex 세션은 `gs child`로 띄운다는 규칙(`NESTED_SESSION_RULE`),
+    고치지 않고 남긴 관찰을 마지막 메시지 끝의 `OBSERVATIONS_HEADING` 절에 쓴다는 규칙(`OBSERVATIONS_RULE`)도 모든 brief에 붙는다. 상한 숫자는 적지 않는다(레포 config 값이다).
+    첫·재개 worker brief(merged가 있을 때)에는 이 티켓의 touches 목록과 touches 밖 파일은 고치지 않는다는 줄도 붙는다(`TOUCHES_LABEL`). touches가 없는 티켓은 이 줄이 없다.
+    수정·수리 worker는 이 줄을 받지 않는다: 고칠 수 있는 파일은 `review._fixable_lines`가 병합된 티켓의 touches까지 합쳐 알린다.
     같은 티켓의 앞 시도 로그가 있고 거기 성공한 명령이 있으면 그 목록이 믿을 수 없는 자료로 표시되어 붙는다(`prior_commands`). 첫 시도나 기록이 없으면 이 부분이 없다."""
     t = job.ticket
     verify = spec.verify_for(t)
@@ -156,6 +170,9 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     ticket_rel = f"{work_rel(feature)}/tickets/{t.path.name}"
     # worktree는 base(integration) 위에 새로 만든 것이라, 여기 있으면 base에 커밋된 profile이다
     base = f"\n{base_lines(merged, t.blocked_by)}" if merged is not None else ""
+    touches = (f"\n{TOUCHES_LABEL}{', '.join(f'`{p}`' for p in t.touches)}. "
+               f"touches 밖 파일은 고치지 않는다. 고쳐야 하면 `{OBSERVATIONS_HEADING}`에 적는다.") \
+        if merged is not None and t.touches else ""
     profile = f"\n먼저 `{PROFILE_REL}`를 읽어라(레포 요약: 구조, 빌드·시험 명령, 관례, 주의점).\n" \
         if (job.worktree / PROFILE_REL).is_file() else ""
     job.brief.write_text(f"""# 티켓 {t.id}: {t.title}
@@ -163,13 +180,16 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 너는 goldstack worker다. 이 worktree(`{job.worktree}`, 브랜치 `{branch}`)에서 아래 티켓 하나를 구현한다.
 
 규칙:
-- 이 worktree 안의 파일만 바꾼다.
+- 이 worktree 안의 파일만 바꾼다.{touches}
 - 끝나면 변경을 이 브랜치에 커밋한다(여러 커밋 가능). 커밋이 없으면 실패로 처리된다.
 - push, PR 생성, 병합은 하지 않는다. gs가 한다.
 {verify_rule}
 {SEE_FAIL_RULE}
 {REAL_TEST_RULE}
 {CHANGED_NAMES_RULE}
+{SPLIT_RUN_RULE}
+{NESTED_SESSION_RULE}
+{OBSERVATIONS_RULE}
 {MACHINE_RULE}
 - sandbox에서 네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 검증 단계만 돌릴 수 없다면 실패로 보지 않는다. 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다. 돌릴 수 없던 단계와 이유를 마지막 메시지에 적고 변경을 커밋한다. gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.
@@ -262,40 +282,55 @@ def read_exit(job: Job) -> int | None:
         return None
 
 
-def _ps() -> dict[int, tuple[int, str, str]]:
-    """{pid: (ppid, stat, 명령줄)}."""
-    cp = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,stat=,command="], capture_output=True, text=True,
+def _ps() -> dict[int, tuple[int, int, str, str]]:
+    """{pid: (ppid, 프로세스 그룹, stat, 명령줄)}."""
+    cp = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,stat=,command="], capture_output=True, text=True,
                         stdin=subprocess.DEVNULL)
     table = {}
     for line in cp.stdout.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
-            table[int(parts[0])] = (int(parts[1]), parts[2], parts[3] if len(parts) > 3 else "")
+        parts = line.split(None, 4)
+        if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit() and parts[2].isdigit():
+            table[int(parts[0])] = (int(parts[1]), int(parts[2]), parts[3], parts[4] if len(parts) > 4 else "")
     return table
 
 
-def _live(table: dict[int, tuple[int, str, str]], pid: int) -> bool:
-    return pid in table and not table[pid][1].startswith("Z")
+def _live(table: dict[int, tuple[int, int, str, str]], pid: int) -> bool:
+    return pid in table and not table[pid][2].startswith("Z")
 
 
-def kill_script(script: Path, grace: float = 3.0) -> bool:
-    """명령줄에 이 run.sh 경로가 있는 프로세스와 그 자손을 끝낸다(TERM, 안 끝나면 KILL). 끝낸 게 있으면 True.
+def _tree(table: dict[int, tuple[int, int, str, str]], script: Path) -> list[int]:
+    """명령줄에 이 run.sh 경로가 있는 살아 있는 프로세스와 그 자손(좀비 포함)의 pid. 없으면 빈 목록.
 
-    pid가 아니라 명령줄로 찾으므로 재사용된 pid를 잘못 죽이지 않는다. 시도마다 run.sh 경로가 달라 다른 시도도 안 건드린다.
+    pid가 아니라 명령줄로 찾으므로 재사용된 pid를 잘못 고르지 않는다. 시도마다 run.sh 경로가 달라 다른 시도도 안 고른다.
+    고른 프로세스가 프로세스 그룹의 리더면(SubprocessRunner는 run.sh를 새 세션에서 띄운다) 그 그룹의 프로세스(좀비 포함)와 그 자손도 넣는다.
+    부모가 먼저 끝나 고아가 된(PPID 1) 백그라운드 자식은 부모 관계로는 못 찾지만 그룹에 남는다. gs 자신의 그룹은 넣지 않는다.
     """
-    table = _ps()
-    me = os.getpid()
-    roots = [pid for pid, (_, _, cmd) in table.items() if str(script) in cmd and pid != me and _live(table, pid)]
-    if not roots:
-        return False
+    me, mine = os.getpid(), os.getpgrp()
+    todo = [pid for pid, (_, _, _, cmd) in table.items() if str(script) in cmd and pid != me and _live(table, pid)]
     pids: list[int] = []
-    todo = list(roots)
     while todo:
         pid = todo.pop()
         if pid in pids:
             continue
         pids.append(pid)
-        todo += [c for c, (pp, _, _) in table.items() if pp == pid]
+        todo += [c for c, (pp, _, _, _) in table.items() if pp == pid]
+        group = table[pid][1]
+        if group == pid and group not in (0, 1, mine):
+            todo += [m for m, (_, g, _, _) in table.items() if g == group]
+    return pids
+
+
+def leftover(script: Path) -> list[str]:
+    """kill_script가 끝낼 프로세스(_tree)를 pid 순으로 `PID PPID STAT COMMAND` 한 줄씩. 좀비는 STAT이 Z로 시작한다."""
+    table = _ps()
+    return [f"{pid} {table[pid][0]} {table[pid][2]} {table[pid][3]}" for pid in sorted(_tree(table, script))]
+
+
+def kill_script(script: Path, grace: float = 3.0) -> bool:
+    """명령줄에 이 run.sh 경로가 있는 프로세스와 그 자손·그룹(_tree)을 끝낸다(TERM, 안 끝나면 KILL). 끝낸 게 있으면 True."""
+    pids = _tree(_ps(), script)
+    if not pids:
+        return False
     for sig in (signal.SIGTERM, signal.SIGKILL):
         for pid in pids:
             try:
@@ -319,8 +354,9 @@ class SubprocessRunner:
     name = "subprocess"
 
     def start(self, job: Job, label: str) -> tuple[subprocess.Popen, str]:
+        # 새 세션: run.sh가 프로세스 그룹의 리더라 부모가 먼저 끝난 자식도 그 그룹으로 찾아 끝낸다(_tree)
         proc = subprocess.Popen(["bash", str(job.script)], stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return proc, f"pid {proc.pid}"
 
     def alive(self, proc: subprocess.Popen) -> bool:
@@ -457,6 +493,22 @@ class Proc:
                 step()
             except Exception:  # noqa: BLE001 — 정리 중이다. 남은 단계는 계속한다
                 pass
+
+    def end_after_result(self) -> int:
+        """성공 끝 이벤트를 낸 뒤 끝나지 않는 worker를 정리한다(go._wait_any의 유예 정리). 남은 프로세스 수를 돌려준다.
+
+        남은 프로세스(leftover)를 실행 디렉터리의 LEFTOVER_PROCS에 쓰고 stop으로 끝낸 뒤 exit 파일에 0을 쓴다. 끝내는 사이 스크립트가 쓴
+        종료 코드도 0으로 덮는다. 그래서 poll()은 종료 코드 0을 어댑터 판정에 넘기고, 측정의 종료 시각(exit 파일의 mtime, metrics.worker_finished)은
+        정리한 때다. 실행기(subprocess, herdr)와 상관없이 같다.
+        """
+        procs = leftover(self.job.script)
+        (self.job.rundir / LEFTOVER_PROCS).write_text("".join(f"{line}\n" for line in ["PID PPID STAT COMMAND", *procs]),
+                                                      encoding="utf-8")
+        self.stop()
+        tmp = self.job.exit_file.with_name(self.job.exit_file.name + ".gs")
+        tmp.write_text("0\n", encoding="utf-8")
+        tmp.replace(self.job.exit_file)
+        return len(procs)
 
 
 class Finished:
