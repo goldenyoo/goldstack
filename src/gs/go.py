@@ -2896,7 +2896,7 @@ def _plan_repair_reviews(r: Run, a: Active, head: str) -> tuple[list[dict], list
     wait = _review_wait(r, t.id)
     jobs = [dict(repo=r.repo, rdir=_repair_review_dir(a, rec), base=a.base, head=head, verify_log=ts.repairs[-1]["verify_log"],
                  ticket=t.path.resolve(), spec=r.feat.spec.path.resolve(), reviewer=rec["reviewer"], cfg=r.cfg, on_wait=wait,
-                 worker_log=a.proc.job.log, sandbox=r.sandbox) for rec in launch]
+                 worker_log=a.proc.job.log, sandbox=r.sandbox, defer=review.deferred(rec)) for rec in launch]
     return launch, jobs
 
 
