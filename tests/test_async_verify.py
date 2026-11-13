@@ -15,10 +15,10 @@ from unittest import mock
 
 import support
 import test_async_review
-from support import alive, group_alive, kill_quietly
+from support import alive, group_alive, kill_quietly, sh
 from test_second_review import finding
 
-from gs import config, go, state, transient, verify
+from gs import config, go, review, state, transient, verify
 
 # 가짜 검증: 병합 중인 티켓(index에 새로 든 start_<id>)마다 몇 번째 검증인지 세고, 그 검증의 신호 파일을 본다.
 #   hold_<id>_<n>: verifying_<id>를 만들고 release_<id>가 생길 때까지 멈춘다. 그동안 자식(sleep)을 띄워 둔다(프로세스 그룹이 끝나는지 본다)
@@ -248,6 +248,27 @@ class IntegrationResetTest(Base):
         self.assertEqual(self.lines("seen_13_1"), ["start_11", "start_13"])  # 미룬 되돌리기가 11의 병합을 지우지 않았다
         self.assertEqual(self.merged(), ["11", "13"])
 
+    def test_head_moved_between_the_verify_end_and_its_apply_is_caught(self):
+        self.setup_verify(1, "11")
+        real, moved = go._merge_step, []
+
+        def merge_step(r):
+            if not moved and r.merges.now is not None and r.merges.now.future is not None:  # 검증 호출은 끝났고 반영 직전이다
+                moved.append(r.ihead)
+                sh(r.iwt, "git", "branch", "victim", r.ihead)
+                sh(r.iwt, "git", "symbolic-ref", "HEAD", "refs/heads/victim")
+            return real(r)
+
+        with mock.patch.object(go, "_merge_step", merge_step):
+            code, out, err = self.go(*self.only("11"))
+        self.assertEqual(len(moved), 1)
+        self.assertEqual(sh(self.repo, "git", "rev-parse", "victim"), moved[0])  # 옮겨진 HEAD의 브랜치에 병합을 커밋하지 않았다
+        self.assertIn("[11] 실패: 검증하는 동안 integration이 바뀌었다(되돌림): 검증한 것과 커밋할 것이 다르다", out)
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts("11")
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertEqual(self.merged(), ["11"])
+
 
 class StopTest(Base):
     def test_stopped_during_the_first_verify_leaves_no_process_and_starts_over(self):
@@ -311,6 +332,47 @@ class StopTest(Base):
         self.assertIn("[12] 지난 리뷰는 끝났다. 수정 worker 또는 병합으로 잇는다", out)
         self.assertEqual(self.calls(), ["11", "12"])  # 12의 worker도
         self.assertEqual(self.lines("review.calls"), reviews)  # 리뷰도 다시 하지 않는다
+        self.assertEqual(self.merged(), ["11", "12"])
+
+    def test_network_abort_does_not_relaunch_a_fix_that_could_not_start_before_the_line(self):
+        self.setup_verify(2, "11", "12")
+        self.signal("hold_11_1")
+        self.hook("start_12", 'await "$here/verifying_11" up\n')
+        self.answer_file("review_12", findings=[finding("FIX A: 값이 틀렸다")])
+        real, fired = go._wait_any, []
+
+        def wait_any(r, active, runner, *, once=False):
+            if not fired and r.merges.queue:  # 12는 수정 worker를 띄우지 못해 지적을 남긴 채 11의 검증 뒤에 줄을 섰다
+                fired.append(True)
+                self.signal("release_11")
+                raise transient.NetworkAbort("시험 끊김")
+            return real(r, active, runner, once=once)
+
+        with mock.patch.object(go, "_wait_any", wait_any), \
+                mock.patch.object(review, "fix_brief", side_effect=OSError("수정 brief 시험 오류")):
+            code, out, err = self.go(*self.only("11", "12"))
+        self.assertEqual(code, go.EXIT_NETWORK, out + err)
+        self.assert_no_timeouts()
+        self.assertIn("[12] 수정 worker를 띄우지 못했다: OSError: 수정 brief 시험 오류", out)
+        reason = "띄우지 못함: OSError: 수정 brief 시험 오류"
+        ts = self.ts("12")
+        self.assertEqual((ts.status, ts.network_resume["reviewed"], ts.review["findings"][0]["fix_reason"]),
+                         (state.PENDING, True, reason))
+        real_fix, fixes = go._start_fix, []
+
+        def start_fix(r, a, *args, **kw):
+            fixes.append(a.t.id)
+            return real_fix(r, a, *args, **kw)
+
+        with mock.patch.object(go, "_start_fix", start_fix):
+            code, out, err = self.go(*self.only("11", "12"))
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("[12] 지난 리뷰는 끝났다. 수정 worker 또는 병합으로 잇는다", out)
+        self.assertEqual(fixes, [])  # 띄우지 못한 수정을 다시 띄우지 않고 병합으로 잇는다
+        ts = self.ts("12")
+        self.assertEqual(ts.review["findings"][0]["fix_reason"], reason)  # 첫 실패의 증거가 그대로다
+        self.assertEqual([p["phase"] for p in ts.phases].count("fix"), 1)
+        self.assertEqual(self.calls(), ["11", "12"])
         self.assertEqual(self.merged(), ["11", "12"])
 
 
@@ -410,6 +472,33 @@ class CancelTest(unittest.TestCase):
         self.assertFalse(group_alive(leader))
         self.assertFalse(alive(child))
         self.assertNotIn("종료 코드:", self.log.read_text())  # 결과가 없다: 재시도도 하지 않았다
+
+    def test_cancel_just_before_the_shell_ends_still_ends_its_group(self):
+        cancel, ready, done = threading.Event(), self.dir / "ready", self.dir / "done"
+
+        def cancel_then_end():
+            deadline = time.monotonic() + 60
+            while not ready.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            cancel.set()
+            done.touch()  # 취소가 선 뒤에 셸이 스스로 끝난다
+
+        helper = threading.Thread(target=cancel_then_end)
+        helper.start()
+        try:
+            # 셸이 끝나기 전에는 취소를 보지 않게 한다: 셸은 취소를 본 틈 없이 정상 종료한다
+            with mock.patch.object(verify, "CANCEL_TICK", 600), self.assertRaises(verify.Cancelled):
+                self.run_verify(f"sleep 300 & echo $! > {self.dir}/child; echo $$ > {self.dir}/leader; touch {ready}; "
+                                f"for i in $(seq 3000); do [ -f {done} ] && break; sleep 0.02; done; exit 0", cancel, retries=1)
+        finally:
+            helper.join()
+            for name in ("leader", "child"):  # 취소를 놓쳐 시험이 떨어져도 자식을 남기지 않는다
+                if (self.dir / name).exists():
+                    self.addCleanup(kill_quietly, int((self.dir / name).read_text()))
+        leader, child = (int((self.dir / name).read_text()) for name in ("leader", "child"))
+        self.assertFalse(group_alive(leader))
+        self.assertFalse(alive(child))
+        self.assertNotIn("종료 코드:", self.log.read_text())  # 결과가 없다
 
     def test_unset_cancel_runs_to_the_end_and_a_set_one_launches_nothing(self):
         cancel = threading.Event()

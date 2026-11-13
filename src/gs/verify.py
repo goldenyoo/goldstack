@@ -33,7 +33,7 @@ verify_retries와 함께 쓰면 시도마다 판별을 먼저 한다. 전체를 
 설정은 호출자가 실행 중인 config 값을 넘긴다(검증하는 worktree의 config를 읽지 않는다). 측정 키는 metrics.sample·metrics.triage가 적는다.
 
 취소(cancel, goldstack-v37 01): 티켓 검증은 루프 밖 스레드에서 돈다(go._merge_step). 부른 쪽이 루프를 떠나면 cancel(threading.Event)을 세운다.
-도는 명령은 CANCEL_TICK마다 그것을 보고, 서 있으면 프로세스 그룹을 끝내고(stop) Cancelled를 올린다. 명령을 띄우기 전에도 보고 서 있으면 띄우지 않는다:
+도는 명령은 CANCEL_TICK마다, 그리고 셸이 끝났을 때 그것을 보고, 서 있으면 프로세스 그룹을 끝내고(stop) Cancelled를 올린다. 명령을 띄우기 전에도 보고 서 있으면 띄우지 않는다:
 판별 파일, 판별 뒤 전체 실행, 재시도 어느 것이든 다음 명령이 나가지 않는다. 취소된 검증은 결과가 없어 로그 끝에 `종료 코드:` 줄이 없다. cancel이 없으면 전처럼 끝까지 기다린다.
 """
 from __future__ import annotations
@@ -277,18 +277,23 @@ def _launch(command: str, seconds: float, cwd: Path, stream: IO[str], cancel: th
 
 
 def _wait(p: subprocess.Popen, seconds: float, cancel: threading.Event | None) -> int:
-    """p가 끝나기를 seconds까지 기다려 종료 코드를 돌려준다. 넘기면 TimeoutExpired. cancel이 있으면 CANCEL_TICK마다 보고, 서 있으면 Cancelled(그룹은 _launch가 끝낸다)."""
+    """p가 끝나기를 seconds까지 기다려 종료 코드를 돌려준다. 넘기면 TimeoutExpired. cancel이 있으면 CANCEL_TICK마다 보고, 서 있으면 Cancelled(그룹은 _launch가 끝낸다).
+    셸이 끝난 뒤에도 본다: 취소 뒤 셸이 스스로 끝났어도 그룹에 남은 자식이 있을 수 있다."""
     if cancel is None:
         return p.wait(timeout=seconds)
     deadline = time.monotonic() + seconds
     while True:
         try:
-            return p.wait(timeout=max(0.0, min(deadline - time.monotonic(), CANCEL_TICK)))
+            code = p.wait(timeout=max(0.0, min(deadline - time.monotonic(), CANCEL_TICK)))
         except subprocess.TimeoutExpired:
             if cancel.is_set():
                 raise Cancelled("검증 명령을 끝낸다: 취소됐다") from None
             if time.monotonic() >= deadline:
                 raise
+            continue
+        if cancel.is_set():
+            raise Cancelled("검증 명령이 끝났지만 취소됐다: 남은 그룹을 끝낸다")
+        return code
 
 
 def _log_path(stream: IO[str], cwd: Path):

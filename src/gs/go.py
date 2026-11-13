@@ -1858,7 +1858,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
     일시 오류로 끝났으면 실패로 세지 않고 세워 둔다(_net_tick이 다시 띄운다). 네트워크 끊김 중이면 리뷰·재리뷰를 미룬다.
     리뷰로 갈 때 리뷰부터 잇는 표시를 먼저 남긴다: 끝나기 전에 gs가 어떻게 끝나든 다음 gs go가 worker를 다시 띄우지 않고 리뷰를 다시 한다.
     그 뒤는 _review_tick이 맡는다: 리뷰(재리뷰)가 티켓 head까지 닿으면(_review_to_head, 병합 전 대조가 거기 있다. 기다린 뒤의 대조는 _leave_review, 병합 직전의 대조는 _merge_stage) 고칠 지적이 있으면 수정 worker(최대 2회), 없으면 병합·검증이다.
-    지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review). 빈 diff에서 판정을 유지한 재리뷰(_verdict_kept)처럼 수정을 더 띄우지 않던 티켓은 여기서도 띄우지 않는다.
+    지난 실행에서 리뷰까지 끝난 티켓(review_done)은 worker 결과도 리뷰도 다시 보지 않고 기다리던 자리로 돌아간다. 떠날 때 head를 다시 대조한다(_leave_review). 빈 diff에서 판정을 유지한 재리뷰(_verdict_kept)나 수정 worker를 띄우지 못하고 병합으로 간 티켓(_fix_skipped)처럼 수정을 더 띄우지 않던 티켓은 여기서도 띄우지 않는다.
     대조의 한 번 더가 끝나기 전에 멈춘 티켓(reviewed_again)은 worker 결과를 다시 보지 않고 그 한 번을 잇는다(_review_again): 합쳐 한 번이고 끝나면 대조 기록이 남는다. 새로 띄운 worker의 Active는 이 값이 False다.
     수리 worker도 여기로 온다: 커밋을 남겼으면 재리뷰, 아니면 다시 검증하지 않고 이 시도가 실패한다(_end_repair). 수리 자리를 기다리던 티켓과 다시 검증 차례인 티켓(수리 재리뷰 뒤, 수리 worker를 띄우지 못한 뒤, 끊긴 검증 뒤)은 그 자리로 돌아간다(_resume, _start_repair).
     오류는 _loop가 처리한다.
@@ -1867,7 +1867,8 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
         if a.repair == REPAIR_VERIFY or _verifying_again(r, a.t.id):
             return _merge(r, a)
         # 수정은 티켓당 최대 2회다. 수리 뒤와 버린 수정 뒤에는 고치지 않는다
-        todo = [] if a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) or _verdict_kept(r, a.t, a.fix) else _todo(r, a.t, a.fix + 1)
+        todo = [] if (a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) or _verdict_kept(r, a.t, a.fix)
+                      or _fix_skipped(r, a.t, a.fix + 1)) else _todo(r, a.t, a.fix + 1)
         r.reviews.tickets[a.t.id] = Reviewing(a, finished=True, todo=todo, waited=True, repair=a.repair == REPAIR_SEAT)
         return
     if a.reviewed_again:
@@ -2059,9 +2060,10 @@ def _merge_stage(r: Run, a: Active) -> MergeFlow:
     if res.timed_out:
         _reset_integration(r, r.ihead)
         return _fail_worker(r, a, f"검증 시간 초과({res.minutes}분, 로그 {log})")
-    # 검증하는 동안 다른 worker가 integration(index, HEAD, 병합 상태)을 바꿨으면 검증한 것과 커밋할 것이 다르다. after는 검증 직후에 읽은 상태다
+    # 검증하는 동안 다른 worker가 integration(index, HEAD, 병합 상태)을 바꿨으면 검증한 것과 커밋할 것이 다르다. after는 검증 직후에 읽은 상태다.
+    # 지금 상태도 대조한다: 검증이 끝난 뒤 반영까지의 틈에 HEAD가 다른 브랜치로 옮겨졌으면 아래 reset이 그 브랜치를 옮긴다
     expected = (r.ihead, f"refs/heads/{integration_branch(r.name)}")
-    moved = after != checked or merged[:2] != expected or not all(merged)
+    moved = after != checked or _merge_state(r) != checked or merged[:2] != expected or not all(merged)
     if not res.ok:
         _reset_integration(r, r.ihead)
         reason = f"검증 실패(로그 {log})"
@@ -2513,6 +2515,12 @@ def _received(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
 def _fix_discarded(r: Run, t: Ticket, nth: int) -> bool:
     """nth번째 수정을 버렸나(_end_fix). 지적의 기록으로 가리므로 재개해도 그대로다. 받은 지적이 없으면(nth가 0) 아니다."""
     return any(f.get("fix_attempt") == review.DISCARDED for _, found in _received(r, t, nth) for f in found)
+
+
+def _fix_skipped(r: Run, t: Ticket, nth: int) -> bool:
+    """nth번째 수정 worker를 띄우지 못했나(_skip_fix: 띄우지 못함, agy 한도). 그 티켓은 지적을 남긴 채 병합·검증으로 갔다(_leave_review).
+    지적의 기록으로 가리므로 재개해도 그대로다: 병합 줄에서 중단(네트워크)을 만나 이은 티켓에 수정 worker를 다시 띄우지 않는다. 그 회차를 받은 지적(_mark_fixes)은 뺀다."""
+    return any(f.get("fix_reason") and f.get("fix_round", 0) != nth for _, found in _targets(r, t, nth) for f in found)
 
 
 def _verdict_kept(r: Run, t: Ticket, nth: int) -> bool:
@@ -3191,7 +3199,7 @@ def _verify(r: Run, t: Ticket) -> VerifyFlow:
     verify.run과 검증 직후의 병합 상태·트리 읽기다. 인자로 받은 값(worktree 경로, 로그 파일, config, 취소 통로)만 보고 state·출력은 건드리지 않는다.
     취소 통로는 Merges.cancel이다: 루프를 떠나면 도는 명령의 프로세스 그룹을 끝내고 다음 명령을 띄우지 않는다(_stop_merges).
     (결과, 로그, 트리가 바뀌었나, 검증 직후의 병합 상태)를 돌려준다. 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
-    더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 검증 직후의 상태는 호출이 끝나자마자 읽는다: 반영을 기다린 사이의 변경을 검증 중의 변경으로 보지 않는다.
+    더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 검증 직후의 상태는 호출이 끝나자마자 읽는다: 반영을 기다린 사이의 변경을 트리 변경(changed)으로 보지 않는다. 그 틈의 변경은 _merge_stage가 반영 때의 상태로 대조한다.
     수리 뒤의 다시 검증은 측정 라벨이 따로다.
     끊긴 검증의 다시 검증은 로그를 덮지 않고 이어 쓴다: 끊긴 증거가 남고, 수리 worker도 같은 파일을 받는다. 끊긴 검증이 남긴 파일은 트리 변경으로 보지 않고(되돌린다) 측정 라벨 끝이 `-끊김`이다.
     판별(verify 머리말)은 실행 중인 config `[verify]`로 하고, 판별·전체 재실행 전에 같은 트리 규칙(`same`)으로 트리를 확인한다."""
