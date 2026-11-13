@@ -3,18 +3,20 @@
 가짜 리뷰어는 support.GoTest 계열의 것을 쓴다: 2차 재리뷰는 test_rereview의 리뷰어(회차마다 답 파일), 수리 재리뷰는 test_verify_repair의 리뷰어.
 재시도 worker는 brief의 `## 지난 시도 실패 요약`으로 알아보고, clean_retry가 있으면 첫 리뷰 지적 파일을 지워 다음 시도가 깨끗하게 병합되게 한다.
 재개 시험은 결과를 처음 저장한 직후(state.save)나 결과만 남은 state(재개의 reviewed·REPAIR_VERIFY)에서 gs를 멈추고 다시 gs go를 돈다.
+goldstack-v38 01: 병합 전 대조가 같은 기준(base)에서 그 회차를 새 head로 다시 보면 앞 head의 새 high는 대체됨이다(Supersede*).
 """
+import copy
 import unittest
 from unittest import mock
 
 import support
 import test_rereview
 import test_verify_repair
-from test_review_target import at_call, late_commit
+from test_review_target import at_call, integration_moved, late_commit
 from test_second_review import finding
 from test_verify_repair import BREAKS, GOOD, REPAIRS
 
-from gs import go, review, state
+from gs import go, report, review, state
 
 RETRY = """\
 if grep -q '^## 지난 시도 실패 요약' "$GS_BRIEF"; then
@@ -395,6 +397,118 @@ class SecondRereviewLateCommitTest(SecondRereviewBase):
         self.assertIn("늦은 커밋도 고치지 않았다", (self.rundir / "01/1/fix2/failure.log").read_text())
 
 
+class SupersedeTest(SecondRereviewBase):
+    """goldstack-v38 01(spec 2-2): 2차 재리뷰가 이전 head에서 낸 새 high는 병합 전 대조가 같은 기준에서 새 head를 다시 보면 대체됨이다."""
+
+    def check_again(self, *new):
+        """2차 재리뷰가 이전 head에서 A를 resolved로 보고 NEW_HIGH를 새로 낸다. 반영 직전 늦은 커밋이 생겨 병합 전 대조가
+        새 head에서 2차 재리뷰를 다시 부른다(세 번째 재리뷰). 그 재리뷰는 A를 resolved로 보고 new를 새로 낸다."""
+        self.second_rereview(NEW_HIGH)
+        self.answer("codex", 3, [(1, "resolved", "A 고침")], list(new))
+        with late_during_second_rereview():
+            return self.go("--only", "01")
+
+    @staticmethod
+    def round_two(rec):
+        return [x for x in rec["rereviews"] if x["round"] == 2]
+
+    def test_high_of_the_earlier_head_is_superseded_by_the_check_again(self):
+        code, out, err = self.check_again()
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])
+        self.assertIn("late", self.files())
+        self.assertIn("fix2_01", self.files())
+        self.assertNotIn("남은 high:", out)
+        rec = ts.review
+        first, again = self.round_two(rec)
+        self.assertEqual(first["base"], again["base"])  # 병합 전 대조는 기준을 그대로 둔다
+        self.assertNotEqual(first["head"], again["head"])
+        a, high = rec["findings"]  # 대체된 지적도 기록에 남는다
+        self.assertEqual((high["claim"], high["severity"], high["found_round"], high["action"]), (LONG_CLAIM, "high", 2, review.REPORT))
+        self.assertEqual(high["superseded"], again["head"])
+        self.assertNotIn("superseded", a)
+        self.assertEqual(review.final_highs(state.reviews(ts)), [])
+
+    def test_high_found_again_at_the_new_head_fails_the_ticket(self):
+        (self.bin / "clean_retry").touch()
+        code, out, err = self.check_again(finding("새 head의 회귀", "high", "재현"))
+        self.assertEqual(code, 0, out + err)
+        # 이유는 새 head의 high 하나다: 대체된 앞 head의 high는 세지 않는다(` 외 1개`가 없다)
+        reason = "남은 high: file_01 새 head의 회귀"
+        self.assert_not_merged_and_retried(out, reason)
+        self.assertEqual([x for x in out.splitlines() if x.startswith("[01] 실패: ")], [f"[01] 실패: {reason}"])
+        self.assertNotIn("late", self.files())
+        text = (self.rundir / "01/1/fix2" / review.FINAL_HIGH_FILE).read_text()
+        self.assertIn("새 head의 회귀", text)
+        self.assertNotIn(LONG_CLAIM, text)
+        [prior] = self.ts().prior_findings
+        self.assertEqual([(f["claim"][:8], bool(f.get("superseded"))) for f in prior["findings"]],
+                         [("FIX A: 값", False), (LONG_CLAIM[:8], True), ("새 head의 ", False)])
+
+    def test_empty_second_fix_leaves_the_high_unresolved_and_is_not_merged(self):
+        """빈 2차 수정 커밋: 재리뷰를 부르지 않고 받은 high를 2차 unresolved로 적는다. 병합하지 않고 티켓 실패다."""
+        self.findings("codex", finding("FIX A: 값이 틀렸다"))
+        self.answer("codex", 1, [(1, "unresolved", "그대로다")])
+        (self.bin / "fixempty_2").touch()
+        (self.bin / "clean_retry").touch()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("fix.log"), ["fix 01 1", "fix 01 2"])
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1"])  # 2차 수정의 diff가 비어 부르지 않았다
+        self.assert_not_merged_and_retried(out, "남은 high: file_01 FIX A: 값이 틀렸다 (미해결)")
+        self.assertNotIn("empty fix 2", self.integration("log", "--format=%s", "gs/demo/integration").splitlines())
+        [prior] = self.ts().prior_findings
+        [a] = prior["findings"]
+        self.assertEqual((a["severity"], a["rereview"], a["rereview_round"], a["rereview_evidence"]),
+                         ("high", review.UNRESOLVED, 2, "수정 커밋의 diff가 비었다"))
+
+    def test_check_after_catch_up_does_not_supersede(self):
+        """catch-up이 기준을 옮긴 뒤(검증 중) 생긴 늦은 커밋을 다시 본 2차 재리뷰는 앞 head의 high를 대체하지 않는다: 그 diff에 앞 변경이 없다.
+        앞 head의 high가 있으면 리뷰 단계가 병합 단계 전에 끊는다. 그래서 catch-up 전까지는 판정(_final_high)을 미뤄(옛 gs가 남긴 결과처럼) 이 경로를 만든다."""
+        self.second_rereview(NEW_HIGH)
+        self.answer("codex", 3, [(1, "resolved", "A 고침")])
+        (self.bin / "clean_retry").touch()
+        real, caught, judged = go._final_high, [], []
+
+        def final_high(r, a):
+            if not caught:
+                return None
+            judged.append(copy.deepcopy(state.reviews(r.st.ticket(a.t.id))))
+            return real(r, a)
+
+        def catch_up(r, a):
+            caught.append(1)
+            integration_moved(r, a)
+
+        with mock.patch.object(go, "_final_high", side_effect=final_high), at_call("_catch_up", catch_up),                 at_call("_verify", late_commit("late", self.rundir / "wt/01")):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])
+        self.assert_not_merged_and_retried(out, f"남은 high: file_01 {LONG_CLAIM[:review.FINAL_HIGH_CLAIM_CHARS]}…")
+        self.assertNotIn("late", self.files())
+        [rec] = judged[0]  # 늦은 커밋을 다시 본 재리뷰 뒤의 판정
+        first, again = self.round_two(rec)
+        self.assertNotEqual(first["base"], again["base"])  # catch-up이 기준을 옮겼다
+        self.assertEqual(support.sh(self.repo, "git", "log", "-1", "--format=%s", again["base"]), "gs: 최신 integration을 01에 합침")
+        a, high = rec["findings"]
+        self.assertEqual((a["rereview"], a["rereview_round"]), (review.RESOLVED, 2))
+        self.assertEqual(high["claim"], LONG_CLAIM)
+        self.assertNotIn("superseded", high)
+
+    def test_superseded_high_is_not_a_remaining_high_in_the_report(self):
+        code, out, err = self.check_again()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.ts().status, "merged")
+        self.assertNotIn("■ 남은 high", out)
+        text = self.final_report()
+        [line] = [x for x in text.splitlines() if x.startswith("마무리:")]
+        self.assertNotIn("남은 high", line)
+        self.assertIn("\n리뷰 지적: 수정됨 1 · 대체됨 1\n", text)
+        self.assertIn(f"file_01: {LONG_CLAIM} — 상태: 대체됨", text)
+
+
 class RepairReviewBase(test_verify_repair.Base):
     reviewer = test_verify_repair.RepairReviewTest.reviewer
 
@@ -508,6 +622,84 @@ class RepairReviewResumeTest(RepairReviewBase):
         ts = self.ts()
         self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
         self.assertFalse(self.repair_commit_merged())
+
+
+class RepairSupersedeTest(RepairReviewBase):
+    def test_check_again_of_the_repair_review_supersedes_the_earlier_head(self):
+        """수리 재리뷰가 이전 head에서 high를 냈는데 반영 직전 늦은 커밋이 생겼다. 병합 전 대조가 같은 기준에서 새 head를 다시 보고 지적이 없으면 병합한다."""
+        self.worker(BREAKS, REPAIRS)
+        self.reviewer(NEW_HIGH)
+
+        def late(r, a, *_):
+            late_commit("late", self.rundir / "wt/01")(r, a)
+            (self.bin / "repair_found.json").write_text('{"findings": []}')
+
+        with at_call("_apply_repair_reviews", late):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.reviewers(), ["codex"] * 3)  # 첫 리뷰, 수리 재리뷰, 병합 전 대조의 수리 재리뷰
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        self.assertTrue(self.repair_commit_merged())
+        self.assertIn("late", self.integration("ls-tree", "--name-only", "gs/demo/integration").split())
+        self.assertNotIn("남은 high:", out)
+        first, again = [x for x in ts.review["rereviews"] if x["round"] == review.REPAIR_ROUND]
+        self.assertEqual(first["base"], again["base"])
+        [high] = ts.review["findings"]
+        self.assertEqual((high["claim"], high["found_round"], high["superseded"]), (LONG_CLAIM, review.REPAIR_ROUND, again["head"]))
+
+
+class SupersedeRecordTest(unittest.TestCase):
+    """review._supersede: apply_rereview·apply_repair_review가 어느 지적을 대체됨으로 적나. final_highs·finding_status가 그것을 어떻게 읽나."""
+
+    def rec(self):
+        return {"reviewer": "codex", "findings": [
+            {"id": 1, "severity": "high", "location": "a.py:1", "claim": "첫 리뷰", "evidence": "e", "action": review.REPORT, "found_round": 0}]}
+
+    def res(self, base, head, *claims, failed=""):
+        return {"dir": "d", "base": base, "head": head, "note": "", "failed": failed, "verdicts": {},
+                "findings": [{"severity": "high", "location": "a.py:2", "claim": c, "evidence": "e", "action": review.REPORT} for c in claims]}
+
+    def marks(self, rec):
+        return [(f["claim"], f.get("superseded", "")) for f in rec["findings"]]
+
+    def test_second_rereview_at_the_same_base_supersedes_only_the_earlier_new_findings(self):
+        rec = self.rec()
+        review.apply_rereview(rec, [], self.res("B", "h1", "앞 head"), 2)
+        self.assertEqual([f["claim"] for _, f in review.final_highs([rec])], ["앞 head"])
+        review.apply_rereview(rec, [], self.res("B", "h2", "새 head"), 2)
+        self.assertEqual(self.marks(rec), [("첫 리뷰", ""), ("앞 head", "h2"), ("새 head", "")])
+        self.assertEqual([f["claim"] for _, f in review.final_highs([rec])], ["새 head"])
+        self.assertEqual([report.finding_status(f) for f in rec["findings"]], ["보고만", report.SUPERSEDED, "보고만"])
+
+    def test_moved_base_failed_check_and_first_round_supersede_nothing(self):
+        cases = [("기준이 옮겨졌다", 2, self.res("C", "h2")),
+                 ("다시 본 재리뷰가 실패했다", 2, self.res("B", "h2", failed=review.REASON_FAILED)),
+                 ("1차 재리뷰는 판단 모델이 나눈다", 1, self.res("B", "h2"))]
+        for why, nth, again in cases:
+            with self.subTest(why):
+                rec = self.rec()
+                review.apply_rereview(rec, [], self.res("B", "h1", "앞 head"), nth)
+                review.apply_rereview(rec, [], again, nth)
+                self.assertEqual(self.marks(rec), [("첫 리뷰", ""), ("앞 head", "")])
+
+    def test_repair_review(self):
+        rec = self.rec()
+        review.apply_repair_review(rec, self.res("B", "h1", "수리 앞 head"))
+        review.apply_repair_review(rec, self.res("C", "h2"))  # catch-up이 기준을 옮겼다
+        self.assertEqual(self.marks(rec), [("첫 리뷰", ""), ("수리 앞 head", "")])
+        rec = self.rec()
+        review.apply_repair_review(rec, self.res("B", "h1", "수리 앞 head"))
+        review.apply_repair_review(rec, self.res("B", "h2"))
+        self.assertEqual(self.marks(rec), [("첫 리뷰", ""), ("수리 앞 head", "h2")])
+        self.assertEqual(review.final_highs([rec]), [])
+
+    def test_old_state_without_the_mark_counts_as_before(self):
+        """옛 state: superseded 키가 없다. 같은 회차 기록이 둘이어도 지금처럼 센다."""
+        old = {"reviewer": "codex", "rereviews": [{"round": 2, "base": "B", "head": "h1"}, {"round": 2, "base": "B", "head": "h2"}],
+               "findings": [{"id": 1, "severity": "high", "location": "a.py:1", "claim": "c", "evidence": "e", "action": "report", "found_round": 2}]}
+        self.assertEqual([f["id"] for _, f in review.final_highs([old])], [1])
+        self.assertEqual(report.finding_status(old["findings"][0]), "보고만")
 
 
 class FormatTest(unittest.TestCase):

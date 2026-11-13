@@ -26,6 +26,9 @@
    severity high 지적을 새로 냈거나 2차 재리뷰가 기존 high를 unresolved로 판정하면(unchecked는 세지 않는다) go가 그 시도를 병합하지 않고
    티켓 실패로 적는다(final_highs, go._final_high). 판단 모델은 부르지 않는다. action은 그대로 report다. 첫 리뷰·1차 재리뷰에서 판단 모델이
    report·defer로 나눈 high와 medium·low는 지금처럼 보고만이다.
+   병합 전 대조(go._review_again)가 같은 회차(2차 재리뷰·수리 재리뷰)를 같은 기준(base)에서 새 head로 다시 보면, 앞 head가 그 회차에 낸
+   새 지적은 대체됨(superseded)이다(goldstack-v38 01, _supersede): 기록에 남지만 final_highs가 세지 않는다. 판정은 새 head의 것이다.
+   catch-up이 기준을 옮긴 뒤의 재리뷰(go._catch_up_reviewed)는 대체하지 않는다: 그 diff에 앞 변경이 없다.
    2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 본다(spec 1-9, is_recheck): 2차 수정이 1차 수정을 덮어썼을 수 있다.
    그 지적을 낸 리뷰어는 2차 수정 대상이 없어도 부른다. 2차 수정 worker가 받는 대상은 그대로다(fix_targets). 다시 본 지적이
    고쳐져 있지 않으면 unresolved(미해결)이고 더 고치지 않는다. 2차 수정이 없었거나, 실패해 버렸거나, diff가 비었으면 최종
@@ -54,7 +57,8 @@ unchecked(한도)로 적는다(spec 1-4, 1-9, go.py가 센다).
 수리(v12 02): 티켓 검증이 실패해 수리 worker(go._start_repair, 지시는 repair_brief)가 같은 브랜치에 커밋을 남기면, 구현과 다른 계열의
 리뷰어가 tiers.rereview 등급으로 수리 커밋의 diff만 본다(repair_review). 받은 지적이 없으니 판정(verdicts)은 없다. 새 지적은 판단 모델을
 부르지 않고 모두 report다(found_round는 REPAIR_ROUND): 수리 뒤에는 고치지 않는다. 단 high 지적이 하나라도 있으면 2차 재리뷰의 새 high처럼
-병합하지 않고 티켓 실패다(final_highs). 오류는 병합을 막지 않는다. 관문은 그 뒤의 다시 검증이다.
+병합하지 않고 티켓 실패다(final_highs). 병합 전 대조가 같은 기준에서 수리 재리뷰를 다시 했으면 앞 head의 지적은 2차 재리뷰처럼 대체됨이다.
+오류는 병합을 막지 않는다. 관문은 그 뒤의 다시 검증이다.
 agy는 상한에 닿았으면 띄우지 않는다. 끊긴 채 대기 상한을 넘기면 NetworkAbort를 올리고 다음 gs go가 수리 재리뷰부터 잇는다.
 수리 worker가 커밋 없이 끝나면 같은 head를 다시 검증하지 않는다. 마지막 메시지에 OUT_OF_BRANCH로 시작하는 줄이 있으면 재시도 없는 실패다(out_of_branch, go._end_repair).
 
@@ -1175,6 +1179,7 @@ def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, fo
     apply_rereview가 그 회차 기록(rereviews[-1])에 옮긴다.
     새 지적은 1차면 판단 모델이 fix·defer·report로 나누고(touches·merged는 고칠 수 있는 파일, run과 같다), 2차면 부르지 않고 report다.
     2차의 high 새 지적과 unresolved로 판정한 high는 go가 병합하지 않고 티켓 실패로 적는다(final_highs). 여기서는 why에 그 사실을 적을 뿐이다.
+    병합 전 대조로 같은 기준에서 다시 불렸으면 앞 head의 새 지적은 반영할 때 대체됨이 된다(apply_rereview, _supersede).
     모델 호출 실패는 failed·note에 남기고 올리지 않는다.
     끊긴 채 대기 상한을 넘기면(시간 초과 포함) NetworkAbort를 올린다. 다음 gs go가 재리뷰부터 잇는다.
     """
@@ -1222,6 +1227,7 @@ def repair_review(*, repo: Path, worktree: Path, rdir: Path, base: str, head: st
     """수리 커밋 diff(base..head)를 tiers.rereview 등급으로 리뷰한다. 돌려주는 값은 apply_repair_review가 쓴다: round, dir, base, head, note, failed, findings.
 
     지적은 판단 모델을 부르지 않고 모두 report다. high 지적은 go가 병합하지 않고 티켓 실패로 적는다(final_highs). 모델 호출 실패는 failed·note에 남기고 올리지 않는다.
+    병합 전 대조로 같은 기준에서 다시 불렸으면 앞 head의 지적은 반영할 때 대체됨이 된다(apply_repair_review, _supersede).
     끊긴 채 대기 상한을 넘기면(시간 초과 포함) NetworkAbort를 올린다. 다음 gs go가 수리 재리뷰부터 잇는다.
     """
     rdir.mkdir(parents=True, exist_ok=True)
@@ -1258,6 +1264,7 @@ def apply_rereview(rec: dict, found: list[dict], res: dict, nth: int) -> None:
     """재리뷰 결과를 리뷰 기록에 옮긴다. found는 rec["findings"] 안의 지적들이다. 새 지적은 뒤에 번호를 이어 붙인다.
 
     재리뷰를 못 했으면 모두 unchecked다. 판정이 없거나 근거가 빈 지적도 확인된 것이 아니라 unchecked(재리뷰 실패)다.
+    2차 재리뷰를 같은 기준에서 다시 봤으면 앞 head가 이 회차에 낸 새 지적은 대체됨이다(_supersede). 못 했으면 대체하지 않는다.
     """
     _keep_round(rec, res, nth)
     if res["failed"]:
@@ -1271,12 +1278,17 @@ def apply_rereview(rec: dict, found: list[dict], res: dict, nth: int) -> None:
             mark_rereview([f], nth, UNCHECKED, REASON_FAILED, f"근거 없는 판정({v['status']})")
         else:
             mark_rereview([f], nth, v["status"], "", v["evidence"])
+    _supersede(rec, res, nth)
     _add_found(rec, res, nth)
 
 
 def apply_repair_review(rec: dict, res: dict) -> None:
-    """수리 재리뷰 결과를 리뷰 기록에 옮긴다. 지적은 뒤에 번호를 이어 붙인다(모두 report다)."""
+    """수리 재리뷰 결과를 리뷰 기록에 옮긴다. 지적은 뒤에 번호를 이어 붙인다(모두 report다).
+
+    같은 기준에서 다시 봤으면 앞 head의 수리 재리뷰 지적은 대체됨이다(_supersede).
+    """
     _keep_round(rec, res, REPAIR_ROUND)
+    _supersede(rec, res, REPAIR_ROUND)
     _add_found(rec, res, REPAIR_ROUND)
 
 
@@ -1288,6 +1300,26 @@ def _keep_round(rec: dict, res: dict, nth) -> None:
         if key in res:
             rec["rereviews"][-1][key] = res[key]
     metrics.copy_review_counts(rec["rereviews"][-1], res)
+
+
+def _supersede(rec: dict, res: dict, nth) -> None:
+    """같은 회차(2차 재리뷰·수리 재리뷰)를 다시 봤으면 앞 재리뷰가 낸 새 지적에 superseded(대체됨. 값은 다시 본 head)를 적는다.
+
+    _keep_round 뒤, _add_found 앞에 부른다: rereviews[-1]이 이번 기록이고, 이번 새 지적은 아직 붙지 않았다.
+    병합 전 대조(go._review_again)는 기준(a.base)을 그대로 둔다. 그래서 다시 본 diff(base..새 head)가 앞 head의 변경을 품고, 앞 지적이
+    새 head에도 맞으면 이번 재리뷰가 다시 낸다. 앞 기록들의 base가 모두 이번 것과 같을 때만 적는다. catch-up이 기준을 옮겼으면
+    (go._catch_up_reviewed) 뒤 diff에 앞 변경이 없으니 적지 않고 앞 지적은 그대로 센다. 이번 재리뷰가 실패했으면(failed) 다시 본 것이
+    아니라 적지 않는다. 첫 리뷰·1차 재리뷰의 지적은 판단 모델이 나눈 것이라 건드리지 않는다. 지적은 지우지 않는다: final_highs가 세지 않고
+    보고서는 `대체됨`으로 보인다(report.finding_status). 이미 적힌 표시는 고치지 않는다. 옛 state의 지적에는 이 키가 없고 대체되지 않은 것으로 읽는다.
+    """
+    if nth not in (2, REPAIR_ROUND) or res["failed"]:
+        return
+    earlier = [x for x in rec["rereviews"][:-1] if x.get("round") == nth]
+    if not earlier or any(x.get("base") != res["base"] for x in earlier):
+        return
+    for f in rec["findings"]:
+        if f.get("found_round") == nth and not f.get("superseded"):
+            f["superseded"] = res["head"]
 
 
 def _add_found(rec: dict, res: dict, nth) -> None:
@@ -1330,9 +1362,11 @@ def final_highs(recs: list[dict]) -> list[tuple[dict, dict]]:
 
     2차 재리뷰·수리 재리뷰가 새로 낸 high가 먼저, 2차 재리뷰가 unresolved로 판정한 기존 high가 뒤다. 각 묶음 안은 기록 순서·지적 순서다.
     그래서 첫 것이 미해결이면 모두 미해결이다(final_high_reason). 지난 시도의 지적(prior_findings)은 recs에 없다: 새 시도는 기록을 비우고 시작한다.
-    상태에서만 읽으므로 결과를 적은 뒤 gs가 죽어도 다음 gs go가 같은 판정을 한다. 옛 state의 지적에 없는 키는 없는 값으로 읽는다.
+    대체된 지적(superseded: 병합 전 대조가 같은 기준에서 그 회차를 새 head로 다시 봤다, _supersede)은 세지 않는다. 기록에는 남는다.
+    상태에서만 읽으므로 결과를 적은 뒤 gs가 죽어도 다음 gs go가 같은 판정을 한다. 옛 state의 지적에 없는 키는 없는 값으로 읽는다
+    (superseded가 없으면 대체되지 않은 지적이다).
     """
-    found = [(rec, f) for rec in recs for f in rec.get("findings") or [] if isinstance(f, dict)]
+    found = [(rec, f) for rec in recs for f in rec.get("findings") or [] if isinstance(f, dict) and not f.get("superseded")]
     return [x for x in found if _new_final_high(x[1])] + [x for x in found if _unresolved_high(x[1]) and not _new_final_high(x[1])]
 
 

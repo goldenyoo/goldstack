@@ -18,7 +18,9 @@ defer로 고치지 않고 보고서의 "재현된 미수리 결함" 절과 high 
 unresolved로 판정했으면(unchecked는 세지 않는다. review.final_highs) 그 시도는 _fail로 티켓 실패다(_final_high). 이유는 `남은 high: <파일:줄> <지적 요약>`이고
 그 지적 전문(review.FINAL_HIGH_FILE)을 failure.log에 싣는다. 첫 실패면 다른 실패처럼 같은 실행에서 등급을 올려 재시도하고 두 번째면 실패다. 판단 모델은 더 부르지 않는다.
 판정은 리뷰 단계가 티켓 head까지 닿은 뒤(병합 전 대조로 늦은 커밋을 다시 본 뒤) 한다: MergeBlocked로 리뷰 단계를 끊고 _review_tick이 _fail만 부른다
-(_leave_review·_merge_stage로 가지 않는다). 판정은 state의 리뷰 기록에서 읽으므로 결과를 저장한 뒤 gs가 죽어도 다음 gs go가 같은 판정을 한다:
+(_leave_review·_merge_stage로 가지 않는다). 병합 전 대조가 같은 기준(a.base)에서 그 회차를 새 head로 다시 봤으면 앞 head가 그 회차에 낸 새 지적은
+대체됨으로 세지 않는다(goldstack-v38 01, review._supersede, 기록에는 남는다). catch-up이 기준을 옮긴 뒤의 재리뷰(_catch_up_reviewed)는 대체하지 않는다.
+판정은 state의 리뷰 기록에서 읽으므로 결과를 저장한 뒤 gs가 죽어도 다음 gs go가 같은 판정을 한다:
 리뷰부터 이으면 이미 본 head의 리뷰어를 다시 부르지 않고 실패를 적고(_review_stage), 병합 단계로 이으면(재개의 reviewed·REPAIR_VERIFY·verify_again, 옛 gs가 남긴 결과)
 _merge_stage가 늦은 커밋 대조 뒤에 같은 판정으로 병합하지 않는다. 실패는 _fail이 한 번 센다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
@@ -2170,6 +2172,7 @@ def _catch_up_reviewed(r: Run, a: Active, head: str) -> None:
 
     기준(a.base)도 옮긴다: 뒤에 늦은 커밋을 재리뷰하면 그 diff에 다른 티켓의 변경이 들지 않는다. 표시에도 적는다: 다음 gs go가 catch-up을 늦은 커밋으로 보지 않게.
     그 뒤의 늦은 커밋이 비어 diff가 없어도 앞 재리뷰의 판정은 그대로다(_empty_rereview). 수정 전 기준은 남기지 않는다(재리뷰 전용 기준은 범위 밖 rereview-diff-base).
+    그 뒤의 늦은 커밋을 다시 본 재리뷰는 앞 head가 그 회차에 낸 새 지적을 대체하지 않는다(review._supersede): 기준이 달라 그 diff에 앞 변경이 없다.
     """
     a.target = a.base = head
     mark = r.st.ticket(a.t.id).network_resume
@@ -2400,6 +2403,8 @@ def _review_again(r: Run, a: Active, call: Callable[[Run, Active], ReviewFlow], 
 
     표시에 먼저 남긴다: 호출 도중 멈추면 다음 gs go가 끊긴 호출만 다시 하고 더 부르지 않는다(_finish).
     기다리는 사이의 대조면 앞 리뷰가 끝났다는 표시(reviewed)가 있다. 지운다: 남으면 이 호출도 끝난 것으로 읽어(_resume) 대조를 건너뛴다. 끝나면 다시 적힌다(_resume_flow).
+    기준(a.base)은 그대로 둔다: 다시 본 diff가 앞 head의 변경을 품는다. 그래서 2차 재리뷰·수리 재리뷰를 다시 보면 앞 head가 그 회차에 낸 새 지적은
+    대체됨이고 병합 판정(_final_high)은 새 head의 지적으로 한다(review._supersede). catch-up이 기준을 옮긴 뒤면(_catch_up_reviewed) 대체하지 않는다.
     """
     a.reviewed_again = True
     mark = r.st.ticket(a.t.id).network_resume
@@ -3099,7 +3104,8 @@ def _rereview_dir(a: Active, rec: dict, nth: int) -> Path:
 
 
 def _final_high(r: Run, a: Active) -> MergeBlocked | None:
-    """이 시도의 리뷰 기록에 마지막 재리뷰의 high가 남았으면 병합을 막는 MergeBlocked(이유, 지적 전문 파일), 없으면 None. 판정은 review.final_highs다.
+    """이 시도의 리뷰 기록에 마지막 재리뷰의 high가 남았으면 병합을 막는 MergeBlocked(이유, 지적 전문 파일), 없으면 None. 판정은 review.final_highs다
+    (병합 전 대조가 같은 기준에서 다시 봐 대체한 앞 head의 지적은 세지 않는다).
 
     state에서만 읽으므로 재개해도 같은 판정이다. 지적 전문은 이 자리의 실행 디렉터리(_fail의 failure.log 옆)에 review.FINAL_HIGH_FILE로 쓰고 _fail이 failure.log에 싣는다.
     파일을 못 쓰면 경고만 하고 그 파일 없이 막는다: 병합하지 않는 것이 먼저다.
