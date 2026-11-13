@@ -2936,7 +2936,7 @@ def _apply_repair_reviews(r: Run, a: Active, launch: list[tuple[dict, Lent]], re
     for (rec, lent), res in zip(launch, results):
         if isinstance(res, BaseException):
             res = {"dir": "", "base": a.base, "head": head, "note": f"뜻밖의 오류 {_err(res)}", "failed": review.REASON_FAILED, "findings": []}
-        review.apply_repair_review(rec, res, lent)
+        review.apply_repair_review(rec, res, **({"lent": lent} if lent else {}))
         rec["reviewed_head"] = head
         highs = sum(f.get("severity") == "high" for f in res["findings"])
         msg = "수리 재리뷰: " + (f"실패 — {res['note']}" if res["failed"] else f"지적 {len(res['findings'])}개"
@@ -3209,7 +3209,7 @@ def _apply_rereviews(r: Run, a: Active, launch: list[tuple[dict, list[dict], Len
         if isinstance(res, BaseException):
             res = {"dir": "", "base": a.base, "head": head, "note": f"뜻밖의 오류 {_err(res)}",
                    "failed": review.REASON_FAILED, "verdicts": {}, "findings": []}
-        review.apply_rereview(rec, found, res, nth, lent)
+        review.apply_rereview(rec, found, res, nth, **({"lent": lent} if lent else {}))  # 함께 판정한 지적이 없으면 부르는 모양이 전과 같다
         for x in (rec, *_lent_recs(lent)):
             x["reviewed_head"] = head
             x.pop("kept_round", None)  # 유지한 뒤 새로 판정했다(_empty_rereview)

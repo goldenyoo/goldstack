@@ -19,9 +19,15 @@ import test_repair_review_defer
 from test_recheck_resolved import A, B, FIXED, UNFIXED
 from test_verify_repair import BREAKS, REPAIRS
 
-from gs import config, review, state
+from gs import config, go, review, state
 
 SETTING = "second_reviewer_rereview"
+
+
+def codex_as_claude(model):
+    """review.family 대신: codex를 구현(claude)과 같은 계열로 본다. 티켓 검사는 이름을 그대로 비교하니 첫 리뷰어가 같은 계열인 경우를 만든다."""
+    name = model.strip().lower()
+    return "claude" if name == "codex" else name
 
 
 def set_rereview(test, value):
@@ -151,6 +157,40 @@ class RereviewTest(test_recheck_resolved.Base):
         self.assertIn("판정을 맡을 agy", ts.second_review["fix"])
         self.assertIn(f"{test_recheck_resolved.UNKNOWN}({review.REASON_LIMIT})", self.report_line("FIX B"))
 
+    def test_first_reviewer_of_the_same_family_leaves_the_lent_finding_unchecked(self):
+        """첫 리뷰어가 구현과 같은 계열이면(첫 리뷰를 거부했다) 두 번째 리뷰어의 지적은 unchecked(재리뷰 실패)다. 두 번째 리뷰어를 대신 부르지 않는다."""
+        self.setting("first")
+        self.two_reviewers()
+        self.findings("agy", B)
+        self.plan(1, "touch unrelated")  # B를 고치지 않는다: 1차 재리뷰 unresolved라 2차 수정이 돈다
+        self.plan(2, "touch fixed_B")
+        with mock.patch.object(review, "family", side_effect=codex_as_claude):
+            self.run_ok()
+        self.assertEqual(self.lines("rereview.calls"), ["agy 1"])
+        b = self.ts().second_review["findings"][0]
+        self.assertEqual((b["rereview"], b["rereview_reason"], b["rereview_round"]), (review.UNCHECKED, review.REASON_FAILED, 2))
+        self.assertIn("첫 리뷰어 codex가 구현과 같은 계열", b["rereview_evidence"])
+        self.assertNotIn("rereview_by", b)
+
+    def test_error_after_the_lent_verdicts_keeps_them(self):
+        """재리뷰 반영 뒤에 뜻밖의 오류가 나도 codex가 이미 적은 agy 지적의 판정은 그대로다(판정한 리뷰어의 기록으로 가린다, go._judge_rec)."""
+        self.setting("first")
+        self.b_left_after_first_fix("touch fixed_B")
+        real = go._append_fix
+
+        def append(rec, msg):
+            if "부르지 않고 codex가 판정" in msg:
+                raise RuntimeError("boom")
+            real(rec, msg)
+
+        with mock.patch.object(go, "_append_fix", side_effect=append):
+            out = self.run_ok()
+        self.assertIn("[01] 재리뷰 2차 실패: RuntimeError: boom", out)
+        ts = self.ts()
+        [a], [b] = ts.review["findings"], ts.second_review["findings"]
+        self.assertEqual((self.result(b), b.get("rereview_by")), ((2, review.RESOLVED, 2), "codex"))
+        self.assertEqual(self.result(a), (1, review.RESOLVED, 2))
+
     def test_resumed_second_rereview_picks_the_same_reviewer(self):
         """2차 재리뷰 도중 끊겨 다음 gs go가 그 회차부터 이어도 agy를 부르지 않고 codex가 B를 판정한다."""
         self.network_limit(1)
@@ -211,7 +251,7 @@ class RepairReviewTest(test_repair_review_defer.Base):
         (self.bin / "reviewer.sh").write_text(REPAIR_REVIEWER)
         (self.bin / "judge").write_text(test_repair_review_defer.JUDGE)
 
-    commit = test_recheck_resolved.Base.commit
+    commit, limit = test_recheck_resolved.Base.commit, test_recheck_resolved.Base.limit
 
     def first(self, who, *found):
         (self.bin / f"first_{who}.json").write_text(json.dumps({"findings": list(found)}, ensure_ascii=False))
@@ -268,6 +308,33 @@ class RepairReviewTest(test_repair_review_defer.Base):
         self.assertEqual((mine["repair_review"], own["repair_review"]), (review.UNRESOLVED, review.RESOLVED))
         for f in (mine, own):
             self.assertNotIn("repair_review_by", f)
+
+    def test_first_reviewer_at_agy_limit_leaves_the_lent_defer_findings_unjudged(self):
+        """첫 리뷰어(agy)가 상한에 닿아 부를 수 없으면 두 번째 리뷰어(codex)의 defer 지적은 판정 없이 재현된 미수리로 남는다. codex를 대신 부르지 않는다."""
+        set_rereview(self, "first")
+        self.limit(1)  # agy: 첫 리뷰로 다 쓴다
+        test_recheck_resolved.Base.tickets(self, **{"01": ("claude", "agy", "codex", "[]")})
+        self.first("agy")
+        self.first("codex", AGY_DEFER)
+        self.run_repair()
+        self.assertEqual(sorted(self.lines("review.calls")), ["first agy", "first codex"])
+        ts = self.ts()
+        [lent] = ts.second_review["findings"]
+        self.assertNotIn("repair_review", lent)
+        self.assertIn("수리 재리뷰: defer 지적을 판정하지 못했다(판정을 맡을 agy가 건너뜀(한도))", ts.second_review["fix"])
+        self.assertIn(f"{AGY_DEFER['claim']} — 상태: 재현된 미수리", self.final_report())
+
+    def test_first_reviewer_of_the_same_family_leaves_the_lent_defer_findings_unjudged(self):
+        set_rereview(self, "first")
+        self.first("codex")
+        self.first("agy", AGY_DEFER)
+        with mock.patch.object(review, "family", side_effect=codex_as_claude):
+            self.run_repair()
+        self.assertEqual(self.lines("review.calls"), ["first agy"])
+        ts = self.ts()
+        self.assertNotIn("repair_review", ts.second_review["findings"][0])
+        self.assertIn("수리 재리뷰: defer 지적을 판정하지 못했다(판정을 맡을 codex가 구현과 같은 계열이라 부르지 않는다)",
+                      ts.second_review["fix"])
 
     def test_first_without_defer_findings_just_skips_the_second_reviewer(self):
         set_rereview(self, "first")
