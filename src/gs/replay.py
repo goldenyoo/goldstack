@@ -568,7 +568,7 @@ def run(repo: Path, cfg: config.Config, feature: str, ticket_id: str, chosen: Wo
                 if not setup.run(cfg, wt, logdir / "setup.log").ok:
                     raise SetupFailed(f"worker worktree 준비 실패. 로그: {logdir / 'setup.log'}")
                 setup.remember(wt)
-            worker.write_brief(job, spec, feature, DETACHED)
+            worker.write_brief(job, spec, feature, DETACHED, touches=list(frozen.touches))
             _point_brief_at_copies(job.brief, feature, frozen)
             adapter =adapters.for_model(chosen.family, cfg.models, config.ModelEffort(chosen.model, chosen.effort),
                                          worker_tests=cfg.hook.worker_tests)
