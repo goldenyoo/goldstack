@@ -189,6 +189,34 @@ class LineTest(Base):
         self.assertEqual(self.merged(), ["11", "12"])
 
 
+    def test_line_does_not_start_during_an_outage(self):
+        self.setup_verify(2, "11", "12")
+        self.signal("hold_11_1")
+        self.hook("start_12", 'await "$here/verifying_11" up\n')
+        outage, seen = self.bin / "outage", []
+
+        def queued():  # 12가 줄을 선 뒤 끊김이 시작되고 11의 검증이 풀린다
+            outage.touch()
+            self.signal("release_11")
+
+        real = go._wait_any
+
+        def wait_any(r, active, runner, *, once=False):
+            if outage.exists() and r.st.tickets["11"].status == state.MERGED:
+                seen.append([e.a.t.id for e in r.merges.queue])  # 11은 끊김 중에도 반영됐다. 12는 줄에 있다
+                outage.unlink()  # 회복
+            return real(r, active, runner, once=once)
+
+        active = property(lambda n: outage.exists() or bool(n.waiting or n.probes))
+        with self.when_queued("12", queued), mock.patch.object(go.Outage, "active", active), \
+                mock.patch.object(go, "_wait_any", wait_any):
+            code, out, err = self.go(*self.only("11", "12"))
+        self.assertEqual(code, 0, out + err)
+        self.assert_no_timeouts()
+        self.assertEqual(seen, [["12"]])
+        self.assertEqual(self.merged(), ["11", "12"])
+
+
 class IntegrationResetTest(Base):
     def test_another_tickets_error_does_not_undo_the_merge_being_verified(self):
         self.setup_verify(2, "11", "13")
@@ -284,6 +312,34 @@ class StopTest(Base):
         self.assertEqual(self.calls(), ["11", "12"])  # 12의 worker도
         self.assertEqual(self.lines("review.calls"), reviews)  # 리뷰도 다시 하지 않는다
         self.assertEqual(self.merged(), ["11", "12"])
+
+
+    def test_network_abort_leaves_the_second_run_of_an_interrupted_verify_to_the_next_go(self):
+        self.setup_verify(1, "11")
+        self.signal("hold_11_1", "term_11_1")
+        real, fired = go._wait_any, []
+
+        def wait_any(r, active, runner, *, once=False):
+            if not fired and (self.bin / "verifying_11").exists():
+                fired.append(True)
+                self.signal("release_11")
+                raise transient.NetworkAbort("시험 끊김")
+            return real(r, active, runner, once=once)
+
+        with mock.patch.object(go, "_wait_any", wait_any):
+            code, out, err = self.go(*self.only("11"))
+        self.assertEqual(code, go.EXIT_NETWORK, out + err)
+        self.assert_no_timeouts()
+        self.assertIn("■ 중단(네트워크): 11 검증을 마치고 멈춘다", out)
+        self.assertEqual(self.verifies(), ["verify 11 1"])  # 다시 검증은 떠나는 중에 시작하지 않는다
+        ts = self.ts("11")
+        self.assertEqual((ts.status, ts.reason, ts.network_resume["verify_again"]), (state.PENDING, go.NETWORK_ABORT, True))
+        code, out, err = self.go(*self.only("11"))
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("[11] 지난 검증이 끊겼다. 같은 worktree에서 다시 검증부터 잇는다", out)
+        self.assertEqual(self.calls(), ["11"])
+        self.assertEqual(self.verifies(), ["verify 11 1", "verify 11 2"])
+        self.assertEqual(self.merged(), ["11"])
 
 
 class CancelTest(unittest.TestCase):
