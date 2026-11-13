@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.2.22 — 2026-11-13
+
+### goldstack-v38
+
+- 병합 전 대조가 2차 재리뷰·수리 재리뷰를 같은 기준에서 새 head로 다시 봤으면 이전 head가 그 회차에 낸 새 지적은 `대체됨`이라 남은 high에서 뺀다(기록에는 남는다). 새로 보지 못했거나 catch-up이 기준을 옮겼으면 지금처럼 막는다.
+- 수리 재리뷰가 defer 지적을 resolved·unresolved로 판정한다. resolved면 보고서에 `수정됨(수리 재리뷰 확인)`이고 남은 high에서 빠진다.
+- `failure.record`가 `final-high.md`는 앞에서부터 64 KiB를 싣고, 잘렸으면 생략 줄과 전문 경로를 적는다.
+- config `[review] second_reviewer_rereview`(`"all"` 기본·`"first"`·`"none"`): 두 번째 리뷰어를 어느 재리뷰까지 부를지 정한다. 빠진 회차의 판정은 첫 리뷰어가 맡고, agy 호출 수에도 세지 않는다. 이 저장소는 `"first"`로 둔다.
+- ETA는 tier별 중앙값으로 예상하고, 예상을 넘긴 티켓은 `예상 N분 넘김(+M분)`으로 보인다.
+- 첫 리뷰가 diff의 touches 밖 경로를 판정하고 보고서에 `touches 밖:` 줄이 붙는다(#70). worker 관찰 규칙에 범위 밖에서 판단해서 한 일을 더했다. 병합은 막지 않는다.
+- `docs/guide.md`·`docs/internals.md`에 위 변경을 적었다.
+- 버전을 `0.2.22`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.21 — 2026-11-13
 
 ### goldstack-v37
