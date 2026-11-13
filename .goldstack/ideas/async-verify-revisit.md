@@ -2,9 +2,9 @@
 date: "2026-11-10"
 severity: "medium"
 source: "/retro goldstack-v31"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v37"
 ---
 [반복] 검증이 도는 동안 코디네이터가 다른 worker 결과를 처리하지 못한다. out-of-scope `async-verify`를 v30·v31 수치로 다시 꺼낸다.
 
