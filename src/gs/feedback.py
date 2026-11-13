@@ -605,10 +605,24 @@ MANUAL_HEADING = "\n\n## 사람이 쓴 피드백\n"
 
 def _manual_title(message: str) -> str:
     """사람이 쓴 원문에서 제목을 고른다. 자유 글이므로 오류 가리기를 적용하지 않는다."""
-    lines = message.splitlines()
-    heading = next((line[2:] for line in lines if line.startswith("# ")), None)
-    candidate = heading if heading is not None else next((line for line in lines if line.strip()), "")
-    candidate = " ".join(_CONTROL.sub(" ", candidate).split())
+    lines = []
+    fence = None
+    for line in message.splitlines():
+        stripped = line.lstrip()
+        marker_char = stripped[:1]
+        marker_size = len(stripped) - len(stripped.lstrip(marker_char)) if marker_char in ("`", "~") else 0
+        if fence is not None:
+            if marker_char == fence[0] and marker_size >= fence[1] and not stripped[marker_size:].strip():
+                fence = None
+            continue
+        if marker_size >= 3:
+            fence = (marker_char, marker_size)
+            continue
+        lines.append(line)
+    heading = next((line[2:] for line in lines if line.startswith("# ") and line[2:].strip()), None)
+    candidate = heading if heading is not None else next(
+        (line for line in lines if line.strip() and not line.startswith("#")), "수동 피드백")
+    candidate = " ".join(_CONTROL.sub(" ", candidate).split()) or "수동 피드백"
     return candidate[:79] + "…" if len(candidate) > 80 else candidate
 
 
