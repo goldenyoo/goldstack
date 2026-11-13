@@ -63,7 +63,8 @@ PYEOF
 if [ -f "$here/late_${who}_$n.sh" ]; then . "$here/late_${who}_$n.sh"; git add -A; git commit -q --allow-empty -m "late $who $n"; fi
 """
 
-A, B, C = finding("FIX A: 값이 틀렸다"), finding("FIX B: 경계값 누락", "medium"), finding("FIX C: 다른 값", "low")
+# A가 2차 재리뷰에 unresolved로 남아도 병합되는 흐름을 본다. high면 병합하지 않는다(test_final_high)
+A, B, C = finding("FIX A: 값이 틀렸다", "medium"), finding("FIX B: 경계값 누락", "medium"), finding("FIX C: 다른 값", "low")
 FIXED, UNFIXED, UNKNOWN = "상태: 수정됨(재리뷰 확인)", "상태: 미해결", "상태: 확인 못 함"
 
 
