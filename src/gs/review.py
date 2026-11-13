@@ -28,7 +28,7 @@
    report·defer로 나눈 high와 medium·low는 지금처럼 보고만이다.
    병합 전 대조(go._review_again)가 같은 회차(2차 재리뷰·수리 재리뷰)를 같은 기준(base)에서 새 head로 다시 보면, 앞 head가 그 회차에 낸
    새 지적은 대체됨(superseded)이다(goldstack-v38 01, _supersede): 기록에 남지만 final_highs가 세지 않는다. 판정은 새 head의 것이다.
-   catch-up이 기준을 옮긴 뒤의 재리뷰(go._catch_up_reviewed)는 대체하지 않는다: 그 diff에 앞 변경이 없다.
+   catch-up이 기준을 옮겼으면(go._catch_up_reviewed) 옮기기 전 기준에서 낸 지적은 대체하지 않는다: 뒤 diff에 그 변경이 없다. 지적마다 낸 기준(found_base)으로 가린다.
    2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 본다(spec 1-9, is_recheck): 2차 수정이 1차 수정을 덮어썼을 수 있다.
    그 지적을 낸 리뷰어는 2차 수정 대상이 없어도 부른다. 2차 수정 worker가 받는 대상은 그대로다(fix_targets). 다시 본 지적이
    고쳐져 있지 않으면 unresolved(미해결)이고 더 고치지 않는다. 2차 수정이 없었거나, 실패해 버렸거나, diff가 비었으면 최종
@@ -1305,27 +1305,26 @@ def _keep_round(rec: dict, res: dict, nth) -> None:
 def _supersede(rec: dict, res: dict, nth) -> None:
     """같은 회차(2차 재리뷰·수리 재리뷰)를 다시 봤으면 앞 재리뷰가 낸 새 지적에 superseded(대체됨. 값은 다시 본 head)를 적는다.
 
-    _keep_round 뒤, _add_found 앞에 부른다: rereviews[-1]이 이번 기록이고, 이번 새 지적은 아직 붙지 않았다.
+    _keep_round 뒤, _add_found 앞에 부른다: 이번 새 지적은 아직 붙지 않았다. 그래서 그 회차의 지적은 모두 앞 재리뷰가 낸 것이다.
     병합 전 대조(go._review_again)는 기준(a.base)을 그대로 둔다. 그래서 다시 본 diff(base..새 head)가 앞 head의 변경을 품고, 앞 지적이
-    새 head에도 맞으면 이번 재리뷰가 다시 낸다. 앞 기록들의 base가 모두 이번 것과 같을 때만 적는다. catch-up이 기준을 옮겼으면
-    (go._catch_up_reviewed) 뒤 diff에 앞 변경이 없으니 적지 않고 앞 지적은 그대로 센다. 이번 재리뷰가 실패했으면(failed) 다시 본 것이
-    아니라 적지 않는다. 첫 리뷰·1차 재리뷰의 지적은 판단 모델이 나눈 것이라 건드리지 않는다. 지적은 지우지 않는다: final_highs가 세지 않고
-    보고서는 `대체됨`으로 보인다(report.finding_status). 이미 적힌 표시는 고치지 않는다. 옛 state의 지적에는 이 키가 없고 대체되지 않은 것으로 읽는다.
+    새 head에도 맞으면 이번 재리뷰가 다시 낸다. 지적마다 그것을 낸 재리뷰의 기준(found_base, _add_found)이 이번 것과 같을 때만 적는다.
+    catch-up이 기준을 옮겼으면(go._catch_up_reviewed) 뒤 diff에 앞 변경이 없으니 옮기기 전 기준의 지적은 적지 않고 그대로 센다. 옮긴 기준에서
+    낸 지적은 그 기준에서 다시 보면 적는다. 이번 재리뷰가 실패했으면(failed) 다시 본 것이 아니라 적지 않는다. 첫 리뷰·1차 재리뷰의 지적은
+    판단 모델이 나눈 것이라 건드리지 않는다. 지적은 지우지 않는다: final_highs가 세지 않고 보고서는 `대체됨`으로 보인다(report.finding_status).
+    이미 적힌 표시는 고치지 않는다. 옛 state의 지적에는 두 키가 없다: 대체되지 않은 것으로 읽고, 기준을 모르니 대체하지 않는다.
     """
     if nth not in (2, REPAIR_ROUND) or res["failed"]:
         return
-    earlier = [x for x in rec["rereviews"][:-1] if x.get("round") == nth]
-    if not earlier or any(x.get("base") != res["base"] for x in earlier):
-        return
     for f in rec["findings"]:
-        if f.get("found_round") == nth and not f.get("superseded"):
+        if f.get("found_round") == nth and f.get("found_base") == res["base"] and not f.get("superseded"):
             f["superseded"] = res["head"]
 
 
 def _add_found(rec: dict, res: dict, nth) -> None:
+    """새 지적을 번호를 이어 붙인다. found_base는 그 지적을 낸 재리뷰의 기준이다(_supersede)."""
     next_id = max((f["id"] for f in rec["findings"]), default=0) + 1
     for i, f in enumerate(res["findings"]):
-        rec["findings"].append({**f, "id": next_id + i, "found_round": nth})
+        rec["findings"].append({**f, "id": next_id + i, "found_round": nth, "found_base": res["base"]})
 
 
 def rereview_counts(found: list[dict], new: int) -> str:

@@ -497,6 +497,32 @@ class SupersedeTest(SecondRereviewBase):
         self.assertEqual(high["claim"], LONG_CLAIM)
         self.assertNotIn("superseded", high)
 
+    def test_check_again_at_the_moved_base_supersedes_the_high_found_at_that_base(self):
+        """B → C → C: B의 2차 재리뷰는 새 지적이 없다. catch-up이 기준을 C로 옮긴 뒤 검증 중 늦은 커밋을 다시 본 2차 재리뷰(C..h2)가
+        high를 내고 저장 직후 멈췄다. 멈춘 사이 또 커밋이 생겨 다음 gs go가 같은 기준 C에서 다시 본 재리뷰(C..h3)는 지적이 없다.
+        앞 기록에 다른 기준(B)이 있어도 C..h2의 high는 대체됨이고 병합된다."""
+        self.second_rereview()
+        self.answer("codex", 3, [(1, "resolved", "A 고침")], [NEW_HIGH])
+        self.answer("codex", 4, [(1, "resolved", "A 고침")])
+        wt = self.rundir / "wt/01"
+        with at_call("_catch_up", integration_moved), at_call("_verify", late_commit("late", wt)), \
+                blocked_save(self, again_saved), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        late_commit("late2", wt)(None, None)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3", "codex 4"])
+        self.assertNotIn("남은 high:", out)
+        self.assertTrue({"late", "late2"} <= set(self.files()))
+        first, moved, again = self.round_two(ts.review)
+        self.assertNotEqual(first["base"], moved["base"])  # catch-up이 기준을 옮겼다
+        self.assertEqual(moved["base"], again["base"])
+        a, high = ts.review["findings"]
+        self.assertEqual((high["claim"], high["found_base"], high["superseded"]), (LONG_CLAIM, moved["base"], again["head"]))
+        self.assertNotIn("superseded", a)
+
     def test_superseded_high_is_not_a_remaining_high_in_the_report(self):
         code, out, err = self.check_again()
         self.assertEqual(code, 0, out + err)
@@ -683,6 +709,20 @@ class SupersedeRecordTest(unittest.TestCase):
                 review.apply_rereview(rec, [], again, nth)
                 self.assertEqual(self.marks(rec), [("첫 리뷰", ""), ("앞 head", "")])
 
+    def test_only_the_findings_of_the_same_base_are_superseded(self):
+        """B → C(catch-up) → C: 세 번째 재리뷰는 같은 기준 C에서 낸 지적만 대체한다. 옮기기 전 기준 B의 지적은 그대로 센다."""
+        def second(rec, res):
+            review.apply_rereview(rec, [], res, 2)
+
+        for nth, apply in ((2, second), (review.REPAIR_ROUND, review.apply_repair_review)):
+            with self.subTest(nth):
+                rec = self.rec()
+                apply(rec, self.res("B", "h1", "B 기준"))
+                apply(rec, self.res("C", "h2", "C 앞 head"))
+                apply(rec, self.res("C", "h3"))
+                self.assertEqual(self.marks(rec), [("첫 리뷰", ""), ("B 기준", ""), ("C 앞 head", "h3")])
+                self.assertEqual([f["claim"] for _, f in review.final_highs([rec])], ["B 기준"])
+
     def test_repair_review(self):
         rec = self.rec()
         review.apply_repair_review(rec, self.res("B", "h1", "수리 앞 head"))
@@ -700,6 +740,9 @@ class SupersedeRecordTest(unittest.TestCase):
                "findings": [{"id": 1, "severity": "high", "location": "a.py:1", "claim": "c", "evidence": "e", "action": "report", "found_round": 2}]}
         self.assertEqual([f["id"] for _, f in review.final_highs([old])], [1])
         self.assertEqual(report.finding_status(old["findings"][0]), "보고만")
+        review.apply_rereview(old, [], self.res("B", "h3"), 2)  # 지적을 낸 기준(found_base)을 모르니 대체하지 않는다
+        self.assertNotIn("superseded", old["findings"][0])
+        self.assertEqual([f["id"] for _, f in review.final_highs([old])], [1])
 
 
 class FormatTest(unittest.TestCase):
