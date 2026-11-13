@@ -16,6 +16,8 @@ landlock 모드로 돈 실행의 보고서는 제목 바로 아래에 `샌드박
 `- <라벨>: 통과 · 종료 코드 0 · <초>초 · 로그 <경로>` 한 줄이다(passed_line). 실패·flaky·시간 초과·끊김, 측정 기록이 없는 옛 state는 끝 4000자를 그대로 붙인다.
 defer 지적(review.DEFER: 재현됐지만 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않은 결함)은 상태가 "재현된 미수리"이고, Evidence의
 "재현된 미수리 결함" 절에 따로 나오며(deferred_section), 원래 심각도와 상관없이 남은 high로 센다(remaining_line). 옛 state에는 없다.
+병합 전 대조가 같은 회차를 같은 기준에서 새 head로 다시 봐 대체한 앞 head의 새 지적(review._supersede, 지적의 superseded)은 상태가 "대체됨"이고
+남은 high로 세지 않는다(goldstack-v38 01). 지적 줄과 지적 집계에는 남는다.
 Evidence의 `### 남은 위험` 절(remaining_risks, 실패한 검증 절 다음)은 gs가 원본 그대로 싣는다: 격리 경고 줄 다음에 worker가 남긴 관찰 표 `| 티켓 | 관찰 | 리뷰 판정 |`
 (goldstack-v35 05, spec 3-2. observation_table). 관찰은 리뷰 기록이 아니라 티켓마다 가장 최근 worker 로그(수정·수리 worker가 있으면 그것)의
 마지막 메시지 전체에서 `## 남긴 관찰` 절을 직접 뽑고(review.worker_observations), 판정은 그 시도의 리뷰 기록마다 가장 최근 회차(재리뷰 포함)에서
@@ -38,8 +40,9 @@ LOG_TAIL = 4000  # 로그 하나에서 붙이는 끝부분(자). 전체는 경�
 MAX_BODY = 60000  # GitHub PR 본문 상한(65,536자)보다 넉넉히 작게
 FAILURE_LINE_LIMIT = 1000  # 긴 실패 줄도 후보·티켓 결과·되돌리는 법을 밀어내지 않게 표시만 줄인다
 DEFERRED = "재현된 미수리"  # defer 지적의 상태(finding_status). 심각도와 상관없이 남은 high다
-FINDING_STATUSES = ("수정됨", "미해결", "보고만", DEFERRED, "수정 못 함", "확인 못 함")
-REMAINING_STATUSES = ("보고만", DEFERRED, "미해결", "수정 못 함", "확인 못 함")  # high 지적(defer는 모두)이 이 상태면 남은 high다(수정됨만 뺀다)
+SUPERSEDED = "대체됨"  # 병합 전 대조가 같은 회차를 새 head로 다시 봐 대체한 앞 head의 새 지적(review._supersede). 남은 high가 아니다
+FINDING_STATUSES = ("수정됨", "미해결", "보고만", DEFERRED, SUPERSEDED, "수정 못 함", "확인 못 함")
+REMAINING_STATUSES = ("보고만", DEFERRED, "미해결", "수정 못 함", "확인 못 함")  # high 지적(defer는 모두)이 이 상태면 남은 high다(수정됨·대체됨은 뺀다)
 
 
 def block(text: str) -> str:
@@ -69,7 +72,12 @@ def kept(ts) -> str:
 
 
 def finding_status(finding: dict) -> str:
-    """01의 지적별 결과를 표시한다. 이전 재리뷰의 미해결 판정은 2차 수정 실패보다 우선한다. defer는 고치지 않았으니 DEFERRED다."""
+    """01의 지적별 결과를 표시한다. 이전 재리뷰의 미해결 판정은 2차 수정 실패보다 우선한다. defer는 고치지 않았으니 DEFERRED다.
+
+    대체된 지적(superseded)은 action과 상관없이 SUPERSEDED다: 그 회차의 판정은 새 head를 다시 본 재리뷰의 것이다. 옛 state에는 이 키가 없다.
+    """
+    if finding.get("superseded"):
+        return SUPERSEDED
     if finding.get("action", review.REPORT) == review.REPORT or finding.get("found_round") == 2:
         return "보고만"
     if finding.get("action") == review.DEFER:
@@ -103,7 +111,7 @@ def remaining_line(r) -> str:
     """끝 출력·보고서 마무리 줄의 `남은 high N(상태 n · …) · 건너뛴 리뷰: 티켓`. 둘 다 없으면 빈 문자열.
 
     판정·종료 코드는 바꾸지 않고 보이기만 한다(spec 2-2). 건너뛴 리뷰는 note가 `건너뜀(한도)`로 시작하는 리뷰 기록이다.
-    defer 지적(DEFERRED)은 원래 심각도와 상관없이 high로 센다: 재현된 결함인데 고치지 않았다.
+    defer 지적(DEFERRED)은 원래 심각도와 상관없이 high로 센다: 재현된 결함인데 고치지 않았다. 대체된 지적(SUPERSEDED)은 high여도 세지 않는다.
     옛 state에 심각도·상태·note가 없어도 오류 없이 센다(없는 심각도는 high가 아니다).
     """
     counts, skipped = Counter(), []
@@ -600,6 +608,7 @@ def summarize(r, on_wait=None) -> str:
               "리뷰 지적의 상태를 반영하라. 수정됨(재리뷰 확인)은 해결된 지적이므로 남은 위험에 넣지 마라. "
               "미해결·보고만·수정 못 함·확인 못 함은 남은 지적이며, 수정 커밋만으로 해결됐다고 쓰지 마라. "
               "재현된 미수리(재현됐지만 고칠 수 있는 파일 밖이라 고치지 않은 결함)도 남은 지적이다. "
+              "대체됨(병합 전 대조가 새 head를 다시 리뷰해 대체한 앞 head의 지적)은 남은 지적이 아니다. "
               "마무리 상태(PR 병합 여부, base 검증 결과, revert)를 말하는 문장은 쓰지 마라. 이 요약은 병합 전에 쓰여 "
               "마무리가 끝나면 틀린 말이 된다. 마무리 상태 줄은 gs가 state에서 Summary 아래에 붙인다. "
               "병합 순서·병합 상태에 관한 주장은 `티켓 병합 사실(git)`과 대조해 맞는 것만 남은 위험으로 쓴다. "
