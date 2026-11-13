@@ -19,6 +19,7 @@ from statistics import median
 from . import feature as featmod
 from . import adapters, config, git, graph, models, sandbox, state, version
 from .review import reviewer_selection
+from .state import TIER_ORDER, tier_samples
 
 
 def ticket_model_line(ticket: featmod.Ticket, cfg: config.Config) -> str:
@@ -40,38 +41,6 @@ def ticket_model_line(ticket: featmod.Ticket, cfg: config.Config) -> str:
         reviews.append(f"{name} {models}")
     return (f"{ticket.id} {tier or ticket.tier or 'medium'} 구현 {worker} · 수정 {worker} · 수리 {worker} · "
             + " · ".join(reviews))
-
-
-TIER_ORDER = ("small", "medium", "large")
-
-
-def tier_samples(repo: Path, feature: str) -> dict[str, list[float]]:
-    """같은 레포 다른 feature의 지난 실행(`run/state.json`)에서 등급별 merged 티켓 소요(초).
-
-    소요는 티켓의 첫 단계 시작부터 종료까지다(재시도 포함). 등급은 worker·수정 단계가 남긴 tier다.
-    등급이 없는 옛 티켓, 시각이 없거나 거꾸로인 기록, 읽을 수 없는 state는 건너뛴다. `run/`이 없어도 오류가 아니다.
-    """
-    samples: dict[str, list[float]] = {}
-    for p in sorted((repo / ".goldstack" / "work").glob("*/run/state.json")):
-        if p.parent.parent.name == feature:
-            continue
-        try:
-            st = state.load(p.parent, p.parent.parent.name)
-            found = []
-            for ts in st.tickets.values():
-                if ts.status != state.MERGED:
-                    continue
-                tier = next((ph["tier"] for ph in ts.phases if ph.get("tier") in TIER_ORDER), None)
-                starts = [s for ph in ts.phases if (s := state.parse_time(ph["started_at"]))]
-                start = min(starts) if starts else state.parse_time(ts.started_at)
-                end = state.parse_time(ts.ended_at)
-                if tier and start and end and end >= start:
-                    found.append((tier, (end - start).total_seconds()))
-        except (OSError, ValueError, TypeError, AttributeError, KeyError):
-            continue  # 깨진 기록은 check를 막지 않는다
-        for tier, seconds in found:
-            samples.setdefault(tier, []).append(seconds)
-    return samples
 
 
 def measured_line(repo: Path, feature: str) -> str:
