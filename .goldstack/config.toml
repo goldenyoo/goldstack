@@ -16,6 +16,10 @@ agy = "gemini-4-carbon-high"
 codex = ""
 failure_summary = "haiku"
 
+# 두 번째 리뷰어(agy)는 1차 재리뷰까지만 부른다. 2차·수리 재리뷰의 판정은 첫 리뷰어가 맡아 agy 호출과 시간을 줄인다(goldstack-v38).
+[review]
+second_reviewer_rereview = "first"
+
 [tiers]
 review = "large"
 rereview = "medium"
