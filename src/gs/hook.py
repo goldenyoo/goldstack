@@ -14,10 +14,16 @@
 - worker 환경의 `GS_ROLE`을 지우거나 바꾸는 명령(`check_role_strip`): `env -u GS_ROLE`·`env --unset=GS_ROLE`·`env -i`·`env GS_ROLE=<worker 아닌 값>`,
   `unset GS_ROLE`, `export GS_ROLE=<값>`·`export -n GS_ROLE`, `GS_ROLE=<값> <명령>`. 지우면 자식에게 이 hook이 판정하지 않는다(`env -u GS_ROLE claude -p …`).
   `strip_prefix` 전 argv로 보고, `bash -c` 본문·치환·`;` 뒤·`sudo`·`timeout`·`nohup`·`setsid` 뒤(그 뒤의 `bash -c` 본문도)도 막는다.
-  `gs child -- <명령>`의 `<명령>`은 같은 판정을 받는다. 안내는 `gs child -- <명령>`이다.
+  `gs child -- <명령>`의 `<명령>`도 같은 판정을 받는다(아래 항목). 안내는 `gs child -- <명령>`이다.
   통과: `echo $GS_ROLE`, `env | grep GS_`, `env -u CLAUDE_EFFORT …`(다른 변수), 값이 `worker`인 대입, 커밋 메시지·heredoc 본문 속 글자.
   알려진 오차단: `echo ';' unset GS_ROLE`(따옴표 속 `;`를 명령 구분으로 읽어 뒤쪽을 명령으로 본다. 아래 `echo ';' zsh -c`와 같은 원인).
   `python -c "os.environ.pop(…)"`·스크립트 파일 속은 따라가지 않는다
+- 명령 맨 앞이 아닌 `gs child`와 겹친 `gs child`. `gs child`는 원래 argv(`env -S`를 펼치기 전)의 맨 앞에서 한 겹만 받는다.
+  앞붙이(대입·`env`·`setsid`·`timeout`·`exec`·`xargs` 등 `strip_prefix`가 벗기는 것) 뒤의 `gs child`(`setsid gs child -- …`,
+  `env -S 'gs child -- …'`)와 안쪽이 다시 `gs child`인 명령(`gs child -- gs child -- …`)은 안쪽이 무엇이든 막는다.
+  안쪽 `<명령>`은 그대로 exec되니 바깥 앞붙이 없이 새 명령으로 처음부터 판정한다(`gs child -- git push`는 막고
+  `gs child -- timeout 600 claude -p …`는 통과). 안내는 "앞붙이는 `gs child --` 뒤에 둔다"이다
+- 셸 중첩(`bash -c`·`eval` 본문, `$( )` 치환)이 `MAX_DEPTH`(3)겹을 넘는 명령. 읽지 않은 본문을 통과시키지 않는다(fail closed). 펼쳐서 쓴다
 - 따옴표 없이 `=`로 시작하는 두 글자 이상 단어(`echo ===`). zsh의 `=` 확장이 `== not found`로 명령 묶음을 끊고, 뒤 명령이 돌지 않았는데 돈 것처럼 읽힌다.
   `echo "==="`·`[ a = a ]`·`[[ a == a ]]`·heredoc 본문·주석은 통과한다(`equals_word`). 같은 zsh에서 도는 `eval`·`zsh -c` 본문과 치환 속도 본다.
   `bash -c`·`sh -c` 속은 `=` 확장이 없어 보지 않는다(`Ctx.zsh`).
@@ -35,6 +41,10 @@
   `GS_WORKER_TESTS`로 넘기고 hook은 그것만 읽는다. worker가 worktree의 config를 고쳐도 그 실행의 규칙은 그대로다.
   값을 해석하지 못하면 이 규칙만 건너뛰고 stderr에 경고한다(다른 판정은 그대로).
   판정은 명령 원문 정규식이라 heredoc 본문·따옴표 속 글자도 본다. 데이터로 적은 금지 명령(커밋 메시지, heredoc으로 쓰는 파일 내용)도 막힐 수 있다
+
+명령 이름은 앞붙이(대입, `sudo`·`env`·`timeout`·`setsid`·`nice`·`stdbuf`·`exec`·`xargs` …)와 그 옵션의 값(`env -u X`,
+`timeout -s KILL 5`, `exec -a x`, `nice -n +5`, `stdbuf -o L`)을 벗겨 찾는다(`strip_prefix`, `WRAPPER_VALUED`). `env -S` 문자열은 펼쳐
+그 안의 명령을 본다. 표에 없는 옵션은 값을 받지 않는다고 보고, 모른다는 이유로 막지는 않는다.
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
 이 hook은 안전띠다. 스크립트 파일 안의 명령까지 따라가지 않는다. 그래서 worker 명령의 도구 차단 옵션도 남겨 둔다(이중 장치).
@@ -137,7 +147,8 @@ SECRET_SUFFIX_PATHS = ((".goldstack", "local.env"), ("gh", "hosts.yml"), (".kube
 PRIVATE_KEYS = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
 ENV_SAFE_SUFFIXES = (".example", ".sample", ".template", ".dist")
 
-WRAPPERS = {"sudo", "env", "command", "builtin", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "xargs"}
+WRAPPERS = {"sudo", "env", "command", "builtin", "exec", "nohup", "time", "nice", "timeout", "stdbuf", "xargs",
+            "setsid", "ionice", "caffeinate"}
 WRITE_ALL_ARGS = {"rm", "rmdir", "touch", "mkdir", "chmod", "chown", "truncate", "unlink", "mv", "tee"}
 WRITE_LAST_ARG = {"cp", "ln", "install", "rsync"}
 KILL_BY_NAME = {"pkill", "killall"}
@@ -558,12 +569,20 @@ def check_worker_tests(command: str, env: Mapping[str, str]) -> str | None:
 
 # ---------------------------------------------------------------- Bash
 
+MAX_DEPTH = 3  # 따라 들어가는 셸 중첩(`bash -c` 본문, `eval` 본문, `$( )` 치환)의 한도
+TOO_DEEP = (f"셸 중첩(`bash -c`·`eval`·`$( )`)이 {MAX_DEPTH}겹을 넘어 판정할 수 없다. "
+            "펼쳐서 쓴다(겹을 줄인다)")
+GS_CHILD_FRONT = ("`gs child`는 명령 맨 앞에 한 번만 쓴다. 앞붙이는 `gs child --` 뒤에 둔다"
+                  "(`gs child -- timeout 600 claude -p …`)")
+
+
 def check_bash(command: str, ctx: Ctx, depth: int = 0, substitution: bool = False) -> str | None:
     """`substitution`: 바깥 글에서 떼어 낸 치환 속이다. `equals_word`가 바깥 글에서 이미 봤다.
     그 속의 `eval`·`zsh -c` 본문은 새 글이라 다시 본다.
-    `ctx.noequals`이면 이 글의 `=` 단어 판정만 건너뛴다(다른 판정과 `zsh -c` 본문의 판정은 그대로다)."""
-    if depth > 3:
-        return None
+    `ctx.noequals`이면 이 글의 `=` 단어 판정만 건너뛴다(다른 판정과 `zsh -c` 본문의 판정은 그대로다).
+    중첩이 `MAX_DEPTH`를 넘으면 읽지 않고 막는다(fail closed)."""
+    if depth > MAX_DEPTH:
+        return TOO_DEEP
     text, subs = scan(command.replace("\\\n", " "))
     if ctx.zsh and not ctx.noequals and not substitution:
         word = equals_word(text)
@@ -1022,40 +1041,74 @@ def _xargs_filled(words: list[str], fill: tuple[str, ...]) -> list[str]:
     return [XARGS_INPUT if any(s in word for s in fill) else word for word in words]
 
 
-SUDO_SHORT_VALUED = set("CDghpRrTtUu")
-SUDO_LONG_VALUED = ("--close-from", "--chdir", "--chroot", "--group", "--host", "--prompt", "--role", "--type",
-                    "--command-timeout", "--other-user", "--user")
+# 앞붙이마다 값을 받는 옵션: (짧은 옵션 글자, 긴 옵션 이름). 값은 명령이 아니다(`timeout -s KILL 5 git push`의 `KILL`).
+# 짧은 옵션 묶음에서 이 글자가 마지막이면 다음 단어가 값이고(`-s KILL`, `-Eu root`), 뒤에 글자가 더 있으면 붙은 값이다(`-sKILL`).
+# 긴 옵션은 `=`이 없으면 다음 단어가 값이다(`--signal KILL`. 줄임말 `--sig`도). 여기 없는 옵션은 값을 받지 않는다고 본다.
+# 모르는 옵션이라는 이유로 막지는 않는다. `env`는 `_role_env`가, `xargs`는 `_xargs_takes_next`가 읽는다
+WRAPPER_VALUED = {
+    "sudo": ("CDghpRrTtUu", ("--close-from", "--chdir", "--chroot", "--group", "--host", "--prompt", "--role", "--type",
+                             "--command-timeout", "--other-user", "--user")),
+    "timeout": ("sk", ("--signal", "--kill-after")),
+    "exec": ("a", ()),
+    "nice": ("n", ("--adjustment",)),
+    "stdbuf": ("ioe", ("--input", "--output", "--error")),
+    "ionice": ("cnpPu", ("--class", "--classdata", "--pid", "--pgid", "--uid")),
+    "caffeinate": ("tw", ()),
+    "time": ("fo", ("--format", "--output")),  # GNU·BSD `/usr/bin/time`
+}
 
 
-def _sudo_takes_next(word: str) -> bool:
-    """이 sudo 옵션의 값이 다음 단어인가(`-u root`, `-Eu root`, `--user root`). 그 단어는 명령이 아니다."""
+def _wrapper_takes_next(base: str, word: str) -> bool:
+    """앞붙이 `base`의 옵션 `word`가 다음 단어를 값으로 받는가(`-u root`, `-Eu root`, `--user root`). 그 단어는 명령이 아니다."""
+    if base == "xargs":
+        return _xargs_takes_next(word)
+    short, long = WRAPPER_VALUED.get(base, ("", ()))
     if word.startswith("--"):
-        return "=" not in word and word in SUDO_LONG_VALUED
+        return "=" not in word and bool(long) and _is_long(word, *long)
     for k, ch in enumerate(word[1:], 1):
-        if ch in SUDO_SHORT_VALUED:
+        if ch in short:
             return k == len(word) - 1  # 뒤에 글자가 더 있으면 `-uroot`처럼 값이 붙어 있다
     return False
 
 
-def strip_prefix(argv: list[str]) -> list[str]:
-    """`FOO=1 sudo env -i nohup git push`에서 `git push`만 남긴다."""
+def _prefix_scan(words: list[str]) -> tuple[str | None, list[str], int]:
+    """앞붙이(`!`·`{`, 대입, 앞붙이 명령과 그 옵션·값)를 지나 명령이 시작하는 자리를 찾는다.
+    (`GS_ROLE`을 바꾸는 첫 이유, `env -S` 문자열을 단어로 펼친 단어들, 명령 자리). 이유가 있어도 끝까지 읽는다.
+    `strip_prefix`와 `check_role_strip`이 같은 판독을 쓴다(둘이 다르게 읽으면 한쪽이 명령 이름을 놓친다)."""
+    words = list(words)
+    reason = None
     i = 0
-    while i < len(argv):
-        a = argv[i]
-        if a in ("!", "{", "}", "$"):
+    while i < len(words):
+        word = words[i]
+        base = os.path.basename(word).lstrip("\\")
+        if word in ("!", "{", "}", "$"):
             i += 1
-        elif re.match(r"^[A-Za-z_]\w*=", a):
+        elif ROLE_ASSIGN.fullmatch(word):
+            if _role_assign_blocks(word):
+                reason = reason or "같은 줄 대입 `GS_ROLE=<값> <명령>`이 `GS_ROLE`을 바꾼다"
             i += 1
-        elif os.path.basename(a).lstrip("\\") in WRAPPERS:
-            xargs = _is_xargs(a)  # `xargs -I {} git …`의 `{}`는 명령이 아니다
-            sudo = os.path.basename(a).lstrip("\\") == "sudo"  # `sudo -u root pkill …`의 `root`도 명령이 아니다
+        elif ANY_ASSIGN.match(word):
             i += 1
-            while i < len(argv) and (argv[i].startswith("-") or "=" in argv[i] or re.match(r"^\d+[smhd]?$", argv[i])):
-                takes = (xargs and _xargs_takes_next(argv[i])) or (sudo and argv[i].startswith("-") and _sudo_takes_next(argv[i]))
-                i += 2 if takes else 1
+        elif base == "env":
+            why, words, i = _role_env(words, i)
+            reason = reason or why
+        elif base in WRAPPERS:
+            why, i = _role_wrapper_opts(words, i, base)
+            reason = reason or why
         else:
             break
-    return argv[i:]
+    return reason, words, i
+
+
+def split_prefix(argv: list[str]) -> tuple[list[str], list[str]]:
+    """(앞붙이 단어들, 명령과 인자). 둘을 이으면 `env -S`를 펼친 argv다. 원래 argv에서 길이로 자르지 않는다(`-S`가 길이를 바꾼다)."""
+    _, words, i = _prefix_scan(argv)
+    return words[:i], words[i:]
+
+
+def strip_prefix(argv: list[str]) -> list[str]:
+    """`FOO=1 sudo env -i nohup git push`에서 `git push`만 남긴다. `env -u X`·`timeout -s KILL 5`·`exec -a x`의 값도 건너뛴다."""
+    return split_prefix(argv)[1]
 
 
 def command_name(argv: list[str]) -> str:
@@ -1065,14 +1118,12 @@ def command_name(argv: list[str]) -> str:
 
 # ---------------------------------------------------------------- GS_ROLE 지우기
 # worker가 `GS_ROLE`을 지운 환경으로 자식을 띄우면 그 자식에는 hook이 판정하지 않는다(`env -u GS_ROLE claude -p "push"`).
-# `strip_prefix`는 `GS_ROLE=x` 대입과 `env -i`를 지우고 `env -u GS_ROLE …`에서는 `GS_ROLE`을 명령 이름으로 남긴다.
-# 그래서 이 판정은 `strip_prefix` 전의 argv를 직접 훑는다.
+# `strip_prefix`는 `GS_ROLE=x` 대입, `env -i`, `env -u GS_ROLE`을 앞붙이로 지운다.
+# 그래서 이 판정은 `strip_prefix`가 지우기 전에 같은 판독(`_prefix_scan`)으로 앞붙이를 훑는다.
 
 ROLE_VAR = "GS_ROLE"
 ROLE_ASSIGN = re.compile(r"GS_ROLE(\+?)=(.*)\Z", re.S)
 ANY_ASSIGN = re.compile(r"[A-Za-z_]\w*\+?=")
-# `strip_prefix`가 보는 WRAPPERS에 `setsid` 같은 앞붙이를 더한 것. 이 판정 안에서만 쓴다
-ROLE_WRAPPERS = WRAPPERS | {"setsid", "ionice", "caffeinate"}
 ROLE_EXPORTERS = {"export", "declare", "typeset", "readonly"}  # 변수를 내보내거나 값을 정하는 셸 내장
 ROLE_ADVICE = ("`GS_ROLE`은 worker가 지우거나 바꿀 수 없다(바꾸면 worker 차단이 풀린다). "
                "중첩 세션은 `gs child -- <명령>`으로 띄운다(GS_*는 남고 Claude Code 세션 변수만 지운다)")
@@ -1085,10 +1136,10 @@ def check_role_strip(argv: list[str]) -> str | None:
     막는 형태: `env -u GS_ROLE`·`env --unset=GS_ROLE`·`env -i`(`GS_ROLE=worker`를 다시 주지 않으면)·`env GS_ROLE=<값>`,
     `unset GS_ROLE`, `export GS_ROLE=<값>`·`export -n GS_ROLE`(`declare`·`typeset`·`readonly`도), `GS_ROLE=<값> <명령>`, `exec -c`.
     값이 `worker`인 대입은 아무것도 바꾸지 않아 통과한다. 앞붙이(`sudo`·`timeout`·`nohup`·`setsid` …)와 `env -S` 본문은 따라간다.
-    `bash -c` 본문·치환·`eval`은 `check_bash`가 새 글로 읽어 이 판정을 다시 부른다. 앞붙이 뒤의 `bash -c`는 `check_segment`가
-    `role_scan`이 돌려준 꼬리로 따라간다(`strip_prefix`는 `setsid`와 `env -u X`의 `X`를 못 건너뛴다).
+    `bash -c` 본문·치환·`eval`은 `check_bash`가 새 글로 읽어 이 판정을 다시 부른다. 앞붙이 뒤의 `bash -c`도 `strip_prefix`가
+    같은 판독으로 앞붙이를 벗기므로 `check_segment`가 본문을 읽는다.
     """
-    reason, _ = role_scan(list(argv))
+    reason = role_scan(argv)
     return f"{reason}. {ROLE_ADVICE}" if reason else None
 
 
@@ -1105,37 +1156,17 @@ def _role_assign_blocks(word: str) -> bool:
     return bool(m) and (bool(m.group(1)) or m.group(2) != "worker")
 
 
-def role_scan(words: list[str]) -> tuple[str | None, list[str]]:
-    """(막을 이유, 앞붙이·대입·`env` 옵션을 지난 뒤의 명령 단어들). 이유가 있으면 꼬리는 쓰지 않는다."""
-    i = 0
-    while i < len(words):
-        word = words[i]
-        base = os.path.basename(word).lstrip("\\")
-        if word in ("!", "{", "}", "$"):
-            i += 1
-        elif ROLE_ASSIGN.fullmatch(word):
-            if _role_assign_blocks(word):
-                return "같은 줄 대입 `GS_ROLE=<값> <명령>`이 `GS_ROLE`을 바꾼다", []
-            i += 1
-        elif ANY_ASSIGN.match(word):
-            i += 1
-        elif base == "env":
-            reason, words, i = _role_env(words, i)
-            if reason:
-                return reason, []
-        elif base == "unset":
-            if any(_names_role(w) for w in words[i + 1:] if not w.startswith("-")):
-                return "`unset GS_ROLE`이 `GS_ROLE`을 지운다", []
-            return None, words[i:]
-        elif base in ROLE_EXPORTERS:
-            return _role_export(base, words[i + 1:]), words[i:]
-        elif base in ROLE_WRAPPERS:
-            reason, i = _role_wrapper_opts(words, i, base)
-            if reason:
-                return reason, []
-        else:
-            break
-    return None, words[i:]
+def role_scan(words: list[str]) -> str | None:
+    """막을 이유. 앞붙이·대입·`env` 옵션(`_prefix_scan`)과 그 뒤 명령 자리의 `unset`·`export` 들을 본다."""
+    reason, words, i = _prefix_scan(words)
+    if reason or i >= len(words):
+        return reason
+    base = os.path.basename(words[i]).lstrip("\\")
+    if base == "unset" and any(_names_role(w) for w in words[i + 1:] if not w.startswith("-")):
+        return "`unset GS_ROLE`이 `GS_ROLE`을 지운다"
+    if base in ROLE_EXPORTERS:
+        return _role_export(base, words[i + 1:])
+    return None
 
 
 def gs_child_command(words: list[str]) -> list[str] | None:
@@ -1174,9 +1205,11 @@ def _env_split(value: str) -> list[str] | None:
 
 
 def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
-    """`words[i]`가 `env`다. (막을 이유, 단어들, `env` 옵션·대입 뒤 명령이 시작하는 자리).
-    `-S` 문자열은 단어로 풀어 `words`에 끼워 넣으므로 단어들을 새로 돌려준다."""
+    """`words[i]`가 `env`다. (막을 이유, 단어들, `env` 옵션·대입 뒤 명령이 시작하는 자리). 이유가 있어도 끝까지 읽는다.
+    `-S` 문자열은 단어로 풀어 `words`에 끼워 넣으므로 단어들을 새로 돌려준다. 풀지 못하는 문자열은 `env`도 읽지 못해
+    명령이 돌지 않는다. 그 옵션과 값만 건너뛴다."""
     words = list(words)
+    reason = None
     j = i + 1
     cleared = False  # `-i`: 환경을 비운다
     kept = False  # `GS_ROLE=worker`를 다시 줬다
@@ -1190,20 +1223,22 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
             j += 1
         elif w.startswith("--"):
             _, eq, value = w.partition("=")
+            span = 1 if eq else 2
             if _is_long(w, "--ignore-environment"):
                 cleared = True
                 j += 1
             elif _is_long(w, "--unset"):
                 value = value if eq else (words[j + 1] if j + 1 < len(words) else "")
                 if _names_role(value):
-                    return "`env --unset=GS_ROLE`이 `GS_ROLE`을 지운다", words, j
-                j += 1 if eq else 2
+                    reason = reason or "`env --unset=GS_ROLE`이 `GS_ROLE`을 지운다"
+                j += span
             elif _is_long(w, "--split-string"):
                 value = value if eq else (words[j + 1] if j + 1 < len(words) else "")
                 parts = _env_split(value)
                 if parts is None:
-                    break
-                words[j:j + (1 if eq else 2)] = parts
+                    j += span
+                else:
+                    words[j:j + span] = parts
             elif _is_long(w, "--chdir", "--argv0") and not eq:
                 j += 2
             else:
@@ -1219,7 +1254,7 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
                     value = attached or (words[j + 1] if j + 1 < len(words) else "")
                     consumed = 1 if attached else 2
                     if ch == "u" and _names_role(value):
-                        return "`env -u GS_ROLE`이 `GS_ROLE`을 지운다", words, j
+                        reason = reason or "`env -u GS_ROLE`이 `GS_ROLE`을 지운다"
                     if ch == "S":
                         parts = _env_split(value)
                         if parts is not None:
@@ -1231,7 +1266,7 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
                 j += consumed
         elif ROLE_ASSIGN.fullmatch(w):
             if _role_assign_blocks(w):
-                return "`env GS_ROLE=<값>`이 `GS_ROLE`을 바꾼다", words, j
+                reason = reason or "`env GS_ROLE=<값>`이 `GS_ROLE`을 바꾼다"
             kept = True
             j += 1
         elif "=" in w:  # `env`는 식별자가 아닌 이름(`FOO.BAR=1`)도 대입으로 받는다
@@ -1239,71 +1274,73 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
         else:
             break
     if cleared and not kept:
-        return "`env -i`가 `GS_ROLE`을 포함해 환경을 비운다", words, j
-    return None, words, j
+        reason = reason or "`env -i`가 `GS_ROLE`을 포함해 환경을 비운다"
+    return reason, words, j
 
 
 def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None, int]:
-    """`words[i]`가 앞붙이(`sudo`·`timeout` …)다. (막을 이유, 그 옵션과 대입을 지난 자리). 값을 받는 옵션의 값은 건너뛴다."""
+    """`words[i]`가 앞붙이(`sudo`·`timeout`·`setsid` …)다. (막을 이유, 그 옵션·값·대입을 지난 자리). 이유가 있어도 끝까지 읽는다.
+    값을 받는 옵션(`WRAPPER_VALUED`)의 값은 건너뛴다. `timeout`은 옵션 뒤의 첫 단어가 시간이다(`5`, `0.5`, `1m`, `$T`)."""
+    reason = None
     i += 1
     while i < len(words):
         w = words[i]
-        if ROLE_ASSIGN.fullmatch(w):
-            if _role_assign_blocks(w):
-                return f"`{base} GS_ROLE=<값>`이 `GS_ROLE`을 바꾼다", i
+        if w == "--":
             i += 1
-        elif w.startswith("-") and w != "-":
+            break
+        if w.startswith("-") and w != "-":
             if base == "exec" and not w.startswith("--") and "c" in w[1:]:
-                return "`exec -c`가 `GS_ROLE`을 포함해 환경을 비운다", i
-            takes = ((base == "xargs" and _xargs_takes_next(w)) or (base == "sudo" and _sudo_takes_next(w))
-                     or (base == "timeout" and ("=" not in w and (w in ("--signal", "--kill-after")
-                                                                  or (not w.startswith("--") and w[-1] in "sk"))))
-                     or (base == "exec" and w == "-a"))
-            i += 2 if takes else 1
+                reason = reason or "`exec -c`가 `GS_ROLE`을 포함해 환경을 비운다"
+            i += 2 if _wrapper_takes_next(base, w) else 1
+        elif ROLE_ASSIGN.fullmatch(w):
+            if _role_assign_blocks(w):
+                reason = reason or f"`{base} GS_ROLE=<값>`이 `GS_ROLE`을 바꾼다"
+            i += 1
+        elif base == "timeout":
+            break
         elif "=" in w or re.fullmatch(r"\d+[smhd]?", w) or TIMEOUT_DURATION.fullmatch(w):
             i += 1
         else:
             break
-    return None, i
+    if base == "timeout" and i < len(words):
+        i += 1
+    return reason, i
 
 
 def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, ctx: Ctx, depth: int) -> str | None:
+    if depth > MAX_DEPTH:
+        return TOO_DEEP
+    # `gs child -- <명령>`은 원래 argv(`env -S`를 펼치기 전)의 맨 앞에서 한 겹만 받는다. `<명령>`은 그대로 exec되니
+    # 새 명령으로 처음부터 판정한다. 바깥 앞붙이를 다시 붙이지 않는다(붙이면 `strip_prefix`가 명령 이름을 놓친다. goldstack-v35 02)
+    inner = gs_child_command(argv)
+    if inner is not None:
+        if gs_child_command(inner) is not None:
+            return GS_CHILD_FRONT
+        return check_segment(inner, redirects, cwd, ctx, depth)
     reason = check_role_strip(argv)  # `strip_prefix` 전 argv로 본다. `strip_prefix`가 `GS_ROLE` 대입과 `env -i`를 지운다
     if reason:
         return reason
-    rest = strip_prefix(argv)
-    name = command_name(argv)
+    prefix, rest = split_prefix(argv)
+    if gs_child_command(rest) is not None:  # 앞붙이 뒤의 `gs child`(`setsid gs child …`, `env -S 'gs child …'`)
+        return GS_CHILD_FRONT
+    name = os.path.basename(rest[0].lstrip("\\`(")) if rest else ""
     args = rest[1:]
-    prefix = argv[:len(argv) - len(rest)]
     seg = replace(ctx, cwd=cwd, xargs_fill=(*ctx.xargs_fill, *_xargs_fill(prefix)))
-
-    # `setsid bash -c '…'`·`env -u X bash -c '…'`·`gs child -- …`: `strip_prefix`가 못 건너뛰는 앞붙이 뒤의 명령.
-    # 본문이 통과해도 반환하지 않는다. 아래의 xargs 치환·리다이렉션 판정도 이 segment에 걸린다.
-    _, tail = role_scan(list(argv))
-    tail_seg = replace(seg, xargs_fill=(*ctx.xargs_fill, *_xargs_fill(argv[:len(argv) - len(tail)])))
-    inner = gs_child_command(tail)
-    if inner and depth <= 3:
-        lead = argv[:len(argv) - len(tail)]  # 바깥 `xargs`가 `<명령>` 뒤에 입력을 붙인다
-        reason = check_segment([*lead, *inner], redirects, cwd, ctx, depth + 1)
-        if reason:
-            return reason
-    elif inner is None and tail and os.path.basename(tail[0].lstrip("\\`(")) in ("bash", "sh", "zsh", "dash", "eval"):
-        shell = os.path.basename(tail[0].lstrip("\\`("))
-        script = " ".join(tail[1:]) if shell == "eval" else shell_c_script(tail[1:])
-        if script is not None:
-            reason = check_bash(_as_script(script), replace(tail_seg, zsh=shell == "zsh", noequals=False) if shell != "eval" else tail_seg, depth + 1)
-            if reason:
-                return reason
 
     if _xargs_filled(rest[:1], seg.xargs_fill) == [XARGS_INPUT]:  # GNU xargs는 명령 이름도 바꾼다
         return f"`xargs`의 치환 문자열이 명령 이름 `{rest[0]}`에 들어 있어 어떤 명령을 돌리는지 볼 수 없다. `{{}}`처럼 겹치지 않는 문자열을 쓴다"
 
+    # 셸 본문이 통과해도 반환하지 않는다. 아래의 리다이렉션 판정도 이 segment에 걸린다(`setsid bash -c '…' > 밖`)
     if name in ("bash", "sh", "zsh", "dash"):
         script = shell_c_script(args)
         if script is not None:  # 새 셸 프로세스: 시작 파일을 읽지 않을 수 있어(`-f`) noequals를 물려받지 않는다
-            return check_bash(_as_script(script), replace(seg, zsh=name == "zsh", noequals=False), depth + 1)
-    if name == "eval":
-        return check_bash(_as_script(" ".join(args)), seg, depth + 1)
+            reason = check_bash(_as_script(script), replace(seg, zsh=name == "zsh", noequals=False), depth + 1)
+            if reason:
+                return reason
+    elif name == "eval":
+        reason = check_bash(_as_script(" ".join(args)), seg, depth + 1)
+        if reason:
+            return reason
 
     if name == "git":
         # xargs 뒤의 git은 글에 없는 단어를 더 받는다. `xargs git config core.hooksPath`는 읽기처럼 보이는 쓰기다

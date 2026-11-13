@@ -1,7 +1,8 @@
 """goldstack-v35 02: worker가 `GS_ROLE`을 지우거나 바꾸는 명령을 hook이 막는다.
 
 #59의 worker들이 측정용 자식 `claude -p`를 `env -u GS_ROLE …`로 띄웠다. 지우면 자식에는 worker hook이 판정하지 않는다.
-판정은 `strip_prefix` 전 argv로 한다(`strip_prefix`가 `GS_ROLE=x`·`env -i`를 지우고 `env -u GS_ROLE`의 `GS_ROLE`을 명령 이름으로 남긴다).
+판정은 `strip_prefix` 전 argv로 한다(`strip_prefix`가 `GS_ROLE=x`·`env -i`·`env -u GS_ROLE`을 앞붙이로 지운다).
+`gs child` 맨 앞 한 겹·앞붙이 옵션·중첩 한도는 `test_hook_child.py`(goldstack-v36 01)가 본다.
 """
 import contextlib
 import io
@@ -211,7 +212,8 @@ class RoleStripTest(unittest.TestCase):
                 self.assertIsNotNone(self.verdict(command), command)
 
     def test_gs_child_repeated_does_not_recurse_forever(self):
-        self.assertIsNone(self.verdict("gs child -- " * 1000 + "echo ok"))
+        """goldstack-v36 01: `gs child`는 한 겹만 받는다. 반복은 두 번째 겹에서 바로 막고 끝까지 따라가지 않는다."""
+        self.assertEqual(self.verdict("gs child -- " * 1000 + "echo ok"), hook.GS_CHILD_FRONT)
 
     def test_passed_forms(self):
         for command in PASSED:
@@ -250,7 +252,8 @@ class RoleStripTest(unittest.TestCase):
         """판정을 `strip_prefix` 후로 하면 놓치는 형태가 실제로 있다(전 argv로 봐야 하는 이유)."""
         self.assertEqual(hook.strip_prefix(["GS_ROLE=x", "claude"]), ["claude"])
         self.assertEqual(hook.strip_prefix(["env", "-i", "claude"]), ["claude"])
-        self.assertEqual(hook.strip_prefix(["env", "-u", "GS_ROLE", "claude"])[0], "GS_ROLE")
+        # goldstack-v36 01: `strip_prefix`가 `env -u`의 값을 건너뛴다. 셋 모두 앞붙이로 지워져 명령만 남는다
+        self.assertEqual(hook.strip_prefix(["env", "-u", "GS_ROLE", "claude"]), ["claude"])
         for argv in (["GS_ROLE=x", "claude"], ["env", "-i", "claude"], ["env", "-u", "GS_ROLE", "claude"]):
             self.assertIsNotNone(hook.check_role_strip(argv), argv)
 
