@@ -40,6 +40,18 @@ class ManualFeedbackTitleTest(unittest.TestCase):
     def test_without_heading_uses_first_nonempty_line(self):
         self.assertEqual(self.title('\n  첫 내용 줄  \n다음 줄'), '[field] 첫 내용 줄 (gs 9.9.9)')
 
+    def test_manual_title_skips_subheadings_and_fenced_code(self):
+        self.assertEqual(self.title('## 증상\n\nworker가 멈춘다'), '[field] worker가 멈춘다 (gs 9.9.9)')
+        self.assertEqual(self.title('설명\n```python\n# 주석\n```\n다음'),
+                         '[field] 설명 (gs 9.9.9)')
+        self.assertEqual(self.title('~~~\n# 주석\n~~~\n본문'), '[field] 본문 (gs 9.9.9)')
+        self.assertEqual(self.title('## 증상\n# 제목\n본문'), '[field] 제목 (gs 9.9.9)')
+
+    def test_manual_title_falls_back_when_no_body_line_exists(self):
+        for message in ('## 증상\n### 재현', '```\n본문\n```', '~~~\n# 제목\n~~~', '# ', '# \x07'):
+            with self.subTest(message=message):
+                self.assertEqual(self.title(message), '[field] 수동 피드백 (gs 9.9.9)')
+
     def test_title_is_limited_to_eighty_characters(self):
         title = self.title('# ' + '가' * 81)
         self.assertEqual(title, '[field] ' + '가' * 79 + '… (gs 9.9.9)')
