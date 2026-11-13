@@ -3,7 +3,7 @@
 상황별로 무엇을 치고 무엇이 보이는지 적는다. 설치는 [README](../README.md#설치), 엔진이 안에서 하는 일은 [internals.md](internals.md).
 예시의 feature 이름은 `csv-export`, base 브랜치는 `main`, 원격은 `origin`이다. 실제 값은 `gs config git.base`, `gs config git.remote`가 알려 준다.
 
-- [기존 레포에 들이기(`/adopt`, `gs doctor`, `[worktree] setup`)](#기존-레포에-들이기)
+- [기존 레포에 들이기(`/goldstack:adopt`, `gs doctor`, `[worktree] setup`)](#기존-레포에-들이기)
   - [예시: squash만 허용](#예시-squash만-허용) · [보호된 main + 필수 승인](#예시-보호된-main--필수-승인) · [느린 시험](#예시-느린-시험verify_ticket-verify_retries) · [전체 시험 나누기](#예시-전체-시험을-프로세스로-나누기)
   - [config 키](#config-키) · [spec frontmatter 키](#spec-frontmatter-키) · [한계](#한계)
 - [새 feature](#새-feature)
@@ -13,8 +13,8 @@
 - [실패했을 때](#실패했을-때) · [네트워크가 끊겼을 때](#네트워크가-끊겼을-때)
 - [여러 feature 이어 돌리기(`gs go a b`)](#여러-feature-이어-돌리기gs-go-a-b)
 - [끝난 feature 치우기(`gs clean`)](#끝난-feature-치우기gs-clean)
-- [아이디어 흐름(`/retro` → `/idea` → `gs backlog` → `/grill`)](#아이디어-흐름)
-- [피드백: gs 결함을 goldstack에 알리기](#피드백-gs-결함을-goldstack에-알리기) · [`/overnight`: 자는 동안 이어 돌리기](#overnight-자는-동안-이어-돌리기)
+- [아이디어 흐름(`/goldstack:retro` → `/goldstack:idea` → `gs backlog` → `/goldstack:grill`)](#아이디어-흐름)
+- [피드백: gs 결함을 goldstack에 알리기](#피드백-gs-결함을-goldstack에-알리기) · [`/goldstack:overnight`: 자는 동안 이어 돌리기](#overnight-자는-동안-이어-돌리기)
 - [버전 맞추기(`gs self-update`, `requires`)](#버전-맞추기gs-self-update-requires)
 - [리눅스 서버에서 쓰기](#리눅스-서버에서-쓰기)
 - [기존 레포 옮기기(`gs migrate`)](#기존-레포-옮기기gs-migrate)
@@ -26,7 +26,7 @@
 
 **1. 설치** — `gs` CLI와 plugin을 머신에 한 번 설치한다(README ["설치"](../README.md#설치) 1–2). 대상 레포의 원격은 GitHub여야 한다([한계](#한계)).
 
-**2. `/adopt`** — 대상 레포에서 Claude Code를 열고 `/adopt`. 레포를 훑고, `.goldstack/config.toml`이 없으면 `gs init`을 돌리고, `gs doctor`를 보이고, 레포 요약 `.goldstack/profile.md`(구조, 빌드·시험 명령과 잰 시간, 관례, 주의점, CI)를 쓴다. 사람에게 묻는 것은 "제안대로 config에 쓸까"뿐이다. 다시 부르면 profile을 갱신하고 바뀐 점을 보인다. 커밋은 하지 않는다. `/grill`이 profile을 가장 먼저 읽고, worker brief가 "먼저 읽어라"로 가리킨다.
+**2. `/goldstack:adopt`** — 대상 레포에서 Claude Code를 열고 `/goldstack:adopt`. 레포를 훑고, `.goldstack/config.toml`이 없으면 `gs init`을 돌리고, `gs doctor`를 보이고, 레포 요약 `.goldstack/profile.md`(구조, 빌드·시험 명령과 잰 시간, 관례, 주의점, CI)를 쓴다. 사람에게 묻는 것은 "제안대로 config에 쓸까"뿐이다. 다시 부르면 profile을 갱신하고 바뀐 점을 보인다. 커밋은 하지 않는다. `/goldstack:grill`이 profile을 가장 먼저 읽고, worker brief가 "먼저 읽어라"로 가리킨다.
 
 `gs doctor`는 터미널에서 직접 쳐도 된다. 저장소 설정을 읽어 표와 맞는 config 줄을 보인다(읽기 전용):
 ```console
@@ -67,7 +67,7 @@ git.wait_checks: false → true (build, test)
 git add .goldstack/config.toml .goldstack/local.env.example .gitignore
 git commit -m "goldstack init"
 ```
-`.goldstack/profile.md`는 여기 넣지 않아도 된다. 다음 `/grill`·`/go`의 커밋 경로에 들어 있다.
+`.goldstack/profile.md`는 여기 넣지 않아도 된다. 다음 `/goldstack:grill`·`/goldstack:go`의 커밋 경로에 들어 있다.
 
 **4. `[worktree] setup` 채우기** — gs가 만드는 worktree에는 커밋된 파일만 있다. `node_modules`, 가상환경, `.env`처럼 커밋하지 않는 것이 있어야 시험이 돌면 준비 명령을 한 줄 적는다.
 ```toml
@@ -87,7 +87,7 @@ setup_minutes = 15            # 준비 명령 한 번의 상한(기본 15)
   ```
   경고: setup이 추적 파일을 바꿨다 → 되돌림: package-lock.json
   ```
-  실패로 치지 않으므로 티켓·병합·revert에는 영향이 없고, 설치 산출물은 그대로 둔다. 같은 줄이 `setup.log`와 보고서(티켓이면 티켓별 결과의 이유, integration·base면 Merge Danger)에 남는다. 다만 되돌린 lockfile과 방금 설치한 산출물이 어긋난 채 시험이 돌 수 있으니, 이 경고를 보면 명령을 고친다. `gs doctor`는 setup에 `npm install`·`npm i`나 잠금 옵션 없는 `yarn`이 있으면 표 끝에 줄을 더하고(`--write`는 고치지 않는다), `/adopt`도 같은 것을 권한다:
+  실패로 치지 않으므로 티켓·병합·revert에는 영향이 없고, 설치 산출물은 그대로 둔다. 같은 줄이 `setup.log`와 보고서(티켓이면 티켓별 결과의 이유, integration·base면 Merge Danger)에 남는다. 다만 되돌린 lockfile과 방금 설치한 산출물이 어긋난 채 시험이 돌 수 있으니, 이 경고를 보면 명령을 고친다. `gs doctor`는 setup에 `npm install`·`npm i`나 잠금 옵션 없는 `yarn`이 있으면 표 끝에 줄을 더하고(`--write`는 고치지 않는다), `/goldstack:adopt`도 같은 것을 권한다:
   ```
   setup  lockfile을 바꾸지 않는 명령 권장: npm ci · yarn --frozen-lockfile · uv sync --locked
   ```
@@ -96,7 +96,7 @@ setup_minutes = 15            # 준비 명령 한 번의 상한(기본 15)
 
 고쳤으면 커밋한다(`git commit -am "goldstack: worktree 준비 명령"`).
 
-**5. 첫 `/grill`** — 이제 평소처럼 `/grill <feature>` → `/go <feature>`다([새 feature](#새-feature)). spec에 `verify`를 정할 때 `.goldstack/profile.md`의 시험 시간을 보고, 느리면 먼저 [전체 시험을 나눠](#예시-전체-시험을-프로세스로-나누기) 줄이고, 그래도 느리면 [느린 시험 예시](#예시-느린-시험verify_ticket-verify_retries)대로 한다. 레포의 조건에 맞는 예시를 아래에서 고른다.
+**5. 첫 `/goldstack:grill`** — 이제 평소처럼 `/goldstack:grill <feature>` → `/goldstack:go <feature>`다([새 feature](#새-feature)). spec에 `verify`를 정할 때 `.goldstack/profile.md`의 시험 시간을 보고, 느리면 먼저 [전체 시험을 나눠](#예시-전체-시험을-프로세스로-나누기) 줄이고, 그래도 느리면 [느린 시험 예시](#예시-느린-시험verify_ticket-verify_retries)대로 한다. 레포의 조건에 맞는 예시를 아래에서 고른다.
 
 ### 예시: squash만 허용
 
@@ -158,15 +158,15 @@ checks_minutes = 60           # CI 대기 한 번의 상한(기본 60)
 checks_grace_seconds = 60     # 검사가 하나도 안 보일 때 등록을 기다리는 시간(기본 60)
 ```
 
-**spec·티켓은 먼저 사람이 PR로 올린다** — `gs go`는 spec·티켓이 원격 main에 있어야 시작한다. `/go`의 `git push origin main`은 보호에 막히고, `direct_push = false`는 이 push를 바꾸지 않는다. 그래서 `/grill`이 커밋한 뒤 그 커밋(들여올 때의 config·`.gitignore` 커밋 포함)을 브랜치로 올려 사람이 병합한다:
+**spec·티켓은 먼저 사람이 PR로 올린다** — `gs go`는 spec·티켓이 원격 main에 있어야 시작한다. `/goldstack:go`의 `git push origin main`은 보호에 막히고, `direct_push = false`는 이 push를 바꾸지 않는다. 그래서 `/goldstack:grill`이 커밋한 뒤 그 커밋(들여올 때의 config·`.gitignore` 커밋 포함)을 브랜치로 올려 사람이 병합한다:
 ```sh
 git switch -c grill/csv-export       # 로컬 main의 커밋을 브랜치로
 git push -u origin grill/csv-export
 gh pr create --fill --base main      # 승인·병합은 사람이 한다
-# 병합된 뒤 로컬 main을 원격에 맞춘다(squash면 안 그러면 갈라져 /go가 멈춘다)
+# 병합된 뒤 로컬 main을 원격에 맞춘다(squash면 안 그러면 갈라져 /goldstack:go가 멈춘다)
 git switch main && git fetch origin && git reset --keep origin/main
 ```
-그 뒤 `/go csv-export`. 로컬 main이 원격과 같으니 push할 것이 없다.
+그 뒤 `/goldstack:go csv-export`. 로컬 main이 원격과 같으니 push할 것이 없다.
 
 **feature PR** — 티켓이 끝나면 PR을 열고 CI를 기다린다. 필수 검사가 끝나면 병합을 시도하고, 승인이 없어 막히면 PR을 열어 둔 채 끝난다(종료 1, 알림):
 ```
@@ -179,7 +179,7 @@ git switch main && git fetch origin && git reset --keep origin/main
 ■ 남은 high 1(보고만 1) · 건너뛴 리뷰: 02
 ■ PR: https://github.com/you/tally/pull/7
 ```
-`■ 남은 high …` 줄은 high 지적이 `수정됨`이 아닌 채 남았거나(상태별로 `보고만`·`미해결`·`수정 못 함`·`확인 못 함`을 나눠 센다) 리뷰가 한도로 건너뛰어졌을 때만 나온다(`■ 남은 high 2(보고만 1 · 확인 못 함 1) · 건너뛴 리뷰: 05`처럼 둘이 `·`로 이어지고, 건너뛴 리뷰만 있으면 그것만 나온다). 보이기만 한다: `verified`와 종료 코드는 그대로다. 같은 내용이 보고서 `마무리:` 줄 뒤에도 붙고 `/overnight` 아침 표와 `/go` 요약에도 실린다.
+`■ 남은 high …` 줄은 high 지적이 `수정됨`이 아닌 채 남았거나(상태별로 `보고만`·`미해결`·`수정 못 함`·`확인 못 함`을 나눠 센다) 리뷰가 한도로 건너뛰어졌을 때만 나온다(`■ 남은 high 2(보고만 1 · 확인 못 함 1) · 건너뛴 리뷰: 05`처럼 둘이 `·`로 이어지고, 건너뛴 리뷰만 있으면 그것만 나온다). 보이기만 한다: `verified`와 종료 코드는 그대로다. 같은 내용이 보고서 `마무리:` 줄 뒤에도 붙고 `/goldstack:overnight` 아침 표와 `/goldstack:go` 요약에도 실린다.
 ```
 ❌ csv-export · 사람 승인 필요: https://github.com/you/tally/pull/7. main 검증은 미실행 · 티켓 3/3 · 보고서 .goldstack/work/csv-export/report.md
 ```
@@ -200,7 +200,7 @@ checks = ["linux-only"]   # 비우면 보호·rulesets 필수 검사 → gh 판�
 ```
 CI가 늦게 뜨는 저장소면 값을 올리고, 기다릴 필요가 없으면 `0`으로 둔다. revert·보고서 PR의 CI 대기에도 같게 적용된다.
 
-**승인 뒤** — GitHub에서 승인하고(병합까지 해도 된다) 터미널에서 `gs go csv-export`를 다시 친다. worker는 다시 돌지 않는다. `/go`로 치려면 먼저 `git pull --ff-only`다. PR이 병합되면 로컬 main이 원격보다 뒤처져 `/go`가 멈춘다. main을 검증하고 최종 보고서를 `gs/csv-export/report` PR로 올리는데, 이 PR에도 승인이 필요하면 또 멈춘다:
+**승인 뒤** — GitHub에서 승인하고(병합까지 해도 된다) 터미널에서 `gs go csv-export`를 다시 친다. worker는 다시 돌지 않는다. `/goldstack:go`로 치려면 먼저 `git pull --ff-only`다. PR이 병합되면 로컬 main이 원격보다 뒤처져 `/goldstack:go`가 멈춘다. main을 검증하고 최종 보고서를 `gs/csv-export/report` PR로 올리는데, 이 PR에도 승인이 필요하면 또 멈춘다:
 ```
 [01] 이미 병합됨
 ■ main 검증: npm test
@@ -278,7 +278,7 @@ integration-final: 보고서만 바뀜, 건너뜀
 
 flaky: main 재시도 1번 만에 통과
 ```
-주의: 빠른 검사가 놓친 실패는 integration의 전체 `verify`에서 잡힌다. gs는 원인 티켓을 되짚거나 고치지 않으므로 재시도 없이 feature 전체가 `integration 검증 실패 → 병합 안 함`으로 끝난다. 보고서 Evidence의 "검증 실패"에 로그 경로, 실패 줄(최대 10줄), `후보 티켓(추정)`이 있다. 후보는 실패 줄에 나온 경로·이름과 티켓의 `touches`·변경 파일을 맞춰 본 것이라 틀릴 수 있다. 로그를 읽고 `/grill`로 고칠 티켓을 더해 다시 돌린다. 그래서 `verify_ticket`은 자주 깨지는 쪽을 덮는 검사로 고른다.
+주의: 빠른 검사가 놓친 실패는 integration의 전체 `verify`에서 잡힌다. gs는 원인 티켓을 되짚거나 고치지 않으므로 재시도 없이 feature 전체가 `integration 검증 실패 → 병합 안 함`으로 끝난다. 보고서 Evidence의 "검증 실패"에 로그 경로, 실패 줄(최대 10줄), `후보 티켓(추정)`이 있다. 후보는 실패 줄에 나온 경로·이름과 티켓의 `touches`·변경 파일을 맞춰 본 것이라 틀릴 수 있다. 로그를 읽고 `/goldstack:grill`로 고칠 티켓을 더해 다시 돌린다. 그래서 `verify_ticket`은 자주 깨지는 쪽을 덮는 검사로 고른다.
 
 ### 예시: 전체 시험을 프로세스로 나누기
 
@@ -296,12 +296,12 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 
 ### config 키
 
-`.goldstack/config.toml`. `gs init`이 전부 기본값으로 쓴다. 값 하나는 `gs config <섹션.키>`(`gs config git.merge_method` → `squash`, 등급표의 칸은 못 읽으니 파일을 본다). `/go` skill은 이것으로 `git.base`·`git.remote`를 읽는다. `gs go`는 시작할 때 한 번 읽는다.
+`.goldstack/config.toml`. `gs init`이 전부 기본값으로 쓴다. 값 하나는 `gs config <섹션.키>`(`gs config git.merge_method` → `squash`, 등급표의 칸은 못 읽으니 파일을 본다). `/goldstack:go` skill은 이것으로 `git.base`·`git.remote`를 읽는다. `gs go`는 시작할 때 한 번 읽는다.
 
 | 키 | 기본 | 누가 쓰나 |
 |---|---|---|
-| `git.remote` | `"origin"` | `gs go`(fetch, push, PR 저장소 owner/repo), `gs doctor`(읽을 저장소), `/go`. GitHub URL이어야 한다 |
-| `git.base` | `origin/HEAD`의 브랜치, 못 찾으면 `"main"`(`gs init`이 적는다) | `gs go`(PR 대상, worker·integration 출발점, 재검증), `gs doctor`(보호 규칙을 읽을 브랜치), `/go` |
+| `git.remote` | `"origin"` | `gs go`(fetch, push, PR 저장소 owner/repo), `gs doctor`(읽을 저장소), `/goldstack:go`. GitHub URL이어야 한다 |
+| `git.base` | `origin/HEAD`의 브랜치, 못 찾으면 `"main"`(`gs init`이 적는다) | `gs go`(PR 대상, worker·integration 출발점, 재검증), `gs doctor`(보호 규칙을 읽을 브랜치), `/goldstack:go` |
 | `git.merge_method` | `"merge"` | `gs go` 마무리: PR 병합·확인·revert. `merge` 또는 `squash`. `gs doctor --write`가 고친다 |
 | `git.direct_push` | `true` | `gs go` 마무리: `false`면 revert·최종 보고서를 PR로. `gs doctor --write`가 고친다 |
 | `git.wait_checks` | `false` | `gs go` 마무리: `true`면 CI를 기다린 뒤 병합. `gs doctor --write`가 고친다 |
@@ -311,7 +311,7 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 | `models.judge` | `"opus"` | 판단 모델 `claude -p --model`: 리뷰 분류(1차 재리뷰의 새 지적 포함), 보고서 요약 |
 | `models.failure_summary` | `gs init` `"haiku"`, 키가 없으면 `models.judge` | 재시도 brief용 실패 요약의 `claude -p --model` |
 | `models.claude_review` | `"opus"` | `tiers.claude` 표가 없을 때 claude reviewer(재리뷰 포함) `--model` |
-| `models.agy` | `"gemini-4-carbon-high"` | `tiers.agy` 표가 없을 때 agy worker·reviewer `--model`. `/retro`의 로그 요약은 표와 상관없이 이 값 |
+| `models.agy` | `"gemini-4-carbon-high"` | `tiers.agy` 표가 없을 때 agy worker·reviewer `--model`. `/goldstack:retro`의 로그 요약은 표와 상관없이 이 값 |
 | `models.codex` | `""` | `tiers.codex` 표가 없을 때 codex worker·reviewer `--model`. 비우면 codex 기본 모델 |
 | `tiers.claude`·`tiers.codex`·`tiers.agy`의 `small`·`medium`·`large` | `gs init`이 쓴다, 키가 없으면 표 없음 | `"모델/effort"`(effort 생략 가능). worker·reviewer의 `--model`과 effort 인자. 값·없을 때 동작은 [`tier`](#tier--티켓-크기에-맞는-모델effort) |
 | `tiers.review` | `"large"` | 첫 리뷰의 등급. 리뷰어 계열의 표가 있을 때만 |
@@ -324,6 +324,7 @@ verify: uv sync --locked -q && ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/
 | `timeouts.network_wait_minutes` | `60` | 끊김 하나의 대기 합계(분), codex `Reconnecting`을 참는 시간. 넘기면 [`중단(네트워크)`](#네트워크가-끊겼을-때). 시간 초과까지 쓴 호출 시간은 합계에 들지 않는다 |
 | `timeouts.checks_minutes` | `60` | PR 하나의 CI 대기 한 번(`gs go`마다 새로 잰다). `git.wait_checks`일 때만 |
 | `timeouts.checks_grace_seconds` | `60` | CI 대기에서 검사가 하나도 안 보일 때 등록을 기다리는 시간. 지나면 검사 없음으로 보고 병합을 시도한다. `0`이면 기다리지 않는다. 필수 검사 이름을 읽었으면 쓰지 않는다. `git.wait_checks`일 때만 |
+| `timeouts.result_grace_seconds` | `60` | worker가 성공 끝 이벤트(claude `result`의 `is_error: false`, codex `turn.completed`)를 낸 뒤에도 남은 자식 때문에 끝나지 않을 때 정리하기 전에 기다리는 시간. 지나면 [정리하고 끝난 것으로 본다](#성공-result-뒤-끝나지-않는-worker). `0`이면 끈다(유휴 시간 초과를 기다린다) |
 | `timeouts.setup_minutes` | `15` | `worktree.setup` 한 번 |
 | `notify.telegram` | `false` | `gs go`가 끝날 때 한 통, `gs check`(값이 비면 경고) |
 | `goldstack.requires` | 없음(검사 안 함) | `gs check`·`gs go`: 설치한 gs가 이 최소 버전(`">=0.1"`)보다 낮으면 오류로 거부하고 `gs self-update`를 안내한다. 형식이 틀리면 config 오류 |
@@ -371,7 +372,7 @@ setup_when = ["uv.lock", "pyproject.toml"]
 
 ### spec frontmatter 키
 
-feature마다 다른 값은 config가 아니라 `.goldstack/work/<feature>/spec.md` frontmatter에 둔다. `/grill`이 적고 `gs check`·`gs go`가 읽는다. `: `나 ` # `가 든 값은 따옴표로 감싼다.
+feature마다 다른 값은 config가 아니라 `.goldstack/work/<feature>/spec.md` frontmatter에 둔다. `/goldstack:grill`이 적고 `gs check`·`gs go`가 읽는다. `: `나 ` # `가 든 값은 따옴표로 감싼다.
 
 | 키 | 기본 | 누가 쓰나 |
 |---|---|---|
@@ -398,7 +399,7 @@ feature마다 다른 값은 config가 아니라 `.goldstack/work/<feature>/spec.
 
 ### `gs init`이 만드는 것
 
-`/adopt`가 대신 부르지만 직접 쳐도 된다. 레포 루트(또는 그 안 어디서든. 위로 `.git`을 찾는다)에서:
+`/goldstack:adopt`가 대신 부르지만 직접 쳐도 된다. 레포 루트(또는 그 안 어디서든. 위로 `.git`을 찾는다)에서:
 ```console
 $ gs init
 만듦: .goldstack/config.toml
@@ -431,7 +432,7 @@ TG_CHAT_ID=987654321
 주석은 줄 맨 앞 `#`만 인정한다. 값 뒤에 붙인 `# ...`는 값의 일부가 된다.
 채팅 ID를 모르면 봇에게 아무 메시지나 보낸 뒤 `https://api.telegram.org/bot<TG_TOKEN>/getUpdates`의 `chat.id`를 본다. 그리고 config에서 `telegram = true`.
 gs는 이 파일만 읽는다(환경 변수는 보지 않는다). worker는 이 파일을 읽을 수 없다(차단 hook).
-`gs notify <파일>`은 그 파일 내용을 같은 텔레그램으로 보낸다(3900자에서 자른다). `notify.telegram`이 꺼져 있어도 사람이 친 명령이라 보낸다. `gs notify --check`는 토큰만 확인한다(`getMe`). 성공이면 종료 0, 값이 없거나 실패하면 이유 한 줄과 종료 1이다. `/overnight`이 아침 보고를 보낼 때 쓴다.
+`gs notify <파일>`은 그 파일 내용을 같은 텔레그램으로 보낸다(3900자에서 자른다). `notify.telegram`이 꺼져 있어도 사람이 친 명령이라 보낸다. `gs notify --check`는 토큰만 확인한다(`getMe`). 성공이면 종료 0, 값이 없거나 실패하면 이유 한 줄과 종료 1이다. `/goldstack:overnight`이 아침 보고를 보낼 때 쓴다.
 
 **환경 확인** — `gs check <feature>`는 spec·티켓과 함께 환경도 본다. feature가 아직 없어도 `gs check x`를 돌리면("feature 디렉터리가 없다" 오류는 무시) `git`·`gh`·원격·텔레그램 문제가 먼저 보인다. 나오는 줄:
 - ``필요한 CLI `codex`가 PATH에 없다``(오류): `git`, `gh`, `claude`(판단 모델: 실패 요약·리뷰 분류·보고서)와 범위 안 티켓의 `model`·`reviewer`가 쓰는 CLI가 있어야 한다.
@@ -440,10 +441,10 @@ gs는 이 파일만 읽는다(환경 변수는 보지 않는다). worker는 이 
 
 ## 새 feature
 
-base 브랜치에서 Claude Code를 연다. 순서는 `/grill` → `/go`이고, 둘 다 사용자가 부르는 skill이다.
+base 브랜치에서 Claude Code를 연다. 순서는 `/goldstack:grill` → `/goldstack:go`이고, 둘 다 사용자가 부르는 skill이다.
 
-**`/grill csv-export`** — 인자가 공백 없는 한 단어면 feature 이름이다. 공백이 있으면(`/grill CSV로 내보내기 추가`) 이름이 아니라 요청으로 읽고, 라운드 1에서 feature 이름을 제안한다. 확정 전에는 `.goldstack/work/<이름>/` 경로를 만들지 않는다.
-1. Claude가 `.goldstack/profile.md`(있으면 가장 먼저, 없고 처음 쓰는 레포면 `/adopt`를 권한다), 레포·문서·도구 버전과 `gs backlog`(열린 아이디어, 범위 밖의 다시 볼 조건)를 직접 읽고 돌려 본 것을 spec "환경 사실"에 날짜와 함께 적는다. 찾을 수 있는 것은 묻지 않는다.
+**`/goldstack:grill csv-export`** — 인자가 공백 없는 한 단어면 feature 이름이다. 공백이 있으면(`/goldstack:grill CSV로 내보내기 추가`) 이름이 아니라 요청으로 읽고, 라운드 1에서 feature 이름을 제안한다. 확정 전에는 `.goldstack/work/<이름>/` 경로를 만들지 않는다.
+1. Claude가 `.goldstack/profile.md`(있으면 가장 먼저, 없고 처음 쓰는 레포면 `/goldstack:adopt`를 권한다), 레포·문서·도구 버전과 `gs backlog`(열린 아이디어, 범위 밖의 다시 볼 조건)를 직접 읽고 돌려 본 것을 spec "환경 사실"에 날짜와 함께 적는다. 찾을 수 있는 것은 묻지 않는다.
 2. 사람이 정할 결정을 라운드마다 한 메시지에 번호 붙여 묻는다. 질문마다 선택지와 그 선택지의 구체 예시(실제로 보일 명령·파일·출력), 추천과 이유가 붙고, 끝에 `yes = 추천 전부 수락. 바꿀 것만 번호로`. 열린 아이디어가 있으면 라운드 1의 첫 질문은 "이번 feature에 넣을 후보"다(아래 [아이디어 흐름](#아이디어-흐름)).
 3. 답하는 법: `yes`(추천 전부), `2. B`(2번만 B), `3. 왜 B가 아니야?`(되묻기: 답을 듣고 같은 라운드를 다시 확정한다). 짧은 답이면 Claude가 "이렇게 읽었다"를 답마다 한 줄로 보이니, 어긋나면 그때 고친다.
 4. 답은 바로 `.goldstack/work/csv-export/spec.md`의 "결정" 표와 "grill 기록"에 적힌다. `verify` 같은 frontmatter 값이면 frontmatter도 고친다(gs는 표가 아니라 frontmatter를 읽는다).
@@ -464,18 +465,18 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 티켓이 있고 spec에 `### 교차 검토` 제목이 있는데 그 절에 실제 표 행(2–5번째 칸이 모두 찬 행)도 `교차 검토 못 함:` 줄도 없으면 `gs check`가 경고한다: `spec §7 교차 검토 기록이 없다(…)`. 템플릿의 자리표시 행만 있어도 같다. 그 제목이 없는 옛 spec은 조용하다. 경고라 막지는 않으니 교차 검토를 돌려 결과를 적거나, 못 돌렸으면 이유를 `교차 검토 못 함: <이유>`로 적는다.
 
 오류가 없으면 `gs check`는 `순서`와 `지금 시작 가능` 뒤에 세 가지를 더 보인다.
-- `실측(지난 실행): small 9분(14) · …` — 같은 레포 다른 feature의 지난 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값(괄호는 표본 수)이다. 소요는 티켓의 첫 단계 시작부터 끝까지이고 재시도를 포함한다. 등급이 없는 옛 티켓과 읽을 수 없는 state는 건너뛴다. 표본이 없으면 `실측 기록 없음`이다. `/grill`은 티켓 표의 예상에 그 티켓 tier의 중앙값을 쓰고, 값이 없으면 `–`로 둔다.
+- `실측(지난 실행): small 9분(14) · …` — 같은 레포 다른 feature의 지난 `run/state.json`에서 병합된 티켓의 등급별 소요 중앙값(괄호는 표본 수)이다. 소요는 티켓의 첫 단계 시작부터 끝까지이고 재시도를 포함한다. 등급이 없는 옛 티켓과 읽을 수 없는 state는 건너뛴다. 표본이 없으면 `실측 기록 없음`이다. `/goldstack:grill`은 티켓 표의 예상에 그 티켓 tier의 중앙값을 쓰고, 값이 없으면 `–`로 둔다.
 - `공통 모델: 판단 claude … · 실패 요약 claude …` — 지적 분류·보고서 Summary에 쓰는 `models.judge`와 실패 요약에 쓰는 `models.failure_summary`다.
-- 티켓마다 한 줄 — 등급과 구현·수정·수리·첫 리뷰·재리뷰의 계열 모델/effort다(두 번째 리뷰어가 있으면 `+`로 잇는다). 실행이 쓰는 선택 함수와 같은 값이고, 재시도·승급은 미리 알 수 없어 넣지 않는다. 그 계열의 `[tiers]` 표가 없으면 모델은 `CLI 기본값`이다. `/grill`은 이 값을 spec의 티켓 표(구현·수정·수리·첫 리뷰·재리뷰 열)와 그 아래 `계열:`(고른 이유)·`공통 모델:` 줄에 그대로 옮긴다.
+- 티켓마다 한 줄 — 등급과 구현·수정·수리·첫 리뷰·재리뷰의 계열 모델/effort다(두 번째 리뷰어가 있으면 `+`로 잇는다). 실행이 쓰는 선택 함수와 같은 값이고, 재시도·승급은 미리 알 수 없어 넣지 않는다. 그 계열의 `[tiers]` 표가 없으면 모델은 `CLI 기본값`이다. `/goldstack:grill`은 이 값을 spec의 티켓 표(구현·수정·수리·첫 리뷰·재리뷰 열)와 그 아래 `계열:`(고른 이유)·`공통 모델:` 줄에 그대로 옮긴다.
 
-파일 형식은 [skills/grill/templates/](../skills/grill/templates/). 중간에 세션이 끊겨도 `/grill csv-export`를 다시 부르면 spec의 기록에서 이어 간다.
+파일 형식은 [skills/grill/templates/](../skills/grill/templates/). 중간에 세션이 끊겨도 `/goldstack:grill csv-export`를 다시 부르면 spec의 기록에서 이어 간다.
 
-**`/go csv-export`**
-1. `gs check` — 오류가 있으면 보이고 "`/grill csv-export`로 고친다"며 끝낸다.
+**`/goldstack:go csv-export`**
+1. `gs check` — 오류가 있으면 보이고 "`/goldstack:grill csv-export`로 고친다"며 끝낸다.
 2. 현재 브랜치가 base인지 보고, grill 결과(`.goldstack/work/csv-export`, `.goldstack/out-of-scope`, `.goldstack/ideas`, `.goldstack/profile.md`)가 아직 커밋 안 됐으면 그 경로만 커밋하고, base가 원격보다 앞서기만 하면 `git push origin main`(force 아님). 뒤처졌거나 갈라졌으면 말하고 끝낸다. worker는 `origin/main` 위에서 일하므로 spec·티켓이 거기 있어야 한다. 보호된 main이면 이 push가 막히니 [먼저 PR로 올린다](#예시-보호된-main--필수-승인).
 3. `gs go csv-export`를 백그라운드로 돌리고 끝날 때까지 기다린다. 사람에게 묻지 않는다.
 4. 결과: `report.md`의 세 줄 요약과 PR 링크(README "5분 따라 하기" 3).
-5. 회고: 끝난 feature마다 subagent가 `/retro`와 같은 방식으로 실행을 읽어 고칠 후보만 번호 붙여 돌려준다. 세션이 후보를 보이고, 사람이 고른 것만 아이디어 파일로 쓴다. 고르지 않으면 아무것도 쓰지 않는다. subagent가 실패하면 다시 부르지 않고 `/retro csv-export`로 따로 돌리라고만 말한다([아이디어 흐름](#아이디어-흐름)). 1~4단계는 사람에게 묻지 않고, 묻는 건 끝난 뒤인 이 단계뿐이다. `/overnight`은 사람이 없어 이 단계를 돌리지 않고 아침 보고에 `회고: /retro csv-export` 한 줄만 적는다.
+5. 회고: 끝난 feature마다 subagent가 `/goldstack:retro`와 같은 방식으로 실행을 읽어 고칠 후보만 번호 붙여 돌려준다. 세션이 후보를 보이고, 사람이 고른 것만 아이디어 파일로 쓴다. 고르지 않으면 아무것도 쓰지 않는다. subagent가 실패하면 다시 부르지 않고 `/goldstack:retro csv-export`로 따로 돌리라고만 말한다([아이디어 흐름](#아이디어-흐름)). 1~4단계는 사람에게 묻지 않고, 묻는 건 끝난 뒤인 이 단계뿐이다. `/goldstack:overnight`은 사람이 없어 이 단계를 돌리지 않고 아침 보고에 `회고: /goldstack:retro csv-export` 한 줄만 적는다.
 
 일부 티켓만 먼저 돌려 볼 때는 터미널에서 `gs check csv-export --only 01,02`로 범위를 보고 `gs go csv-export --only 01,02`. 범위 밖 의존은 끝났다고 본다. **`--only`는 병합하지 않고 멈춘다.** 티켓을 돌려 integration에 병합·검증까지만 하고, 범위가 모든 티켓이어도 PR을 만들지 않고 base를 바꾸지 않으며 최종 보고서도 쓰지 않는다. 끝에 `■ --only 범위만 돌았다: 병합하지 않음 → 이어서 gs go csv-export`가 나온다(범위 안 티켓이 모두 병합됐으면 종료 0, 아니면 1). base 병합은 옵션 없는 `gs go csv-export`가 한다. 이미 병합된 티켓은 다시 돌지 않고 남은 티켓만 돌린 뒤 PR을 병합하며, 보고서 표에 `--only`로 돌린 티켓도 나온다. 반쪽 기능이 main에 들어가지 않는다.
 
@@ -492,7 +493,7 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 | `second_reviewer` | 없음 | 두 번째 리뷰어. `model`·`reviewer`와 다른 계열 |
 
 ### `tier` — 티켓 크기에 맞는 모델·effort
-`/grill`이 티켓 표에 등급과 이유 한 줄을 적어 확인받는다. 문서는 `small`, 재개 흐름처럼 틀리면 비싼 티켓은 `large`다. 실제 이름은 티켓이 아니라 config에 둔다. `gs init` 새 config의 값:
+`/goldstack:grill`이 티켓 표에 등급과 이유 한 줄을 적어 확인받는다. 문서는 `small`, 재개 흐름처럼 틀리면 비싼 티켓은 `large`다. 실제 이름은 티켓이 아니라 config에 둔다. `gs init` 새 config의 값:
 ```toml
 [tiers]
 review = "large"      # 첫 리뷰
@@ -602,7 +603,7 @@ second_reviewer: agy
 [agy]
 max_calls_per_run = 3
 ```
-`gs go` 한 번(feature 하나)에서 gs가 띄우는 agy 호출 수의 상한이다. 1회는 agy worker 한 번(재시도·수정 worker·2차 수정 worker·끊겨서 다시 띄운 worker도 각각 1회), agy 리뷰 한 번, agy 재리뷰 한 번(회차마다, 끊겨서 다시 부른 호출도) 중 하나다. 실행마다 0부터 센다(`gs go a b`면 feature마다 따로). 섹션이 없으면 3, `0`이면 agy를 띄우지 않는다. `/retro`의 agy 요약과 `gs check`의 agy 차단 장치 확인(`agy -p /hooks`, 모델 호출 없음)은 세지 않는다.
+`gs go` 한 번(feature 하나)에서 gs가 띄우는 agy 호출 수의 상한이다. 1회는 agy worker 한 번(재시도·수정 worker·2차 수정 worker·끊겨서 다시 띄운 worker도 각각 1회), agy 리뷰 한 번, agy 재리뷰 한 번(회차마다, 끊겨서 다시 부른 호출도) 중 하나다. 실행마다 0부터 센다(`gs go a b`면 feature마다 따로). 섹션이 없으면 3, `0`이면 agy를 띄우지 않는다. `/goldstack:retro`의 agy 요약과 `gs check`의 agy 차단 장치 확인(`agy -p /hooks`, 모델 호출 없음)은 세지 않는다.
 - **`gs check`**: 범위 안 티켓의 `model`·`reviewer`·`second_reviewer` 중 agy인 자리마다 최악 3회(리뷰 1 + 재리뷰 2, worker 1 + 수정 2)로 센다. 재시도(실패 뒤 다시 부르기)는 세지 않는다. 최악 합이 상한을 넘으면 경고(배정 2자리 × 3 = 6이 상한 3을 넘는 예):
   ```
   경고: 범위 안 agy 최대 6회(배정 2 × 3)가 상한 agy.max_calls_per_run=3회를 넘는다
@@ -631,6 +632,21 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 **리뷰 중에도 일은 이어진다** — 리뷰·판단·재리뷰는 루프 밖 스레드에서 돈다. 한 티켓의 리뷰가 도는 동안 다른 worker가 끝나면 바로 처리되고 준비된 티켓이 시작된다. 병합과 검증은 여전히 한 번에 하나라서, 두 티켓의 리뷰가 함께 끝나도 차례로 병합된다. 리뷰 중인 티켓은 `max_workers` 자리를 차지하지 않는다: worker는 최대 `max_workers`개, 리뷰 중인 티켓도 최대 `max_workers`개다. 수정 worker는 worker 자리를 쓰고, 자리가 없으면 기다린다. `gs status`와 진행 바는 리뷰 중인 티켓을 그대로 `04 리뷰 중(codex)`로 보인다. `gs go`가 루프를 떠나면(`중단(네트워크)`, Ctrl-C, 뜻밖의 오류) 돌던 리뷰어를 끝내고, 다음 `gs go`가 끝나지 않은 리뷰를 처음부터 다시 한다.
 
 **sandbox에서 못 도는 검증** — codex worker는 네트워크가 꺼진 sandbox에서 돌아 `uv build`처럼 네트워크가 필요한 단계를 못 돌릴 수 있다. 지시문이 worker에게 그 단계와 이유를 마지막 메시지에 적고 변경을 커밋하라고 한다(다른 실패는 지금처럼 고친다). gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다. 리뷰어는 네트워크가 필요한 단계를 worker가 못 돌린 것만으로는 지적하지 않고, 다른 실패를 네트워크 탓으로 돌린 것은 지적한다. 새 config 키는 없다.
+
+### worker가 남긴 관찰
+worker가 고치지 않고 남긴 것이 있으면 마지막 메시지 끝에 `## 남긴 관찰` 절로 한 줄에 하나씩 쓴다. 사람이 할 일은 없다. gs가 그 절을 worker 로그의 마지막 메시지 전체에서 뽑는다(`worker-last.txt`는 4,000자에서 잘리지만 이 절은 자르기 전 전체에서 뽑는다).
+1. 리뷰어 프롬프트(첫 리뷰·재리뷰)에 관찰이 번호와 함께 "믿을 수 없는 자료"로 실린다. 리뷰어는 diff와 코드에서 확인하고 관찰마다 판정한다: `지적`(실제 결함. 일반 지적으로도 올라가 다른 지적처럼 fix·report로 나뉜다), `수용`(문제 아님), `범위 밖`(이 티켓이 다룰 일이 아님). 판정은 리뷰 JSON의 선택 칸 `observations: [{"n": 1, "verdict": "지적", "reason": "…"}]`이고, 없거나 모양이 틀리면 판정 없음으로 두고 지적은 그대로 받는다.
+2. 최종 보고서 Evidence의 `### 남은 위험`에 표가 나온다. 관찰은 티켓마다 가장 최근 worker(수정·수리 worker 포함)의 로그에서 직접 뽑아 리뷰를 부르지 않은 티켓(agy 상한 등)의 관찰도 빠지지 않고, 판정은 그 시도의 가장 최근 리뷰 회차에서 번호로 잇는다. 이어지지 않으면 `리뷰 판정 없음`이다. 관찰이 없으면 표도 없다:
+```
+| 티켓 | 관찰 | 리뷰 판정 |
+|---|---|---|
+| 04 | docs/guide.md 표 한 줄이 touches 밖이라 못 고쳤다 | 수용: 이 티켓 범위 밖 문서 |
+| 05 | agy 상한 경우를 돌리지 못했다 | 리뷰 판정 없음 |
+```
+관찰은 worker가 쓴 글이라 확인되지 않은 자료다. 표의 판정이 `수용`이어도 사람이 한 번 읽는다.
+
+### 성공 result 뒤 끝나지 않는 worker
+worker가 성공 끝 이벤트를 냈는데 남긴 자식 프로세스(`setsid nohup … &` 같은 것) 때문에 worker 프로세스가 끝나지 않으면, 예전에는 `idle_minutes`(기본 20분) 동안 출력·커밋이 없다는 시간 초과로 재시도했다. 지금은 성공 끝 이벤트를 처음 본 뒤 `[timeouts] result_grace_seconds`(기본 60초)가 지나면 프로세스 그룹을 정리하고 끝난 것(종료 코드 0)으로 보고 리뷰로 넘긴다. 출력에 `[04] result 뒤 60초 지나도 끝나지 않아 정리: 남은 프로세스 N개`가 나오고, 정리 때 남아 있던 프로세스 목록은 그 시도의 실행 디렉터리 `leftover-procs.txt`에 남는다. 실패 끝 이벤트(`is_error: true`)는 이 유예를 쓰지 않는다. `0`이면 끈다.
 
 리뷰어·판단 모델 호출이 끊기거나 시간을 넘기면 실패가 아니다: 기다렸다 다시 부르고, 상한을 넘기면 [`중단(네트워크)`](#네트워크가-끊겼을-때)로 멈춘다. 끊겼다는 이유로 리뷰 없이 병합하지 않는다.
 
@@ -661,15 +677,15 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 | 상태 | 뜻 | 사람이 볼 것 |
 |---|---|---|
 | `수정됨(재리뷰 확인)` | 지적을 낸 리뷰어가 수정 커밋에서 근거를 대고 고쳐졌다고 확인했다 | 없다. 믿기 어려우면 `재리뷰 근거`만 읽는다 |
-| `미해결` | 리뷰어가 아직 안 고쳐졌다고 봤다. 고치지 못한 채 병합됐다 | **가장 먼저 본다.** `재리뷰 근거`를 읽고 맞으면 `/grill`로 고칠 티켓을 더한다 |
+| `미해결` | 리뷰어가 아직 안 고쳐졌다고 봤다. 고치지 못한 채 병합됐다 | **가장 먼저 본다.** `재리뷰 근거`를 읽고 맞으면 `/goldstack:grill`로 고칠 티켓을 더한다 |
 | `보고만` | 고치지 않기로 했다: 판단 모델이 `report`로 봤거나(근거 없음, 범위 밖 등) 2차 재리뷰의 새 문제다 | `판단`을 읽고 동의하는지 본다. 2차 재리뷰의 새 문제는 판단 모델이 보지 않았으니 지적을 직접 읽는다. high·medium은 아이디어 파일로도 남는다(아래) |
-| `재현된 미수리` | 판단 모델이 `defer`로 봤다: 리뷰어가 재현한 결함인데 고치려면 고칠 수 있는 파일 밖을 건드려야 한다. 고치지 않았다. 원래 심각도와 상관없이 남은 high로 센다 | 보고서 Evidence의 **"재현된 미수리 결함"** 절(티켓·리뷰어·원래 심각도·근거·판단)을 읽고 `/grill`로 고칠 티켓을 더한다. 병합은 막지 않는다 |
+| `재현된 미수리` | 판단 모델이 `defer`로 봤다: 리뷰어가 재현한 결함인데 고치려면 고칠 수 있는 파일 밖을 건드려야 한다. 고치지 않았다. 원래 심각도와 상관없이 남은 high로 센다 | 보고서 Evidence의 **"재현된 미수리 결함"** 절(티켓·리뷰어·원래 심각도·근거·판단)을 읽고 `/goldstack:grill`로 고칠 티켓을 더한다. 병합은 막지 않는다 |
 | `수정 못 함(<이유>)` | 고칠 지적인데 수정이 들어가지 않았다. 이유: `한도`(agy 상한), `띄우지 못함: …`, `수정 worker 실패: …` | 지적이 코드에 그대로 있다고 보고 읽는다. `수정 worker 실패: 커밋 없음`이면 worker가 지적을 틀렸다고 봤을 수 있으니 `run/<NN>/<시도>/fix/worker.log`의 마지막 메시지를 본다. 한도면 `agy.max_calls_per_run`을 올린다 |
 | `확인 못 함(<이유>)` | 수정 커밋은 들어갔지만 고쳐졌는지 모른다. 이유: `한도`, `재리뷰 실패`(답 형식 오류, 판정·근거 없음 등). 옛 실행에는 `시간 초과`도 있다 | 지적과 수정 커밋을 직접 대조한다. 로그는 `run/<NN>/<시도>/rereview<회차>-<계열>/reviewer.log` |
 
 **형식 오류로 읽지 못한 리뷰** — 리뷰어 답에 JSON이 허용하지 않는 이스케이프(`\$`, `\x5d` 같은 셸 인용)가 섞여 있어도 gs가 역슬래시를 두 번 써서 글자를 살려 읽는다. 키 글자가 바뀌는 고치기는 하지 않는다. 그래도 읽지 못한 답은 지적 0건의 성공처럼 보이지 않는다. 보고서의 "리뷰 호출별 시간" 표 결과 칸이 `format-error`이고(고쳐서 읽은 호출은 `passed`), 표 아래 "형식 오류로 읽지 못한 리뷰 답"에 답을 담은 `review.txt` 경로와 바이트 수가 나온다. 답 원문은 믿을 수 없는 글이라 보고서에 옮기지 않는다. 그 리뷰의 지적은 없는 것이니 `review.txt`를 직접 열어 본다.
 
-**보고만 지적은 아이디어 파일로 남는다** — 상태가 `재현된 미수리`인 지적은 원래 심각도와 상관없이 high 아이디어 파일로 남고(본문에 원래 심각도와 `재현된 미수리 결함(defer)`이 적힌다), 상태가 `보고만`인 high·medium 지적마다 `.goldstack/ideas/<feature>-<티켓>-<번호>.md`가 하나씩 생기고 보고서 커밋에 함께 들어가 main에 올라간다. 다른 머신에서도 `gs backlog`에 열린 아이디어(`source: <feature> 리뷰 <티켓>`)로 보이고 다음 `/grill`의 후보가 된다. low는 보고서에만 남는다. 이미 있는 파일은 다시 쓰지 않으므로 재개해도 두 번 생기지 않고, `taken`·`dropped`와 직접 고친 내용이 남는다. 필요 없으면 지우지 말고 `status: "dropped"`로 둔다. 파일을 쓰지 못해도 마무리 결과는 바뀌지 않고 경고만 남는다.
+**보고만 지적은 아이디어 파일로 남는다** — 상태가 `재현된 미수리`인 지적은 원래 심각도와 상관없이 high 아이디어 파일로 남고(본문에 원래 심각도와 `재현된 미수리 결함(defer)`이 적힌다), 상태가 `보고만`인 high·medium 지적마다 `.goldstack/ideas/<feature>-<티켓>-<번호>.md`가 하나씩 생기고 보고서 커밋에 함께 들어가 main에 올라간다. 다른 머신에서도 `gs backlog`에 열린 아이디어(`source: <feature> 리뷰 <티켓>`)로 보이고 다음 `/goldstack:grill`의 후보가 된다. low는 보고서에만 남는다. 이미 있는 파일은 다시 쓰지 않으므로 재개해도 두 번 생기지 않고, `taken`·`dropped`와 직접 고친 내용이 남는다. 필요 없으면 지우지 말고 `status: "dropped"`로 둔다. 파일을 쓰지 못해도 마무리 결과는 바뀌지 않고 경고만 남는다.
 
 `수정됨`이 아닌 상태를 다 합친 수가 `■ 보고서: … · 남은 리뷰 지적 N`과 텔레그램의 `남은 지적 N`이다(`보고만`도 센다). 이 기능이 생기기 전에 돈 실행의 state를 읽으면 `확인 못 함(재리뷰 없음)`, `수정 못 함(수정 버림)`, `수정 못 함(수정 기록 없음)`으로 보일 수 있다.
 
@@ -686,6 +702,8 @@ worker가 끝나면 병합 전에 다른 계열 리뷰어가 티켓 diff를 보�
 - 수리 brief는 검증이 integration의 병합 트리에서 도는 것 자체는 정상이라고 하되, integration과 worktree의 환경 차이(setup을 돌린 시각, 설치 메타데이터)는 원인 후보로 확인하게 하고, 브랜치 안에서 고칠 수 없으면 위 줄을 쓰고 커밋하지 말라고 안내한다. 실패 요약도 같다.
 - 모든 worker의 brief는 전체 검증 대신 고친 곳에 닿는 좁은 시험만 시킨다. 첫 구현 worker(claude·codex·agy 계열 무관, 재개한 worker 포함)도 수리 worker와 [수정 worker](#리뷰와-재리뷰)와 같다. 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 하므로, 같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없앴다. 티켓 `verify`가 좁아도 같다. 뒤 실행에서 첫 검증 실패가 늘어 수리 시간이 줄어든 시간을 넘으면 되돌린다(goldstack-v20 결정 4-2). 모든 brief에는 "다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 다루고 `pkill`·`killall`로 찾아 죽이지 않는다"가 붙는다.
 - 첫·수정·수리 worker의 brief에는 "버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다"가 붙는다. worker는 복구한 뒤 커밋하고 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다. 재리뷰 지시에는 넣지 않는다.
+- 첫·재개 worker의 brief에는 그 티켓의 `touches` 줄(`- 이 티켓의 touches: …`)과 "touches 밖 파일은 고치지 않는다. 고쳐야 하면 `## 남긴 관찰`에 적는다"가 붙는다. `touches`가 없는 티켓은 이 줄이 없다. 수정·수리 worker는 이 줄을 받지 않는다: 고칠 수 있는 파일은 리뷰가 알려 주는 목록(이 티켓과 이미 병합된 티켓의 `touches`)이다. gs는 touches 밖 변경을 diff로 대조하거나 실패로 처리하지 않는다.
+- 모든 worker의 brief에는 고치지 않고 남긴 관찰(리뷰가 짚지 않은 의심, 돌리지 못한 확인, touches 밖에서 고쳐야 할 것)을 마지막 메시지 끝의 `## 남긴 관찰` 절에 한 줄에 하나씩 쓰라는 규칙이 붙는다. 이 절이 [리뷰 판정과 보고서 표](#worker가-남긴-관찰)로 이어진다.
 - 보고서 티켓별 결과의 이유 칸에 `수리: 시도 1 커밋 1개 → 다시 검증 통과` 같은 줄이 붙는다. gs가 죽거나 끊겨도 다음 `gs go`가 수리를 같은 worktree에서 잇는다.
 
 ### 신호로 끊긴 검증
@@ -721,6 +739,11 @@ zsh는 `=cmd`를 `cmd`의 경로로 바꾼다(`=ls` → `/bin/ls`). 따옴표 �
 setopt noequals
 ```
 `.zshenv`는 대화형이 아닌 `zsh -c`도 읽으므로 명령 묶음에도 적용된다. 이 머신의 `zsh -c 'echo ==='`는 이 설정으로 정상 출력했다(spec 작성 때 `ZDOTDIR`의 `.zshenv`에 두고 1회 쟀다). 부작용: `=cmd` 확장(`=ls`, `=python`으로 경로 얻기)을 더 쓸 수 없다. `echo =ls`는 `=ls` 그대로 나온다. 그 확장에 기대는 스크립트가 있으면 같이 깨지니 먼저 `grep -rn '=[a-z]' ~/.zshrc`처럼 확인한다. **Claude Code Bash 도구에서 이 설정이 통하는지는 재지 않았다.** Bash 도구가 쓰는 셸 환경(스냅샷)이 `.zshenv`를 읽는지는 확인하지 않았으니, 효과를 보려면 새 세션에서 `echo ===`로 직접 확인한다.
+
+### worker가 띄우는 중첩 세션(`gs child`)과 `GS_ROLE`
+worker가 측정을 하려고 `claude -p`를 자식으로 띄울 때가 있다. 사람이 셸에서 띄운 세션과 같은 조건으로 재려면 Claude Code가 Bash 자식에 넣어 주는 세션 변수가 없어야 한다. 그렇다고 `env -u GS_ROLE claude -p …`로 `GS_ROLE`을 지우면 자식에게는 worker 차단 hook이 판정하지 않으므로(`claude -p "git push"`가 통과한다) 막힌다.
+- **`gs child -- <명령> [인자…]`** — Claude Code 세션 변수(`CLAUDECODE`, `CLAUDE_EFFORT`, `CLAUDE_PID`, `CLAUDE_CODE_ENTRYPOINT`·`_EXECPATH`·`_SESSION_ID`·`_CHILD_SESSION`·`_SESSION_ATTENDED`·`_MESSAGING_SOCKET`·`_MESSAGING_TOKEN`)만 지우고 그 명령으로 프로세스를 바꾼다. 접두어가 아니라 이 목록이라 인증 변수는 지우지 않고, `GS_*`는 남아 자식에도 hook이 판정한다. 모델·effort는 플래그로 고정한다: `gs child -- claude -p --model <모델> --effort <effort> "…"`. worker brief가 이 형태를 안내한다. 레포 밖에서도 돈다.
+- **worker는 `GS_ROLE`을 못 바꾼다** — worker hook이 Bash 명령에서 `GS_ROLE`을 지우거나 worker가 아닌 값으로 바꾸는 형태(`env -u GS_ROLE`, `env -i`, `unset GS_ROLE`, `export GS_ROLE=…`, `GS_ROLE=… <명령>`)를 막는다. 차단 메시지가 "중첩 세션은 `gs child -- …`로 띄운다"를 안내한다. `echo $GS_ROLE`, `env | grep GS_`, `GS_ROLE=worker …`는 통과한다. 알려진 오차단: `echo ';' unset GS_ROLE`처럼 따옴표 속 `;`를 명령 구분으로 읽는 경우.
 
 ### worker의 전체 시험을 막기(`[hook.worker_tests]`)
 
@@ -779,7 +802,7 @@ csv-export: 실행 중(pid 48211) · 시작 14:02:10
 03의 시도 2는 첫 시도가 실패해 재시도 중이라는 뜻이다(실패 이유는 끝난 시도에만 보인다). `gs status`만 치면 지금 돌고 있는 feature를 모두 보이고, 없으면 지난 실행 기록이 있는 feature 이름을 알려 준다. 첫 줄이 `중단됨(…)`이면 `gs go`가 끝을 남기지 않고 죽은 것이고, `중단(네트워크)(…) · 다음 gs go가 이어 간다`면 대기 상한을 넘겨 스스로 멈춘 것이다. 둘 다 다시 `gs go`를 돌리면 이어 간다.
 
 **worker 화면과 로그** — herdr 안에서 돌렸으면 지금 workspace의 탭 `gs:csv-export`에 worker마다 pane이 열린다. 성공한 worker의 pane은 닫히고, 실패한 pane은 들여다볼 수 있게 남는다.
-herdr 밖이면 화면 없이 돌고, 로그는 `.goldstack/work/csv-export/run/<티켓>/<시도>/worker.log`에 쌓인다. `gs go` 자신의 출력(`[02] 리뷰: codex`, `[02] 검증 통과 → integration 병합` 같은 줄)은 `/go`가 띄운 백그라운드 출력이다.
+herdr 밖이면 화면 없이 돌고, 로그는 `.goldstack/work/csv-export/run/<티켓>/<시도>/worker.log`에 쌓인다. `gs go` 자신의 출력(`[02] 리뷰: codex`, `[02] 검증 통과 → integration 병합` 같은 줄)은 `/goldstack:go`가 띄운 백그라운드 출력이다.
 
 ## 실패했을 때
 
@@ -796,9 +819,9 @@ $ git show "$head:.goldstack/work/csv-export/report.md"
 | `문서 미반영: <티켓>`(있을 때만, 제목 바로 아래) | 코드 티켓이 병합됐는데 `touches`에 `docs/`나 `CHANGELOG.md`가 든 티켓이 `failed`·`skipped`로 남았다는 표시다. 문서 티켓마다 한 줄이다. 코드만 main에 들어가고 문서는 빠졌으니 그 티켓을 다시 돌리거나 직접 문서를 고친다. 실패한 티켓을 되돌려 다시 돌려도 이 줄은 마무리가 끝날 때까지 남는다 |
 | 마무리 상태 줄(Summary 바로 아래) | gs가 state에서 쓴 한 줄. 예 `마무리: verified · PR https://github.com/you/tally/pull/7 병합 · main 검증 통과`, `마무리: reverted · main 검증 실패 → revert 1a2b3c4d`, `마무리: not_merged · integration 검증 실패` |
 | 지적 개수 줄(마무리 상태 줄 아래) | `리뷰 지적: 수정됨 1 · 미해결 1 · …`. 상태마다 뜻과 볼 것은 [리뷰와 재리뷰](#리뷰와-재리뷰) |
-| Evidence → 남은 위험(있을 때만, 맨 앞) | `- 01: 플러그인 격리 못 함: …`. claude worker의 플러그인 끄기가 빠진 채 돌았다는 뜻이다(worker를 막지는 않는다). `claude plugin list`가 되는지 본다 |
+| Evidence → 남은 위험(있을 때만, 맨 앞) | `- 01: 플러그인 격리 못 함: …`. claude worker의 플러그인 끄기가 빠진 채 돌았다는 뜻이다(worker를 막지는 않는다). `claude plugin list`가 되는지 본다 그 다음에 worker가 남긴 관찰 표 `\| 티켓 \| 관찰 \| 리뷰 판정 \|`이 온다. 판정은 `지적`·`수용`·`범위 밖`이고 리뷰 판정이 이어지지 않으면 `리뷰 판정 없음`이다([자세히](#worker가-남긴-관찰)) |
 | Evidence → 실행 측정 | gs 버전·설치 commit, 일시 오류 수·대기 시간(전체, 티켓별), 표: worker 시도별 실제 모델·effort·소요·처리 대기, 리뷰어별 소요·결과 대기·지적·채택(fix, 해결 수와 다르다), 리뷰 호출별 시간(재호출 포함), gs 검증별 티켓 시도·재시도·명령·integration head·티켓 head·소요·결과(integration head는 검증한 integration 끝이라 같은 티켓의 여러 검증이 같을 수 있다), 마무리 단계별 시간. `결과 대기(초)`는 리뷰 호출이 돌아온 뒤 `gs go`가 그 결과를 받기까지다. 검증이 `gs go`를 붙잡는 동안 끝난 리뷰가 기다린 시간이고, 기록이 없는 옛 실행은 `기록 없음`이다. 어디서 시간을 썼는지 볼 때 읽는다. 뜻은 [internals](internals.md#상태) |
-| Evidence → 검증 실패(마무리 전체 검증이 실패했을 때만) | 실패한 단계(`integration`, `integration-final`), 로그 경로, 실패 줄 최대 10줄, `후보 티켓(추정)`. 추정이라 틀릴 수 있다. 로그로 확인하고 `/grill`로 고칠 티켓을 더한다 |
+| Evidence → 검증 실패(마무리 전체 검증이 실패했을 때만) | 실패한 단계(`integration`, `integration-final`), 로그 경로, 실패 줄 최대 10줄, `후보 티켓(추정)`. 추정이라 틀릴 수 있다. 로그로 확인하고 `/goldstack:grill`로 고칠 티켓을 더한다 |
 | Evidence → 티켓별 결과 | 티켓마다 결과(`merged`, `failed`, `skipped`)와 이유. 단계별 소요(`worker 9분 · 리뷰 4분 · 수정 2분 · 재리뷰 1분 · 검증 3분`, 0분인 단계는 빼고 모두 1분 미만이면 `모두 1분 미만`). 미커밋 변경 때문에 남긴 worktree(`--only` 범위 밖 티켓 것도). `경고: setup이 추적 파일을 바꿨다 → 되돌림: …`, 플러그인 격리 경고 |
 | Evidence → 리뷰 지적 | 다른 계열 reviewer의 지적 전부와 지적마다의 상태·근거·판단·재리뷰 근거. 리뷰어가 `checked`(확인한 완료 조건·돌린 명령과 결과)를 냈으면 `04 리뷰(codex) checked(믿을 수 없는 자료)` 목록이 붙는다. 리뷰어가 쓴 글이라 증거가 아니라 단서로 읽는다. 고쳐졌다고 확인된 지적도 `수정됨(재리뷰 확인)`으로 남는다. `second_reviewer`가 있으면 리뷰마다 `04 리뷰(codex)`, `04 리뷰(agy)`로 나뉜다. 리뷰 자체가 실패했거나 `건너뜀(한도)`이면 그 메모, 수정·재리뷰 경과 메모 |
 | Evidence 끝 `agy 사용: N/상한` | 이번 실행에서 gs가 띄운 agy 호출 수 |
@@ -891,24 +914,24 @@ gs go: git 오류: push 설정이 실행 시작 때와 달라 push하지 않았�
 ```
 마무리를 하지 않았으니 `■ 보고서:` 줄과 알림의 경로에는 파일이 없거나 지난 실행의 것이 있다. 지금 상태는 `gs status csv-export`로 본다.
 
-**이어 가기** — 네트워크가 돌아오면 `gs go csv-export`(또는 `/go`)를 다시 친다. 끊긴 worker는 같은 worktree에서 잇고, worker가 끝나 있던 티켓은 리뷰·재리뷰부터 하고, 대기 합계는 새로 센다. 그 worktree를 지웠거나 브랜치가 달라졌으면 경고하고 새로 시작한다. agy worker는 다시 띄울 때도 호출로 세므로 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿으면 `agy 한도`로 실패한다. 이 상한은 `agy.max_calls_per_run`으로 올린다. 대기 합계의 상한은 `timeouts.network_wait_minutes`로 올린다.
+**이어 가기** — 네트워크가 돌아오면 `gs go csv-export`(또는 `/goldstack:go`)를 다시 친다. 끊긴 worker는 같은 worktree에서 잇고, worker가 끝나 있던 티켓은 리뷰·재리뷰부터 하고, 대기 합계는 새로 센다. 그 worktree를 지웠거나 브랜치가 달라졌으면 경고하고 새로 시작한다. agy worker는 다시 띄울 때도 호출로 세므로 [상한](#agy-max_calls_per_run--gemini-호출-상한)에 닿으면 `agy 한도`로 실패한다. 이 상한은 `agy.max_calls_per_run`으로 올린다. 대기 합계의 상한은 `timeouts.network_wait_minutes`로 올린다.
 
 끊김을 자주 보면 보고서 "실행 측정"의 일시 오류 수·대기 시간을 본다. 마무리 단계의 push·`gh` 오류는 기다리지 않는다. 지금처럼 멈추고 다음 `gs go`가 잇는다.
 
 ### 다시 실행
 
-고칠 것이 spec·티켓이면 `/grill csv-export`로 고치고(커밋까지 한다), 그 뒤 `/go csv-export`. 코드만 다시 돌리면 되면 바로 `/go csv-export`.
+고칠 것이 spec·티켓이면 `/goldstack:grill csv-export`로 고치고(커밋까지 한다), 그 뒤 `/goldstack:go csv-export`. 코드만 다시 돌리면 되면 바로 `/goldstack:go csv-export`.
 - integration에 병합된 티켓은 건너뛴다(`[01] 이미 병합됨`). 실패·건너뜀 티켓은 실패 횟수를 0으로 되돌리고 다시 한다.
 - `gs go`가 죽어 `running`으로 남은 티켓은 실패로 세지 않고 새로 시작한다. 살아 남은 worker가 있으면 먼저 끝낸다.
 - 실패한 티켓을 다시 돌려도 앞 시도의 리뷰 지적이 사라지지 않는다. 새 시도가 리뷰 기록을 비우기 전에 지적이 있으면 시도 번호·리뷰어·리뷰한 SHA와 함께 state `prior_findings`로 옮기고, 보고서 "리뷰 지적" 아래 **"버려진 시도의 지적"** 절에 `- 03 시도 1 리뷰(codex, 1a2b3c4d5e6f) [high] src/x.py:12: …`처럼 시도 번호·리뷰어·severity·한 줄이 나온다. 버려진 코드의 지적이라 지금 코드에 있는지는 모른다: 읽고 참고만 한다. `남은 리뷰 지적` 집계와 아이디어 파일에는 들어가지 않고 다음 시도 brief에도 넘기지 않는다. 지적이 없었으면 절이 없다.
 - 이미 끝난 feature를 다시 실행해 '이미 끝남' 경로로 가도 issue 닫기·다시 열기가 gh 실패로 못 끝났으면 끝 출력에 `■ issue: #12 닫기 실패(gh). 다음 gs go가 다시 시도한다`가 보인다. 보고서는 다시 쓰지 않고 종료 코드·base도 그대로다.
 - 지난 마무리가 끝나지 않았으면(승인·CI 대기, main 검증 전 등) 그것만 끝내고 멈춘다. 실패·건너뜀 티켓이 있으면 `■ 남은 티켓 N개 → 다음 gs go`이니 [한 번 더 친다](#예시-보호된-main--필수-승인).
-- spec·티켓을 고치고 커밋·push하지 않았으면 `gs go`가 시작 전에 거부한다(`.goldstack/work/csv-export가 origin/main와 다르다. … 먼저 커밋하고 push하라`). `/go`가 커밋·push를 대신 해 준다.
+- spec·티켓을 고치고 커밋·push하지 않았으면 `gs go`가 시작 전에 거부한다(`.goldstack/work/csv-export가 origin/main와 다르다. … 먼저 커밋하고 push하라`). `/goldstack:go`가 커밋·push를 대신 해 준다.
 - 같은 feature에 `gs go`는 하나만 돈다. `이미 다른 gs go가 돌고 있다(pid …)`면 그 프로세스가 끝나길 기다린다.
 
 ## 여러 feature 이어 돌리기(`gs go a b`)
 
-grill이 끝난 feature가 여럿이면(밤새 돌려 둘 때) 한 번에 줄 세운다. Claude Code에서 `/go csv-export csv-import`, 터미널에서 `gs go csv-export csv-import`. `/go`는 feature마다 `gs check`와 커밋·push를 한 뒤 `gs go csv-export csv-import`를 한 번 띄우고, 끝나면 실행된 feature마다 세 줄 요약과 PR을 보인다.
+grill이 끝난 feature가 여럿이면(밤새 돌려 둘 때) 한 번에 줄 세운다. Claude Code에서 `/goldstack:go csv-export csv-import`, 터미널에서 `gs go csv-export csv-import`. `/goldstack:go`는 feature마다 `gs check`와 커밋·push를 한 뒤 `gs go csv-export csv-import`를 한 번 띄우고, 끝나면 실행된 feature마다 세 줄 요약과 PR을 보인다.
 1. 시작 전에 모든 feature를 `gs check`한다. 하나라도 오류면 아무것도 시작하지 않는다(종료 1). 뒤 feature의 오류 때문에 앞 것만 돌고 끝나는 일이 없다.
 2. 앞 feature를 평소처럼 main 검증까지 끝낸다.
 3. 종료 코드가 0이고 마무리가 `verified`면 다음으로 간다:
@@ -981,24 +1004,24 @@ $ gs clean csv-export
 
 ## 아이디어 흐름
 
-실행에서 나온 생각은 아이디어 함 `.goldstack/ideas/`에 파일로 쌓였다가 다음 feature의 grill에서 후보가 된다. 보고만으로 남은 high·medium 리뷰 지적은 `/go`가 끝날 때 gs가 스스로 파일로 쓴다([리뷰와 재리뷰](#리뷰와-재리뷰)). `/go csv-export`가 끝나면 `/retro csv-export`가 그 실행 기록(report.md, state.json, worker 로그, 리뷰, 다른 feature 보고서와의 반복)을 읽고 고칠 후보를 제안하고, 사람이 고른 것을 아이디어 파일로 쓴다. 실행 중 대화에서 떠오른 생각은 `/idea <한 줄>`로 바로 넣는다. 다음 feature를 시작하기 전에 `gs backlog`로 열린 아이디어와 범위 밖의 다시 볼 조건을 훑고, `/grill <다음 feature>`를 부르면 라운드 1의 첫 질문으로 그 열린 아이디어 가운데 이번에 넣을 것을 묻는다. 고른 아이디어는 `status: taken`이 되어 다음 `gs backlog`에서 빠진다. 아이디어 파일은 커밋하지 않고 두면 `/grill`·`/go`의 커밋이 함께 담는다.
+실행에서 나온 생각은 아이디어 함 `.goldstack/ideas/`에 파일로 쌓였다가 다음 feature의 grill에서 후보가 된다. 보고만으로 남은 high·medium 리뷰 지적은 `/goldstack:go`가 끝날 때 gs가 스스로 파일로 쓴다([리뷰와 재리뷰](#리뷰와-재리뷰)). `/goldstack:go csv-export`가 끝나면 `/goldstack:retro csv-export`가 그 실행 기록(report.md, state.json, worker 로그, 리뷰, 다른 feature 보고서와의 반복)을 읽고 고칠 후보를 제안하고, 사람이 고른 것을 아이디어 파일로 쓴다. 실행 중 대화에서 떠오른 생각은 `/goldstack:idea <한 줄>`로 바로 넣는다. 다음 feature를 시작하기 전에 `gs backlog`로 열린 아이디어와 범위 밖의 다시 볼 조건을 훑고, `/goldstack:grill <다음 feature>`를 부르면 라운드 1의 첫 질문으로 그 열린 아이디어 가운데 이번에 넣을 것을 묻는다. 고른 아이디어는 `status: taken`이 되어 다음 `gs backlog`에서 빠진다. 아이디어 파일은 커밋하지 않고 두면 `/goldstack:grill`·`/goldstack:go`의 커밋이 함께 담는다.
 
 **재시도로 버려진 코드의 지적 파일은 닫힌다** — 티켓이 첫 시도에서 실패하고 재시도(새 worktree, 새 코드)가 병합되면, 옛 시도의 리뷰가 낸 `.goldstack/ideas/<feature>-<티켓>-<번호>.md` 중 `status: open`인 것을 gs가 보고서 커밋에서 `status: "dropped"`로 바꾸고 본문 끝에 `재시도가 병합돼 이 지적을 낸 시도의 코드는 버려졌다. 유효하면 새 리뷰가 다시 낸다. (gs가 닫음)`을 붙인다. 판단 모델은 부르지 않고 문장도 비교하지 않는다.
 - 닫는 것: 이번 실행에서 병합된 티켓의 파일 중 지금 state가 가리키는 번호에 없고, frontmatter `source`가 `<feature> 리뷰 <티켓>`인 것.
 - 안 건드리는 것: `status`가 `open`이 아닌 파일(`taken`·`dropped` 등), 지금 시도의 지적, 병합되지 않은 티켓의 파일, 같은 시도 안의 비슷한 지적(합치지 않는다). 본문을 사람이 고쳐도 `source`와 `status: open`이 그대로면 닫히니, 보존할 지적은 `status`를 바꿔 둔다.
 - 이미 닫은 파일은 `open`이 아니라서 재개로 다시 돌아도 결과가 같다. 파일을 못 닫으면 `■ 경고: 재시도로 대체된 지적 파일 …을 닫지 못했다`만 나오고 실행 결과는 그대로다.
 
-**`/retro csv-export`** — feature 실행을 돌아볼 때. 인자가 `.goldstack/work/` 아래 feature 이름이면 실행 기록을, 아니면 세션을 읽는다(아래 [`/retro`](#retro--실행을-돌아볼-때사용자-호출)). 후보를 번호 붙여 보이고, 다른 feature 보고서에도 같은 실패가 있으면 `[반복]`을 단다. 파일은 사람이 "1, 3"처럼 고른 뒤에만 쓴다.
+**`/goldstack:retro csv-export`** — feature 실행을 돌아볼 때. 인자가 `.goldstack/work/` 아래 feature 이름이면 실행 기록을, 아니면 세션을 읽는다(아래 [`/goldstack:retro`](#retro--실행을-돌아볼-때사용자-호출)). 후보를 번호 붙여 보이고, 다른 feature 보고서에도 같은 실패가 있으면 `[반복]`을 단다. 파일은 사람이 "1, 3"처럼 고른 뒤에만 쓴다.
 
-**`/idea <한 줄>`** — 생각 하나를 바로 적을 때.
+**`/goldstack:idea <한 줄>`** — 생각 하나를 바로 적을 때.
 ```
-/idea gs status가 끝난 티켓의 리뷰 지적 수를 보이면 좋겠다
+/goldstack:idea gs status가 끝난 티켓의 리뷰 지적 수를 보이면 좋겠다
 ```
 먼저 열린 아이디어에서 비슷한 것(같은 문제, 같은 곳)을 찾는다. 있으면 그 slug와 첫 줄을 보이고 "덧붙일까, 새 파일로 쓸까"를 묻는다. 덧붙이면 그 파일 끝에 `- 2026-11-03 <근거> (출처: …)` 줄이 붙는다. 없으면 slug·severity·source를 문맥에서 정해 새 파일을 쓰고 한 줄로 알린다:
 ```
 .goldstack/ideas/status-review-count.md · 2026-11-03 · low · goldstack-v3 실행 중 대화 · open
 ```
-severity는 `high`(결과·기록이 틀리거나 안전 구멍), `medium`(반복되는 손일·불편), `low`(다듬기). 커밋은 하지 않는다. 파일 형식의 원본은 plugin의 `skills/idea/templates/idea.md`이고, `/idea`가 그 파일을 직접 읽는다(대상 레포의 README를 가리키지 않는다).
+severity는 `high`(결과·기록이 틀리거나 안전 구멍), `medium`(반복되는 손일·불편), `low`(다듬기). 커밋은 하지 않는다. 파일 형식의 원본은 plugin의 `skills/idea/templates/idea.md`이고, `/goldstack:idea`가 그 파일을 직접 읽는다(대상 레포의 README를 가리키지 않는다).
 
 **`gs backlog [--all]`** — 다음 feature를 고르기 전에. 읽기 전용이고 늘 종료 0이다.
 ```console
@@ -1012,7 +1035,7 @@ same-file-serialization-check  v0 06처럼 blocked_by 누락 충돌로 티켓이
 ```
 아이디어 파일에 `issues: [12]`를 적으면 그 issue 번호가 줄 끝에 `issues: #12`로 붙는다. 열린 아이디어를 severity(high→low) → 날짜(오래된 것 먼저) → slug 순으로 보이고, 아래에 `.goldstack/out-of-scope/*.md`마다 `**다시 볼 조건**:` 문장을 보인다. 조건이 맞았으면 그 개념을 다음 grill에서 다시 꺼낸다. `--all`은 taken·dropped도 보이고 status 열을 더한다. 형식이 틀린 아이디어 파일은 `경고: <파일>: <이유>`로 알리고 목록에서 뺀다(`gs check`는 아이디어를 보지 않는다). 파일 형식은 `skills/idea/templates/idea.md`와 [internals.md](internals.md#아이디어-함).
 
-**`/grill`의 후보 질문** — 열린 아이디어가 있을 때 라운드 1의 첫 질문:
+**`/goldstack:grill`의 후보 질문** — 열린 아이디어가 있을 때 라운드 1의 첫 질문:
 ```
 라운드 1
 1. 이번 feature에 넣을 후보(여러 개 가능, 없으면 "없음"):
@@ -1035,7 +1058,7 @@ yes = 추천 전부 수락. 바꿀 것만 번호로
 
 현장에서 쓰다 드러난 gs 자체의 결함을 goldstack 저장소의 GitHub issue(라벨 `field-report`)로 올린다. 판단 모델 없이 규칙으로만 고른다.
 
-**보내는 것** — gs의 내부 예외, 마무리 이상(재개 phase에 갇힘, 예상 밖 revert, 마무리 오류), 이름 붙은 어댑터 실패 패턴(예 codex ref 잠금 실패)과 모르는 어댑터 오류(`unknown`), 그리고 사람이 `gs feedback "한 줄"`·`/feedback`으로 직접 쓴 글. issue에는 gs·CLI 버전, OS, 단계, 동작에 영향을 주는 config 값(merge_method 등), gs 소스의 프레임(파일:함수:줄), 지문, 횟수, 그리고 `detail = "errors"`면 가린 오류 줄 최대 20줄이 들어간다.
+**보내는 것** — gs의 내부 예외, 마무리 이상(재개 phase에 갇힘, 예상 밖 revert, 마무리 오류), 이름 붙은 어댑터 실패 패턴(예 codex ref 잠금 실패)과 모르는 어댑터 오류(`unknown`), 그리고 사람이 `gs feedback "한 줄"`·`/goldstack:feedback`으로 직접 쓴 글. issue에는 gs·CLI 버전, OS, 단계, 동작에 영향을 주는 config 값(merge_method 등), gs 소스의 프레임(파일:함수:줄), 지문, 횟수, 그리고 `detail = "errors"`면 가린 오류 줄 최대 20줄이 들어간다.
 
 **안 보내는 것** — 대상 레포 이름·원격 URL, 파일·디렉터리 이름, 코드·diff, 커밋 메시지, 브랜치·feature 이름, 사람 이름, `local.env` 값, 모델이 쓴 글. 오류 줄은 경로·이름·토큰 모양을 `<repo>/…`, `~`, `<feature>`, `<secret>`, `<name>`으로 가리고 흔한 오류 낱말만 남긴다. 티켓 구현 실패, 시험 실패, 리뷰 지적, 네트워크·인증·사용량 한도 같은 환경 오류는 올리지 않는다. 직접 쓴 글은 가리지 않고 쓴 그대로 나가니 회사 이름 같은 것을 넣지 않는다.
 
@@ -1048,13 +1071,15 @@ mode = "off"      # off | draft | auto
 detail = "errors" # errors | minimal
 ```
 - `off`: 아무것도 쓰지도 보내지도 않는다. 회사 레포에 권한다. `[feedback]` 절이 아예 없는 옛 config도 `off`다.
-- `draft`: 로컬 초안만 쌓고 `gs feedback send`나 `/feedback send`로 직접 보낸다. `gs init`이 만든 config의 기본값이다.
+- `draft`: 로컬 초안만 쌓고 `gs feedback send`나 `/goldstack:feedback send`로 직접 보낸다. `gs init`이 만든 config의 기본값이다.
 - `auto` + `errors`: 개인 프로젝트용. 자동으로 오류 줄까지 보낸다. `minimal`이면 오류 줄 없이 항목만 보낸다.
-`/adopt`가 새 레포에서 한 번 묻고 이 값을 적는다. 받는 쪽은 `gs backlog`와 `/grill` 1단계가 열린 `field-report` issue와 저장소 소유자가 올린 라벨 없는 열린 issue(`미분류`)를 후보로 보인다. 아이디어 파일의 `issues: [12]`로 연결한 issue는 후보에서 한 번만 나온다. 다만 `dropped` 아이디어에 연결된 열린 issue는 단서가 사라지지 않게 후보에 다시 보인다(`taken`·열림 아이디어에 연결된 것은 숨긴다).
+`/goldstack:adopt`가 새 레포에서 한 번 묻고 이 값을 적는다. 받는 쪽은 `gs backlog`와 `/goldstack:grill` 1단계가 열린 `field-report` issue와 저장소 소유자가 올린 라벨 없는 열린 issue(`미분류`)를 후보로 보인다. 아이디어 파일의 `issues: [12]`로 연결한 issue는 후보에서 한 번만 나온다. 다만 `dropped` 아이디어에 연결된 열린 issue는 단서가 사라지지 않게 후보에 다시 보인다(`taken`·열림 아이디어에 연결된 것은 숨긴다).
 
 **issue 상태** — 티켓 키 `closes: [12]`인 issue는 base에 실제로 반영된 만큼만 닫힌다. 병합된 티켓의 issue는 PR 없이 직접 반영돼도 `<버전>에서 고침 (<커밋>)` 댓글과 함께 닫히고, 그 티켓이 revert되면 다시 열린다. 실패·건너뜀 티켓이나 결과가 안 정해진 PR의 issue는 닫지 않는다. 닫힌 field-report와 같은 결함이 고친 버전보다 새 gs에서 다시 나면 issue를 다시 열고 횟수 댓글을 단다. 같거나 옛 gs면 `gs self-update`를 안내한다.
 
-명령: `gs feedback "문장"` 또는 `gs feedback --body-file <파일>`(확인한 UTF-8 본문으로 초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태. `status`도 같다), `gs feedback send`(쌓인 것 전송). skill은 `/feedback <문장 | --body-file 파일 | list | status | send>`.
+명령: `gs feedback "문장"` 또는 `gs feedback --body-file <파일>`(확인한 UTF-8 본문으로 초안을 쓰고 보낸다), `gs feedback list`(초안과 전송 상태. `status`도 같다), `gs feedback send`(쌓인 것 전송). skill은 `/goldstack:feedback <문장 | --body-file 파일 | list | status | send>`.
+
+**수동 피드백의 issue 제목** — `gs feedback "문장"`·`--body-file`로 보낸 글의 제목은 본문 첫 `# ` 줄(없으면 첫 비어 있지 않은 줄)이고 80자에서 자른다: `[field] <제목> (gs <버전>)`. 예전에는 모두 `[field] feedback: feedback (gs …)`여서 목록에서 구분되지 않았다. 사람이 쓴 글이라 본문과 같은 원문이며 비밀 가리기를 거치지 않는다(본문과 같다). 같은 issue 찾기는 제목이 아니라 본문 줄로 하므로 중복 판정은 그대로다.
 
 **한 단어는 보내지 않는다** — `list`·`send`·`status`는 정상 하위 명령이라 예외다. `gs feedback statsu`처럼 그 밖의 한 단어는 하위 명령을 잘못 친 것으로 보고 `gs feedback: subcommand가 아니다. 보내려면 gs feedback "문장"`을 내고 종료 코드 2로 끝난다. 초안도 만들지 않는다. 옛 판은 `status`를 글로 보고 `draft` 모드에서도 공개 issue를 올렸다. `"status "`·`status ""`처럼 공백이나 빈 인자를 더해도 거부한다. 본문 파일도 두 단어 이상이어야 한다.
 
@@ -1064,8 +1089,8 @@ detail = "errors" # errors | minimal
 
 자러 가기 전에 한 번 부르면 여러 feature를 병합까지 이어 돌리고 아침에 한 장으로 보고한다. 범위는 병합까지다(force push나 원격 브랜치 수동 삭제는 안 한다).
 ```
-/overnight csv-export csv-import     # 시작
-/overnight resume                    # 세션이 죽었거나 멈춘 밤을 잇는다
+/goldstack:overnight csv-export csv-import     # 시작
+/goldstack:overnight resume                    # 세션이 죽었거나 멈춘 밤을 잇는다
 ```
 1. **시작 라운드**(사람이 앞에 있다): 순서와 feature끼리의 독립 여부, 사소한 수정 허락 범위, 텔레그램 켤지를 한 번에 묻는다. `[overnight] autonomy` 값도 파일에 `자율`로 적힌다. 답은 `.goldstack/overnight/<날짜>.md`에 적힌다(gitignore).
 2. **사전 점검**: 원격 앞섬, `gs check`, 미커밋 grill, 세션 권한 모드(승인 창이 안 뜨는지), 디스크, CLI 로그인을 사람이 있을 때 확인한다. "자도 된다"가 나오면 그때부터 묻지 않는다.
@@ -1078,20 +1103,20 @@ detail = "errors" # errors | minimal
 
 도는 동안 다음 feature를 grill해 두면 대기열에 붙여 이어 돌 수 있다:
 ```
-/overnight add csv-import            # 사람이 앞에 있다: 독립 여부만 묻는다
+/goldstack:overnight add csv-import            # 사람이 앞에 있다: 독립 여부만 묻는다
 gs overnight add csv-import          # CLI: 이미 있는 밤샘 파일의 결과 표에 `대기` 줄만 더한다
 ```
-대기열은 가장 최근 밤샘 파일(`.goldstack/overnight/<날짜>.md`)의 `결과` 표다. `/overnight`이 feature가 끝날 때마다 이 표를 다시 읽어 `대기` 줄을 잇는다. 파일 만들기와 실행 중 pid에 묶기는 `/overnight add`(skill)만 한다. `gs overnight add`는 파일을 만들지 않는다. 밤샘 파일이 없으면 `줄을 더할 밤샘 파일이 없다`를 출력하고 1로 끝난다. 있으면 줄을 더하고 이을 코디네이터가 있는지 알리고(`코디네이터: 없음`이면 이을 세션이 없다), `/go`로만 돌고 있으면 `/overnight add`를 친 세션이 그 pid에 묶여 코디네이터가 된다(CLI만 치면 묶이지 않는다). 코디네이터가 없으면 `/overnight resume`으로 잇는다.
+대기열은 가장 최근 밤샘 파일(`.goldstack/overnight/<날짜>.md`)의 `결과` 표다. `/goldstack:overnight`이 feature가 끝날 때마다 이 표를 다시 읽어 `대기` 줄을 잇는다. 파일 만들기와 실행 중 pid에 묶기는 `/goldstack:overnight add`(skill)만 한다. `gs overnight add`는 파일을 만들지 않는다. 밤샘 파일이 없으면 `줄을 더할 밤샘 파일이 없다`를 출력하고 1로 끝난다. 있으면 줄을 더하고 이을 코디네이터가 있는지 알리고(`코디네이터: 없음`이면 이을 세션이 없다), `/goldstack:go`로만 돌고 있으면 `/goldstack:overnight add`를 친 세션이 그 pid에 묶여 코디네이터가 된다(CLI만 치면 묶이지 않는다). 코디네이터가 없으면 `/goldstack:overnight resume`으로 잇는다.
 
 ### 사람 없는 세션: 승인 창 거부
 
 승인 창은 사람이 없으면 닫히지 않아 아침까지 선다. 이를 거부로 바꾸는 명령이 둘이다:
-- `gs overnight arm`: 이 Claude 세션에서 뜰 승인 창을 거부로 바꾼다. 플러그인의 `PermissionRequest` hook이 `arm`을 친 그 세션(가장 가까운 조상 Claude 프로세스)에서만 거부하므로 다른 세션은 창이 그대로 뜬다. `/overnight`이 첫 `gs go`를 띄울 때 사람 앞에서 친다.
-- `gs overnight disarm`: 끈다. 아침 보고를 쓴 뒤 `/overnight`이 친다. `대기` 줄이 남아 있으면 끄지 않고 거부한다.
+- `gs overnight arm`: 이 Claude 세션에서 뜰 승인 창을 거부로 바꾼다. 플러그인의 `PermissionRequest` hook이 `arm`을 친 그 세션(가장 가까운 조상 Claude 프로세스)에서만 거부하므로 다른 세션은 창이 그대로 뜬다. `/goldstack:overnight`이 첫 `gs go`를 띄울 때 사람 앞에서 친다.
+- `gs overnight disarm`: 끈다. 아침 보고를 쓴 뒤 `/goldstack:overnight`이 친다. `대기` 줄이 남아 있으면 끄지 않고 거부한다.
 
 거부는 어떤 호출도 허용하지 않으므로 모델이 꺼도 권한이 넓어지지 않는다. 거부된 호출은 `.goldstack/overnight/denied.log`에 남고 아침 보고의 `쓴 허락`/`거부된 호출`에 옮겨진다. 판정이 실패하면 창으로 돌아간다.
 
-**필요한 허용 규칙** — 거부되면 밤이 멈추므로 `/overnight`이 사전 점검에서 밤에 칠 명령을 지금 같은 모양으로 쳐 본다(창이 뜨면 규칙을 더한다): `git show <remote>/<base>:…`와 `git show gs/<f>/integration:…`, `git push <remote> <base>`, `git add -- .goldstack/work/<f> …`와 `git commit`, `gs go *`, `gs overnight next *`·`add *`·`arm`·`disarm`, `gs self-update`, `gs check *`, `gs status *`. `gs overnight next`가 pull·재설치·`gs check`를 묶어 규칙이 줄었다.
+**필요한 허용 규칙** — 거부되면 밤이 멈추므로 `/goldstack:overnight`이 사전 점검에서 밤에 칠 명령을 지금 같은 모양으로 쳐 본다(창이 뜨면 규칙을 더한다): `git show <remote>/<base>:…`와 `git show gs/<f>/integration:…`, `git push <remote> <base>`, `git add -- .goldstack/work/<f> …`와 `git commit`, `gs go *`, `gs overnight next *`·`add *`·`arm`·`disarm`, `gs self-update`, `gs check *`, `gs status *`. `gs overnight next`가 pull·재설치·`gs check`를 묶어 규칙이 줄었다.
 
 ### 밤사이 판단(`[overnight] autonomy`)
 
@@ -1121,7 +1146,7 @@ autonomy = "record"   # 기본 stop
 herdr 없이도 된다. `gs go`를 herdr 밖에서 돌리면 worker가 화면 없는 프로세스로 돌고, 진행은 `gs status`와 `worker.log`로 본다. SSH가 끊겨도 돌게 하려면 tmux 안에서 띄운다:
 ```sh
 tmux new -s gs
-claude    # 여기서 /go 나 /overnight
+claude    # 여기서 /goldstack:go 나 /goldstack:overnight
 # 떼어 놓기: Ctrl-b d · 다시 붙기: tmux attach -t gs
 ```
 `gs go`가 죽었으면 다시 치면 같은 자리에서 잇는다. 설치는 README와 같고 `uv`, `git`, `gh`, `claude`가 필요하다. 이 레포의 시험은 GitHub Actions ubuntu에서도 돈다.
@@ -1159,7 +1184,7 @@ codex worker·codex 리뷰·agy 리뷰를 OS 샌드박스 대신 `gs jail`(커�
 
 ## 원격 머신에서 돌리기(`gs remote`)
 
-맥북이 바쁠 때 herdr에 저장된 다른 머신(예: `mac_mini`)에서 `/go`를 끝까지 돌린다. 원격 pane에 claude를 띄워 `/go <feature>`를 보내고 바로 돌아온다. 이후 실행은 원격의 레포에서 일어난다. 필요한 `herdr`는 로컬에 있어야 하고 머신은 `herdr machine status`에 `reachable`로 보여야 한다.
+맥북이 바쁠 때 herdr에 저장된 다른 머신(예: `mac_mini`)에서 `/goldstack:go`를 끝까지 돌린다. 원격 pane에 claude를 띄워 `/goldstack:go <feature>`를 보내고 바로 돌아온다. 이후 실행은 원격의 레포에서 일어난다. 필요한 `herdr`는 로컬에 있어야 하고 머신은 `herdr machine status`에 `reachable`로 보여야 한다.
 
 ### 준비 순서 (원격 머신에서, 한 번)
 1. `gs` 설치: README의 설치를 따른다(`uv`, `git`, `gh`, `claude`, `codex` 필요). 로컬과 같은 버전이어야 한다.
@@ -1196,15 +1221,15 @@ $ gs remote check mac_mini
 같은 검사를 하고 grill 커밋(spec과 티켓)이 원격에 닿았는지 본다. 하나라도 빠지면 세션을 띄우지 않는다. feature는 grill 뒤 커밋·push돼 있어야 한다:
 ```console
 $ gs remote go mac_mini csv-export
-■ mac_mini에서 /go csv-export 시작
+■ mac_mini에서 /goldstack:go csv-export 시작
 workspace: …
 pane: …
 상태: gs remote status mac_mini csv-export
 화면: herdr --machine mac_mini pane read … --lines 40
 ```
-같은 feature의 `gs go`가 원격에서 이미 돌고 있으면 새 세션을 띄우지 않고 pid와 상태 명령을 보인다. `/go` 전송 응답을 받지 못하면 전달됐을 수 있어 세션을 닫지 않는다. 안내된 `pane read`로 화면에 `/go`가 있는지 보고, 없을 때만 `workspace close`로 닫고 다시 친다.
+같은 feature의 `gs go`가 원격에서 이미 돌고 있으면 새 세션을 띄우지 않고 pid와 상태 명령을 보인다. `/goldstack:go` 전송 응답을 받지 못하면 전달됐을 수 있어 세션을 닫지 않는다. 안내된 `pane read`로 화면에 `/goldstack:go`가 있는지 보고, 없을 때만 `workspace close`로 닫고 다시 친다.
 
-세션에 보내는 글은 `/go <feature> -- ` 뒤에 "사람이 없다. 실행이 멈추면 로그를 읽어 원인 후보만 적고 멈춘다. 회고·수정·재실행은 하지 않는다."를 붙인 한 줄이다. `/go`는 ` -- ` 뒤를 feature로 읽지 않고 실행 지침으로 따른다. 멈춘 실행을 본 세션이 스스로 고치러 들지 않게 하려는 것이다.
+세션에 보내는 글은 `/goldstack:go <feature> -- ` 뒤에 "사람이 없다. 실행이 멈추면 로그를 읽어 원인 후보만 적고 멈춘다. 회고·수정·재실행은 하지 않는다."를 붙인 한 줄이다. `/goldstack:go`는 ` -- ` 뒤를 feature로 읽지 않고 실행 지침으로 따른다. 멈춘 실행을 본 세션이 스스로 고치러 들지 않게 하려는 것이다.
 
 ### `gs remote status <머신> <feature>`
 원격에서 `gs status`를 돌려 그 출력을 보인다. 끝나면 원격 레포의 `report.md`와 PR을 본다:
@@ -1219,7 +1244,7 @@ $ gs remote status mac_mini csv-export
 2. 위 준비 순서를 맥미니에서 끝내고 로컬 `.goldstack/local.env`에 `GS_REMOTE_REPO_mac_mini`를 적는다.
 3. 작은 feature(티켓 하나) 하나를 grill·커밋·push한다. check도 grill 커밋이 원격에 닿았는지 보므로 이 단계가 먼저다.
 4. `gs remote check mac_mini`가 `빠짐` 없이 끝나는지 본다. 그다음 `gs remote go mac_mini <feature>`를 친다.
-5. 맥북을 닫거나 다른 일을 하면서 `gs remote status mac_mini <feature>`로 진행을 보고, `herdr --machine mac_mini pane read` 화면에 claude가 `/go`를 받았는지 확인한다.
+5. 맥북을 닫거나 다른 일을 하면서 `gs remote status mac_mini <feature>`로 진행을 보고, `herdr --machine mac_mini pane read` 화면에 claude가 `/goldstack:go`를 받았는지 확인한다.
 6. 끝나면 PR이 만들어졌는지, 원격에서 로컬 레포로 `git pull`하면 보고서가 오는지 본다.
 7. 실패한 단계와 화면 출력을 보고서나 아이디어 파일에 적는다. `--machine`이 붙은 `pane run`은 가짜 herdr로만 시험했고 실제로 돌려 본 적이 없다.
 
@@ -1250,23 +1275,23 @@ $ gs migrate
 
 ## skill 사용 장면
 
-**skill 부르는 법** — `/grill`·`/handoff`·`/idea`·`/retro`는 이름만 말해도 돈다("grill 해 줘", "인계 문서 써 줘"). 사람이 명시적으로 요청할 때만 쓰도록 description을 좁혔다. 나머지 `/go`·`/overnight`·`/feedback`·`/adopt`·`/wait-what`·`/writing-for-agents`는 무인 실행이나 문맥 부담이 커서 사람이 `/goldstack:<이름>`(예: `/goldstack:go csv-export`)으로 칠 때만 돈다. 세션이 시작되면 plugin의 SessionStart hook이 Claude에게 "이 이름이나 그 일로 요청하면 흉내 내지 말고 슬래시 명령을 안내하라"는 한 줄을 넣어, 닫힌 skill을 말로 시키면 Claude가 해당 `/goldstack:<이름>`을 안내한다. worker(`GS_ROLE=worker`)에는 넣지 않는다.
+**skill 부르는 법** — `/goldstack:grill`·`/goldstack:handoff`·`/goldstack:idea`·`/goldstack:retro`는 이름만 말해도 돈다("grill 해 줘", "인계 문서 써 줘"). 사람이 명시적으로 요청할 때만 쓰도록 description을 좁혔다. 나머지 `/goldstack:go`·`/goldstack:overnight`·`/goldstack:feedback`·`/goldstack:adopt`·`/goldstack:wait-what`·`/goldstack:writing-for-agents`는 무인 실행이나 문맥 부담이 커서 사람이 `/goldstack:<이름>`(예: `/goldstack:go csv-export`)으로 칠 때만 돈다. 세션이 시작되면 plugin의 SessionStart hook이 Claude에게 "이 이름이나 그 일로 요청하면 흉내 내지 말고 슬래시 명령을 안내하라"는 한 줄을 넣어, 닫힌 skill을 말로 시키면 Claude가 해당 `/goldstack:<이름>`을 안내한다. worker(`GS_ROLE=worker`)에는 넣지 않는다.
 
-`/grill`, `/go`, `/adopt`, `/idea` 밖의 다섯 skill은 [mattpocock/skills](https://github.com/mattpocock/skills)를 옮긴 것이다. 각 `SKILL.md` 끝에 원본 링크가 있다. `/idea`·`gs backlog`와 `/retro <feature>`는 [아이디어 흐름](#아이디어-흐름).
+`/goldstack:grill`, `/goldstack:go`, `/goldstack:adopt`, `/goldstack:idea` 밖의 다섯 skill은 [mattpocock/skills](https://github.com/mattpocock/skills)를 옮긴 것이다. 각 `SKILL.md` 끝에 원본 링크가 있다. `/goldstack:idea`·`gs backlog`와 `/goldstack:retro <feature>`는 [아이디어 흐름](#아이디어-흐름).
 
 skill 본문(frontmatter 뺀 `split()`)에는 단어 상한이 있다. 상한은 `tests/test_skills.py`의 `WORD_LIMITS` 한 곳에 모여 있고, `grill`·`go`·`adopt`·`overnight`·`idea`·`retro`·`writing-for-agents`·`diagnosing-bugs` 각각 실제 단어 수의 약 10% 위(10단위 올림)다. skill 글을 고치는 티켓은 이 값과 지금 단어 수를 완료 조건에 적고, 늘렸으면 상한을 같은 티켓에서 올린다.
 
 ### `/wait-what` — 설명을 못 따라갔을 때(사용자 호출)
 grill 라운드 3번 질문이 "frontier 재계산 시 blocked_by 전이 폐포를…"처럼 읽혀 뜻을 모르겠다.
 ```
-/wait-what
+/goldstack:wait-what
 ```
 Claude가 놓친 맥락부터 짧게 깔고, 짧은 문장으로, 약어와 자기가 만든 용어를 풀고, 선택지마다 "고르면 실제로 보일 명령·파일·출력"을 붙여 다시 설명한다. 그 뒤 원래 라운드에 답하면 된다.
 
 ### `/handoff` — 다른 세션에 넘길 때(모델 호출, 명시적 요청일 때만)
-`/go`가 끝났는데 03이 실패했다. 이 세션은 문맥이 꽉 찼으니 새 세션에서 원인을 찾고 싶다.
+`/goldstack:go`가 끝났는데 03이 실패했다. 이 세션은 문맥이 꽉 찼으니 새 세션에서 원인을 찾고 싶다.
 ```
-/handoff 03 실패 원인을 찾아 고친다
+/goldstack:handoff 03 실패 원인을 찾아 고친다
 ```
 `$TMPDIR`(없으면 `/tmp`)에 인계 문서를 쓰고 전체 경로를 보인다. 작업 트리에는 쓰지 않는다. 진행 중인 일, 이유, 다음 할 일, 확인 안 한 믿음 표시, "추천 skill"(예: `diagnosing-bugs`)이 들어가고, spec·티켓·report.md·PR은 옮겨 적지 않고 경로로만 가리킨다. 비밀과 `local.env` 값은 `<REDACTED>`.
 새 세션에서는 "`<경로>`를 읽고 이어서 해"라고 시작한다.
@@ -1280,7 +1305,7 @@ Claude가 놓친 맥락부터 짧게 깔고, 짧은 문장으로, 약어와 자�
 ### `/retro` — 실행을 돌아볼 때(모델 호출, 명시적 요청일 때만)
 `csv-export` 실행에서 worker가 같은 시험 실패로 두 번 재시도했다. 다음 실행이 나아지게 무엇을 바꿀지 보고 싶다.
 ```
-/retro csv-export
+/goldstack:retro csv-export
 ```
 인자가 `.goldstack/work/` 아래 feature 이름이면 **feature 실행**을 읽는다: `report.md`, `run/state.json`, `run/<NN>/<시도>/`의 `worker.log`·`review/`·`fix/`, spec의 grill 기록, 다른 feature의 `report.md`(같은 실패가 전에도 있었나), `~/.claude/usage-data/report-*.html`(`/insights` 보고서, 있으면). `run/`은 실행한 머신에만 있으니 다른 머신에서 돌린 feature면 report.md만 읽고 그렇다고 말한다. 인자가 없으면 지금 세션, feature가 아닌 인자면 그 세션의 기록을 읽는다.
 
@@ -1293,12 +1318,12 @@ agy로 로그 7개 요약(한도 1회, gs 상한에는 안 셈)
 agy -p "<프롬프트>" --sandbox --disable-slash-commands --model "$model"
 ```
 먼저 `gs retro-log csv-export`가 `.goldstack/work/csv-export/run/retro-log.md` 하나를 쓰고 그 경로를 출력한다. 티켓·시도별로 읽기 쉽게 바꾼 로그, 리뷰 답, `state.json`의 단계 시각이 들어 있고, 실패한 시도에는 오류 줄을 더한다. 약 21만 자(약 8만 토큰)를 넘으면 실패한 시도를 먼저 남기고 나머지를 줄이며 줄였다고 파일에 적는다. `run/`이 없으면(다른 머신에서 돌린 feature) 그렇다고 말하고 0이 아닌 코드로 끝난다. agy에는 이 파일 하나만 주고 근거는 그 파일의 줄 번호로 받는다. 티켓·시도별 실패 이유, 재시도 횟수, 반복된 리뷰 지적, 오래 걸린 단계를 요약하게 한다. Claude는 그 요약과 `report.md`·`state.json`으로 후보를 정하고, 근거로 인용할 곳만 원본 로그를 직접 연다. agy가 없거나 실패하면(종료 코드, 빈 답, `no output produced`를 담은 답. 앞뒤 문구가 붙어도 해당한다) 다시 부르지 않고 그렇다고 한 줄 말한 뒤 로그마다 끝부분과 오류 줄을 직접 읽는다. 200KB 미만이면 agy를 부르지 않는다. 이 호출은 gs가 아니라 skill이 부르므로 [`[agy] max_calls_per_run`](#agy-max_calls_per_run--gemini-호출-상한)에 세지 않는다.
-길 찾기, 자동 검사, 리뷰 기준, `CLAUDE.md`·`AGENTS.md`, 도구 비용, 효과 없는 지시, goldstack 자체(`gs`, skill, spec·티켓 형식), 정보 접근 범주로 고칠 후보를 심각한 순으로 보인다. 후보마다 본 근거와 고칠 곳이 붙고, 다른 feature에도 있던 실패면 `[반복]`이 붙는다. **사람이 고르기 전에는 아무 파일도 바꾸지 않는다.** feature 회고면 고른 후보를 `/idea` 형식으로 `.goldstack/ideas/`에 쓰고(`source: /retro csv-export`), 세션 회고면 고른 것만 고치고 사람이 원하는 후보만 아이디어 함에 적는다.
+길 찾기, 자동 검사, 리뷰 기준, `CLAUDE.md`·`AGENTS.md`, 도구 비용, 효과 없는 지시, goldstack 자체(`gs`, skill, spec·티켓 형식), 정보 접근 범주로 고칠 후보를 심각한 순으로 보인다. 후보마다 본 근거와 고칠 곳이 붙고, 다른 feature에도 있던 실패면 `[반복]`이 붙는다. **사람이 고르기 전에는 아무 파일도 바꾸지 않는다.** feature 회고면 고른 후보를 `/goldstack:idea` 형식으로 `.goldstack/ideas/`에 쓰고(`source: /goldstack:retro csv-export`), 세션 회고면 고른 것만 고치고 사람이 원하는 후보만 아이디어 함에 적는다.
 
 ### `/writing-for-agents` — agent가 읽는 문서를 쓸 때(사용자 호출)
 새 skill을 만들거나 레포의 `CLAUDE.md`가 커져서 줄이고 싶다.
 ```
-/writing-for-agents
+/goldstack:writing-for-agents
 skills/release/SKILL.md를 새로 쓰려 한다. description부터 같이 다듬자
 ```
-문맥 포인터, 문맥 부담과 인지 부담, 정보 위계, 단계와 완료 기준, 리딩 워드, 쳐내기 기준을 문맥에 싣는다. skill이면 frontmatter와 호출 방식(사용자 호출·모델 호출) 고르기를 [SKILL-MECHANICS.md](../skills/writing-for-agents/SKILL-MECHANICS.md)에서 읽는다. `/retro`도 후보를 쓸 때 이 기준을 읽는다.
+문맥 포인터, 문맥 부담과 인지 부담, 정보 위계, 단계와 완료 기준, 리딩 워드, 쳐내기 기준을 문맥에 싣는다. skill이면 frontmatter와 호출 방식(사용자 호출·모델 호출) 고르기를 [SKILL-MECHANICS.md](../skills/writing-for-agents/SKILL-MECHANICS.md)에서 읽는다. `/goldstack:retro`도 후보를 쓸 때 이 기준을 읽는다.

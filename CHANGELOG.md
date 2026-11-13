@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.2.19 — 2026-11-13
+
+### goldstack-v35
+
+- `gs child -- <명령>`: worker가 측정용 중첩 세션(`claude -p`)을 띄울 때 Claude Code 세션 변수(`CLAUDECODE`, `CLAUDE_EFFORT`, `CLAUDE_PID`, `CLAUDE_CODE_*` 중 명시한 목록)만 지우고 `GS_*`·인증 변수는 남긴다(#59).
+- worker hook이 `GS_ROLE`을 지우거나 바꾸는 명령(`env -u GS_ROLE`, `env -i`, `unset GS_ROLE`, `export GS_ROLE=…`, `GS_ROLE=… <명령>`)을 막고 `gs child -- …`를 안내한다. 알려진 오차단은 `echo ';' unset GS_ROLE`.
+- worker brief: 마지막 메시지 끝 `## 남긴 관찰` 절에 고치지 않고 남긴 것을 쓴다. 첫·재개 worker brief에는 티켓 `touches`와 "밖의 파일은 고치지 않는다"가 붙는다. 측정용 중첩 claude는 `gs child`로 띄우게 안내한다.
+- 리뷰어가 남긴 관찰마다 `지적`·`수용`·`범위 밖`으로 판정하고(JSON 선택 칸 `observations`), 보고서 `### 남은 위험`에 `| 티켓 | 관찰 | 리뷰 판정 |` 표가 나온다. 리뷰 판정이 없으면 `리뷰 판정 없음`(#60, #63, #66).
+- 성공 `result` 뒤에도 끝나지 않는 worker는 `[timeouts] result_grace_seconds`(기본 60, 0이면 끔)가 지나면 프로세스 그룹을 정리하고 끝난 것으로 보고 리뷰로 넘긴다. 남은 프로세스는 `leftover-procs.txt`에 남는다(#65).
+- 수동 피드백 issue 제목이 본문 첫 `# ` 줄(없으면 첫 비어 있지 않은 줄, 80자)이 된다: `[field] <제목> (gs <버전>)`(#61).
+- 시험이 `gs` CLI를 부를 때 홈 설정에 기대지 않는다(`support`가 가린다).
+- `README.md`·`docs/guide.md`의 실행 예시를 `/goldstack:<이름>`으로 맞췄다. `docs/guide.md`·`docs/internals.md`에 위 변경을 적었다.
+- 버전을 `0.2.19`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.18 — 2026-11-12
 
 ### goldstack-v34
