@@ -7,8 +7,10 @@
 import unittest
 from unittest import mock
 
+import support
 import test_rereview
 import test_verify_repair
+from test_review_target import at_call, late_commit
 from test_second_review import finding
 from test_verify_repair import BREAKS, GOOD, REPAIRS
 
@@ -57,6 +59,17 @@ def recording(name, *fields):
 
 def has_final_high(st):
     return bool(review.final_highs(state.reviews(st.tickets["01"]))) if "01" in st.tickets else False
+
+
+def again_saved(st):
+    """병합 전 대조로 다시 부른 2차 재리뷰(1차 + 2차 + 2차 다시, 재리뷰 세 번)의 결과에 남은 high가 있는 저장."""
+    return has_final_high(st) and len((st.tickets["01"].review or {}).get("rereviews", [])) == 3
+
+
+def late_during_second_rereview():
+    """2차 재리뷰의 결과를 반영하기 직전에 티켓 worktree에 늦은 커밋이 생긴다(살아 남은 worker 자손 흉내). 1차 재리뷰는 그대로다."""
+    commit = late_commit("late")
+    return at_call("_apply_rereviews", None, lambda r, a, *_: commit(r, a))
 
 
 class SecondRereviewBase(test_rereview.Base):
@@ -280,6 +293,69 @@ class SecondRereviewResumeTest(SecondRereviewBase):
         self.assertNotIn("fix2_01", self.files())
         self.assertIn(EVIDENCE, (self.rundir / "01/1/fix2/failure.log").read_text())
 
+    def test_unresolved_high_saved_before_a_stop_is_not_rereviewed(self):
+        """2차 재리뷰가 A를 unresolved로 적고 저장한 직후 멈췄다. 다음 gs go는 리뷰부터 잇지만 같은 head의 리뷰어를 다시 부르지 않는다:
+        다시 부른 재리뷰가 실패하면(여기선 답 파일이 없다) unresolved가 unchecked로 덮여 병합된다."""
+        self.second_rereview(verdict=("unresolved", "또 그대로다"))
+        (self.bin / "clean_retry").touch()
+        with blocked_save(self, has_final_high), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.failures, ts.network_resume["fix"]), ("running", 0, 2))
+        self.assertFalse(ts.network_resume.get("reviewed"))
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("리뷰부터 잇는다", out)
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
+        self.assertIn("[01] 실패: 남은 high: file_01 FIX A: 값이 틀렸다 (미해결)", out)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertNotIn("fix2_01", self.files())
+
+    def test_stopped_after_the_check_again_saved_its_results(self):
+        """병합 전 대조로 다시 부른 2차 재리뷰가 결과를 저장한 직후 멈췄다(reviewed_again). 다음 gs go는 그 head를 다시 부르지 않는다."""
+        self.second_rereview(verdict=("unresolved", "또 그대로다"))
+        self.answer("codex", 3, [(1, "unresolved", "늦은 커밋도 고치지 않았다")])
+        (self.bin / "clean_retry").touch()
+        with late_during_second_rereview(), blocked_save(self, again_saved), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        self.assertTrue(self.ts().network_resume["reviewed_again"])
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])
+        self.assertIn("[01] 실패: 남은 high: file_01 FIX A: 값이 틀렸다 (미해결)", out)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertNotIn("late", self.files())
+
+
+class SecondRereviewLateCommitTest(SecondRereviewBase):
+    def test_late_commit_is_checked_before_the_judgment(self):
+        """2차 재리뷰 도중 생긴 늦은 커밋이 A를 고쳤다. 병합 전 대조가 그 head에서 다시 본 판정(resolved)으로 정하고 병합한다."""
+        self.second_rereview(verdict=("unresolved", "또 그대로다"))
+        self.answer("codex", 3, [(1, "resolved", "늦은 커밋이 고쳤다")])
+        with late_during_second_rereview():
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        self.assertIn("late", self.files())
+        [a] = ts.review["findings"]
+        self.assertEqual((a["rereview"], a["rereview_round"], a["rereview_evidence"]), (review.RESOLVED, 2, "늦은 커밋이 고쳤다"))
+        self.assertNotIn("남은 high:", out)
+
+    def test_late_commit_that_leaves_the_high_fails_after_the_check(self):
+        self.second_rereview(verdict=("unresolved", "또 그대로다"))
+        self.answer("codex", 3, [(1, "unresolved", "늦은 커밋도 고치지 않았다")])
+        (self.bin / "clean_retry").touch()
+        with late_during_second_rereview():
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])
+        self.assert_not_merged_and_retried(out, "남은 high: file_01 FIX A: 값이 틀렸다 (미해결)")
+        self.assertIn("늦은 커밋도 고치지 않았다", (self.rundir / "01/1/fix2/failure.log").read_text())
+
 
 class RepairReviewBase(test_verify_repair.Base):
     reviewer = test_verify_repair.RepairReviewTest.reviewer
@@ -375,6 +451,26 @@ class RepairReviewResumeTest(RepairReviewBase):
         self.assertEqual(ts.repairs[0]["result"], state.REPAIR_FAILED)
         self.assertIn(EVIDENCE, (self.rundir / "01/1/repair/failure.log").read_text())
 
+    def test_late_commit_while_stopped_is_rereviewed_before_the_judgment(self):
+        """다시 검증 차례(REPAIR_VERIFY)에서 멈춘 사이 늦은 커밋이 생겼다. 병합 단계는 남은 high로 바로 실패시키지 않고 먼저 그 커밋을 재리뷰로 보낸다."""
+        self.worker(BREAKS, REPAIRS, retry=GOOD)
+        self.reviewer(NEW_HIGH)
+        with mock.patch.object(go, "_final_high", return_value=None):
+            self.stop_at_verify()
+        wt = self.rundir / "wt/01"
+        (wt / "late").write_text("late\n")
+        support.sh(wt, "git", "add", "-A")
+        support.sh(wt, "git", "commit", "-qm", "late")
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("마지막으로 리뷰한 head와 달라 다시 리뷰한다", out)
+        # 첫 리뷰, 수리 재리뷰, 늦은 커밋의 수리 재리뷰, 새 시도의 첫 리뷰
+        self.assertEqual(self.reviewers(), ["codex"] * 4)
+        self.assertIn("[01] 실패: 남은 high: file_01", out)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertFalse(self.repair_commit_merged())
+
 
 class FormatTest(unittest.TestCase):
     """review.final_highs·final_high_reason: 어떤 high를 세고 이유를 어떻게 적나."""
@@ -417,6 +513,12 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(review.final_high_reason([(rec, long)]),
                          "남은 high: a.py:3 " + ("줄 바꿈 " + "가" * 300)[:review.FINAL_HIGH_CLAIM_CHARS] + "…")
         self.assertEqual(review.final_high_reason([(rec, {**new, "location": ""})]), "남은 high: 지적 1")
+
+    def test_second_fix_brief_says_a_remaining_high_is_not_merged(self):
+        text = review.fix_brief([{"id": 1, "severity": "high", "location": "a.py:1", "claim": "c", "evidence": "e"}], 2)
+        self.assertNotIn("남은 지적은 미해결로 병합된다", text)
+        self.assertIn("high 지적이 미해결로 남거나 새로 나오면 이 시도는 병합되지 않고 티켓 실패가 된다", text)
+        self.assertNotIn("티켓 실패", review.fix_brief([{"id": 1, "severity": "high", "location": "a.py:1", "claim": "c", "evidence": "e"}], 1))
 
     def test_why_of_the_rounds_without_the_judge(self):
         high, medium = review.Finding(1, "high", "a", "c", "e"), review.Finding(2, "medium", "a", "c", "e")

@@ -12,9 +12,10 @@ defer로 고치지 않고 보고서의 "재현된 미수리 결함" 절과 high 
 단 마지막 재리뷰의 high는 병합하지 않는다(goldstack-v36 03): 2차 재리뷰·수리 재리뷰에서 리뷰어 하나라도 high를 새로 냈거나 2차 재리뷰가 기존 high를
 unresolved로 판정했으면(unchecked는 세지 않는다. review.final_highs) 그 시도는 _fail로 티켓 실패다(_final_high). 이유는 `남은 high: <파일:줄> <지적 요약>`이고
 그 지적 전문(review.FINAL_HIGH_FILE)을 failure.log에 싣는다. 첫 실패면 다른 실패처럼 같은 실행에서 등급을 올려 재시도하고 두 번째면 실패다. 판단 모델은 더 부르지 않는다.
-판정은 재리뷰 결과를 state에 적는 바로 그 저장에서 실패와 함께 남긴다: 결과를 반영한 뒤 저장하기 전에 MergeBlocked로 리뷰 단계를 끊고 _review_tick이 _fail만 부른다
-(_leave_review·_merge_stage로 가지 않는다). 판정은 state의 리뷰 기록에서 읽으므로 다른 길로 병합 단계에 닿아도(재개의 reviewed·REPAIR_VERIFY·verify_again, 옛 gs가 남긴 결과)
-_merge_stage가 맨 앞에서 같은 판정으로 병합하지 않고 실패를 한 번 적는다.
+판정은 리뷰 단계가 티켓 head까지 닿은 뒤(병합 전 대조로 늦은 커밋을 다시 본 뒤) 한다: MergeBlocked로 리뷰 단계를 끊고 _review_tick이 _fail만 부른다
+(_leave_review·_merge_stage로 가지 않는다). 판정은 state의 리뷰 기록에서 읽으므로 결과를 저장한 뒤 gs가 죽어도 다음 gs go가 같은 판정을 한다:
+리뷰부터 이으면 이미 본 head의 리뷰어를 다시 부르지 않고 실패를 적고(_review_stage), 병합 단계로 이으면(재개의 reviewed·REPAIR_VERIFY·verify_again, 옛 gs가 남긴 결과)
+_merge_stage가 늦은 커밋 대조 뒤에 같은 판정으로 병합하지 않는다. 실패는 _fail이 한 번 센다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
 worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 보고, 그 지적을 낸 리뷰어도 부른다.
 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 위의 마지막 재리뷰 high 말고는 병합을 막지 않는다.
@@ -920,7 +921,7 @@ class ReviewThreadError(Exception):
 class MergeBlocked(Exception):
     """마지막 재리뷰(2차 재리뷰·수리 재리뷰)에 high가 남아 이 시도를 병합하지 않는다(_final_high). 리뷰 단계를 끊고 _review_tick이 티켓 실패로 적는다.
 
-    _rereview·_repair_review의 포괄 예외 처리 밖에서 올린다: 재리뷰 오류처럼 삼켜지면 병합으로 간다. evidence는 _fail에 넘길 지적 전문 파일이다.
+    _review_stage가 올린다: _rereview·_repair_review의 포괄 예외 처리 밖이다(재리뷰 오류처럼 삼켜지면 병합으로 간다). evidence는 _fail에 넘길 지적 전문 파일이다.
     """
 
     def __init__(self, reason: str, evidence: tuple[Path, ...] = ()):
@@ -1753,9 +1754,28 @@ def _review_stage(r: Run, a: Active, moved: str = "") -> ReviewFlow:
     호출 안의 통로는 job의 on_wait 하나다(state 변경은 루프로 넘긴다).
     이 단계는 worker를 띄우지 않고 티켓을 실패시키지 않고 integration을 건드리지 않는다. 그 일은 결과를 받은 _review_tick이 한다.
     올리는 예외: review.Refused(거부), transient.NetworkAbort(중단), git 오류, ReviewThreadError, MergeBlocked(마지막 재리뷰의 high).
+    MergeBlocked는 리뷰가 티켓 head까지 닿은 뒤에 본다(_final_high): 마지막 재리뷰 도중 생긴 늦은 커밋은 병합 전 대조가 다시 본 판정으로 정한다.
+    부르기 전에도 본다(_seen_final_high): 이미 본 head의 결과를 저장한 뒤 gs가 죽었으면 다음 gs go가 리뷰어를 다시 부르지 않고 그 판정으로 끊는다.
     """
+    if blocked := _seen_final_high(r, a):
+        raise blocked
     call = _repair_review if a.repair else _rereview if a.fix else _review
-    return (yield from (_review_again(r, a, call, moved) if moved else _review_to_head(r, a, call)))
+    todo = yield from (_review_again(r, a, call, moved) if moved else _review_to_head(r, a, call))
+    if blocked := _final_high(r, a):
+        raise blocked
+    return todo
+
+
+def _seen_final_high(r: Run, a: Active) -> MergeBlocked | None:
+    """리뷰를 부르기 전의 판정: 티켓 head를 이미 리뷰했고(_moved_head가 빈 값) 그 기록에 마지막 재리뷰의 high가 남았으면 _final_high, 아니면 None.
+
+    재리뷰 결과를 저장한 직후 gs가 죽어 다음 gs go가 리뷰부터 이을 때다(reviewed 표시 없음, 끝나기 전에 멈춘 대조 reviewed_again).
+    같은 head를 다시 부르지 않는다: 그 재리뷰가 실패하면 저장된 unresolved를 unchecked(재리뷰 실패)로 덮어 병합된다.
+    head가 움직였으면 None이다: 늦은 커밋은 다시 부른 판정으로 정한다(_review_again).
+    """
+    if not review.final_highs(state.reviews(r.st.ticket(a.t.id))) or _moved_head(r, a):
+        return None
+    return _final_high(r, a)
 
 
 def _next_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
@@ -1777,16 +1797,17 @@ def _merge_stage(r: Run, a: Active) -> None:
     검증 실패는 _verify_failed가 받는다: 이 시도의 첫 실패면 수리로 보낸다. 병합 충돌, 시간 초과, 검증하는 동안 integration이 바뀐 것은 바로 티켓 실패다.
     검증이 떨어지면서 integration도 바뀌었으면 브랜치의 결함인지 모르니 수리하지 않는다. 끊겼어도 그렇다.
     끊긴 검증은 _verify_interrupted가 받는다: 트리를 되돌리고 여기로 다시 와 같은 SHA를 병합해 한 번 더 검증한다. 그 사이 브랜치가 움직였으면 맨 앞의 대조가 재리뷰로 보낸다.
-    맨 앞에서 마지막 재리뷰의 high를 state로 다시 본다(_final_high). 있으면 병합하지 않고 티켓 실패다: 리뷰 단계는 결과와 실패를 함께 저장하지만,
+    맨 앞의 대조 뒤에 마지막 재리뷰의 high를 state로 다시 본다(_final_high). 있으면 병합하지 않고 티켓 실패다: 리뷰 단계가 끊지만(_review_stage),
     결과만 남은 state(재개의 reviewed·REPAIR_VERIFY·verify_again, 옛 gs)로 여기 와도 병합하지 않는다. 실패는 _fail이 한 번 센다.
+    대조가 먼저다: 멈춘 사이 생긴 늦은 커밋은 재리뷰로 보내 그 head에서 다시 본 판정으로 정한다. 이미 한 번 더 봤으면 리뷰 대상의 판정 그대로다.
     """
     t = a.t
-    if blocked := _final_high(r, a):
-        return _fail_worker(r, a, blocked.reason, evidence=blocked.evidence)
     head = git.sha(r.repo, a.branch)
     a.target = a.target or _old_target(r, a, head)
     if head != a.target and _late_commit(r, a, head):
         return
+    if blocked := _final_high(r, a):
+        return _fail_worker(r, a, blocked.reason, evidence=blocked.evidence)
 
     # 그 사이 다른 티켓이 병합됐을 수 있다. 최신 integration 끝을 티켓 브랜치에 먼저 합쳐 본다.
     _phase(r, t.id, "verify", t.model)
@@ -2590,7 +2611,7 @@ def _repair_review(r: Run, a: Active) -> ReviewFlow:
     호출은 루프 밖 스레드에서 돈다(_review_stage). 받은 지적이 없으니 지적을 낸 리뷰어만이 아니라 구현과 다른 계열의 리뷰어를 모두 부른다.
     _rereview처럼 재리뷰 자체의 오류는 병합을 막지 않는다. 중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 수리 재리뷰부터 잇고, 뒤는 티켓 실패다.
     순서는 준비(_plan_repair_reviews) → 호출(경계는 _call_repair_reviewers) → 반영(_apply_repair_reviews)이다.
-    반영한 지적에 high가 있으면 저장하기 전에 MergeBlocked를 올린다(_final_high): 포괄 예외 처리 밖이라 삼켜지지 않고, 결과는 _fail의 저장에 실패와 함께 남는다.
+    반영한 지적의 high는 여기서 보지 않는다: 병합 전 대조 뒤에 _review_stage가 MergeBlocked로 끊는다(_final_high). 포괄 예외 처리 밖이라 삼켜지지 않는다.
     """
     t = a.t
     try:
@@ -2611,8 +2632,6 @@ def _repair_review(r: Run, a: Active) -> ReviewFlow:
         say(f"[{t.id}] 수리 재리뷰 실패: {_err(e)}")
         for rec in state.reviews(r.st.ticket(t.id)):
             _append_fix(rec, f"수리 재리뷰 실패: 뜻밖의 오류 {_err(e)}")
-    if blocked := _final_high(r, a):  # 저장 전에 끊는다: 이 결과와 티켓 실패가 한 번에 저장된다(_fail)
-        raise blocked
     r.save()
     return []
 
@@ -2681,8 +2700,8 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
     2차면 수정 worker가 받은 지적에 더해 앞서 resolved인 지적도 최종 커밋에서 본다. 수정 커밋의 diff가 비면 받은 지적만 unresolved다:
     트리가 앞 재리뷰가 본 그대로이니 앞 판정은 그대로 맞다. catch-up이 기준을 옮긴 뒤의 빈 diff는 받은 지적의 판정도 그대로 두고 2차 수정을 띄우지 않는다(_empty_rereview).
     버린 수정 뒤의 늦은 커밋을 보는 재리뷰(_late_commit)는 판정만 적고 2차 수정을 띄우지 않는다: 실패한 수정 뒤에는 고치지 않는다.
-    2차 재리뷰가 high를 새로 냈거나 기존 high를 unresolved로 판정했으면(빈 diff의 unresolved 포함) 저장하기 전에 MergeBlocked를 올린다(_final_high).
-    포괄 예외 처리 밖이라 삼켜지지 않고, 결과는 _fail의 저장에 실패와 함께 남는다. 1차 재리뷰는 이 판정에 들지 않는다.
+    2차 재리뷰가 high를 새로 냈거나 기존 high를 unresolved로 판정했는지(빈 diff의 unresolved 포함)는 여기서 보지 않는다: 병합 전 대조 뒤에
+    _review_stage가 MergeBlocked로 끊는다(_final_high). 포괄 예외 처리 밖이라 삼켜지지 않는다. 1차 재리뷰는 이 판정에 들지 않는다.
     """
     t, nth = a.t, a.fix
     targets = _to_rereview(r, t, nth)
@@ -2703,8 +2722,6 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
             if not done or done[-1].get("head") != head:  # 먼저 끝난 다른 리뷰어의 결과는 그대로 둔다
                 review.mark_rereview(found, nth, review.UNCHECKED, review.REASON_FAILED, f"뜻밖의 오류 {_err(e)}")
                 rec.pop("kept_round", None)  # 유지한 판정을 덮어썼다(_empty_rereview)
-    if nth == 2 and (blocked := _final_high(r, a)):  # 저장 전에 끊는다: 이 결과와 티켓 실패가 한 번에 저장된다(_fail)
-        raise blocked
     r.save()
     return _todo(r, t, nth + 1) if nth == 1 and not _verdict_kept(r, t, nth) and not _fix_discarded(r, t, nth) else []  # 수정은 티켓당 최대 2회다
 
