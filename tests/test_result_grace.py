@@ -1,6 +1,7 @@
 """성공 result 뒤 끝나지 않는 worker의 유예 정리(goldstack-v35 06, issue #65).
 
 가짜 worker는 커밋하고 끝 이벤트를 쓴 뒤 자식 `sleep`을 백그라운드로 띄우고 기다린다. 유예는 시험에서 GRACE초로 줄인다.
+goldstack-v36 02: 마지막 끝 이벤트 때 배경 작업(`background_tasks_changed`)이 있으면 유예를 쓰지 않고, 로그가 자라거나 커밋이 바뀌면 유예 시계를 다시 시작한다.
 """
 import json
 import os
@@ -26,25 +27,52 @@ def result(is_error: bool) -> str:
                        "is_error": is_error, "result": "끝"})
 
 
-def worker_script(end: str, child: float, orphan: bool = False) -> str:
-    """커밋 → 끝 이벤트 → 자식 sleep을 띄우고 기다린다. 자식 pid는 child.pid에 남긴다.
+def tasks_changed(n: int) -> str:
+    """claude의 `system background_tasks_changed` 줄. 작업 n개."""
+    tasks = [{"task_id": f"b{i}", "task_type": "local_bash", "description": "시험"} for i in range(n)]
+    return json.dumps({"type": "system", "subtype": "background_tasks_changed", "tasks": tasks})
 
+
+def worker_script(end: str, child: float, orphan: bool = False, before: str = "", between: str = "") -> str:
+    """(before) 커밋 → 끝 이벤트 → (between) → 자식 sleep을 띄우고 기다린다. 자식 pid는 child.pid에 남긴다.
+
+    before·between은 셸 줄이다. before는 끝 이벤트 앞, between은 뒤에 끼운다.
     orphan이면 기다리지 않고 먼저 끝난다: 고아가 된 자식(PPID 1)이 stdout을 쥐고 있어 run.sh의 파이프가 끝나지 않는다.
     """
     return textwrap.dedent(f'''\
         here="$(dirname "$0")"
         echo "$GS_TICKET" >> "$here/calls.log"
         echo "$GS_TICKET" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
+        {before}
         echo '{end}'
+        {between}
         sleep {child} &
         echo $! > "$here/child.pid"
         {"exit 0" if orphan else "wait"}
     ''')
 
 
+def background_script(silence: float) -> str:
+    """배경 작업을 기다리다 깨어나는 claude worker: 작업 1개 → 성공 result → silence초 침묵(로그 없음) → 작업 알림 → 커밋 → 작업 0개 → result → 종료."""
+    notification = json.dumps({"type": "system", "subtype": "task_notification", "status": "completed"})
+    return textwrap.dedent(f'''\
+        here="$(dirname "$0")"
+        echo "$GS_TICKET" >> "$here/calls.log"
+        echo '{tasks_changed(1)}'
+        echo '{result(False)}'
+        sleep {silence}
+        echo '{notification}'
+        echo "$GS_TICKET" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
+        echo '{tasks_changed(0)}'
+        echo '{result(False)}'
+        exit 0
+    ''')
+
+
 class ResultGraceGoTest(support.GoTest):
-    def run_go(self, end: str, child: float, runner: str = "subprocess", grace: float | None = GRACE, orphan: bool = False):
-        (self.bin / "worker.sh").write_text(worker_script(end, child, orphan))
+    def run_go(self, end: str, child: float, runner: str = "subprocess", grace: float | None = GRACE, orphan: bool = False,
+               script: str | None = None, before: str = "", between: str = ""):
+        (self.bin / "worker.sh").write_text(script or worker_script(end, child, orphan, before, between))
         env = {"GS_RUNNER": runner}
         if runner == "herdr":
             path = self.bin / "herdr"
@@ -108,6 +136,35 @@ class ResultGraceGoTest(support.GoTest):
         self.assert_cleaned_and_reviewed("herdr")
         cmds = (self.bin / "herdr.log").read_text().splitlines()
         self.assertIn("pane close w1:p1", cmds)  # 성공한 worker처럼 pane을 닫는다
+
+    def test_empty_background_list_at_the_result_does_not_stop_the_cleanup(self):
+        """작업 0개로 끝난 성공 result 뒤 끝나지 않는 worker(#65 형태)는 배경 작업이 있었던 것이 아니니 유예 뒤 정리된다."""
+        code, out, err = self.run_go(result(False), HANG, before=f"echo '{tasks_changed(0)}'")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(f"[01] result 뒤 {GRACE:g}초 지나도 끝나지 않아 정리: 남은 프로세스 ", out)
+        self.assertFalse(alive(int((self.bin / "child.pid").read_text())))
+
+    def test_worker_waiting_for_background_task_is_not_cleaned_and_its_later_work_is_kept(self):
+        """성공 result(작업 1개) → 유예(GRACE)보다 긴 침묵 → 작업 알림 → 커밋 → result(작업 0개) → 종료. 정리하지 않고 커밋이 병합된다."""
+        code, out, err = self.run_go("", 0, script=background_script(1.5))
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("result 뒤", out)
+        self.assertNotIn("시간 초과", out)
+        self.assertFalse((self.attempt / worker.LEFTOVER_PROCS).exists())
+        self.assertEqual((self.attempt / "exit").read_text().strip(), "0")
+        ts = state.load(self.rundir, "demo").tickets["01"]
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 1, 0))
+        self.assertEqual(self.calls(), ["01"])
+        self.assertEqual(self.merged(), ["01"])  # 침묵 뒤의 커밋이 그대로 들어갔다
+
+    def test_log_growing_within_grace_restarts_the_clock_and_cleanup_waits_for_quiet(self):
+        """성공 result 뒤 로그가 계속 자라는 동안(간격 < 유예)은 정리하지 않고, 멈춘 뒤 유예가 지나면 정리한다."""
+        grow = ("for i in $(seq 1 30); do echo '{\"type\":\"assistant\"}'; sleep 0.05; done; touch \"$here/grew\"")
+        code, out, err = self.run_go(result(False), HANG, grace=0.6, between=grow)
+        self.assertEqual(code, 0, out + err)
+        self.assertTrue((self.bin / "grew").exists(), "로그가 자라는 중에 정리됐다")
+        self.assertIn("[01] result 뒤 0.6초 지나도 끝나지 않아 정리: 남은 프로세스 ", out)
+        self.assertFalse(alive(int((self.bin / "child.pid").read_text())))
 
     def test_error_result_is_not_cleaned(self):
         code, out, err = self.run_go(result(True), SHORT)
@@ -206,29 +263,193 @@ class ResultWatchTest(unittest.TestCase):
         self.write(result(True))
         self.assertIsNone(watch.success_end())  # 마지막 끝 이벤트가 실패다
 
+    def test_remembers_background_task_count_at_the_last_end_event(self):
+        watch = streamfmt.ResultWatch(self.log)
+        self.write(result(False))
+        watch.success_end()
+        self.assertEqual(watch.tasks, 0)  # background_tasks_changed가 없으면 0
+        self.write(tasks_changed(2), result(False))
+        watch.success_end()
+        self.assertEqual(watch.tasks, 2)
+        self.write(tasks_changed(0))
+        watch.success_end()
+        self.assertEqual(watch.tasks, 2)  # 끝 이벤트 뒤에 바뀐 목록은 다음 끝 이벤트가 나올 때까지 보지 않는다
+        self.write(result(False))
+        watch.success_end()
+        self.assertEqual(watch.tasks, 0)
+        self.write(tasks_changed(1), json.dumps({"type": "system", "subtype": "background_tasks_changed", "tasks": "x"}), result(False))
+        watch.success_end()
+        self.assertEqual(watch.tasks, 0)  # 목록이 아니면 0
+        self.write(json.dumps({"type": "system", "subtype": "init"}), tasks_changed(3), json.dumps({"type": "turn.completed"}))
+        self.assertIsNotNone(watch.success_end())
+        self.assertEqual(watch.tasks, 3)
+
+
+class WaitAnyGraceTest(unittest.TestCase):
+    """_wait_any를 한 회차씩(once) 돌린다. 시계·sleep·git을 바꿔 실제 시간에 기대지 않는다."""
+    GRACE = 10.0
+    IDLE = 1000.0
+
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.log = self.tmp / "worker.log"
+        self.log.write_text("")
+        self.clock = [0.0]
+        self.head = ["h0"]
+        self.ended: list[int] = []
+        outer = self
+
+        class Proc:
+            job = SimpleNamespace(log=outer.log)
+            code = None
+
+            def poll(self):
+                return self.code
+
+            def end_after_result(self):
+                self.code = 0
+                outer.ended.append(1)
+                return 2
+
+        self.proc = Proc()
+        self.a = go.Active(t=None, proc=self.proc, branch="b", wt=self.tmp, base="h0")
+        self.a.last_activity = 0.0
+        self.r = SimpleNamespace(order=["01"], repo=self.tmp, saved=0.0, save=lambda: None,
+                                  feat=SimpleNamespace(spec=SimpleNamespace(idle_minutes=self.IDLE / 60)))
+        for p in (mock.patch.object(go.time, "monotonic", lambda: self.clock[0]), mock.patch.object(go.time, "sleep", lambda _: None),
+                  mock.patch.object(go.git, "sha", lambda *_: self.head[0]), mock.patch.object(go, "say", lambda *_: None),
+                  mock.patch.object(go, "_result_grace", return_value=self.GRACE),
+                  mock.patch.object(go, "_idle_seconds", return_value=self.IDLE),
+                  mock.patch.object(go.worker, "poll_interval", return_value=0)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def write(self, *lines: str):
+        with self.log.open("a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def step(self, at: float):
+        """시각 at에 한 회차. 정리했거나 시간 초과면 그 결과, 아니면 None."""
+        self.clock[0] = at
+        return go._wait_any(self.r, {"01": self.a}, "subprocess", once=True)
+
+    def test_no_background_tasks_is_cleaned_when_grace_passes_without_activity(self):
+        self.write(result(False))
+        self.assertIsNone(self.step(0))
+        self.assertIsNone(self.step(self.GRACE - 1))
+        self.assertEqual(self.step(self.GRACE), ("01", 0, ""))
+        self.assertEqual(self.ended, [1])
+
+    def test_background_tasks_are_never_cleaned_but_idle_timeout_still_applies(self):
+        self.write(tasks_changed(1), result(False))
+        for at in (0, self.GRACE, 5 * self.GRACE, self.IDLE - 1):
+            self.assertIsNone(self.step(at), at)
+        self.assertEqual(self.ended, [])
+        code = self.step(self.IDLE)
+        self.assertEqual(code[:2], ("01", None))
+        self.assertIn("시간 초과", code[2])
+        self.assertEqual(self.ended, [])
+
+    def test_log_growing_in_the_round_grace_ends_does_not_clean(self):
+        self.write(result(False))
+        self.assertIsNone(self.step(0))
+        self.write(json.dumps({"type": "assistant"}))  # 유예가 끝나는 회차 직전에 로그만 자랐다
+        self.assertIsNone(self.step(self.GRACE))
+        self.assertEqual(self.ended, [])
+        self.assertIsNone(self.step(2 * self.GRACE - 1))  # 시계는 GRACE에서 다시 시작했다
+        self.assertEqual(self.step(2 * self.GRACE), ("01", 0, ""))
+        self.assertEqual(self.ended, [1])
+
+    def test_commit_changing_in_the_round_grace_ends_does_not_clean(self):
+        self.write(result(False))
+        self.assertIsNone(self.step(0))
+        self.head[0] = "h1"  # 로그는 그대로, 커밋만 바뀌었다
+        self.assertIsNone(self.step(self.GRACE))
+        self.assertEqual(self.ended, [])
+        self.assertIsNone(self.step(2 * self.GRACE - 1))
+        self.assertEqual(self.step(2 * self.GRACE), ("01", 0, ""))
+
+    def test_codex_turn_completed_restarts_the_clock_on_growth_too(self):
+        self.write(json.dumps({"type": "turn.completed"}))
+        self.assertIsNone(self.step(0))
+        self.write(json.dumps({"type": "item.completed"}))
+        self.assertIsNone(self.step(self.GRACE))
+        self.assertEqual(self.ended, [])
+
+    def test_resumed_worker_is_not_cleaned_during_silence_and_is_measured_from_its_second_result(self):
+        self.write(tasks_changed(1), result(False))
+        self.assertIsNone(self.step(0))
+        self.assertIsNone(self.step(5 * self.GRACE))  # 유예보다 긴 침묵
+        self.write(json.dumps({"type": "system", "subtype": "task_notification"}))
+        self.head[0] = "h1"
+        self.assertIsNone(self.step(5 * self.GRACE + 1))
+        self.write(tasks_changed(0), result(False))
+        self.assertIsNone(self.step(5 * self.GRACE + 2))
+        self.assertIsNone(self.step(5 * self.GRACE + 2 + self.GRACE - 1))
+        self.assertEqual(self.ended, [])
+        self.assertEqual(self.step(5 * self.GRACE + 2 + self.GRACE), ("01", 0, ""))  # 둘째 result부터 잰다
+
 
 class ResultClockTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
         job = SimpleNamespace(log=self.tmp / "worker.log")
         self.a = go.Active(t=None, proc=SimpleNamespace(job=job), branch="b", wt=self.tmp, base="0")
+        self.a.last_activity = 0.0  # 시험은 시계를 go.time.monotonic으로 바꾼다
         self.log = job.log
 
-    def test_clock_starts_at_first_success_and_does_not_restart_when_log_grows(self):
-        self.log.write_text(json.dumps({"type": "assistant"}) + "\n")
-        self.assertIsNone(self.a.result_seconds())
-        self.assertIsNone(self.a.result_at)
-        with self.log.open("a") as f:
-            f.write(result(False) + "\n")
-        self.assertIsNotNone(self.a.result_seconds())
-        first = self.a.result_at
-        self.assertIsNotNone(first)
-        time.sleep(0.02)
-        with self.log.open("a") as f:
-            f.write(json.dumps({"type": "assistant"}) + "\n" + result(False) + "\n")
-        waited = self.a.result_seconds()
-        self.assertEqual(self.a.result_at, first)
-        self.assertGreaterEqual(waited, 0.02)
+    def test_clock_starts_at_first_success_and_restarts_when_log_grows_or_commit_changes(self):
+        head = ["a"]
+        clock = [100.0]
+        with mock.patch.object(go.time, "monotonic", lambda: clock[0]), mock.patch.object(go.git, "sha", lambda *_: head[0]):
+            self.log.write_text(json.dumps({"type": "assistant"}) + "\n")
+            self.assertEqual(self.a.idle(self.tmp), 0)
+            self.assertIsNone(self.a.result_seconds())
+            self.assertIsNone(self.a.result_at)
+            clock[0] = 110.0
+            with self.log.open("a") as f:
+                f.write(result(False) + "\n")
+            self.a.idle(self.tmp)  # _wait_any는 result_seconds 전에 활동을 읽는다
+            self.assertEqual(self.a.result_seconds(), 0)
+            self.assertEqual(self.a.result_at, 110.0)
+            clock[0] = 115.0
+            self.a.idle(self.tmp)
+            self.assertEqual(self.a.result_seconds(), 5)
+            clock[0] = 118.0  # 로그가 자란다(성공 끝 이벤트는 또 없다): 시계가 다시 시작한다
+            with self.log.open("a") as f:
+                f.write(json.dumps({"type": "assistant"}) + "\n")
+            self.a.idle(self.tmp)
+            self.assertEqual(self.a.result_seconds(), 0)
+            self.assertEqual(self.a.result_at, 110.0)  # 성공 끝 이벤트를 처음 본 때는 그대로
+            clock[0] = 121.0
+            self.a.idle(self.tmp)
+            self.assertEqual(self.a.result_seconds(), 3)
+            head[0] = "b"  # 커밋만 바뀐다
+            clock[0] = 125.0
+            self.a.idle(self.tmp)
+            self.assertEqual(self.a.result_seconds(), 0)
+            clock[0] = 126.0
+            self.a.idle(self.tmp)
+            self.assertEqual(self.a.result_seconds(), 1)
+
+    def test_success_with_background_tasks_has_no_clock_until_the_list_empties_and_a_success_comes_again(self):
+        clock = [100.0]
+        with mock.patch.object(go.time, "monotonic", lambda: clock[0]):
+            with self.log.open("a") as f:
+                f.write(tasks_changed(1) + "\n" + result(False) + "\n")
+            self.assertIsNone(self.a.result_seconds())  # 배경 작업이 있다
+            self.assertIsNone(self.a.result_at)
+            clock[0] = 500.0
+            self.assertIsNone(self.a.result_seconds())
+            with self.log.open("a") as f:
+                f.write(tasks_changed(0) + "\n")
+            self.assertIsNone(self.a.result_seconds())  # 목록이 비어도 끝 이벤트가 다시 나올 때까지는 그 시점의 값이다
+            clock[0] = 510.0
+            with self.log.open("a") as f:
+                f.write(result(False) + "\n")
+            self.assertEqual(self.a.result_seconds(), 0)  # 이때부터 잰다
+            clock[0] = 513.0
+            self.assertEqual(self.a.result_seconds(), 3)
 
     def test_failure_end_clears_the_clock_and_a_new_success_starts_it_again(self):
         clock = [100.0]
