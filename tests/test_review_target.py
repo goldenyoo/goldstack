@@ -510,7 +510,7 @@ class PreMergeTest(Base):
         self.answer("codex", 1, [(1, "unresolved", "아직")])
         self.late("rereview", 2)
         self.answer("codex", 2, [(1, "resolved", "고침")])
-        self.answer("codex", 3, [(1, "resolved", "늦은 커밋까지 확인")], [finding("FIX 늦은 커밋의 새 문제")])
+        self.answer("codex", 3, [(1, "resolved", "늦은 커밋까지 확인")], [finding("FIX 늦은 커밋의 새 문제", "low")])  # high면 병합하지 않는다(test_final_high)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])
@@ -603,7 +603,7 @@ class PreMergeTest(Base):
         self.assertEqual(self.merged(), ["01"])
 
     def test_empty_fix_commit_needs_no_second_look(self):
-        self.findings("codex", finding("FIX A: 값이 틀렸다"))
+        self.findings("codex", finding("FIX A: 값이 틀렸다", "medium"))  # 빈 수정이 재리뷰를 부르지 않는 것만 본다. unresolved high면 병합하지 않는다(goldstack-v36 03)
         (self.bin / "fixempty_1").touch()
         (self.bin / "fixempty_2").touch()
         code, out, err = self.go("--only", "01")
