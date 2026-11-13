@@ -69,6 +69,7 @@ checks_minutes = 60
 checks_grace_seconds = 60
 setup_minutes = 15
 network_wait_minutes = 60
+result_grace_seconds = 60
 
 [notify]
 telegram = false
@@ -159,6 +160,9 @@ class TiersConfig:
         return tier, table[tier]
 
 
+ZERO_OK_TIMEOUTS = ("checks_grace_seconds", "result_grace_seconds")  # 0을 받는 `[timeouts]` 키(0이면 기다리지 않거나 끈다). 나머지는 0보다 커야 한다
+
+
 @dataclass(frozen=True)
 class TimeoutsConfig:
     review_minutes: int
@@ -169,6 +173,7 @@ class TimeoutsConfig:
     rereview_minutes: int = 10
     checks_grace_seconds: int = 60
     network_wait_minutes: int = 60
+    result_grace_seconds: int = 60  # worker가 성공 끝 이벤트를 낸 뒤 끝나지 않을 때 정리 전 유예(go._wait_any). 0이면 끔
 
 
 @dataclass(frozen=True)
@@ -416,9 +421,9 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 {names[kind]}이어야 한다"))
             elif section == "goldstack" and key in data.get(section, {}) and not version.valid_requirement(raw[key]):
                 problems.append(Problem("오류", CONFIG_PATH, '`goldstack.requires`는 ">=0.1" 같은 최소 버전이어야 한다'))
-            elif section == "timeouts" and key == "checks_grace_seconds" and raw[key] < 0:
+            elif section == "timeouts" and key in ZERO_OK_TIMEOUTS and raw[key] < 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0 이상이어야 한다"))
-            elif section == "timeouts" and key != "checks_grace_seconds" and raw[key] <= 0:
+            elif section == "timeouts" and key not in ZERO_OK_TIMEOUTS and raw[key] <= 0:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 0보다 커야 한다"))
             elif section == "git" and key == "merge_method" and raw[key] not in ("merge", "squash"):
                 problems.append(Problem("오류", CONFIG_PATH, "`git.merge_method`는 merge 또는 squash이어야 한다"))

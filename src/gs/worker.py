@@ -28,6 +28,7 @@ from .adapters import Adapter, WorkerInput
 from .feature import Spec, Ticket, work_rel
 
 POLL_SECONDS = 2.0
+LEFTOVER_PROCS = "leftover-procs.txt"  # 유예 정리(Proc.end_after_result) 때 남아 있던 프로세스. 실행 디렉터리에 둔다
 PUSH_BLOCKED = "/dev/null/gs-worker-push-blocked/"  # 만들 수 없는 경로: push가 여기로 바뀌면 반드시 실패한다
 GH_BLOCKED = "gs-worker-no-gh"  # gh는 GH_TOKEN을 keyring보다 먼저 쓴다. 틀린 토큰이라 쓰기도 읽기도 못 한다
 PROFILE_REL = ".goldstack/profile.md"  # /adopt가 쓰는 레포 요약. brief에는 포인터 한 줄만(내용은 넣지 않는다)
@@ -281,40 +282,55 @@ def read_exit(job: Job) -> int | None:
         return None
 
 
-def _ps() -> dict[int, tuple[int, str, str]]:
-    """{pid: (ppid, stat, 명령줄)}."""
-    cp = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,stat=,command="], capture_output=True, text=True,
+def _ps() -> dict[int, tuple[int, int, str, str]]:
+    """{pid: (ppid, 프로세스 그룹, stat, 명령줄)}."""
+    cp = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,stat=,command="], capture_output=True, text=True,
                         stdin=subprocess.DEVNULL)
     table = {}
     for line in cp.stdout.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
-            table[int(parts[0])] = (int(parts[1]), parts[2], parts[3] if len(parts) > 3 else "")
+        parts = line.split(None, 4)
+        if len(parts) >= 4 and parts[0].isdigit() and parts[1].isdigit() and parts[2].isdigit():
+            table[int(parts[0])] = (int(parts[1]), int(parts[2]), parts[3], parts[4] if len(parts) > 4 else "")
     return table
 
 
-def _live(table: dict[int, tuple[int, str, str]], pid: int) -> bool:
-    return pid in table and not table[pid][1].startswith("Z")
+def _live(table: dict[int, tuple[int, int, str, str]], pid: int) -> bool:
+    return pid in table and not table[pid][2].startswith("Z")
 
 
-def kill_script(script: Path, grace: float = 3.0) -> bool:
-    """명령줄에 이 run.sh 경로가 있는 프로세스와 그 자손을 끝낸다(TERM, 안 끝나면 KILL). 끝낸 게 있으면 True.
+def _tree(table: dict[int, tuple[int, int, str, str]], script: Path) -> list[int]:
+    """명령줄에 이 run.sh 경로가 있는 살아 있는 프로세스와 그 자손(좀비 포함)의 pid. 없으면 빈 목록.
 
-    pid가 아니라 명령줄로 찾으므로 재사용된 pid를 잘못 죽이지 않는다. 시도마다 run.sh 경로가 달라 다른 시도도 안 건드린다.
+    pid가 아니라 명령줄로 찾으므로 재사용된 pid를 잘못 고르지 않는다. 시도마다 run.sh 경로가 달라 다른 시도도 안 고른다.
+    고른 프로세스가 프로세스 그룹의 리더면(SubprocessRunner는 run.sh를 새 세션에서 띄운다) 그 그룹의 프로세스(좀비 포함)와 그 자손도 넣는다.
+    부모가 먼저 끝나 고아가 된(PPID 1) 백그라운드 자식은 부모 관계로는 못 찾지만 그룹에 남는다. gs 자신의 그룹은 넣지 않는다.
     """
-    table = _ps()
-    me = os.getpid()
-    roots = [pid for pid, (_, _, cmd) in table.items() if str(script) in cmd and pid != me and _live(table, pid)]
-    if not roots:
-        return False
+    me, mine = os.getpid(), os.getpgrp()
+    todo = [pid for pid, (_, _, _, cmd) in table.items() if str(script) in cmd and pid != me and _live(table, pid)]
     pids: list[int] = []
-    todo = list(roots)
     while todo:
         pid = todo.pop()
         if pid in pids:
             continue
         pids.append(pid)
-        todo += [c for c, (pp, _, _) in table.items() if pp == pid]
+        todo += [c for c, (pp, _, _, _) in table.items() if pp == pid]
+        group = table[pid][1]
+        if group == pid and group not in (0, 1, mine):
+            todo += [m for m, (_, g, _, _) in table.items() if g == group]
+    return pids
+
+
+def leftover(script: Path) -> list[str]:
+    """kill_script가 끝낼 프로세스(_tree)를 pid 순으로 `PID PPID STAT COMMAND` 한 줄씩. 좀비는 STAT이 Z로 시작한다."""
+    table = _ps()
+    return [f"{pid} {table[pid][0]} {table[pid][2]} {table[pid][3]}" for pid in sorted(_tree(table, script))]
+
+
+def kill_script(script: Path, grace: float = 3.0) -> bool:
+    """명령줄에 이 run.sh 경로가 있는 프로세스와 그 자손·그룹(_tree)을 끝낸다(TERM, 안 끝나면 KILL). 끝낸 게 있으면 True."""
+    pids = _tree(_ps(), script)
+    if not pids:
+        return False
     for sig in (signal.SIGTERM, signal.SIGKILL):
         for pid in pids:
             try:
@@ -338,8 +354,9 @@ class SubprocessRunner:
     name = "subprocess"
 
     def start(self, job: Job, label: str) -> tuple[subprocess.Popen, str]:
+        # 새 세션: run.sh가 프로세스 그룹의 리더라 부모가 먼저 끝난 자식도 그 그룹으로 찾아 끝낸다(_tree)
         proc = subprocess.Popen(["bash", str(job.script)], stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         return proc, f"pid {proc.pid}"
 
     def alive(self, proc: subprocess.Popen) -> bool:
@@ -476,6 +493,22 @@ class Proc:
                 step()
             except Exception:  # noqa: BLE001 — 정리 중이다. 남은 단계는 계속한다
                 pass
+
+    def end_after_result(self) -> int:
+        """성공 끝 이벤트를 낸 뒤 끝나지 않는 worker를 정리한다(go._wait_any의 유예 정리). 남은 프로세스 수를 돌려준다.
+
+        남은 프로세스(leftover)를 실행 디렉터리의 LEFTOVER_PROCS에 쓰고 stop으로 끝낸 뒤 exit 파일에 0을 쓴다. 끝내는 사이 스크립트가 쓴
+        종료 코드도 0으로 덮는다. 그래서 poll()은 종료 코드 0을 어댑터 판정에 넘기고, 측정의 종료 시각(exit 파일의 mtime, metrics.worker_finished)은
+        정리한 때다. 실행기(subprocess, herdr)와 상관없이 같다.
+        """
+        procs = leftover(self.job.script)
+        (self.job.rundir / LEFTOVER_PROCS).write_text("".join(f"{line}\n" for line in ["PID PPID STAT COMMAND", *procs]),
+                                                      encoding="utf-8")
+        self.stop()
+        tmp = self.job.exit_file.with_name(self.job.exit_file.name + ".gs")
+        tmp.write_text("0\n", encoding="utf-8")
+        tmp.replace(self.job.exit_file)
+        return len(procs)
 
 
 class Finished:

@@ -4,6 +4,7 @@ import io
 import os
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -135,6 +136,29 @@ class ConfigTest(unittest.TestCase):
         code, out, err = self.cli("config", "git.base")
         self.assertEqual((code, out), (1, ""))
         self.assertIn("timeouts.review_minutes", err)
+
+    def test_result_grace_seconds_defaults_to_60_and_zero_turns_it_off(self):
+        """옛 config(키 없음)와 `gs init` config는 60이다. 0(끔)은 받는다. 음수·정수 아님은 checks_grace_seconds와 같은 오류다."""
+        self.assertEqual(config.load(self.repo)[0].timeouts.result_grace_seconds, 60)
+        self.assertEqual(tomllib.loads(config.DEFAULT_CONFIG.format(base='"main"'))["timeouts"]["result_grace_seconds"], 60)
+        self.assertEqual(config.TimeoutsConfig(30, 10, 60).result_grace_seconds, 60)
+
+        def load(key, value):
+            self.path.write_text(CONFIG.replace("summary_seconds = 45\n", f"summary_seconds = 45\n{key} = {value}\n"))
+            return config.load(self.repo)
+
+        cfg, problems = load("result_grace_seconds", 0)
+        self.assertEqual((problems, cfg.timeouts.result_grace_seconds), ([], 0))
+        for bad, message in (("-1", "0 이상이어야 한다"), ('"60"', "정수이어야 한다"), ("1.5", "정수이어야 한다"),
+                             ("true", "정수이어야 한다")):
+            with self.subTest(bad=bad):
+                cfg, problems = load("result_grace_seconds", bad)
+                self.assertIsNone(cfg)
+                self.assertEqual([(p.level, p.message) for p in problems],
+                                 [("오류", f"`timeouts.result_grace_seconds`는 {message}")])
+                _, same = load("checks_grace_seconds", bad)
+                self.assertEqual([p.message.replace("checks_grace", "result_grace") for p in same],
+                                 [p.message for p in problems])
 
     def test_overnight_autonomy_defaults_to_stop_and_accepts_record(self):
         """절이 없거나 gs init이 쓴 config는 stop이다. 값은 stop|record만 받고 `gs config`가 값을 낸다."""

@@ -153,6 +153,58 @@ def _message_of(ev: dict) -> tuple[str, str] | None:
     return None
 
 
+def end_of(ev: dict) -> bool | None:
+    """이벤트 하나가 worker 실행의 끝이면 성공 여부, 끝이 아니면 None.
+
+    claude `result`는 `is_error`가 false일 때만 성공이다(없거나 true면 실패). codex는 `turn.completed`가 성공, `turn.failed`가 실패다
+    (render가 둘을 `■ 결과`로 가려 보인다). agy `result`는 None이다: 여기서는 성공을 가리지 않는다(끝 판정은 adapters.Agy.outcome).
+    """
+    if "event" in ev:
+        return None
+    kind = ev.get("type")
+    if kind == "result":
+        return ev.get("is_error") is False
+    if kind in ("turn.completed", "turn.failed"):
+        return kind == "turn.completed"
+    return None
+
+
+class ResultWatch:
+    """worker 로그를 이어 읽어 마지막 끝 이벤트(end_of)를 기억한다. go._wait_any의 유예 정리가 쓴다.
+
+    로그는 몇 MB일 수 있어 지난번 뒤로 쓴 다 쓴 줄만 읽는다. 아직 다 쓰지 않은 끝 줄은 다음에 읽는다.
+    """
+
+    def __init__(self, log: Path):
+        self.log = Path(log)
+        self.offset = 0
+        self.last: dict | None = None  # 마지막 끝 이벤트
+        self.ok = False  # 그 이벤트가 성공이다
+
+    def success_end(self) -> dict | None:
+        """로그의 마지막 끝 이벤트가 성공이면 그 이벤트. 끝 이벤트가 없거나(계열이 끝을 알리지 않는 agy 포함) 마지막 것이 실패면 None.
+
+        로그가 아직 없으면 None이다. JSON이 아닌 줄과 모양이 다른 줄은 건너뛴다.
+        """
+        try:
+            with self.log.open("rb") as f:
+                f.seek(self.offset)
+                data = f.read()
+        except FileNotFoundError:
+            return None
+        end = data.rfind(b"\n") + 1
+        self.offset += end
+        for line in data[:end].splitlines():
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            ok = end_of(ev) if isinstance(ev, dict) else None
+            if ok is not None:
+                self.last, self.ok = ev, ok
+        return self.last if self.ok else None
+
+
 COMMANDS_LIMIT = 60  # 기록에 남기는 명령 수 상한(끝에서부터). 검증은 대개 뒤쪽에서 돈다
 COMMAND_CHARS = 240  # 표시용 요약(`command`)의 글자 상한. 원본(`raw`)은 자르지 않는다
 OUTPUT_TAIL_CHARS = 200  # codex 실패 명령의 detail에 넣는 `aggregated_output` 끝 글자 수

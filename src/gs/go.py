@@ -49,6 +49,9 @@ gs가 띄우는 agy 호출(worker·리뷰·수정·수리·재리뷰·재시도)
 worker를 띄우기 전에 push 설정을 state에 기록한다(_begin). 재개해도 유지하고, gs의 push마다 대조한다(git.push).
 진행 상태는 `.goldstack/work/<f>/run/state.json`에 남기고(03), 다시 실행하면 병합된 티켓은 건너뛰고 나머지를 이어 간다.
 같은 feature에 `gs go`는 하나만 돈다(run/lock).
+worker가 성공 끝 이벤트(claude `result`의 `is_error: false`, codex `turn.completed`)를 낸 뒤에도 남은 자식 때문에 끝나지 않으면 유휴 시간 초과(`idle_minutes`)를
+기다리지 않는다: 처음 본 뒤 config `[timeouts] result_grace_seconds`(기본 60, 0이면 끔)가 지나면 남은 프로세스를 실행 디렉터리의 `leftover-procs.txt`에 쓰고
+정리한 뒤 종료 코드 0으로 끝난 것처럼 어댑터 판정 → 리뷰로 넘긴다(_wait_any, 실행기와 상관없이 같다). 측정의 종료 시각은 정리한 때다.
 
 worker는 config 등급표와 티켓 tier(기본 medium)로 모델·effort를 고른다. 첫 실패 뒤에는 한 단계 올리고 수정 worker도 그 등급을 쓴다.
 worker가 일시 오류(transient.py의 판별)로 끝나면 실패로 세지 않고 등급도 올리지 않는다. 간격을 늘려 기다렸다가 같은 worktree·브랜치에서 새 시도
@@ -772,6 +775,8 @@ class Active:
     # 병합할 SHA: 리뷰 단계가 마지막으로 대상으로 삼은 head. 리뷰어를 부르지 못했어도(한도, 트리 실패) 옮긴다. 실패는 기록의 note가 말한다(그때는 verify만으로 병합한다).
     # catch-up이 합친 커밋으로 옮겨 간다(_merge_stage). 재개 표시에 남는다(network_resume의 target). 비어 있으면 옛 state라 대조할 것이 없다
     target: str = ""
+    ends: streamfmt.ResultWatch | None = None  # 로그의 끝 이벤트를 이어 읽는다(result_seconds). 처음 볼 때 만든다
+    result_at: float | None = None  # 성공 끝 이벤트를 처음 본 시각(time.monotonic). 로그가 더 자라도 옮기지 않는다. 마지막 끝 이벤트가 실패면 None
 
     def quiet_seconds(self) -> float:
         """일시 오류 없이 돈 시간. 시작 이후 마지막 Reconnecting부터 잰다. Reconnecting 뒤 다른 이벤트가 아직 없으면 0이다."""
@@ -784,6 +789,21 @@ class Active:
         if self.watch.since is not None:
             return 0.0
         return time.monotonic() - max(self.started, self.watch.last or 0.0)
+
+    def result_seconds(self) -> float | None:
+        """로그의 마지막 끝 이벤트가 성공이면 그 이벤트를 처음 본 뒤 지난 초, 아니면 None(_wait_any의 유예 정리).
+
+        시계는 처음 본 때부터다: 그 뒤 로그가 자라도(성공 끝 이벤트가 또 나와도) 다시 시작하지 않는다.
+        마지막 끝 이벤트가 실패가 되면 시계를 지운다. 그 뒤 성공 끝 이벤트가 다시 나오면 그것을 처음 본 때부터 잰다.
+        """
+        if self.ends is None:
+            self.ends = streamfmt.ResultWatch(self.proc.job.log)
+        if self.ends.success_end() is None:
+            self.result_at = None
+            return None
+        if self.result_at is None:
+            self.result_at = time.monotonic()
+        return time.monotonic() - self.result_at
 
     def idle(self, repo: Path) -> float:
         """로그 출력 또는 브랜치 커밋이 바뀌면 유휴 시계를 다시 시작한다."""
@@ -823,6 +843,11 @@ class Outage:
 def _idle_seconds(r: Run) -> float:
     """시험은 이 시간만 짧게 바꿔 실제 worker의 멈춤을 확인할 수 있다."""
     return r.feat.spec.idle_minutes * 60
+
+
+def _result_grace(r: Run) -> float:
+    """성공 끝 이벤트 뒤 끝나지 않는 worker를 정리하기 전에 기다리는 초(config `timeouts.result_grace_seconds`). 0이면 끔. 시험은 이 시간만 짧게 바꾼다."""
+    return r.cfg.timeouts.result_grace_seconds
 
 
 def _network_limit_seconds(r: Run) -> float:
@@ -1354,6 +1379,10 @@ def _wait_any(r: Run, active: dict[str, Active], runner, *, once: bool = False) 
     (티켓, 종료 코드, 오류). 확인 중 오류(실행기·어댑터 판정의 예외)는 그 티켓의 오류로 돌려준다.
     once면 한 번만 보고 끝난 worker가 없으면 None이다(끊김·리뷰 중: 루프가 대기 시계와 리뷰 호출의 끝을 본다).
     codex worker가 Reconnecting만 상한 넘게 이어 가면 NetworkAbort를 올린다.
+    유예 정리(issue #65): 아직 도는 worker의 로그에 성공 끝 이벤트(streamfmt.end_of: claude `result`의 `is_error: false`, codex `turn.completed`)가 있고
+    처음 본 뒤 `timeouts.result_grace_seconds`(_result_grace, 0이면 끔)가 지났으면 남은 자식 때문에 끝나지 않는 것으로 본다.
+    남은 프로세스를 실행 디렉터리의 `leftover-procs.txt`에 쓰고 끝낸 뒤 종료 코드 0으로 끝난 것처럼 돌려준다(worker.Proc.end_after_result).
+    그다음은 다른 끝난 worker와 같다(_finish: 어댑터 판정 → 리뷰). 성공 끝 이벤트가 없거나 마지막 끝 이벤트가 실패면 유휴 시간 초과만 본다.
     """
     while True:
         result = timed_out = None
@@ -1361,6 +1390,8 @@ def _wait_any(r: Run, active: dict[str, Active], runner, *, once: bool = False) 
             if tid in active:
                 try:
                     code = active[tid].proc.poll()
+                    if code is None and _overdue_result(r, tid, active[tid]):
+                        code = active[tid].proc.poll()
                     if code is None and active[tid].idle(r.repo) >= _idle_seconds(r):
                         timed_out = timed_out or (
                             tid, None, f"시간 초과: {r.feat.spec.idle_minutes}분 동안 로그 출력·새 커밋 없음")
@@ -1383,6 +1414,20 @@ def _wait_any(r: Run, active: dict[str, Active], runner, *, once: bool = False) 
         time.sleep(worker.poll_interval(runner))
         if once:
             return None
+
+
+def _overdue_result(r: Run, tid: str, a: Active) -> bool:
+    """성공 끝 이벤트를 낸 뒤 유예가 지나도 끝나지 않은 worker를 정리했으면 True(_wait_any). 유예가 0이면 보지 않는다.
+
+    정리는 실행기와 상관없이 같다(worker.Proc.end_after_result). 사건 줄을 남긴다.
+    """
+    grace = _result_grace(r)
+    waited = a.result_seconds() if grace > 0 else None
+    if waited is None or waited < grace:
+        return False
+    n = a.proc.end_after_result()
+    say(f"[{tid}] result 뒤 {grace:g}초 지나도 끝나지 않아 정리: 남은 프로세스 {n}개")
+    return True
 
 
 def _failure_summary(r: Run, ts: state.TicketState) -> str:
