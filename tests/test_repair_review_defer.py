@@ -15,9 +15,10 @@ from unittest import mock
 
 import support
 import test_verify_repair
+from test_review_target import at_call, late_commit
 from test_verify_repair import BREAKS, REPAIRS
 
-from gs import report, review, state
+from gs import go, report, review, state
 
 CLAIM = "DEFER 병합된 티켓 밖 util.py가 빈 입력에서 틀린다"
 EVIDENCE = "재현: python -c 'import util; util.f(\"\")' → exit 1"
@@ -118,6 +119,29 @@ class DeferVerdictTest(Base):
     def test_failed_repair_review_is_still_counted(self):
         self.assert_still_counted("판정이 아닌 글")
 
+    def test_new_head_whose_review_tree_fails_does_not_keep_the_earlier_resolved(self):
+        """병합 전 대조가 새 head를 다시 부르는데 리뷰 트리를 못 만들면(호출 전 실패) 앞 head의 resolved를 남기지 않는다."""
+        self.worker(BREAKS, REPAIRS)
+        applied, real_tree = [], go._review_tree
+
+        def tree(*args, **kw):
+            if applied:
+                raise go.TreeUnavailable("임시 worktree를 만들지 못했다: 시험")
+            return real_tree(*args, **kw)
+
+        def late(r, a, *_):
+            applied.append(1)
+            late_commit("late", self.rundir / "wt/01")(r, a)
+
+        with self.reviewers_answer([DEFERRED_FINDING], answer(verdict("resolved"))), \
+                at_call("_apply_repair_reviews", late), mock.patch.object(go, "_review_tree", side_effect=tree):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        f = self.finding()
+        self.assertNotIn("repair_review", f)
+        self.assertEqual(report.finding_status(f), "재현된 미수리")
+        self.assertEqual(self.closing_line(), "남은 high 1(재현된 미수리 1)")
+
     def test_verdict_for_another_id_is_still_counted(self):
         self.assert_still_counted(answer(verdict("resolved", id=7)))
 
@@ -192,6 +216,13 @@ class RecordTest(unittest.TestCase):
         review.apply_repair_review(rec, self.res({1: {"status": "resolved", "evidence": "x"}}, head="h1"))
         review.apply_repair_review(rec, self.res(failed="재리뷰 실패", head="h2"))
         self.assertEqual(report.finding_status(rec["findings"][0]), "재현된 미수리")
+
+    def test_clear_defer_verdicts_removes_both_keys(self):
+        rec = self.rec()
+        review.apply_repair_review(rec, self.res({1: {"status": "resolved", "evidence": "x"}}))
+        review.clear_defer_verdicts(rec)
+        self.assertNotIn("repair_review", rec["findings"][0])
+        self.assertNotIn("repair_review_evidence", rec["findings"][0])
 
     def test_later_unresolved_replaces_an_earlier_resolved(self):
         rec = self.rec()

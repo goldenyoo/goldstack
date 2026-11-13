@@ -2850,6 +2850,8 @@ def _repair_review(r: Run, a: Active) -> ReviewFlow:
     반영한 지적의 high는 여기서 보지 않는다: 병합 전 대조 뒤에 _review_stage가 MergeBlocked로 끊는다(_final_high). 포괄 예외 처리 밖이라 삼켜지지 않는다.
     """
     t = a.t
+    for rec in state.reviews(r.st.ticket(t.id)):  # 새 head의 판정만 남긴다: 트리 준비 실패·상한·빈 diff처럼 부르지 못한 길에서 앞 resolved가 남지 않게
+        review.clear_defer_verdicts(rec)
     try:
         head = a.target = git.sha(r.repo, a.branch)
         if git.out(r.repo, "diff", "--no-ext-diff", "--name-only", f"{a.base}..{head}"):

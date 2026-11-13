@@ -1331,13 +1331,18 @@ def _mark_defer_verdicts(rec: dict, res: dict) -> None:
     근거가 빈 판정은 적되 해소로 세지 않는다(report.finding_status). 옛 state의 지적에는 두 키가 없고 그대로 읽힌다(해소되지 않은 지적).
     """
     verdicts = {} if res.get("failed") else res.get("defer_verdicts") or {}
+    clear_defer_verdicts(rec)
     for f in deferred(rec):
         v = verdicts.get(f["id"])
-        if v is None:
-            f.pop("repair_review", None)
-            f.pop("repair_review_evidence", None)
-        else:
+        if v is not None:
             f["repair_review"], f["repair_review_evidence"] = v["status"], v["evidence"]
+
+
+def clear_defer_verdicts(rec: dict) -> None:
+    """앞 head의 수리 재리뷰 판정을 지운다. 새 head를 부르기 전에 부른다: 호출 전에 실패하거나 부르지 않으면 앞 resolved가 새 head에 남는다."""
+    for f in rec.get("findings", []):
+        f.pop("repair_review", None)
+        f.pop("repair_review_evidence", None)
 
 
 def repair_resolved(f: dict) -> bool:
