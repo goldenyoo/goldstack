@@ -239,6 +239,38 @@ def network_label(st: State, at: str) -> str:
     return f"네트워크 대기({wait['count']}회, {max(1, left)}분 뒤)"
 
 
+TIER_ORDER = ("small", "medium", "large")
+
+
+def tier_samples(repo: Path, feature: str) -> dict[str, list[float]]:
+    """같은 레포 다른 feature의 지난 실행(`run/state.json`)에서 등급별 merged 티켓 소요(초).
+
+    소요는 티켓의 첫 단계 시작부터 종료까지다(재시도 포함). 등급은 worker·수정 단계가 남긴 tier다.
+    등급이 없는 옛 티켓, 시각이 없거나 거꾸로인 기록, 읽을 수 없는 state는 건너뛴다. `run/`이 없어도 오류가 아니다.
+    """
+    samples: dict[str, list[float]] = {}
+    for p in sorted((repo / ".goldstack" / "work").glob("*/run/state.json")):
+        if p.parent.parent.name == feature:
+            continue
+        try:
+            st = load(p.parent, p.parent.parent.name)
+            found = []
+            for ts in st.tickets.values():
+                if ts.status != MERGED:
+                    continue
+                tier = next((ph["tier"] for ph in ts.phases if ph.get("tier") in TIER_ORDER), None)
+                starts = [s for ph in ts.phases if (s := parse_time(ph["started_at"]))]
+                start = min(starts) if starts else parse_time(ts.started_at)
+                end = parse_time(ts.ended_at)
+                if tier and start and end and end >= start:
+                    found.append((tier, (end - start).total_seconds()))
+        except (OSError, ValueError, TypeError, AttributeError, KeyError):
+            continue  # 깨진 기록은 진행 계산·check를 막지 않는다
+        for tier, seconds in found:
+            samples.setdefault(tier, []).append(seconds)
+    return samples
+
+
 def load_eta_history(repo: Path, feature: str) -> float | None:
     """다른 feature의 merged 티켓 소요 중앙값(초). 로컬 실행 기록만 읽는다."""
     durations = []
@@ -264,7 +296,7 @@ def load_eta_history(repo: Path, feature: str) -> float | None:
 
 
 FINISHED_PHASES = ("verified", "reverted")  # 마무리를 끝까지 한 실행(finish.BASE_REPORT_PHASES). 멈춘 실행의 짧은 마무리는 표본이 아니다
-MIN_RUNNING_S = 60  # 평균을 넘긴 티켓이 앞으로 걸릴 시간으로 세는 값
+MIN_RUNNING_S = 60  # 예상을 넘긴 티켓이 앞으로 걸릴 시간으로 세는 값
 
 
 def load_finish_history(repo: Path, feature: str) -> float | None:
@@ -342,11 +374,13 @@ def simulate_schedule(remaining: dict[str, float], running: dict[str, float], de
 def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(),
                        models: dict[str, str] | None = None, at: str | None = None,
                        history_median_s: float | None = None, deps: dict[str, list[str]] | None = None,
-                       finish_median_s: float | None = None) -> dict:
+                       finish_median_s: float | None = None, tiers: dict[str, str | None] | None = None,
+                       tier_medians_s: dict[str, float] | None = None) -> dict:
     """남은 시간을 의존과 max_workers로 흉내 낸 일정에 마무리를 더해 계산한다.
 
-    티켓 하나의 예상 소요는 이번 실행에서 끝난 티켓의 평균이다. 없으면 이전 실행 중앙값(history_median_s)이고
-    line에 `(이전 실행 기준)`이 붙는다. 도는 티켓은 예상 소요에서 쓴 시간을 뺀 값(넘겼으면 1분)으로 센다.
+    예상 소요는 이번 실행 같은 tier 평균 → 지난 실행 tier 중앙값 → 이번 실행 전체 평균 → 지난 실행 전체 중앙값이다.
+    tier가 없으면 전체 표본을 쓴다. 지난 실행 표본을 쓰면 line에 `(이전 실행 기준)`이 붙는다.
+    도는 티켓은 예상에서 쓴 시간을 뺀 값(넘겼으면 1분)으로 세고, 넘긴 예상과 초과 시간을 따로 표시한다.
     finish_median_s(다른 feature의 마무리 중앙값)가 있으면 더하고, 없으면 `+ 마무리`를 붙인다.
     마무리 중에는 값이 있고 아직 남았을 때만 시간을 보이고, 아니면 `마무리 중`(eta_s는 None)이다.
     """
@@ -356,6 +390,8 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
     terminal = (MERGED, FAILED, SKIPPED)
     done = sum(st.tickets[tid].status in terminal for tid in order)
     running, durations, spent = [], [], {}
+    tier_durations: dict[str, list[float]] = {}
+    tiers, tier_medians_s = tiers or {}, tier_medians_s or {}
     for tid in order:
         ts = st.tickets[tid]
         if ts.status == RUNNING and not st.finished_at:
@@ -369,15 +405,19 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
             continue
         start, end = _ticket_start(ts, run_start), parse_time(ts.ended_at)
         if start and end:
-            durations.append(max(0, (end - start).total_seconds()))
+            duration = max(0, (end - start).total_seconds())
+            durations.append(duration)
+            if tier := tiers.get(tid):
+                tier_durations.setdefault(tier, []).append(duration)
     finishing = st.phase == "finish" and not st.finished_at
     if st.phase in ("finish", "setup") and not st.finished_at:
         # 빈 id는 개별 티켓이 아닌 feature 전체의 보고서·PR·base 검증을 뜻한다.
         phase = "setup" if st.phase == "setup" else "checks" if st.finish.get("phase") == "checks_pending" else "finish"
         running = [{"id": "", "phase": phase, "model": "claude" if phase == "finish" else ""}]
     total = len(order)
-    historical = not durations and history_median_s is not None
+    historical = False
     average = sum(durations) / len(durations) if durations else history_median_s
+    overruns = {}
     eta, pending_finish = None, False  # pending_finish: 마무리 시간을 모르는 채 티켓 일정만 센 값이다
     if finishing:
         # 티켓은 모두 끝났다. 마무리 시작은 마지막 티켓 종료다(이번 실행에서 끝난 것이 없으면 실행 시작)
@@ -386,14 +426,27 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
         if finish_median_s is not None and began and now_t:
             left = minutes(finish_median_s - (now_t - began).total_seconds())
             eta = left * 60 if left >= 1 else None  # 마무리 중에는 0분 남음을 보이지 않는다
-        historical = False
     else:
         waiting = [tid for tid in order if st.tickets[tid].status not in terminal and tid not in spent]
-        if average is not None or not (waiting or spent):
-            avg = average or 0
+        estimates = {}
+        for tid in [*waiting, *spent]:
+            tier = tiers.get(tid)
+            samples = tier_durations.get(tier)
+            if samples:
+                estimates[tid] = sum(samples) / len(samples)
+            elif tier and tier in tier_medians_s:
+                estimates[tid] = tier_medians_s[tier]
+                historical = True
+            else:
+                estimates[tid] = average
+                historical = historical or (not durations and average is not None)
+        overruns = {tid: (estimates[tid], s - estimates[tid]) for tid, s in spent.items()
+                    if estimates[tid] is not None and s > estimates[tid]}
+        if all(estimate is not None for estimate in estimates.values()):
             scope = set(order)  # 범위 밖 의존은 끝난 것이다(go._skip_blocked)
             schedule = simulate_schedule(
-                {tid: avg for tid in waiting}, {tid: avg - s if s < avg else MIN_RUNNING_S for tid, s in spent.items()},
+                {tid: estimates[tid] for tid in waiting},
+                {tid: estimates[tid] - s if s < estimates[tid] else MIN_RUNNING_S for tid, s in spent.items()},
                 {tid: [d for d in (deps or {}).get(tid, ()) if d in scope] for tid in order},
                 {tid for tid in order if st.tickets[tid].status == MERGED}, max_workers)
             pending_finish = finish_median_s is None and not st.finished_at
@@ -409,12 +462,16 @@ def calculate_progress(st: State, order: list[str], max_workers: int, *, prior=(
         parts.append(f"{p['id'] + ' ' if p['id'] else ''}{label} 중{model}")
     if not st.finished_at and (network := network_label(st, at)):
         parts.append(network)
+    for tid, (estimate, overrun) in overruns.items():
+        parts.append(f"{tid} 예상 {minutes(estimate)}분 넘김(+{minutes(overrun)}분)")
     if eta is not None:
         eta_text = f"약 {eta // 60}분 남음" + (" + 마무리" if pending_finish else "")
     else:
         eta_text = "마무리 중" if finishing else "남은 시간 계산 중"
     if historical:
         eta_text += "(이전 실행 기준)"
+    if overruns:
+        eta_text += "(예상 넘긴 티켓 있음)"
     parts += [f"{minutes(elapsed)}분", eta_text]
     return {"done": done, "total": total, "running": running, "elapsed_s": elapsed, "eta_s": eta,
             "line": " · ".join(parts)}
