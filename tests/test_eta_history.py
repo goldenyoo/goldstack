@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from gs import config, go, state
+from gs import check, config, go, state
 
 
 def clock(seconds):
@@ -151,6 +151,43 @@ class EtaHistoryTest(HistoryCase):
         saved = json.loads(state.path(r.rundir).read_text())
         self.assertEqual(saved["progress"]["eta_s"], 1200)
         self.assertTrue(saved["progress"]["line"].endswith("약 20분 남음 + 마무리(이전 실행 기준)"))
+
+
+    def test_tier_samples_are_shared_and_cached_for_progress(self):
+        old = state.State(feature="old")
+        for tid, tier, minutes in (("01", "large", 40), ("02", "large", 48), ("03", "large", 92),
+                                   ("04", None, 10), ("05", None, 15), ("06", None, 25), ("07", None, 25)):
+            ts = completed(old, tid, minutes * 60)
+            if tier:
+                state.begin_phase(ts, "worker", "codex", at=clock(0))
+                ts.phases[-1]["tier"] = tier
+                state.end_phase(ts, ts.ended_at)
+        self.save(old)
+        self.assertIs(check.tier_samples, state.tier_samples)
+        self.assertEqual(check.measured_line(self.repo, "current"), "실측(지난 실행): large 48분(3)")
+        self.assertEqual(state.load_eta_history(self.repo, "current"), 25 * 60)
+        feat = SimpleNamespace(name="current", root=self.work / "current",
+                               spec=SimpleNamespace(max_workers=1),
+                               tickets={"01": SimpleNamespace(id="01", model="codex", blocked_by=[], tier="large")})
+        (self.repo / config.CONFIG_PATH).write_text(config.DEFAULT_CONFIG.format(base='"main"'))
+        cfg, _ = config.load(self.repo)
+        r = go.Run(self.repo, feat, None, cfg)
+        with mock.patch.object(state, "tier_samples", wraps=state.tier_samples) as history:
+            with mock.patch.object(state, "now", return_value=clock(0)):
+                go._begin(r)
+            self.assertEqual(r.st.progress["eta_s"], 48 * 60)
+            self.save(state.State(feature="old"))
+            ts = r.st.ticket("01")
+            ts.status, ts.started_at = state.RUNNING, clock(0)
+            with mock.patch.object(state, "now", return_value=clock(30 * 60)):
+                r.save()
+                self.assertEqual(r.st.progress["eta_s"], 18 * 60)
+            with mock.patch.object(state, "now", return_value=clock(60 * 60)):
+                r.save()
+            history.assert_called_once_with(self.repo, "current")
+        saved = state.load(r.rundir, "current")
+        self.assertIn("01 예상 48분 넘김(+12분)", saved.progress["line"])
+        self.assertIn("예상 넘긴 티켓 있음", saved.progress["line"].split(" · ")[-1])
 
 
 def finished(feature, *, tail, phase="verified", ticket_start=0, run_start=0):

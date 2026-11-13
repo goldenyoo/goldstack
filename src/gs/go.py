@@ -110,6 +110,7 @@ from concurrent.futures import wait as wait_futures
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from statistics import median
 
 from . import adapters, clean, config, failure, feedback, finish, git, graph, herdr, metrics, notify, report, review, sandbox, setup, state, streamfmt, transient, verify, worker
 from .check import check
@@ -176,6 +177,7 @@ class Run:
     merges: Merges | None = None  # 병합·검증의 자리와 줄, 루프 밖 검증 호출. _loop가 만든다
     no_merge: bool = False  # 지난 마무리를 회복하지 않는 --only 실행이다. 마무리 없이 멈추고, 지난 마무리의 기록을 이번 결과로 보이지 않는다
     sandbox: adapters.Sandbox = field(default_factory=adapters.Sandbox)  # 실행 시작 때 주 레포에서 계산한 모드·거부 목록(_sandbox). 기본 os
+    tier_medians_s: dict[str, float] = field(default_factory=dict)  # 실행 시작에 읽은 tier별 ETA 중앙값
 
     @property
     def name(self) -> str:
@@ -207,7 +209,9 @@ class Run:
         self.st.progress = state.calculate_progress(
             self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
             models={tid: self.feat.tickets[tid].model for tid in self.order},
-            history_median_s=self.history_median_s, deps=self.g, finish_median_s=self.finish_median_s)
+            history_median_s=self.history_median_s, deps=self.g, finish_median_s=self.finish_median_s,
+            tiers={tid: getattr(self.feat.tickets[tid], "tier", None) for tid in self.order},
+            tier_medians_s=self.tier_medians_s)
         state.save(self.rundir, self.st)
         self.saved = time.monotonic()
 
@@ -462,6 +466,7 @@ def _begin(r: Run) -> None:
     metrics.runtime(r)
     r.history_median_s = state.load_eta_history(r.repo, r.name)
     r.finish_median_s = state.load_finish_history(r.repo, r.name)
+    r.tier_medians_s = {tier: median(samples) for tier, samples in state.tier_samples(r.repo, r.name).items()}
     r.save()
 
 
