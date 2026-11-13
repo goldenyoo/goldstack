@@ -40,8 +40,6 @@ review_minutes = 30
 rereview_minutes = 20
 judge_minutes = 10
 summary_seconds = 60
-# goldstack-v36·v37 실행 동안 유예 정리를 끈다(0.2.19의 유예 정리가 배경 작업을 기다리던 worker를 죽인다. 아이디어 result-grace-kills-resumed-worker). v37 마지막 티켓이 이 줄을 지운다(v36 grill 2-2).
-result_grace_seconds = 0
 
 [notify]
 telegram = false
