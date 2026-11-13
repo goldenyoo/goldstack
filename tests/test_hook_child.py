@@ -209,6 +209,56 @@ class GsChildTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertIsNone(self.verdict(command), command)
 
+    def test_gs_child_head_words_are_still_checked(self):
+        """맨 앞 `gs child`를 벗겨도 벗긴 단어(`gs`, `--repo` 값, `child`)는 바깥 xargs 치환 문자열과 비밀 파일 판정을 받는다(0d8a8c1이 막던 것)."""
+        for command in ("printf 'git push #' | xargs -I gs sh -c 'gs child -- echo hi'",
+                        'echo "git push #" | xargs -I gs eval "gs child -- echo ok"',
+                        'echo pkill | xargs -I gs bash -c "gs child"'):
+            with self.subTest(command=command):
+                self.assertIn("`xargs`의 치환 문자열이 명령 이름 `gs`", self.verdict(command) or "", command)
+        for command in ('echo "; git push #" | xargs -I @ bash -c "gs --repo @ child -- echo ok"',
+                        "echo x | xargs -I child sh -c 'gs child -- echo ok'"):
+            with self.subTest(command=command):
+                self.assertIn("`xargs`의 치환 문자열이 앞붙이 단어", self.verdict(command) or "", command)
+        for command in ("gs --repo ~/.ssh/id_rsa child -- echo ok", "gs --repo=~/.ssh/id_rsa child -- echo ok"):
+            with self.subTest(command=command):
+                self.assertIn("비밀 파일", self.verdict(command) or "", command)
+        self.assertIsNone(self.verdict("echo hi | xargs -I @ sh -c 'gs child -- claude -p @'"))  # 안쪽 명령의 인자는 된다
+
+    def test_env_split_string_splits_where_env_splits(self):
+        """env -S는 C `isspace` 글자(줄바꿈·`\\v`·`\\f`·`\\r` 포함)로 단어를 나눈다. 셸 tokenizer가 줄바꿈 뒤에 넣은 `;`는 떼고 나눈다."""
+        for sep in ("\n", "\v", "\f", "\r", "\t"):
+            with self.subTest(sep=sep):
+                self.assertEqual(self.verdict(f"env -S 'git{sep}push'"), PUSH)
+                self.assertEqual(self.verdict(f"gs child -- env -S 'git{sep}push'"), PUSH)
+                self.assertIn("`env -u GS_ROLE`", self.verdict(f"env -S '-u{sep}GS_ROLE{sep}claude{sep}-p{sep}hi'") or "")
+                self.assertEqual(self.verdict(f"env --split-string='gs{sep}child -- claude -p hi'"), hook.GS_CHILD_FRONT)
+                self.assertEqual(self.verdict(f"env -S 'gs{sep}child{sep}--{sep}git{sep}push'"), hook.GS_CHILD_FRONT)
+                self.assertIsNone(self.verdict(f"env -S 'FOO=1{sep}git{sep}status'"))
+                self.assertEqual(hook.strip_prefix(["env", "-S", f"git{sep}push"]), ["git", "push"])
+        self.assertIsNone(self.verdict("env -S \"'git\vpush'\""))  # 따옴표 속은 env도 나누지 않는다
+
+    def test_assignments_after_double_dash_are_still_prefix(self):
+        """`--`는 옵션만 끝낸다. 그 뒤의 대입(`env`는 식별자가 아닌 이름도)은 계속 앞붙이다."""
+        for command in ("env -- a-b=1 git push", "env -- FOO.BAR=1 git push", "sudo -- a-b=1 git push",
+                        "env -u X -- FOO.BAR=1 git push", "sudo -u root -- FOO=1 git push"):
+            with self.subTest(command=command):
+                self.assertEqual(self.verdict(command), PUSH, command)
+        self.assertIn("`env GS_ROLE=<값>`", self.verdict("env -- FOO.BAR=1 GS_ROLE=other claude -p hi") or "")
+        self.assertEqual(self.verdict("env -- a-b=1 gs child -- git push"), hook.GS_CHILD_FRONT)
+        self.assertIsNone(self.verdict("env -i -- GS_ROLE=worker claude -p hi"))  # 다시 준 `GS_ROLE=worker`를 읽는다
+        self.assertIsNone(self.verdict("env -- FOO.BAR=1 git status"))
+        self.assertEqual(hook.strip_prefix(["env", "--", "a-b=1", "git", "push"]), ["git", "push"])
+
+    def test_xargs_replace_string_in_env_split_string(self):
+        """xargs는 `env -S` 문자열을 env가 나누기 전에 바꾼다. 펼친 뒤의 대입 이름만 보면 `FOO=@`의 `@`를 놓친다."""
+        for command in ('echo "a GS_ROLE=other" | xargs -I @ env -S "FOO=@" claude -p hi',
+                        'echo "a git push" | xargs -I @ env -S "FOO=@"',
+                        'echo "a gs child -- git push" | xargs -I @ env --split-string="FOO=@"'):
+            with self.subTest(command=command):
+                self.assertIn("`xargs`의 치환 문자열이 앞붙이 단어 `FOO=@`", self.verdict(command) or "", command)
+        self.assertIsNone(self.verdict("echo f | xargs -I {} env -S 'FOO=1' echo {}"))
+
     def test_env_split_string_that_env_reads_differently_is_blocked(self):
         """env -S는 `#`(주석), `\\_`(공백), `\\c`(끝), `${VAR}`를 셸과 다르게 푼다. 같게 풀지 못하면 판정하지 않고 막는다."""
         for command in ("env -S '#' git push", "env -S '\\c' git push", "env -S '\\_' git push", "env -S 'git\\_push'",

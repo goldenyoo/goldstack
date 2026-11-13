@@ -1089,12 +1089,13 @@ def _wrapper_takes_next(base: str, word: str) -> bool:
     return False
 
 
-def _prefix_scan(words: list[str]) -> tuple[str | None, list[str], int]:
+def _prefix_scan(words: list[str]) -> tuple[str | None, list[str], int, list[str]]:
     """앞붙이(`!`·`{`, 대입, 앞붙이 명령과 그 옵션·값)를 지나 명령이 시작하는 자리를 찾는다.
-    (`GS_ROLE`을 바꾸는 첫 이유, `env -S` 문자열을 단어로 펼친 단어들, 명령 자리). 이유가 있어도 끝까지 읽는다.
+    (`GS_ROLE`을 바꾸는 첫 이유, `env -S` 문자열을 단어로 펼친 단어들, 명령 자리, 펼치기 전 `env -S` 문자열들). 이유가 있어도 끝까지 읽는다.
     `strip_prefix`와 `check_role_strip`이 같은 판독을 쓴다(둘이 다르게 읽으면 한쪽이 명령 이름을 놓친다)."""
     words = list(words)
     reason = None
+    split: list[str] = []
     i = 0
     while i < len(words):
         word = words[i]
@@ -1108,19 +1109,20 @@ def _prefix_scan(words: list[str]) -> tuple[str | None, list[str], int]:
         elif ANY_ASSIGN.match(word):
             i += 1
         elif base == "env":
-            why, words, i = _role_env(words, i)
+            why, words, i, values = _role_env(words, i)
             reason = reason or why
+            split += values
         elif base in WRAPPERS:
             why, i = _role_wrapper_opts(words, i, base)
             reason = reason or why
         else:
             break
-    return reason, words, i
+    return reason, words, i, split
 
 
 def split_prefix(argv: list[str]) -> tuple[list[str], list[str]]:
     """(앞붙이 단어들, 명령과 인자). 둘을 이으면 `env -S`를 펼친 argv다. 원래 argv에서 길이로 자르지 않는다(`-S`가 길이를 바꾼다)."""
-    _, words, i = _prefix_scan(argv)
+    _, words, i, _ = _prefix_scan(argv)
     return words[:i], words[i:]
 
 
@@ -1149,6 +1151,7 @@ ENV_VALUED_SHORT = "uCSPa"  # 값을 받는 `env` 짧은 옵션. 붙이거나(`-
 # env -S가 셸과 다르게 푸는 글자(`#` 주석, `\_`·`\c`, `${VAR}`)와 셸이 먼저 바꿔 넣는 글자(`$( )`·백틱 치환, 글롭).
 # 바꿔 넣은 결과가 `#`일 수 있다(`env -S "`printf '#'`" git push`)
 ENV_SPLIT_UNSURE = "#\\$`*?["
+ENV_SPLIT_SPACE = " \t\n\v\f\r"  # env -S가 단어를 나누는 글자
 ENV_SPLIT_UNREADABLE = ("`env -S` 문자열을 env와 같게 풀 수 없어(`#` 주석, `\\_` 공백, `\\c`, `${VAR}`, 치환·글롭, 닫히지 않은 따옴표) "
                         "그 안의 명령을 판정할 수 없다. `-S` 없이 단어로 쓴다")
 
@@ -1183,7 +1186,7 @@ def _role_assign_blocks(word: str) -> bool:
 
 def role_scan(words: list[str]) -> str | None:
     """막을 이유. 앞붙이·대입·`env` 옵션(`_prefix_scan`)과 그 뒤 명령 자리의 `unset`·`export` 들을 본다."""
-    reason, words, i = _prefix_scan(words)
+    reason, words, i, _ = _prefix_scan(words)
     if reason or i >= len(words):
         return reason
     base = os.path.basename(words[i]).lstrip("\\")
@@ -1227,29 +1230,38 @@ def _env_split(value: str) -> list[str] | None:
     결과를 모른다. 이 글자(`ENV_SPLIT_UNSURE`)가 있으면 나누지 않는다."""
     if any(c in value for c in ENV_SPLIT_UNSURE):
         return None
+    # `tokens`가 줄바꿈마다 넣은 `;`를 뗀다(`_as_script`와 같다). env는 C `isspace` 글자로 나눈다. shlex 기본값은 `\v`·`\f`를 나누지 않는다
+    lex = shlex.shlex(value.replace("\n;", "\n"), posix=True)
+    lex.whitespace = ENV_SPLIT_SPACE
+    lex.whitespace_split = True
+    lex.commenters = ""
     try:
-        return shlex.split(value)
+        return list(lex)
     except ValueError:
         return None
 
 
-def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
-    """`words[i]`가 `env`다. (막을 이유, 단어들, `env` 옵션·대입 뒤 명령이 시작하는 자리). 이유가 있어도 끝까지 읽는다.
+def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int, list[str]]:
+    """`words[i]`가 `env`다. (막을 이유, 단어들, `env` 옵션·대입 뒤 명령이 시작하는 자리, 펼친 `-S` 문자열들). 이유가 있어도 끝까지 읽는다.
     `-S` 문자열은 단어로 풀어 `words`에 끼워 넣으므로 단어들을 새로 돌려준다. 풀지 못하는 문자열(`_env_split`)은
     그 안의 명령을 판정할 수 없어 막는다(`ENV_SPLIT_UNREADABLE`). 그 옵션과 값을 건너뛰고 끝까지 읽는다."""
     words = list(words)
     reason = None
+    split: list[str] = []
     j = i + 1
     cleared = False  # `-i`: 환경을 비운다
     kept = False  # `GS_ROLE=worker`를 다시 줬다
+    ended = False  # `--` 뒤: 옵션은 끝났고 대입은 계속 받는다(`env -- FOO.BAR=1 git push`)
     while j < len(words):
         w = words[j]
-        if w == "--":
-            j += 1
-            break
         if w == "-":  # 옛 `env -`는 `-i`다
             cleared = True
             j += 1
+        elif w == "--" and not ended:
+            ended = True
+            j += 1
+        elif ended and w.startswith("-"):
+            break
         elif w.startswith("--"):
             _, eq, value = w.partition("=")
             span = 1 if eq else 2
@@ -1268,6 +1280,7 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
                     reason = reason or ENV_SPLIT_UNREADABLE
                     j += span
                 else:
+                    split.append(value)
                     words[j:j + span] = parts
             elif _is_long(w, "--chdir", "--argv0") and not eq:
                 j += 2
@@ -1290,6 +1303,7 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
                         if parts is None:
                             reason = reason or ENV_SPLIT_UNREADABLE
                         else:
+                            split.append(value)
                             words[j:j + consumed] = parts
                             expanded = True
                     break
@@ -1307,20 +1321,23 @@ def _role_env(words: list[str], i: int) -> tuple[str | None, list[str], int]:
             break
     if cleared and not kept:
         reason = reason or "`env -i`가 `GS_ROLE`을 포함해 환경을 비운다"
-    return reason, words, j
+    return reason, words, j, split
 
 
 def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None, int]:
     """`words[i]`가 앞붙이(`sudo`·`timeout`·`setsid` …)다. (막을 이유, 그 옵션·값·대입을 지난 자리). 이유가 있어도 끝까지 읽는다.
     값을 받는 옵션(`WRAPPER_VALUED`)의 값은 건너뛴다. `timeout`은 옵션 뒤의 첫 단어가 시간이다(`5`, `0.5`, `1m`, `$T`. `TIMEOUT_SLOT`)."""
     reason = None
+    ended = False  # `--` 뒤: 옵션은 끝났고 대입은 계속 받는다(`sudo -- FOO=1 git push`)
     i += 1
     while i < len(words):
         w = words[i]
-        if w == "--":
+        if w == "--" and not ended:
+            ended = True
             i += 1
-            break
-        if w.startswith("-") and w != "-":
+            if base == "timeout":  # 다음 단어가 시간이다
+                break
+        elif w.startswith("-") and w != "-" and not ended:
             if base == "exec" and not w.startswith("--") and "c" in w[1:]:
                 reason = reason or "`exec -c`가 `GS_ROLE`을 포함해 환경을 비운다"
             i += 2 if _wrapper_takes_next(base, w) else 1
@@ -1339,6 +1356,24 @@ def _role_wrapper_opts(words: list[str], i: int, base: str) -> tuple[str | None,
     return reason, i
 
 
+def _xargs_in_name(word: str) -> str:
+    return f"`xargs`의 치환 문자열이 명령 이름 `{word}`에 들어 있어 어떤 명령을 돌리는지 볼 수 없다. `{{}}`처럼 겹치지 않는 문자열을 쓴다"
+
+
+def _xargs_in_prefix(word: str) -> str:
+    return (f"`xargs`의 치환 문자열이 앞붙이 단어 `{word}`에 들어 있어 어떤 환경에서 어떤 명령을 돌리는지 볼 수 없다. "
+            "치환 문자열은 명령의 인자에만 쓴다")
+
+
+def _secret_arg(args: list[str], redirects: list[tuple[str, str]], seg: Ctx) -> str | None:
+    """인자(`--opt=값`의 값 포함)와 `<` 리다이렉션 중 비밀 파일을 읽는 것이 있으면 그 이유."""
+    for a in args + [t for op, t in redirects if "<" in op]:
+        for cand in (a, a.split("=", 1)[1] if a.startswith("-") and "=" in a else ""):
+            if cand and not any(ch.isspace() for ch in cand) and secret_read(cand, seg):
+                return f"비밀 파일 `{cand}`을 읽는다"
+    return None
+
+
 def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, ctx: Ctx, depth: int) -> str | None:
     if depth > MAX_DEPTH:
         return TOO_DEEP
@@ -1348,11 +1383,19 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     if inner is not None:
         if gs_child_command(inner) is not None:
             return GS_CHILD_FRONT
-        return check_segment(inner, redirects, cwd, ctx, depth)
+        # 벗긴 `gs [--repo <경로>] child --`도 일반 명령처럼 본다: 바깥 xargs 치환 문자열(`xargs -I gs sh -c 'gs child …'`), 비밀 파일
+        head = argv[:len(argv) - len(inner)]
+        if _xargs_filled(head[:1], ctx.xargs_fill) == [XARGS_INPUT]:
+            return _xargs_in_name(head[0])
+        for word in head[1:]:
+            if _xargs_filled([word], ctx.xargs_fill) == [XARGS_INPUT]:
+                return _xargs_in_prefix(word)
+        return _secret_arg(head[1:], [], replace(ctx, cwd=cwd)) or check_segment(inner, redirects, cwd, ctx, depth)
     reason = check_role_strip(argv)  # `strip_prefix` 전 argv로 본다. `strip_prefix`가 `GS_ROLE` 대입과 `env -i`를 지운다
     if reason:
         return reason
-    prefix, rest = split_prefix(argv)
+    _, words, i, split = _prefix_scan(argv)
+    prefix, rest = words[:i], words[i:]
     if gs_child_command(rest) is not None:  # 앞붙이 뒤의 `gs child`(`setsid gs child …`, `env -S 'gs child …'`)
         return GS_CHILD_FRONT
     name = os.path.basename(rest[0].lstrip("\\`(")) if rest else ""
@@ -1360,14 +1403,17 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
     seg = replace(ctx, cwd=cwd, xargs_fill=(*ctx.xargs_fill, *_xargs_fill(prefix)))
 
     if _xargs_filled(rest[:1], seg.xargs_fill) == [XARGS_INPUT]:  # GNU xargs는 명령 이름도 바꾼다
-        return f"`xargs`의 치환 문자열이 명령 이름 `{rest[0]}`에 들어 있어 어떤 명령을 돌리는지 볼 수 없다. `{{}}`처럼 겹치지 않는 문자열을 쓴다"
+        return _xargs_in_name(rest[0])
     # 앞붙이 옵션의 값도 바꾼다(`xargs -I@ env -u @ claude`의 `@`가 `GS_ROLE`이 된다). 대입은 이름만 본다(`f={}`는 값만 바뀐다).
     # `GS_ROLE=worker`는 값이 바뀌면 `worker`가 아니게 되니 단어 전체를 본다
     for word in _xargs_subject(prefix):
         target = word.partition("=")[0] if ANY_ASSIGN.match(word) and not ROLE_ASSIGN.fullmatch(word) else word
         if _xargs_filled([target], seg.xargs_fill) == [XARGS_INPUT]:
-            return (f"`xargs`의 치환 문자열이 앞붙이 단어 `{word}`에 들어 있어 어떤 환경에서 어떤 명령을 돌리는지 볼 수 없다. "
-                    "치환 문자열은 명령의 인자에만 쓴다")
+            return _xargs_in_prefix(word)
+    # `env -S` 문자열은 xargs가 먼저 바꿔 넣고 env가 나눈다(`xargs -I@ env -S "FOO=@"`의 `@`가 새 대입·명령이 된다). 펼치기 전 문자열 전체를 본다
+    for value in split:
+        if _xargs_filled([value], seg.xargs_fill) == [XARGS_INPUT]:
+            return _xargs_in_prefix(value)
 
     # 셸 본문이 통과해도 반환하지 않는다. 아래의 리다이렉션 판정도 이 segment에 걸린다(`setsid bash -c '…' > 밖`)
     if name in ("bash", "sh", "zsh", "dash"):
@@ -1399,10 +1445,9 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
 
     # 비밀 파일 읽기
     if name not in NO_FILE_READ:
-        for a in args + [t for op, t in redirects if "<" in op]:
-            for cand in (a, a.split("=", 1)[1] if a.startswith("-") and "=" in a else ""):
-                if cand and not any(ch.isspace() for ch in cand) and secret_read(cand, seg):
-                    return f"비밀 파일 `{cand}`을 읽는다"
+        reason = _secret_arg(args, redirects, seg)
+        if reason:
+            return reason
     for root in search_roots(name, args):
         if secret_read(root, seg, recursive=True):
             return f"검색 시작점 `{root}`이 비밀 파일을 품는다"
