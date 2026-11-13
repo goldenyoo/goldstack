@@ -622,7 +622,7 @@ def _manual_title(message: str) -> str:
     heading = next((line[2:] for line in lines if line.startswith("# ") and line[2:].strip()), None)
     candidate = heading if heading is not None else next(
         (line for line in lines if line.strip() and not line.startswith("#")), "수동 피드백")
-    candidate = " ".join(_CONTROL.sub(" ", candidate).split())
+    candidate = " ".join(_CONTROL.sub(" ", candidate).split()) or "수동 피드백"
     return candidate[:79] + "…" if len(candidate) > 80 else candidate
 
 
