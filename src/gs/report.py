@@ -20,6 +20,7 @@ defer 지적(review.DEFER: 재현됐지만 고칠 수 있는 파일 밖을 고�
 남은 high와 "재현된 미수리 결함" 절에서 빠진다(goldstack-v38 02). unresolved·판정 없음·근거 없음·재리뷰 실패는 그대로 "재현된 미수리"다. 판정 키가 없는 옛 state도 그렇다.
 병합 전 대조가 같은 회차를 같은 기준에서 새 head로 다시 봐 대체한 앞 head의 새 지적(review._supersede, 지적의 superseded)은 상태가 "대체됨"이고
 남은 high로 세지 않는다(goldstack-v38 01). 지적 줄과 지적 집계에는 남는다.
+티켓별 결과의 이유 칸에는 첫 리뷰가 남긴 touches 밖 경로가 `touches 밖: <경로들>` 줄로 붙는다(goldstack-v38 05. touches_outside_line). 없으면 줄이 없다.
 Evidence의 `### 남은 위험` 절(remaining_risks, 실패한 검증 절 다음)은 gs가 원본 그대로 싣는다: 격리 경고 줄 다음에 worker가 남긴 관찰 표 `| 티켓 | 관찰 | 리뷰 판정 |`
 (goldstack-v35 05, spec 3-2. observation_table). 관찰은 리뷰 기록이 아니라 티켓마다 가장 최근 worker 로그(수정·수리 worker가 있으면 그것)의
 마지막 메시지 전체에서 `## 남긴 관찰` 절을 직접 뽑고(review.worker_observations), 판정은 그 시도의 리뷰 기록마다 가장 최근 회차(재리뷰 포함)에서
@@ -72,6 +73,15 @@ def _log(r, path: Path, tail: int) -> str:
 
 def kept(ts) -> str:
     return "".join(f"\n남긴 worktree: {path} (미커밋 변경)" for path in ts.kept_worktrees)
+
+
+def touches_outside_line(ts) -> str:
+    """티켓별 결과의 `touches 밖: <경로들>` 줄(앞에 줄바꿈). 이 티켓 리뷰 기록들의 `touches_outside`를 합친다. 없으면 빈 문자열이라 줄이 없다.
+
+    첫 리뷰가 diff와 touches를 기계적으로 대조해 남긴 경로다(review.outside_touches). 병합을 막는 기준이 아니라 사람이 보는 표시다.
+    """
+    paths = list(dict.fromkeys(p for rec in state.reviews(ts) for p in rec.get("touches_outside") or []))
+    return "\ntouches 밖: " + ", ".join(f"`{p}`" for p in paths) if paths else ""
 
 
 def finding_status(finding: dict) -> str:
@@ -329,7 +339,7 @@ def evidence(r, tail: int = LOG_TAIL) -> str:
             spent = [f"{label} {n}분" for phase, label in state.PHASE_LABELS.items()
                      if phase in durations and (n := state.minutes(durations[phase]))]
             timings.append(f"- {tid} 단계별 소요: " + (" · ".join(spent) or "모두 1분 미만"))
-        reason += kept(ts)
+        reason += kept(ts) + touches_outside_line(ts)
         for warning in setup.warnings((r.rundir / tid).glob("*/setup.log")):
             reason += "\n" + warning
         for warning in ts.isolation_warnings:

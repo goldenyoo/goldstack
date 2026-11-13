@@ -46,7 +46,8 @@ SPLIT_RUN_RULE = "- hook이 한 명령의 시험 파일 수를 막으면 명령�
 OBSERVATIONS_HEADING = "## 남긴 관찰"  # worker가 마지막 메시지 끝에 쓰는 절의 제목. 05가 이 제목으로 절을 뽑는다
 OBSERVATIONS_RULE = (
     "- 고치지 않고 남긴 관찰(리뷰가 짚지 않은 의심, 돌리지 못한 확인, touches 밖에서 고쳐야 할 것)이 있으면 "
-    f"마지막 메시지 끝에 `{OBSERVATIONS_HEADING}` 제목 아래 한 줄에 하나씩 쓴다. 없으면 절을 쓰지 않는다.")
+    f"마지막 메시지 끝에 `{OBSERVATIONS_HEADING}` 제목 아래 한 줄에 하나씩 쓴다. 없으면 절을 쓰지 않는다. "
+    "touches 밖이나 레포 밖에서 판단해서 한 일(파일 추가·삭제, 예상 밖 외부 호출)도 이 절에 쓴다.")
 NESTED_SESSION_RULE = (
     "- 측정용으로 claude·codex 세션을 띄우면 `gs child -- <명령>`으로 띄우고 모델·effort를 명령에 명시한다. "
     "`GS_*`를 지우지 않는다.")

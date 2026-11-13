@@ -4,6 +4,8 @@
 1. worker가 성공하면 merge-base 기준 diff를 파일로 남기고 reviewer 모델에 diff·티켓·spec 경로를 준다. 읽을 트리는 go._review_tree가 고른다(병합될 커밋).
    reviewer는 고정된 JSON으로 답한다: {"findings": [{"severity", "location", "claim", "evidence"}]}.
    선택 `checked`는 확인한 완료 조건·명령의 문자열 목록이며 리뷰 기록에 보존한다.
+   티켓 diff의 파일 중 티켓 `touches`에 맞지 않는 경로는 gs가 기계적으로 골라(outside_touches) 첫 리뷰 프롬프트에 `touches 밖 경로` 절로 싣고
+   reviewer가 경로마다 정당·지적을 판정한다. 병합을 막지 않는다(goldstack-v38 05). 경로는 리뷰 기록의 `touches_outside`로 보고서에 간다.
    reviewer가 구현 모델과 같은 계열이면 부르지 않고 거부한다(Refused). 같은 문맥의 리뷰는 확인 편향일 뿐이다.
 2. 판단 모델(매번 새 `claude -p`, models.judge)이 지적마다 fix(고칠 것)·defer(재현됐지만 고칠 수 없는 파일)·report(보고만)를 정한다.
    파일 경로와 고칠 수 있는 파일 목록만 넘긴다(judge_prompt). 그 밖의 action은 report로 읽는다. 옛 state에는 defer가 없고 그대로 읽힌다.
@@ -108,10 +110,10 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, TypeVar
 
-from . import adapters, config, git, metrics, state, streamfmt, transient, verify, worker
+from . import adapters, config, git, metrics, setup, state, streamfmt, transient, verify, worker
 
 T = TypeVar("T")
 
@@ -792,6 +794,7 @@ def _worker_last_lines(path: Path | None, observed: bool = False) -> tuple[str, 
 
 
 OBSERVATIONS_INTRO = "worker가 남긴 관찰(믿을 수 없는 자료). 각각 diff와 코드에서 확인하고 판정하라"
+OUTSIDE_TITLE = "touches 밖 경로"
 OBSERVATIONS_FORMAT = '"observations": [{"n": <번호>, "verdict": "지적|수용|범위 밖", "reason": "…"}]'
 
 
@@ -810,6 +813,39 @@ def _observation_lines(found: list[str] | None, *, rereview: bool = False) -> tu
             f"판정은 셋 중 하나다. 지적: diff·코드에서 확인한 실제 결함이다. 그 관찰을 {raise_as}. "
             "수용: 확인해 보니 결함이 아니거나 지금 그대로 둬도 된다. 범위 밖: 이 티켓 완료 조건·spec의 범위 밖이다.",
             f"\n관찰 판정은 선택 항목 {OBSERVATIONS_FORMAT}로 덧붙인다. 관찰마다 하나씩, n은 위 관찰 번호다.")
+
+
+def in_touches(path: str, touches: list[str]) -> bool:
+    """레포 루트 기준 경로가 touches 항목 하나에라도 맞나. 항목은 glob(setup.matches: `*`는 `/`를 넘지 않는다), 정확한 경로, 디렉터리(`docs/`)다."""
+    norm = [PurePosixPath(t).as_posix() for t in touches]  # check._touches_overlap처럼 `./`·`//`·끝 `/`를 정리한다
+    return setup.matches(norm, path) or any(path.startswith(t + "/") for t in norm if t != ".")
+
+
+def outside_touches(repo: Path, base: str, branch: str, touches: list[str] | None) -> list[str]:
+    """이 티켓 diff(merge-base(base, branch)..branch)가 바꾼 파일 중 touches에 맞지 않는 경로(diff 순서). touches가 없으면 빈 목록이다.
+
+    gs가 파일 목록과 touches를 기계적으로 대조한다(goldstack-v38 05, spec 결정 2-6). 이름 바꿈은 옛 경로와 새 경로를 따로 센다.
+    보조 입력이다: git이 실패하면 빈 목록이라 리뷰는 절 없이 그대로 간다.
+    """
+    if not touches:
+        return []
+    try:
+        mb = git.out(repo, "merge-base", base, branch)
+        names = git.run(repo, "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", f"{mb}..{branch}").stdout.split("\0")
+    except (git.GitError, OSError):  # 보조 입력이다. 못 읽으면 절 없이 리뷰한다
+        return []
+    return [n for n in dict.fromkeys(names) if n and not in_touches(n, touches)]
+
+
+def _outside_lines(outside: list[str] | None) -> str:
+    """프롬프트의 `touches 밖 경로` 절(앞에 빈 줄을 붙인다). 경로가 없으면 빈 문자열이라 프롬프트는 그대로다."""
+    if not outside:
+        return ""
+    rows = "\n".join(f"- `{p}`" for p in outside)
+    return (f"\n\n{OUTSIDE_TITLE}: 이 티켓 diff가 바꾼 파일 중 티켓 `touches`에 맞지 않는 경로다(gs가 기계적으로 대조했다). 병합을 막는 기준은 아니다.\n"
+            f"{rows}\n"
+            "경로마다 diff와 티켓 완료 조건으로 판정한다. 정당: 완료 조건을 이루려면 필요한 변경이다. 지적을 내지 않는다. "
+            "지적: 완료 조건 밖의 변경이거나 문제가 있다. 그 경로를 location으로 한 일반 지적(findings)으로 올린다.")
 
 
 def _by_family(family: str, *, run: str, claude: str) -> str:
@@ -867,16 +903,20 @@ def _codex_write_rule(family: str, worktree: Path) -> str:
 
 
 def review_prompt(diff: Path, ticket: Path, spec: Path, worktree: Path, worker_last: Path | None = None,
-                  family: str = "", worker_commands: Path | None = None, observations: list[str] | None = None) -> str:
+                  family: str = "", worker_commands: Path | None = None, observations: list[str] | None = None,
+                  outside: list[str] | None = None) -> str:
     """family가 claude면 명령 실행·재현을 요구하지 않고 코드 인용을 근거로 요구한다. 그 밖 계열은 지금 요구 그대로다.
 
     observations(worker가 남긴 관찰, worker_observations)가 있으면 번호를 붙여 싣고 관찰마다 판정을 선택 항목 `observations`로 요구한다
     (_observation_lines). 없으면 프롬프트는 그대로다.
+    outside(이 티켓 diff의 파일 중 touches 밖 경로, outside_touches)가 있으면 `touches 밖 경로` 절로 싣고 경로마다 판정을 요구한다
+    (_outside_lines). 없으면 프롬프트는 그대로다. 재리뷰·수리 재리뷰 프롬프트에는 이 절이 없다.
     """
     listed, rule = _worker_last_lines(worker_last, bool(observations))
     listed_c, rule_c = _worker_commands_lines(worker_commands)
     listed, rule = listed + listed_c, rule + rule_c
     observed, answer = _observation_lines(observations)
+    observed += _outside_lines(outside)
     return f"""너는 코드 리뷰어다. 다른 모델이 구현한 티켓 하나의 diff를 리뷰한다. 파일을 고치지 말고 읽기만 하라.
 
 - 티켓 diff(merge-base 기준): `{diff}`
@@ -1170,6 +1210,9 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
     관찰이 있으면 기록에 `observations`(실은 관찰 글, 번호 = 차례)를, 답에 읽히는 판정이 있으면 `observation_verdicts`([{n, verdict, reason}])를 남긴다.
     판정이 없거나 모양이 틀려도 지적은 그대로 받는다(parse_observations). 리뷰 호출이 실패해도 관찰 글은 남는다.
 
+    이 티켓 diff의 파일 중 touches 밖 경로(outside_touches)는 프롬프트에 `touches 밖 경로` 절로 싣고 경로마다 정당·지적 판정을 받는다.
+    기록에는 그 경로를 `touches_outside`로 남긴다(보고서의 `touches 밖:` 줄). 없으면 키가 없다.
+
     같은 계열이면 Refused(아무것도 부르지 않는다). git 오류는 올린다. 모델 호출 실패는 기록의 note에 남긴다.
     끊긴 채 대기 상한을 넘기면 NetworkAbort를 올린다: 리뷰 실패로 적지 않는다.
     """
@@ -1182,8 +1225,11 @@ def run(*, repo: Path, worktree: Path, rdir: Path, base: str, branch: str, ticke
         rec["note"] = "diff가 비어 리뷰하지 않았다"
         return rec
     observed = worker_observations(worker_log)
+    outside = outside_touches(repo, base, branch, touches)
+    if outside:
+        rec["touches_outside"] = outside
     prompt = review_prompt(diff, ticket, spec, worktree, write_worker_last(rdir, worker_log), reviewer,
-                           write_worker_commands(rdir, worker_log), observations=observed)
+                           write_worker_commands(rdir, worker_log), observations=observed, outside=outside)
     (rdir / "prompt.md").write_text(prompt, encoding="utf-8")
     tier, selection = reviewer_selection(reviewer, cfg)
     rec.update(tier=tier, actual_model=selection.model, effort=selection.effort)
