@@ -1,7 +1,12 @@
 """`gs go`: 시작할 수 있는 티켓을 max_workers개까지 동시에 worker에 맡기고 integration에 모아 PR을 연다.
 
-병렬 실행(04). 병합·검증은 루프 안에서 한 번에 하나씩. 실패·멈춤은 같은 계열로 한 번 재시도한다(07). 티켓 검증 실패는 재시도 전에 같은 브랜치에서 한 번 수리한다.
+병렬 실행(04). 병합·검증은 한 번에 하나씩. 실패·멈춤은 같은 계열로 한 번 재시도한다(07). 티켓 검증 실패는 재시도 전에 같은 브랜치에서 한 번 수리한다.
 리뷰·판단·재리뷰 호출은 루프 밖 스레드에서 돈다(v9 06): 그동안 루프는 다른 worker의 종료를 처리하고 새 티켓을 시작한다.
+티켓 검증 호출(verify.run)도 루프 밖 스레드에서 돈다(goldstack-v37 01): 병합 준비(catch-up, 미완 병합, setup)와 결과 반영은 루프에서 하고(_merge_stage, _merge_step),
+검증이 도는 동안 루프는 worker 끝·리뷰 호출과 결과·수정·수리 worker·새 worker를 처리한다. integration worktree와 r.ihead는 건드리지 않는다:
+그동안 병합 차례가 된 티켓은 줄을 서고(`[<id>] 병합 대기: <검증 중 id> 검증 중`) 반영 뒤 순서대로 병합하며, 다른 티켓 경로의 되돌리기는 반영 뒤로 미룬다(Merges).
+gs가 검증 도중 멈추면 검증의 프로세스 그룹을 끝낸다. 재개 의미는 검증이 루프 안에 있던 때와 같다(첫 검증이면 새로 시작, 다시 검증이면 다시 검증부터).
+`중단(네트워크)`이 나면 도는 검증은 끝까지 기다려 반영한 뒤 떠나고 줄 선 병합은 시작하지 않는다(_finish_verify).
 리뷰 중인 티켓은 worker 자리를 쓰지 않는다: worker 최대 max_workers + 리뷰 중인 티켓 최대 max_workers. 수정·수리 worker는 worker 자리를 쓰고, 없으면 기다린다.
 state.json은 루프 스레드만 고친다. 호출은 결과를 돌려주고, 호출 도중의 대기·측정은 루프에 넘긴다(Reviews.inbox, review.CallWait).
 worker가 성공하면 병합 전에 다른 계열이 그 티켓 diff를 리뷰하고, 고칠 지적이 있으면 같은 모델로 수정 worker를
@@ -94,6 +99,7 @@ import threading
 import time
 from collections.abc import Callable, Generator, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import wait as wait_futures
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -123,6 +129,12 @@ REPAIR_REVIEW = "review"  # 수리 worker가 커밋을 남겼고 재리뷰 중�
 REPAIR_VERIFY = "verify"  # 수리 커밋의 재리뷰가 끝났거나 수리 worker를 띄우지 못했다. 다시 병합·검증한다. 옛 gs는 커밋 없는 수리 뒤에도 남겼다(그대로 다시 검증한다)
 # 리뷰 단계: 루프 스레드에서 돌다가 루프 밖에서 부를 호출을 내고 멈춘다. 호출의 결과를 받아 잇고, 끝에 고칠 지적을 돌려준다.
 ReviewFlow = Generator[Callable[[], list], list, list[dict]]
+# 검증 호출의 결과: (verify.Result, 검증 직후의 병합 상태(_tree_state), 그때 트리가 깨끗했나). 호출 스레드가 검증이 끝나자마자 읽는다
+VerifyCall = Callable[[], tuple]
+# 티켓 검증(_verify): 준비하고 검증 호출을 내고 멈춘다. 결과를 받아 반영하고 (결과, 로그, 트리가 바뀌었나, 검증 직후의 병합 상태)를 돌려준다.
+VerifyFlow = Generator[VerifyCall, tuple, tuple]
+# 병합 단계(_merge_stage): 준비 → 검증 호출(_verify) → 반영. 끊긴 검증의 다시 검증도 같은 흐름 안에서 한다(_verify_interrupted).
+MergeFlow = Generator[VerifyCall, tuple, None]
 
 
 def integration_branch(feature: str) -> str:
@@ -154,6 +166,7 @@ class Run:
     finish_median_s: float | None = None  # 실행 시작에 한 번 읽은 다른 feature의 마무리 시간 중앙값
     net: Outage | None = None  # 지금의 네트워크 끊김. _loop가 새로 만든다: 대기 합계는 gs go마다 새로 센다
     reviews: Reviews | None = None  # 루프 밖 리뷰. _loop가 만든다
+    merges: Merges | None = None  # 병합·검증의 자리와 줄, 루프 밖 검증 호출. _loop가 만든다
     no_merge: bool = False  # 지난 마무리를 회복하지 않는 --only 실행이다. 마무리 없이 멈추고, 지난 마무리의 기록을 이번 결과로 보이지 않는다
     sandbox: adapters.Sandbox = field(default_factory=adapters.Sandbox)  # 실행 시작 때 주 레포에서 계산한 모드·거부 목록(_sandbox). 기본 os
 
@@ -914,6 +927,41 @@ class Reviews:
                    for rv in self.tickets.values())
 
 
+@dataclass
+class Merging:
+    """병합 차례를 얻었거나 기다리는 티켓 하나. worker 자리를 쓰지 않는다.
+
+    flow는 그 티켓의 병합 단계(_merge_stage)다: 루프 스레드에서 준비하다가 검증 호출을 내고 멈추고(future: 루프 밖에서 돈다), 호출이 끝나면 결과를 넣어 반영한다(_merge_step).
+    줄에서는 아직 돌기 전이다. flow가 없으면 다시 시작하지 않는 자리다: 중단으로 떠나는 중에 끊긴 검증의 다시 검증 차례가 됐다(_verify_interrupted, _net_abort가 거둔다).
+    """
+    a: Active
+    flow: MergeFlow | None
+    future: Future | None = None
+
+
+class Merges:
+    """병합·검증의 자리(한 번에 하나)와 줄. _loop가 하나 만든다. 루프 스레드만 쓴다: 검증 호출(verify.run)만 executor에서 돈다.
+
+    자리를 가진 티켓(now)은 준비·반영 중이거나 검증 호출이 돈다(future). 그동안 병합 차례가 된 티켓은 줄(queue)을 서고, 자리가 비면 줄의 순서대로 시작한다(_merge_next).
+    """
+
+    def __init__(self):
+        self.now: Merging | None = None
+        self.queue: list[Merging] = []
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gs-verify")
+        self.cancel = threading.Event()  # 서면 도는 검증이 자기 프로세스 그룹을 끝내고 다음 명령을 띄우지 않는다(verify.run)
+        self.reset_due = False  # 검증이 도는 동안 다른 티켓 경로가 부른 integration 되돌리기. 반영 뒤에 그때의 r.ihead로 한다(_reset_unless_verifying)
+        self.hold = False  # 새 병합과 다시 검증을 시작하지 않는다: 중단(네트워크)으로 떠나는 중이다(_loop)
+
+    def verifying(self) -> str:
+        """검증 호출이 도는 티켓. 없으면 빈 문자열. 준비·반영 중에는 빈 문자열이다: 그때 integration을 바꾸는 것은 자리를 가진 티켓 자신이다."""
+        return self.now.a.t.id if self.now is not None and self.now.future is not None else ""
+
+    def busy(self) -> bool:
+        """루프의 미완 작업이 있나: 자리를 가진 티켓이나 줄 선 티켓."""
+        return self.now is not None or bool(self.queue)
+
+
 class ReviewThreadError(Exception):
     """리뷰 스레드에서 올라온 뜻밖의 오류. 첫 리뷰든 재리뷰든 그 티켓의 실패로 처리한다."""
 
@@ -953,9 +1001,15 @@ def _stop_signals() -> Iterator[None]:
 def _loop(r: Run) -> None:
     """frontier에서 max_workers개까지 띄우고, worker가 끝나면 리뷰로 보내고, 리뷰가 끝나면 수정 worker를 띄우거나 병합·검증한 뒤 frontier를 다시 계산해 채운다.
 
-    루프는 스레드 하나다. worker는 각자 pane·프로세스에서 돌고, 리뷰어·판단 모델 호출은 스레드 풀에서 돈다(_review_tick). 병합과 검증은 이 루프 안에서 하나씩 한다(직렬).
+    루프는 스레드 하나다. worker는 각자 pane·프로세스에서 돌고, 리뷰어·판단 모델 호출은 스레드 풀에서 돈다(_review_tick). 병합·검증은 한 번에 하나다(Merges):
+    준비(늦은 커밋 대조, catch-up, 미완 병합, setup)와 반영은 이 스레드에서 하고 검증 호출(verify.run)만 루프 밖 스레드에서 돈다(_merge_tick, goldstack-v37 01).
+    검증이 도는 동안에도 worker 끝, 리뷰 호출과 결과, 수정·수리 worker, 새 worker를 처리한다. integration worktree와 r.ihead는 바꾸지 않는다:
+    다른 티켓의 병합은 줄을 서고(`병합 대기`), 다른 티켓 경로의 되돌리기는 반영 뒤로 미룬다(_reset_unless_verifying).
+    도는 검증과 병합 줄도 미완 작업이다: 그것만 남아도 끝나지 않고, 다른 worker가 도는 동안에도 _wait_any를 한 번씩 보고 돌아와 끝난 검증을 바로 반영한다.
     state.json도 이 스레드만 고친다. 네트워크 끊김 동안에는 새 worker를 띄우지 않고 끝난 worker만 처리한다. 대기는 sleep이 아니라 이 루프의 시계다(_net_tick).
-    어떻게 떠나든 돌던 worker와 리뷰어를 남기지 않는다.
+    끊김 중에도 도는 검증의 결과는 반영한다(검증은 로컬이다). 줄 선 병합은 회복까지 시작하지 않는다.
+    중단(NetworkAbort)이면 worker·리뷰어를 끝내고, 도는 검증은 끝날 때까지 기다려 반영한 뒤 떠난다(_finish_verify). 줄 선 병합은 시작하지 않는다.
+    어떻게 떠나든 돌던 worker, 리뷰어, 검증(프로세스 그룹)을 남기지 않는다(_stop_reviews, _stop_merges).
     """
     cap = max(1, r.feat.spec.max_workers)
     say(f"■ 순서: {' '.join(r.order)}")
@@ -965,9 +1019,11 @@ def _loop(r: Run) -> None:
     r.net = Outage()
     runner = worker.make_runner(r.repo, r.name)
     r.reviews = Reviews(cap)
+    r.merges = Merges()
     active: dict[str, Active] = {}
     try:
         while True:
+            _merge_tick(r)  # 먼저 반영한다: 떨어진 티켓에 막힌 티켓은 바로 아래에서 건너뛴다
             _skip_blocked(r)
             _net_tick(r, active, runner)
             _review_tick(r, active, runner)
@@ -980,10 +1036,10 @@ def _loop(r: Run) -> None:
                     _skip_blocked(r)
                 else:
                     active[a.t.id] = a
-            if not active and not r.net.active and not r.reviews.tickets:
+            if not active and not r.net.active and not r.reviews.tickets and not r.merges.busy():
                 return
-            # 끊김 중에는 대기 시계와 회복을, 리뷰 중에는 호출의 끝을 보러 돌아온다
-            ended = _wait_any(r, active, runner, once=r.net.active or bool(r.reviews.tickets))
+            # 끊김 중에는 대기 시계와 회복을, 리뷰 중에는 호출의 끝을, 병합·검증 중에는 검증의 끝과 줄을 보러 돌아온다
+            ended = _wait_any(r, active, runner, once=r.net.active or bool(r.reviews.tickets) or r.merges.busy())
             if ended is None:
                 continue
             tid, code, error = ended
@@ -1000,38 +1056,62 @@ def _loop(r: Run) -> None:
             try:
                 _finish(r, a, code, others=sorted(t for t in active if t != tid), error=error)
             except (git.GitError, OSError) as e:
-                # 병합·검증 실행 오류는 이 티켓의 실패로 한정한다.
+                # 결과 처리 실행 오류는 이 티켓의 실패로 한정한다. 병합 단계의 오류는 _merge_step이 같은 처리를 한다.
                 _ticket_error(r, a, e)
             active.pop(tid)
     except transient.NetworkAbort as e:
         r.st.network["kind"] = e.kind  # _net_abort가 티켓 이유를 종류에 맞춰 적는다
         _stop_reviews(r)
+        r.merges.hold = True  # 줄 선 병합과 다시 검증을 시작하지 않는다
         _net_abort(r, active)
         active.clear()
+        if _finish_verify(r):  # 반영이 리뷰 단계(수리 자리, 늦은 커밋)나 줄(끊긴 검증)로 보낸 티켓도 다음 gs go가 이을 표시를 남긴다
+            _net_abort(r, active)
         raise
     finally:
-        # 예상 못 한 오류나 사람의 중단으로 루프를 떠나도 띄운 리뷰어·worker를 남기지 않는다.
+        # 예상 못 한 오류나 사람의 중단으로 루프를 떠나도 띄운 리뷰어·검증·worker를 남기지 않는다.
         try:
-            _stop_reviews(r)  # 리뷰어를 기다리는 중에 또 중단돼도 worker는 끝낸다
+            _stop_reviews(r)  # 리뷰어를 기다리는 중에 또 중단돼도 검증과 worker는 끝낸다
         finally:
-            for a in active.values():
-                say(f"[{a.t.id}] gs가 멈춰 worker를 끝낸다")
-                a.proc.stop()
-            for rv in r.reviews.tickets.values():
-                rv.a.proc.stop()
+            try:
+                _stop_merges(r)
+            finally:
+                for a in active.values():
+                    say(f"[{a.t.id}] gs가 멈춰 worker를 끝낸다")
+                    a.proc.stop()
+                for rv in r.reviews.tickets.values():
+                    rv.a.proc.stop()
 
 
 def _ticket_error(r: Run, a: Active, e: Exception) -> None:
-    """결과 처리·병합·검증의 실행 오류, 리뷰 스레드의 뜻밖의 오류: 이 티켓의 실패로 한정한다."""
+    """결과 처리·병합·검증의 실행 오류, 리뷰 스레드의 뜻밖의 오류: 이 티켓의 실패로 한정한다.
+
+    integration은 되돌린다. 다른 티켓의 검증이 도는 중이면 그 반영 뒤로 미룬다(_reset_unless_verifying): 그 검증의 미완 병합을 지우지 않는다.
+    """
     a.proc.stop()
-    _reset_integration(r, r.ihead)
+    _reset_unless_verifying(r)
     _fail(r, a.t, f"worker 결과 처리 중 오류: {_err(e)}")
+
+
+def _reset_unless_verifying(r: Run) -> bool:
+    """다른 티켓 경로의 integration 되돌리기(r.ihead로). 무언가 버렸으면 True(_reset_integration).
+
+    검증 호출이 도는 동안은 하지 않고 반영 뒤로 미룬다(False): integration에는 그 검증의 미완 병합이 있다. 미룬 되돌리기는 반영이 끝난 때의 r.ihead로 한다(_merge_step).
+    부를 때의 r.ihead로 재생하지 않는다: 방금 통과해 옮긴 병합을 지운다. 반영은 어느 길로 가든 integration을 그 끝으로 되돌려 두니 보통 버릴 것이 없다.
+    검증하는 동안 integration이 바뀌었는지는 반영이 대조한다(_merge_stage). 병합 자리를 가진 티켓 자신의 준비·반영은 이것을 거치지 않는다.
+    """
+    merges = getattr(r, "merges", None)
+    if merges is not None and merges.verifying():
+        merges.reset_due = True
+        return False
+    return _reset_integration(r, r.ihead)
 
 
 def _review_tick(r: Run, active: dict[str, Active], runner) -> None:
     """리뷰 쪽 시계: 호출이 넘긴 state 변경을 반영하고, r.order 순으로 티켓마다 리뷰 단계를 한 걸음 잇는다(_review_step).
 
-    병합·검증이 끝나면 돌아간다: 오래 걸린 사이에 끝난 worker를 보고 frontier를 채운 뒤 다음 티켓의 병합으로 간다. 검증이 실패해 수리 자리를 기다리게 됐거나 늦은 커밋을 봐 재리뷰로 돌아온 티켓(새 Reviewing)도 그렇다.
+    티켓을 병합으로 보냈으면(준비해 검증 호출을 보냈거나 줄을 섰다, _merge) 돌아간다: 끝난 worker를 보고 frontier를 채운 뒤 다음 티켓으로 간다.
+    병합 준비에서 늦은 커밋을 봐 재리뷰로 돌아온 티켓(새 Reviewing)도 그렇다. 검증이 실패해 수리 자리를 기다리는 티켓은 검증을 반영할 때(_merge_tick) 여기로 온다.
     거부와 git·파일 오류, 리뷰 스레드의 뜻밖의 오류는 그 티켓의 실패다. 중단(NetworkAbort)은 올린다. 티켓은 리뷰 단계에 남아 _net_abort가 처리한다.
     마지막 재리뷰의 high(MergeBlocked)도 그 티켓의 실패다: _fail만 부르고 리뷰 단계를 닫는다. 수정·병합으로 이어 가지 않는다.
     """
@@ -1048,7 +1128,7 @@ def _review_tick(r: Run, active: dict[str, Active], runner) -> None:
             _fail_worker(r, rv.a, e.reason, evidence=e.evidence)
         except (git.GitError, OSError, ReviewThreadError) as e:
             _ticket_error(r, rv.a, e)
-        if tickets.get(tid) is rv:  # 다르면 병합 단계가 리뷰 단계로 되돌렸다(_verify_failed, _late_commit)
+        if tickets.get(tid) is rv:  # 다르면 병합 준비가 리뷰 단계로 되돌렸다(_late_commit)
             del tickets[tid]
         if tid not in active:
             return
@@ -1097,7 +1177,7 @@ def _resume_flow(r: Run, rv: Reviewing, done: Future | None = None) -> None:
     """
     _drain(r)
     if done is not None:
-        metrics.result_wait(r, rv)  # 결과를 받는 시각이다. 검증이 루프를 막았다면 그만큼 늦다
+        metrics.result_wait(r, rv)  # 결과를 받는 시각이다. 루프가 다른 일(병합 준비·setup, 실패 요약 등)을 하고 있었다면 그만큼 늦다. 검증은 루프 밖이라 막지 않는다
     try:
         if done is None:
             rv.call = next(rv.flow)
@@ -1130,7 +1210,7 @@ def _leave_review(r: Run, rv: Reviewing, active: dict[str, Active], runner) -> b
     """리뷰가 끝난 티켓을 다음 단계로 보낸다: 수정 worker 또는 병합·검증. 검증이 실패해 기다리던 티켓은 수리 worker로 보낸다.
     아직 갈 수 없으면 False(끊김 중, 수정·수리 worker 자리 없음, 기다리는 사이 head가 움직여 다시 리뷰한다).
 
-    나가면 리뷰부터 잇는 표시를 지운다. 그 뒤에 gs가 죽으면 티켓을 새로 시작한다. catch-up이 합친 커밋을 다시 리뷰하지 않게.
+    나가면 리뷰부터 잇는 표시를 지운다. 그 뒤에 gs가 죽으면 티켓을 새로 시작한다. catch-up이 합친 커밋을 다시 리뷰하지 않게. 병합 줄을 서는 동안도 같다(_merge).
     수리를 거친 티켓은 표시를 지우지 않고 다시 검증(REPAIR_VERIFY)으로 바꾼다: 새로 시작하면 수리를 잃는다.
     """
     a, tid = rv.a, rv.a.t.id
@@ -1156,7 +1236,7 @@ def _leave_review(r: Run, rv: Reviewing, active: dict[str, Active], runner) -> b
     if nxt is not None:  # (2차) 수정 worker를 띄웠다. 끝나면 다시 _finish로 온다
         active[tid] = nxt
     else:
-        _merge_stage(r, a)
+        _merge(r, a)
     return True
 
 
@@ -1215,6 +1295,121 @@ def _stop_reviews(r: Run) -> None:
             except Exception as e:  # noqa: BLE001 — 정리 중이다. worker를 끝내는 일이 남았다
                 say(f"[{tid}] 경고: 리뷰 단계를 닫지 못했다: {_err(e)}")
             rv.flow = None
+
+
+def _merge(r: Run, a: Active) -> None:
+    """티켓을 병합·검증으로 보낸다(_merge_stage). 병합 자리가 비고 줄이 없으면 바로 준비하고 검증 호출을 루프 밖으로 보낸다(_merge_step).
+
+    아니면 줄을 서고 `[<id>] 병합 대기: <검증 중 id> 검증 중`을 한 번 출력한다. 줄은 검증이 반영된 뒤 순서대로 시작한다(_merge_next).
+    병합 단계(_merge_stage)는 여기서 만든다: 병합하기로 정한 때다. 그 몸은 차례가 와야 돈다(준비는 그때의 브랜치와 integration을 본다).
+    줄 선 동안의 재개 표시는 줄을 서기 전 그대로다(_leave_review가 지운 것은 지운 채): gs가 멈추면 지금처럼 첫 검증 도중과 같게 잇는다.
+    """
+    merges = r.merges
+    entry = Merging(a, _merge_stage(r, a))
+    if merges.now is None and not merges.queue and not merges.hold:
+        merges.now = entry
+        _merge_step(r)
+        return
+    merges.queue.append(entry)
+    why = f"{merges.now.a.t.id} 검증 중" if merges.now is not None else "네트워크 회복을 기다린다"
+    say(f"[{a.t.id}] 병합 대기: {why}")
+
+
+def _merge_tick(r: Run) -> None:
+    """병합 쪽 시계: 끝난 검증 호출의 결과를 반영하고(_merge_step), 자리가 비었으면 줄의 다음 티켓을 시작한다(_merge_next).
+
+    반영은 네트워크 끊김 중에도 한다(검증은 로컬이다). 반영의 git·파일 오류는 그 티켓의 실패다. 사람의 중단 같은 다른 예외는 올린다.
+    """
+    merges = r.merges
+    if merges.now is not None and merges.now.future is not None and merges.now.future.done():
+        _merge_step(r)
+    _merge_next(r)
+
+
+def _merge_next(r: Run) -> None:
+    """자리가 비었으면 줄 맨 앞부터 시작한다. 시작한 병합이 검증 없이 끝났으면(충돌, 늦은 커밋 등) 다음 티켓으로 간다.
+
+    네트워크 끊김 중이거나 중단으로 떠나는 중(hold)이면 시작하지 않는다: 리뷰 뒤의 병합처럼 회복을 기다린다.
+    """
+    merges = r.merges
+    while merges.now is None and merges.queue and not merges.hold and not r.net.active and merges.queue[0].flow is not None:
+        merges.now = merges.queue.pop(0)
+        _merge_step(r)
+
+
+def _merge_step(r: Run) -> None:
+    """병합 자리의 단계를 다음 검증 호출이나 끝까지 이 스레드에서 돌린다. 끝난 호출이 있으면(now.future) 그 결과나 예외를 넣어 잇고, 없으면 처음 시작한다.
+
+    호출을 내면 루프 밖 스레드로 보낸다(검증 호출은 하나뿐이다). 단계가 끝나면 자리를 비우고, 검증이 도는 동안 미룬 integration 되돌리기를 지금의 r.ihead로 한다.
+    git·파일 오류는 그 티켓의 실패다(_ticket_error, 결과 처리 오류와 같다). 다른 예외(사람의 중단 등)는 자리를 그대로 두고 올린다: _stop_merges가 거둔다.
+    """
+    merges = r.merges
+    now = merges.now
+    done, now.future = now.future, None
+    call = None
+    try:
+        if done is None:
+            call = next(now.flow)
+        elif done.exception() is not None:
+            call = now.flow.throw(done.exception())
+        else:
+            call = now.flow.send(done.result())
+    except StopIteration:
+        pass
+    except (git.GitError, OSError) as e:
+        merges.now = None
+        _ticket_error(r, now.a, e)
+    if call is not None:
+        now.future = merges.executor.submit(call)
+        return
+    merges.now = None
+    if merges.reset_due:
+        merges.reset_due = False
+        _reset_integration(r, r.ihead)
+
+
+def _finish_verify(r: Run) -> bool:
+    """중단(NetworkAbort)으로 떠나기 전에 도는 검증이 끝나기를 기다려 반영한다. 반영했으면 True.
+
+    `■ 중단(네트워크): <id> 검증을 마치고 멈춘다`를 출력한다. 기다리는 동안 state를 heartbeat로 다시 쓴다. 줄 선 병합과 끊긴 검증의 다시 검증은 시작하지 않는다(Merges.hold).
+    """
+    merges = r.merges
+    tid = merges.verifying()
+    if not tid:
+        return False
+    say(f"■ {abort_label(r.st)}: {tid} 검증을 마치고 멈춘다")
+    future = merges.now.future
+    while not future.done():
+        if time.monotonic() - r.saved >= HEARTBEAT_SECONDS:
+            r.save()
+        wait_futures([future], timeout=1.0)
+    _merge_step(r)
+    return True
+
+
+def _stop_merges(r: Run) -> None:
+    """루프를 떠난다: 도는 검증에 취소를 알려 프로세스 그룹을 끝내게 하고(verify.run) 스레드를 기다린 뒤, 병합 단계를 닫고(로그 파일) worker 자리를 거둔다.
+
+    여러 번 불러도 된다. 티켓의 상태와 재개 표시는 그대로다: 첫 검증 도중이었으면 다음 gs go가 새로 시작하고, 다시 검증 도중이었으면 다시 검증부터 잇는다.
+    integration에 남은 미완 병합은 다음 gs go가 시작할 때 버린다(_prepare_integration).
+    """
+    merges = r.merges
+    if merges is None:
+        return
+    running = merges.verifying()
+    merges.cancel.set()  # 맨 앞이다: 여기서 두 번째 Ctrl-C가 와도 검증은 스스로 끝난다
+    if running:
+        say(f"[{running}] gs가 멈춰 검증을 끝낸다")
+    merges.executor.shutdown(wait=True)
+    entries = [e for e in (merges.now, *merges.queue) if e is not None]
+    merges.now, merges.queue = None, []
+    for e in entries:
+        if e.flow is not None:
+            try:
+                e.flow.close()
+            except Exception as err:  # noqa: BLE001 — 정리 중이다. worker를 끝내는 일이 남았다
+                say(f"[{e.a.t.id}] 경고: 병합 단계를 닫지 못했다: {_err(err)}")
+        e.a.proc.stop()
 
 
 def _mark_resume(r: Run, a: Active, *, done: bool = False, verify_again: bool = False) -> None:
@@ -1350,7 +1545,9 @@ def _net_tick(r: Run, active: dict[str, Active], runner) -> None:
 def _net_abort(r: Run, active: dict[str, Active]) -> None:
     """`중단(네트워크)`·`중단(샌드박스)`: 돌던 worker를 끝내고, 티켓은 실패로 세지 않고, 다음 gs go가 이어 갈 표시를 남긴다. 리뷰어는 _stop_reviews가 먼저 끝냈다. 리뷰 단계의 티켓은 표시가 이미 있다.
 
-    티켓 이유와 줄은 중단 종류(state의 network kind, abort_label)를 따른다.
+    병합 줄의 티켓은 시작하지 않고 거둔다. 표시가 없으면(리뷰를 마치고 줄을 섰다) 리뷰가 끝난 표시(reviewed)를 남긴다: 다음 gs go가 리뷰를 다시 부르지 않고 병합으로 잇는다(_resume).
+    끊긴 검증의 다시 검증 차례(verify_again)와 수리 뒤 다시 검증(REPAIR_VERIFY)은 표시가 이미 있다. 도는 검증은 여기서 다루지 않는다(_finish_verify가 반영한 뒤 다시 부른다).
+    여러 번 불러도 된다. 티켓 이유와 줄은 중단 종류(state의 network kind, abort_label)를 따른다.
     """
     n = r.net
     label = abort_label(r.st)
@@ -1358,10 +1555,18 @@ def _net_abort(r: Run, active: dict[str, Active]) -> None:
     if n.waiting and n.due is not None:
         _net_add_waited(r, now - n.wait_started)
     reviewing = {tid: rv.a for tid, rv in r.reviews.tickets.items()}
-    for tid, a in {**active, **n.waiting, **n.parked, **reviewing}.items():
+    merges = getattr(r, "merges", None)
+    queue = merges.queue if merges is not None else []
+    queued = {e.a.t.id: e.a for e in queue}
+    for e in queue:
+        if e.flow is not None:
+            e.flow.close()  # 아직 돌지 않은 병합 단계다
+    for tid, a in {**active, **n.waiting, **n.parked, **reviewing, **queued}.items():
         ts = r.st.ticket(tid)
         if not ts.network_resume:
-            _mark_resume(r, a)
+            _mark_resume(r, a, done=tid in queued)
+            if tid in queued:
+                ts.network_resume.update(reviewed=True)
         if tid in n.waiting:
             ts.network_wait_seconds = round(ts.network_wait_seconds + now - a.held_at, 1)
         elif tid in active and not isinstance(a.proc, worker.Finished):
@@ -1372,6 +1577,7 @@ def _net_abort(r: Run, active: dict[str, Active]) -> None:
     n.parked.clear()
     n.probes.clear()
     r.reviews.tickets.clear()
+    queue.clear()
     n.due = None
     r.st.network["wait"] = {}
     r.save()
@@ -1659,7 +1865,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
     """
     if a.review_done:
         if a.repair == REPAIR_VERIFY or _verifying_again(r, a.t.id):
-            return _merge_stage(r, a)
+            return _merge(r, a)
         # 수정은 티켓당 최대 2회다. 수리 뒤와 버린 수정 뒤에는 고치지 않는다
         todo = [] if a.repair or a.fix >= 2 or _fix_discarded(r, a.t, a.fix) or _verdict_kept(r, a.t, a.fix) else _todo(r, a.t, a.fix + 1)
         r.reviews.tickets[a.t.id] = Reviewing(a, finished=True, todo=todo, waited=True, repair=a.repair == REPAIR_SEAT)
@@ -1672,7 +1878,7 @@ def _finish(r: Run, a: Active, code: int | None, others: list[str] = (), error: 
         _mark_resume(r, a, done=True)
         r.reviews.tickets[a.t.id] = Reviewing(a)
     elif step == TO_MERGE:
-        _merge_stage(r, a)
+        _merge(r, a)
 
 
 def _fail_worker(r: Run, a: Active, reason: str, **kw) -> None:
@@ -1685,7 +1891,7 @@ def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error:
     """1단계: 끝난 worker의 결과를 확인한다. 다음 단계(TO_REVIEW | TO_MERGE)를 돌려준다. 여기서 티켓을 처리했으면 None(실패, 네트워크 대기, 리뷰 미룸).
 
     실패한 수정 worker는 그 수정을 버리고 재리뷰 없이 병합·검증으로 간다(_end_fix). 수리 worker는 다르다: 실패했거나 커밋이 없으면 다시 검증하지 않고 이 시도가 실패한다(_end_repair, None).
-    순서: integration 되돌리기 → 샌드박스 실패(_sandbox_end) → 일시 오류 판별(_transient_end) → `브랜치 밖 원인:` 표식(_out_of_branch_end) → 네트워크 대기(_net_hold) → worker 종류별 처리.
+    순서: integration 되돌리기(다른 티켓의 검증이 돌면 반영 뒤로 미룬다) → 샌드박스 실패(_sandbox_end) → 일시 오류 판별(_transient_end) → `브랜치 밖 원인:` 표식(_out_of_branch_end) → 네트워크 대기(_net_hold) → worker 종류별 처리.
     샌드박스가 명령을 띄우지 못했으면 종료 코드·커밋과 상관없이 이 시도를 판정하지 않고 SandboxAbort를 올린다: 실패로 세지 않고, 같은 실패로 재시도하지 않는다.
     티켓은 active에 남아 _net_abort가 다음 gs go가 이을 표시를 남긴다.
     표식이 일시 오류 처리보다 먼저다: 이번 실행에서 띄운 수리 worker가 커밋 없이 끝났고 마지막 메시지에 표식이 있으면 일시 오류로 끝났어도
@@ -1708,7 +1914,8 @@ def _check_worker(r: Run, a: Active, code: int | None, others: list[str], error:
 
     # worker가 integration을 건드렸으면(커밋, 미커밋 변경, 브랜치 이동) 되돌린다. 돌던 worker가 이것 하나뿐이면
     # 이 worker 짓이라 실패로 친다. 여럿이 돌았으면 누구 짓인지 모르니 되돌리기만 하고 경고한다.
-    if _reset_integration(r, r.ihead):
+    # 다른 티켓의 검증이 도는 중이면 integration에 그 미완 병합이 있다: 반영 뒤로 미룬다. 그동안의 변경은 그 검증의 반영이 대조한다
+    if _reset_unless_verifying(r):
         if not others:
             return _fail_worker(r, a, "worker가 integration worktree를 바꿨다(되돌림)")
         say(f"[{t.id}] 경고: integration worktree가 바뀌어 되돌렸다. 함께 돌던 worker({', '.join([t.id, *others])}) 중 "
@@ -1786,8 +1993,12 @@ def _next_fix(r: Run, a: Active, todo: list[dict], runner) -> Active | None:
     return _start_fix(r, a, todo, runner, a.fix + 1)
 
 
-def _merge_stage(r: Run, a: Active) -> None:
-    """3단계: 리뷰가 끝난 SHA(a.target)에 최신 integration을 합쳐 보고(catch-up) integration에 병합·검증한다. 통과하면 커밋해 끝낸다.
+def _merge_stage(r: Run, a: Active) -> MergeFlow:
+    """3단계(제너레이터, MergeFlow): 리뷰가 끝난 SHA(a.target)에 최신 integration을 합쳐 보고(catch-up) integration에 병합·검증한다. 통과하면 커밋해 끝낸다.
+
+    한 번의 병합은 준비 → 호출 → 반영이다(리뷰 단계와 같은 원칙, goldstack-v37 01). 준비(늦은 커밋 대조, catch-up, `merge --no-ff --no-commit`, _setup_merge)와
+    반영(시간 초과·실패·끊김·트리 변경·늦은 커밋·커밋)은 루프 스레드에서 하고, 검증 호출(_verify의 verify.run)만 루프 밖 스레드에서 돈다: 여기서 낸 호출을
+    _merge_step이 보내고 결과를 넣어 잇는다. 병합·검증은 한 번에 하나다(Merges). 검증이 도는 동안 다른 티켓의 병합은 줄을 선다(_merge).
 
     병합은 브랜치 이름이 아니라 SHA로 한다: 살아 남은 worker 자손이 리뷰 뒤에 커밋해도 리뷰어가 보지 않은 코드는 들어가지 않는다.
     브랜치는 catch-up 앞뒤와 검증 뒤에 대조한다. 움직였으면 병합하지 않고 재리뷰로 돌아간다(_late_commit). 이미 한 번 더 봤으면 늦은 커밋을 뺀 SHA를 병합한다.
@@ -1796,7 +2007,8 @@ def _merge_stage(r: Run, a: Active) -> None:
     a.target이 없으면 옛 state의 표시로 이은 것이다. 리뷰 기록으로 대조할 SHA를 정한다(_old_target). 리뷰 없이 verify만으로 가는 티켓도 대상은 리뷰하려던 head다.
     검증 실패는 _verify_failed가 받는다: 이 시도의 첫 실패면 수리로 보낸다. 병합 충돌, 시간 초과, 검증하는 동안 integration이 바뀐 것은 바로 티켓 실패다.
     검증이 떨어지면서 integration도 바뀌었으면 브랜치의 결함인지 모르니 수리하지 않는다. 끊겼어도 그렇다.
-    끊긴 검증은 _verify_interrupted가 받는다: 트리를 되돌리고 여기로 다시 와 같은 SHA를 병합해 한 번 더 검증한다. 그 사이 브랜치가 움직였으면 맨 앞의 대조가 재리뷰로 보낸다.
+    끊긴 검증은 _verify_interrupted가 받는다: 트리를 되돌리고 같은 흐름 안에서 여기로 다시 와 같은 SHA를 병합해 한 번 더 검증한다. 병합 자리를 지키므로
+    줄 선 다른 티켓이 끼어들어 integration(catch-up의 대상)을 바꾸지 않는다. 그 사이 브랜치가 움직였으면 맨 앞의 대조가 재리뷰로 보낸다.
     맨 앞의 대조 뒤에 마지막 재리뷰의 high를 state로 다시 본다(_final_high). 있으면 병합하지 않고 티켓 실패다: 리뷰 단계가 끊지만(_review_stage),
     결과만 남은 state(재개의 reviewed·REPAIR_VERIFY·verify_again, 옛 gs)로 여기 와도 병합하지 않는다. 실패는 _fail이 한 번 센다.
     대조가 먼저다: 멈춘 사이 생긴 늦은 커밋은 재리뷰로 보내 그 head에서 다시 본 판정으로 정한다. 이미 한 번 더 봤으면 리뷰 대상의 판정 그대로다.
@@ -1843,19 +2055,22 @@ def _merge_stage(r: Run, a: Active) -> None:
                                           "검증할 것과 병합 커밋이 다르다")
             return _verify_failed(r, a, f"integration setup 실패(로그 {setup_log})", setup_log)
     checked = _merge_state(r)  # 검증이 보는 상태: 미완 병합, 또는 병합 커밋의 분리 HEAD
-    res, log, changed = _verify(r, t)
+    res, log, changed, after = yield from _verify(r, t)  # 여기서 멈춘다: 검증 호출이 루프 밖에서 돈다. 아래는 반영이다
     if res.timed_out:
         _reset_integration(r, r.ihead)
         return _fail_worker(r, a, f"검증 시간 초과({res.minutes}분, 로그 {log})")
-    # 검증하는 동안 다른 worker가 integration(index, HEAD, 병합 상태)을 바꿨으면 검증한 것과 커밋할 것이 다르다
+    # 검증하는 동안 다른 worker가 integration(index, HEAD, 병합 상태)을 바꿨으면 검증한 것과 커밋할 것이 다르다. after는 검증 직후에 읽은 상태다
     expected = (r.ihead, f"refs/heads/{integration_branch(r.name)}")
-    moved = _merge_state(r) != checked or merged[:2] != expected or not all(merged)
+    moved = after != checked or merged[:2] != expected or not all(merged)
     if not res.ok:
         _reset_integration(r, r.ihead)
         reason = f"검증 실패(로그 {log})"
         if moved:
             return _fail_worker(r, a, reason)
-        return _verify_interrupted(r, a, res.code, log) if res.interrupted else _verify_failed(r, a, reason, log)
+        if res.interrupted:
+            yield from _verify_interrupted(r, a, res.code, log)
+            return
+        return _verify_failed(r, a, reason, log)
     if moved:
         _reset_integration(r, r.ihead)
         return _fail_worker(r, a, "검증하는 동안 integration이 바뀌었다(되돌림): 검증한 것과 커밋할 것이 다르다")
@@ -2433,11 +2648,13 @@ def _verifying_again(r: Run, tid: str) -> bool:
     return bool(r.st.ticket(tid).network_resume.get("verify_again"))
 
 
-def _verify_interrupted(r: Run, a: Active, code: int, log: Path) -> None:
+def _verify_interrupted(r: Run, a: Active, code: int, log: Path) -> MergeFlow:
     """티켓 검증이 끊겼다(verify.Result.interrupted). 다른 프로세스가 죽였을 수 있으니 코드 결함으로 보지 않는다: 수리 worker를 띄우지 않고 같은 트리로 한 번 다시 검증한다. 이미 다시 검증이었으면 티켓 실패다.
 
     다시 검증의 판정은 여느 검증과 같다(_merge_stage): 통과하면 병합, 끊김이 아닌 실패면 _verify_failed로 수리, 시간 초과와 integration 변경은 바로 실패다.
+    다시 검증은 끊긴 병합 단계 안에서 잇는다(제너레이터): 병합 자리를 놓지 않으니 줄 선 다른 티켓이 그 사이에 병합되지 않고, catch-up과 병합의 대상이 그대로다.
     표시를 먼저 남긴다: 다시 검증 중 어디서 gs가 죽어도 다음 gs go가 구현·리뷰를 다시 하지 않고 다시 검증부터 잇고, 그 검증이 끊기면 실패다. _verify_failed와 _late_commit이 표시를 새로 쓰면 지워진다: 그 뒤의 검증은 다른 트리의 새 검증이다.
+    중단(네트워크)으로 떠나는 중(Merges.hold)이면 다시 검증하지 않는다: 표시를 남기고 줄 맨 앞에 서 있다가 _net_abort가 거둔다. 다음 gs go가 다시 검증부터 잇는다.
     끊긴 뒤 남은 파일은 _merge_stage가 이미 되돌렸다.
     """
     t = a.t
@@ -2446,7 +2663,10 @@ def _verify_interrupted(r: Run, a: Active, code: int, log: Path) -> None:
         return _fail_worker(r, a, f"{why}: 다시 검증도 끊겼다")
     _mark_resume(r, a, done=True, verify_again=True)
     say(f"[{t.id}] {why} → 수리 없이 같은 트리로 한 번 다시 검증한다")
-    _merge_stage(r, a)
+    if r.merges.hold:
+        r.merges.queue.insert(0, Merging(a, None))
+        return
+    yield from _merge_stage(r, a)
 
 
 def _verify_failed(r: Run, a: Active, reason: str, log: Path) -> None:
@@ -2892,9 +3112,14 @@ def _final_high(r: Run, a: Active) -> MergeBlocked | None:
 
 
 def _merge_state(r: Run) -> tuple[str, str, str, str]:
-    """(HEAD, HEAD가 가리키는 브랜치, MERGE_HEAD, index 트리). 읽지 못한 값은 빈 문자열(그러면 비교에서 다르다)."""
+    """integration worktree의 (HEAD, HEAD가 가리키는 브랜치, MERGE_HEAD, index 트리). 읽지 못한 값은 빈 문자열(그러면 비교에서 다르다)."""
+    return _tree_state(r.iwt)
+
+
+def _tree_state(wt: Path) -> tuple[str, str, str, str]:
+    """_merge_state를 경로로 읽는다. 검증 호출의 스레드도 이것을 부른다(Run을 넘기지 않는다)."""
     def get(*args: str) -> str:
-        cp = git.run(r.iwt, *args, check=False)
+        cp = git.run(wt, *args, check=False)
         return cp.stdout.strip() if cp.returncode == 0 else ""
     return (get("rev-parse", "-q", "--verify", "HEAD"), get("symbolic-ref", "-q", "HEAD"),
             get("rev-parse", "-q", "--verify", "MERGE_HEAD"), get("write-tree"))
@@ -2958,12 +3183,16 @@ def _fail(r: Run, t: Ticket, reason: str, *, retry: bool = True, evidence: tuple
     return False
 
 
-def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
+def _verify(r: Run, t: Ticket) -> VerifyFlow:
     """티켓 검증은 명령과 상관없이 커밋될 트리, 곧 integration의 미완 병합에서 돈다(티켓 worktree의 커밋 안 된 파일은 못 본다).
     setup을 다시 돌린 병합은 그 병합 커밋의 분리 HEAD에서 돈다(_setup_merge). 측정에는 그 커밋의 두 부모(integration 끝, 티켓 커밋)를 남긴다.
 
-    (결과, 로그, 트리가 바뀌었나). 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
-    더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 수리 뒤의 다시 검증은 측정 라벨이 따로다.
+    제너레이터(VerifyFlow)다: 준비(로그 머리, 검증 전 상태, `검증:` 줄) → 호출 → 반영(트리 판정, flaky 줄, 측정). 호출만 루프 밖 스레드에서 돈다(_merge_step):
+    verify.run과 검증 직후의 병합 상태·트리 읽기다. 인자로 받은 값(worktree 경로, 로그 파일, config, 취소 통로)만 보고 state·출력은 건드리지 않는다.
+    취소 통로는 Merges.cancel이다: 루프를 떠나면 도는 명령의 프로세스 그룹을 끝내고 다음 명령을 띄우지 않는다(_stop_merges).
+    (결과, 로그, 트리가 바뀌었나, 검증 직후의 병합 상태)를 돌려준다. 트리를 보는 규칙은 `finish._verify`와 같다. 다만 미완 병합이라 index의 변경은
+    더러운 것이 아니고, index가 그대로인지는 `_merge_state`로 본다. 검증 직후의 상태는 호출이 끝나자마자 읽는다: 반영을 기다린 사이의 변경을 검증 중의 변경으로 보지 않는다.
+    수리 뒤의 다시 검증은 측정 라벨이 따로다.
     끊긴 검증의 다시 검증은 로그를 덮지 않고 이어 쓴다: 끊긴 증거가 남고, 수리 worker도 같은 파일을 받는다. 끊긴 검증이 남긴 파일은 트리 변경으로 보지 않고(되돌린다) 측정 라벨 끝이 `-끊김`이다.
     판별(verify 머리말)은 실행 중인 config `[verify]`로 하고, 판별·전체 재실행 전에 같은 트리 규칙(`same`)으로 트리를 확인한다."""
     log = Path(r.st.ticket(t.id).log).parent / "verify.log"
@@ -2971,16 +3200,24 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
     spec = r.feat.spec
     command = spec.verify_for(t)
     before = _merge_state(r)
+    iwt, triage = r.iwt, r.cfg.verify
+    merges = getattr(r, "merges", None)
+    cancel = merges.cancel if merges is not None else None
 
     def same() -> bool:
-        return _merge_state(r) == before and setup.is_clean(r.iwt, staged_ok=True)
+        return _tree_state(iwt) == before and setup.is_clean(iwt, staged_ok=True)
 
     say(f"[{t.id}] 검증: {command}")
     with log.open("a" if again else "w", encoding="utf-8") as f:
-        f.write(("\n끊긴 검증을 같은 트리로 다시 돌린다\n" if again else "") + f"$ {command}\ncwd: {r.iwt}\n")
-        res = verify.run(replace(spec, verify=command), r.iwt, f, r.cfg.verify, same)
-        after = _merge_state(r)
-        changed = not res.timed_out and not res.interrupted and (after != before or not setup.is_clean(r.iwt, staged_ok=True))
+        f.write(("\n끊긴 검증을 같은 트리로 다시 돌린다\n" if again else "") + f"$ {command}\ncwd: {iwt}\n")
+
+        def call() -> tuple[verify.Result, tuple[str, str, str, str], bool]:
+            res = verify.run(replace(spec, verify=command), iwt, f, triage, same, cancel)
+            after = _tree_state(iwt)
+            return res, after, res.timed_out or res.interrupted or setup.is_clean(iwt, staged_ok=True)
+
+        res, after, clean = yield call
+        changed = not res.timed_out and not res.interrupted and (after != before or not clean)
         if changed:
             f.write("\n검증 중 worktree가 바뀌었다. 검증 실패로 처리한다.\n")
             _log_changes(r, f, before, after)
@@ -2997,7 +3234,7 @@ def _verify(r: Run, t: Ticket) -> tuple[verify.Result, Path, bool]:
             integration_head, ticket_head = parents
     metrics.validation(r, label, command, integration_head, res, changed, tree_sha=before[3], ticket_head=ticket_head,
                        ticket_attempt=ts.phases[-1]["attempt"] if ts.phases else ts.attempts)
-    return res, log, changed
+    return res, log, changed, after
 
 
 def _log_changes(r: Run, f, before: tuple[str, ...], after: tuple[str, ...]) -> None:

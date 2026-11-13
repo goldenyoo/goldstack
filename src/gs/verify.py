@@ -31,6 +31,10 @@ verify_retries와 함께 쓰면 시도마다 판별을 먼저 한다. 전체를 
 재시도 전에도 확인 함수를 부르고 트리가 바뀌었으면 `검증 재시도 안 함: …` 줄을 남기고 더 돌리지 않는다. 판별이나 앞 실행이 바꾼 트리를 다음 실행이 되돌려
 호출자의 최종 비교를 통과하는 일을 막는다. 그 시도의 실패 결과를 돌려주고 바뀐 트리는 손대지 않는다(트리 변경 판정은 호출자의 비교가 한다).
 설정은 호출자가 실행 중인 config 값을 넘긴다(검증하는 worktree의 config를 읽지 않는다). 측정 키는 metrics.sample·metrics.triage가 적는다.
+
+취소(cancel, goldstack-v37 01): 티켓 검증은 루프 밖 스레드에서 돈다(go._merge_step). 부른 쪽이 루프를 떠나면 cancel(threading.Event)을 세운다.
+도는 명령은 CANCEL_TICK마다 그것을 보고, 서 있으면 프로세스 그룹을 끝내고(stop) Cancelled를 올린다. 명령을 띄우기 전에도 보고 서 있으면 띄우지 않는다:
+판별 파일, 판별 뒤 전체 실행, 재시도 어느 것이든 다음 명령이 나가지 않는다. 취소된 검증은 결과가 없어 로그 끝에 `종료 코드:` 줄이 없다. cancel이 없으면 전처럼 끝까지 기다린다.
 """
 from __future__ import annotations
 
@@ -38,6 +42,7 @@ import os
 import re
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -57,6 +62,11 @@ KEEP_BASH = "\nexit $?"
 MARKED_ROW = re.compile(r"^bash -c .*exit \$\? (" + MARK + r"\S+)$")  # 줄바꿈은 ps가 바꿔 보인다(macOS `\012`). 표지는 공백이 없어 마지막 낱말이다
 PS_SECONDS = 30.0
 SAFE_FILE = re.compile(r"[A-Za-z0-9_.-]+")  # 판별에 쓸 수 있는 시험 파일 값. 이것만 rerun의 {file} 자리에 넣는다
+CANCEL_TICK = 0.2  # 도는 명령이 취소(cancel)를 보는 간격(초)
+
+
+class Cancelled(Exception):
+    """부른 쪽이 검증을 취소했다(cancel). 돌던 명령의 프로세스 그룹은 끝냈고 다음 명령은 띄우지 않았다. 검증 실패가 아니다: 결과가 없다."""
 
 
 @dataclass(frozen=True)
@@ -108,23 +118,25 @@ def mark(path) -> str:
     return MARK + quote(os.path.realpath(path), safe="/")
 
 
-def run(spec, cwd: Path, stream: IO[str], triage=None, unchanged: Callable[[], bool] | None = None) -> Result:
+def run(spec, cwd: Path, stream: IO[str], triage=None, unchanged: Callable[[], bool] | None = None,
+        cancel: threading.Event | None = None) -> Result:
     """실패한 명령을 최대 verify_retries만큼 다시 돌린다. 각 실행의 시간 제한은 같다. 돌려주는 결과는 마지막 전체 실행의 것이고, 실행마다 로그 끝에 종료 코드 줄을 남긴다.
 
     triage는 config `[verify]`(config.VerifyConfig), unchanged는 트리가 검증 전 그대로면 True인 함수다. 둘 다 있고 triage가 켜져 있으면 시도마다 판별하고(머리말),
     따로 돌린 파일이 시간 초과·끊김 없이 실패하면 남은 재시도를 멈춘다. 판별 생략·꺼짐, 판별 파일의 시간 초과·끊김, 판별 통과 뒤 전체 실패는 재시도한다.
-    재시도 전에도 unchanged를 불러 트리가 바뀌었으면 더 돌리지 않고 그 시도의 실패 결과를 돌려준다(바뀐 트리는 그대로 두어 호출자의 최종 비교가 본다)."""
+    재시도 전에도 unchanged를 불러 트리가 바뀌었으면 더 돌리지 않고 그 시도의 실패 결과를 돌려준다(바뀐 트리는 그대로 두어 호출자의 최종 비교가 본다).
+    cancel이 서면 도는 명령의 프로세스 그룹을 끝내고 Cancelled를 올린다. 다음 명령(판별·판별 뒤 전체·재시도)은 띄우지 않는다(머리말)."""
     samples = []
     on = triage is not None and triage.enabled
     attempt = 0
     while True:
         offset = _offset(stream)
-        result = _full(spec, cwd, stream, samples)
+        result = _full(spec, cwd, stream, samples, cancel=cancel)
         outcome = _TriageResult()
         if not result.ok and on:
-            outcome = _triage(spec, cwd, stream, triage, unchanged, result, _output(stream, offset), samples)
+            outcome = _triage(spec, cwd, stream, triage, unchanged, result, _output(stream, offset), samples, cancel)
             if outcome.files:
-                result = replace(_full(spec, cwd, stream, samples, after_triage=True), triaged=outcome.files)
+                result = replace(_full(spec, cwd, stream, samples, after_triage=True, cancel=cancel), triaged=outcome.files)
         if result.ok or attempt >= getattr(spec, "verify_retries", 0):
             break
         if on and unchanged is not None and not unchanged():
@@ -132,6 +144,8 @@ def run(spec, cwd: Path, stream: IO[str], triage=None, unchanged: Callable[[], b
             break
         if outcome.deterministic_failure:
             break
+        if cancel is not None and cancel.is_set():  # 재시도 줄도 쓰지 않는다: 돌지 않을 재시도다
+            raise Cancelled("검증을 다시 돌리지 않는다: 취소됐다")
         attempt += 1
         stream.write(f"\n검증 재시도 {attempt}\n")
     return replace(result, retries=attempt, samples=tuple(samples))
@@ -145,10 +159,11 @@ def flaky(result: Result, label: str, stream: IO[str]) -> None:
         stream.write(f"\nflaky: {label} 재시도 {result.retries}번 만에 통과\n")
 
 
-def _full(spec, cwd: Path, stream: IO[str], samples: list, *, after_triage: bool = False) -> Result:
-    """전체 명령 한 번. 로그 끝에 종료 코드 줄, 측정에 표본 하나."""
+def _full(spec, cwd: Path, stream: IO[str], samples: list, *, after_triage: bool = False,
+          cancel: threading.Event | None = None) -> Result:
+    """전체 명령 한 번. 로그 끝에 종료 코드 줄, 측정에 표본 하나. 취소되면 둘 다 없이 Cancelled다."""
     start = metrics.clock()
-    result = _run_once(spec, cwd, stream)
+    result = _run_once(spec, cwd, stream, *_given(cancel))
     stream.write(f"\n종료 코드: {result.code}\n")
     stream.flush()
     metrics.sample(samples, start, result, after_triage=after_triage)
@@ -163,7 +178,8 @@ def failed_files(pattern: str, output: str) -> tuple[str, ...]:
     return tuple(found)
 
 
-def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result, output: str, samples: list) -> _TriageResult:
+def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result, output: str, samples: list,
+            cancel: threading.Event | None = None) -> _TriageResult:
     """판별(머리말 1–3). 전체를 한 번 더 돌릴 파일들과 재시도를 멈출 결정적 실패 여부를 돌려준다. 측정은 실패한 전체 실행의 표본에 붙인다."""
     start = metrics.clock()
 
@@ -195,7 +211,7 @@ def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result,
         stream.write(f"\n판별 {name}: $ {command}\n")
         left = deadline - _clock()
         if left > 0:
-            res = _launch(command, left, cwd, stream)
+            res = _launch(command, left, cwd, stream, *_given(cancel))
         else:
             stream.write(f"판별 시간({minutes(total)}분)을 다 써서 돌리지 않았다\n")
             res = Result(1, True, minutes(total))
@@ -214,19 +230,28 @@ def _triage(spec, cwd: Path, stream: IO[str], triage, unchanged, result: Result,
     return _TriageResult(files=files)
 
 
+def _given(cancel: threading.Event | None) -> tuple[threading.Event, ...]:
+    """취소 통로는 있을 때만 넘긴다. 없으면 _run_once·_launch를 옛 서명 그대로 부른다(시험이 그 둘을 바꿔 끼운다)."""
+    return () if cancel is None else (cancel,)
+
+
 def _clock() -> float:
     """판별 시간 예산의 시계. 시험이 바꾼다."""
     return time.monotonic()
 
 
-def _run_once(spec, cwd: Path, stream: IO[str]) -> Result:
+def _run_once(spec, cwd: Path, stream: IO[str], cancel: threading.Event | None = None) -> Result:
     """spec.verify를 cwd에서 spec의 시간 제한으로 돌린다(_launch)."""
-    return _launch(spec.verify, limit_seconds(spec), cwd, stream)
+    return _launch(spec.verify, limit_seconds(spec), cwd, stream, *_given(cancel))
 
 
-def _launch(command: str, seconds: float, cwd: Path, stream: IO[str]) -> Result:
-    """command를 cwd에서 돌려 출력을 stream에 쓴다. 시간을 넘기면 끝에 `시간 초과: <N>분` 줄을 남긴다. 끊겼으면 남은 그룹을 끝낸다."""
+def _launch(command: str, seconds: float, cwd: Path, stream: IO[str], cancel: threading.Event | None = None) -> Result:
+    """command를 cwd에서 돌려 출력을 stream에 쓴다. 시간을 넘기면 끝에 `시간 초과: <N>분` 줄을 남긴다. 끊겼으면 남은 그룹을 끝낸다.
+
+    cancel이 이미 서 있으면 띄우지 않고 Cancelled, 도는 중에 서면 그룹을 끝내고 Cancelled다(_wait)."""
     limit = minutes(seconds)
+    if cancel is not None and cancel.is_set():
+        raise Cancelled(f"검증 명령을 띄우지 않는다: 취소됐다(`{command}`)")
     stream.flush()
     try:
         start = os.lseek(stream.fileno(), 0, os.SEEK_CUR)  # 자식과 함께 쓰는 위치다. 여기부터가 이번 실행의 출력이다
@@ -236,7 +261,7 @@ def _launch(command: str, seconds: float, cwd: Path, stream: IO[str]) -> Result:
         stream.write(f"검증 명령 실행 실패: {e}\n")
         return Result(1, False, limit, launch_failed=True)
     try:
-        code = p.wait(timeout=seconds)
+        code = _wait(p, seconds, cancel)
         interrupted = _interrupted(code, stream, start)
         if interrupted:
             stop(p)
@@ -247,8 +272,23 @@ def _launch(command: str, seconds: float, cwd: Path, stream: IO[str]) -> Result:
         stream.flush()
         return Result(code, True, limit)
     except BaseException:
-        stop(p)  # 코디네이터가 죽어도(Ctrl-C 등) 검증 프로세스를 남기지 않는다
+        stop(p)  # 코디네이터가 죽어도(Ctrl-C 등), 취소돼도(Cancelled) 검증 프로세스를 남기지 않는다
         raise
+
+
+def _wait(p: subprocess.Popen, seconds: float, cancel: threading.Event | None) -> int:
+    """p가 끝나기를 seconds까지 기다려 종료 코드를 돌려준다. 넘기면 TimeoutExpired. cancel이 있으면 CANCEL_TICK마다 보고, 서 있으면 Cancelled(그룹은 _launch가 끝낸다)."""
+    if cancel is None:
+        return p.wait(timeout=seconds)
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return p.wait(timeout=max(0.0, min(deadline - time.monotonic(), CANCEL_TICK)))
+        except subprocess.TimeoutExpired:
+            if cancel.is_set():
+                raise Cancelled("검증 명령을 끝낸다: 취소됐다") from None
+            if time.monotonic() >= deadline:
+                raise
 
 
 def _log_path(stream: IO[str], cwd: Path):
