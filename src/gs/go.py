@@ -1800,14 +1800,17 @@ def _merge_stage(r: Run, a: Active) -> None:
     맨 앞의 대조 뒤에 마지막 재리뷰의 high를 state로 다시 본다(_final_high). 있으면 병합하지 않고 티켓 실패다: 리뷰 단계가 끊지만(_review_stage),
     결과만 남은 state(재개의 reviewed·REPAIR_VERIFY·verify_again, 옛 gs)로 여기 와도 병합하지 않는다. 실패는 _fail이 한 번 센다.
     대조가 먼저다: 멈춘 사이 생긴 늦은 커밋은 재리뷰로 보내 그 head에서 다시 본 판정으로 정한다. 이미 한 번 더 봤으면 리뷰 대상의 판정 그대로다.
+    그때는 판정을 먼저 본다: 막힐 시도에 리뷰 대상을 병합한다는 경고와 기록(_late_commit)을 남기지 않는다.
     """
     t = a.t
     head = git.sha(r.repo, a.branch)
     a.target = a.target or _old_target(r, a, head)
-    if head != a.target and _late_commit(r, a, head):
+    if head != a.target and not a.reviewed_again and _late_commit(r, a, head):
         return
     if blocked := _final_high(r, a):
         return _fail_worker(r, a, blocked.reason, evidence=blocked.evidence)
+    if head != a.target:
+        _late_commit(r, a, head)  # 이미 한 번 더 봤다: 경고와 기록을 남기고 리뷰 대상을 병합한다
 
     # 그 사이 다른 티켓이 병합됐을 수 있다. 최신 integration 끝을 티켓 브랜치에 먼저 합쳐 본다.
     _phase(r, t.id, "verify", t.model)

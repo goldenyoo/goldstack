@@ -328,6 +328,44 @@ class SecondRereviewResumeTest(SecondRereviewBase):
         self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
         self.assertNotIn("late", self.files())
 
+    def test_commit_after_the_check_again_does_not_say_the_blocked_target_is_merged(self):
+        """병합 전 대조로 한 번 더 본 결과(reviewed·reviewed_again)만 남기고 멈춘 사이 또 늦은 커밋이 생겼다.
+        다음 gs go는 리뷰 대상의 남은 high로 실패시킨다. 막힐 시도에 "리뷰 대상을 병합한다"는 경고와 기록을 남기지 않는다."""
+        self.second_rereview(verdict=("unresolved", "또 그대로다"))
+        self.answer("codex", 3, [(1, "unresolved", "늦은 커밋도 고치지 않았다")])
+        (self.bin / "clean_retry").touch()
+        real_leave = go._leave_review
+
+        def leave(r, rv, active, runner):
+            if rv.a.fix == 2:
+                raise KeyboardInterrupt
+            return real_leave(r, rv, active, runner)
+
+        with late_during_second_rereview(), mock.patch.object(go, "_final_high", return_value=None), \
+                mock.patch.object(go, "_leave_review", side_effect=leave), self.assertRaises(KeyboardInterrupt):
+            self.go("--only", "01")
+        mark = self.ts().network_resume
+        self.assertTrue(mark["reviewed"] and mark["reviewed_again"])
+        late_commit("late2", self.rundir / "wt/01")(None, None)
+        real_fail, fixes = go._fail_worker, []
+
+        def fail(r, a, *rest, **kw):
+            fixes.extend(rec.get("fix", "") for rec in state.reviews(r.st.ticket(a.t.id)))
+            return real_fail(r, a, *rest, **kw)
+
+        with mock.patch.object(go, "_fail_worker", side_effect=fail):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("[01] 실패: 남은 high: file_01 FIX A: 값이 틀렸다 (미해결)", out)
+        self.assertNotIn("리뷰하지 못해 병합에 넣지 않는다", out)
+        self.assertTrue(fixes)
+        self.assertFalse([f for f in fixes if "리뷰하지 못해 병합에 넣지 않는다" in f], fixes)
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2", "codex 3"])
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertNotIn("late", self.files())
+        self.assertNotIn("late2", self.files())
+
 
 class SecondRereviewLateCommitTest(SecondRereviewBase):
     def test_late_commit_is_checked_before_the_judgment(self):
