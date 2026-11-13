@@ -19,6 +19,7 @@ from gs import config, go, state, streamfmt, worker
 
 GRACE = 0.2  # 시험의 유예(초)
 HANG = 37  # 정리되지 않으면 자식이 이만큼 남는다(idle 시간 초과 IDLE_SECONDS보다 길다)
+DRIVEN = 100.0  # 시계를 시험이 올리는 시험의 유예(초). 실제 경과(폴링 간격 수십 ms)가 판정을 뒤집지 못할 만큼 크다
 SHORT = 0.8  # 정리하지 않아야 하는 시험의 자식. 스스로 끝나 worker도 끝난다
 
 
@@ -52,15 +53,15 @@ def worker_script(end: str, child: float, orphan: bool = False, before: str = ""
     ''')
 
 
-def background_script(silence: float) -> str:
-    """배경 작업을 기다리다 깨어나는 claude worker: 작업 1개 → 성공 result → silence초 침묵(로그 없음) → 작업 알림 → 커밋 → 작업 0개 → result → 종료."""
+def background_script() -> str:
+    """배경 작업을 기다리다 깨어나는 claude worker: 작업 1개 → 성공 result → 침묵(로그 없음, `resume` 표식이 생길 때까지) → 작업 알림 → 커밋 → 작업 0개 → result → 종료."""
     notification = json.dumps({"type": "system", "subtype": "task_notification", "status": "completed"})
     return textwrap.dedent(f'''\
         here="$(dirname "$0")"
         echo "$GS_TICKET" >> "$here/calls.log"
         echo '{tasks_changed(1)}'
         echo '{result(False)}'
-        sleep {silence}
+        until [ -e "$here/resume" ]; do sleep 0.05; done
         echo '{notification}'
         echo "$GS_TICKET" > "file_$GS_TICKET"; git add -A; git commit -qm "t$GS_TICKET"
         echo '{tasks_changed(0)}'
@@ -69,9 +70,16 @@ def background_script(silence: float) -> str:
     ''')
 
 
+def growing_between() -> str:
+    """끝 이벤트 뒤 로그를 세 번 키운다. 각 줄은 `step<i>` 표식이 생긴 뒤에 쓰고, 다 쓰면 `grew` 표식을 남긴다."""
+    return textwrap.dedent('''\
+        for i in 1 2 3; do until [ -e "$here/step$i" ]; do sleep 0.05; done; echo '{"type":"assistant"}'; done
+        touch "$here/grew"''')
+
+
 class ResultGraceGoTest(support.GoTest):
     def run_go(self, end: str, child: float, runner: str = "subprocess", grace: float | None = GRACE, orphan: bool = False,
-               script: str | None = None, before: str = "", between: str = ""):
+               script: str | None = None, before: str = "", between: str = "", drive=None):
         (self.bin / "worker.sh").write_text(script or worker_script(end, child, orphan, before, between))
         env = {"GS_RUNNER": runner}
         if runner == "herdr":
@@ -83,6 +91,13 @@ class ResultGraceGoTest(support.GoTest):
                    mock.patch.object(worker, "POLL_SECONDS", 0.05)]
         if grace is not None:
             patches.append(mock.patch("gs.go._result_grace", return_value=grace))
+        if drive is not None:  # idle 시간 초과는 보지 않는다(시계가 유예 단위로 뛴다)
+            patches[1] = mock.patch("gs.go._idle_seconds", return_value=1e9)
+        if drive is not None:  # 실제 시간에 기대지 않는다: 시계는 시험이 올린다(real + offset), 올리는 때는 폴링 회차 끝이다
+            offset = [0.0]
+            real = time.monotonic
+            patches.append(mock.patch.object(go.time, "monotonic", lambda: real() + offset[0]))
+            patches.append(mock.patch.object(go, "_overdue_result", drive(go._overdue_result, offset)))
         for p in patches:
             p.start()
         try:
@@ -145,9 +160,27 @@ class ResultGraceGoTest(support.GoTest):
         self.assertFalse(alive(int((self.bin / "child.pid").read_text())))
 
     def test_worker_waiting_for_background_task_is_not_cleaned_and_its_later_work_is_kept(self):
-        """성공 result(작업 1개) → 유예(GRACE)보다 긴 침묵 → 작업 알림 → 커밋 → result(작업 0개) → 종료. 정리하지 않고 커밋이 병합된다."""
-        code, out, err = self.run_go("", 0, script=background_script(1.5))
+        """성공 result(작업 1개) → 유예보다 긴 침묵 → 작업 알림 → 커밋 → result(작업 0개) → 종료. 정리하지 않고 커밋이 병합된다.
+
+        침묵은 시계를 3회 폴링 동안 3*유예씩 올려 만든다(그 뒤 `resume` 표식을 남겨 worker를 깨운다). 배경 작업을 무시하면 둘째 폴링에서 정리된다.
+        """
+        marker = self.bin / "resume"
+        polls = [0]
+
+        def drive(orig, offset):
+            def wrapper(r, tid, a):
+                cleaned = orig(r, tid, a)
+                if not cleaned and not marker.exists() and a.ends is not None and a.ends.ok:
+                    polls[0] += 1
+                    offset[0] += 3 * DRIVEN
+                    if polls[0] >= 3:
+                        marker.touch()
+                return cleaned
+            return wrapper
+
+        code, out, err = self.run_go("", 0, script=background_script(), grace=DRIVEN, drive=drive)
         self.assertEqual(code, 0, out + err)
+        self.assertTrue(marker.exists())
         self.assertNotIn("result 뒤", out)
         self.assertNotIn("시간 초과", out)
         self.assertFalse((self.attempt / worker.LEFTOVER_PROCS).exists())
@@ -158,12 +191,33 @@ class ResultGraceGoTest(support.GoTest):
         self.assertEqual(self.merged(), ["01"])  # 침묵 뒤의 커밋이 그대로 들어갔다
 
     def test_log_growing_within_grace_restarts_the_clock_and_cleanup_waits_for_quiet(self):
-        """성공 result 뒤 로그가 계속 자라는 동안(간격 < 유예)은 정리하지 않고, 멈춘 뒤 유예가 지나면 정리한다."""
-        grow = ("for i in $(seq 1 30); do echo '{\"type\":\"assistant\"}'; sleep 0.05; done; touch \"$here/grew\"")
-        code, out, err = self.run_go(result(False), HANG, grace=0.6, between=grow)
+        """성공 result 뒤 로그가 자랄 때마다 시계가 다시 시작한다. 자라는 사이 시계는 0.75*유예씩만 올라 합이 유예를 넘어도 정리하지 않고,
+        다 자란 뒤(`grew`) 침묵이 유예를 넘으면 정리한다. 시계 재시작이 없으면 둘째 증가 뒤에 정리돼 `grew`가 생기지 않는다."""
+        grew = self.bin / "grew"
+        state_ = {"steps": 0, "size": -1}
+
+        def drive(orig, offset):
+            def wrapper(r, tid, a):
+                cleaned = orig(r, tid, a)
+                if cleaned or a.ends is None or not a.ends.ok:
+                    return cleaned
+                size = a.proc.job.log.stat().st_size
+                if state_["steps"] < 3 and size != state_["size"]:  # 처음이거나 앞 단계 줄이 쓰였다
+                    state_["size"] = size
+                    offset[0] += 0.75 * DRIVEN
+                    state_["steps"] += 1
+                    (self.bin / f"step{state_['steps']}").touch()
+                elif grew.exists():
+                    offset[0] += 2 * DRIVEN
+                return cleaned
+            return wrapper
+
+        code, out, err = self.run_go(result(False), HANG, grace=DRIVEN, between=growing_between(), drive=drive)
         self.assertEqual(code, 0, out + err)
-        self.assertTrue((self.bin / "grew").exists(), "로그가 자라는 중에 정리됐다")
-        self.assertIn("[01] result 뒤 0.6초 지나도 끝나지 않아 정리: 남은 프로세스 ", out)
+        self.assertTrue(grew.exists(), "로그가 자라는 중에 정리됐다")
+        self.assertEqual(state_["steps"], 3)
+        self.assertIn(f"[01] result 뒤 {DRIVEN:g}초 지나도 끝나지 않아 정리: 남은 프로세스 ", out)
+        self.assertNotIn("시간 초과", out)
         self.assertFalse(alive(int((self.bin / "child.pid").read_text())))
 
     def test_error_result_is_not_cleaned(self):
