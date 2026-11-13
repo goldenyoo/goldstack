@@ -178,6 +178,67 @@ class ConfigTest(unittest.TestCase):
         cfg, problems = config.load(self.repo)
         self.assertEqual((cfg.overnight.autonomy, [p.level for p in problems]), ("stop", ["경고"]))
 
+    def test_second_reviewer_rereview_defaults_to_all_and_accepts_first_none(self):
+        """goldstack-v38 04: 절·키가 없는 config는 all(지금 동작)이다. all|first|none만 받고 `gs config`가 값을 낸다."""
+        self.assertEqual(config.load(self.repo)[0].review, config.ReviewConfig("all"))
+        self.assertEqual(self.cli("config", "review.second_reviewer_rereview"), (0, "all\n", ""))
+        for value, calls in (("all", (True, True, True)), ("first", (True, False, False)), ("none", (False, False, False))):
+            with self.subTest(value):
+                self.path.write_text(CONFIG + f'[review]\nsecond_reviewer_rereview = "{value}"\n')
+                cfg, problems = config.load(self.repo)
+                self.assertEqual((problems, cfg.review.second_reviewer_rereview), ([], value))
+                self.assertEqual(self.cli("config", "review.second_reviewer_rereview"), (0, f"{value}\n", ""))
+                # 1·2차 재리뷰와 수리 재리뷰(review.REPAIR_ROUND)에서 두 번째 리뷰어를 부르나
+                self.assertEqual(tuple(cfg.review.calls_second(nth) for nth in (1, 2, "수리")), calls)
+        self.path.write_text(CONFIG + "[review]\n")
+        self.assertEqual(config.load(self.repo), (config.load(self.repo)[0], []))
+        self.assertEqual(config.load(self.repo)[0].review.second_reviewer_rereview, "all")
+        for bad in ('"second"', '"First"', '""', "1", "true", '["first"]'):
+            with self.subTest(bad):
+                self.path.write_text(CONFIG + f"[review]\nsecond_reviewer_rereview = {bad}\n")
+                cfg, problems = config.load(self.repo)
+                self.assertIsNone(cfg)
+                self.assertEqual([(p.level, "`review.second_reviewer_rereview`" in p.message) for p in problems], [("오류", True)])
+                self.assertEqual(self.cli("config", "review.second_reviewer_rereview")[0], 1)
+        self.path.write_text(CONFIG + '[review]\nsecond_reviewer_rereview = "first"\nextra = 1\n')
+        cfg, problems = config.load(self.repo)
+        self.assertEqual((cfg.review.second_reviewer_rereview, [p.message for p in problems]),
+                         ("first", ["알 수 없는 키 `review.extra`"]))
+        self.path.write_text('review = "first"\n' + CONFIG)
+        self.assertEqual([p.message for p in config.load(self.repo)[1]], ["`review`는 테이블이어야 한다"])
+
+    def test_init_template_keeps_second_reviewer_rereview_out(self):
+        """`gs init` 템플릿(DEFAULT_CONFIG)에는 `[review]`가 없어 all(지금 동작)이다."""
+        self.assertNotIn("[review]", config.DEFAULT_CONFIG)
+        self.assertNotIn("second_reviewer_rereview", config.DEFAULT_CONFIG)
+        self.path.unlink()
+        code, out, err = self.cli("init")
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertEqual(self.cli("config", "review.second_reviewer_rereview"), (0, "all\n", ""))
+
+    @mock.patch("gs.check.shutil.which", return_value="/test/cli")
+    def test_check_and_go_reject_invalid_second_reviewer_rereview(self, _which):
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        subprocess.run(["git", "remote", "add", "upstream", "https://github.com/owner/repo.git"],
+                       cwd=self.repo, check=True)
+        root = self.repo / ".goldstack/work/demo"
+        (root / "tickets").mkdir(parents=True)
+        (root / "spec.md").write_text('---\nfeature: demo\nverify: "true"\n---\n')
+        (root / "tickets/01-a.md").write_text(
+            '---\nid: "01"\ntitle: a\nblocked_by: []\nmodel: claude\nreviewer: codex\ntouches: ["a.py"]\n---\n')
+        (self.repo / ".goldstack/local.env").write_text("TG_TOKEN=1:abc\nTG_CHAT_ID=42\n")
+        self.path.write_text(CONFIG + '[review]\nsecond_reviewer_rereview = "first"\n')
+        code, out, err = self.cli("check", "demo")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("second_reviewer_rereview", err)
+        self.path.write_text(CONFIG + '[review]\nsecond_reviewer_rereview = "twice"\n')
+        for cmd in ("check", "go"):
+            with self.subTest(cmd):
+                code, out, err = self.cli(cmd, "demo")
+                self.assertEqual(code, 1)
+                self.assertIn("오류: .goldstack/config.toml: `review.second_reviewer_rereview`는 all|first|none 중 하나여야 한다", err)
+        self.assertFalse((root / "run").exists())
+
     def test_init_config_is_stop_and_this_repo_is_record(self):
         out = io.StringIO()
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(out):
