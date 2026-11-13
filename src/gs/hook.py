@@ -44,7 +44,7 @@
 
 명령 이름은 앞붙이(대입, `sudo`·`env`·`timeout`·`setsid`·`nice`·`stdbuf`·`exec`·`xargs` …)와 그 옵션의 값(`env -u X`,
 `timeout -s KILL 5`, `exec -a x`, `nice -n +5`, `stdbuf -o L`)을 벗겨 찾는다(`strip_prefix`, `WRAPPER_VALUED`). `env -S` 문자열은 펼쳐
-그 안의 명령을 본다. env가 셸과 다르게 푸는 글자(`#`·`\\`·`$`)가 든 문자열은 풀지 않고 막는다. 표에 없는 옵션은 값을 받지 않는다고
+그 안의 명령을 본다. env가 셸과 다르게 푸는 글자(`#`·`\\`·`$`)나 치환·글롭이 든 문자열은 풀지 않고 막는다. 표에 없는 옵션은 값을 받지 않는다고
 보고, 모른다는 이유로 막지는 않는다. 건너뛴 앞붙이 단어(옵션 값, 대입 이름)에 xargs 치환 문자열이 들어 있으면 막는다(`xargs -I@ env -u @ …`).
 
 막으면 종료 코드 2와 stderr의 이유를 돌려준다(Claude Code가 도구 호출을 막고 이유를 모델에게 보여 준다).
@@ -272,8 +272,10 @@ SHELL_COMMAND_WORD = re.compile(r"[\w./+][\w./+-]*")  # 따옴표·escape·치�
 SHELL_ANSI_QUOTED = re.compile(r"\$'(?:[^'\\]|\\.)*'", re.DOTALL)
 SHELL_BACKTICK = re.compile(r"`((?:[^`\\]|\\.)*)`", re.DOTALL)
 TIMEOUT_DURATION = re.compile(r"\d+(\.\d+)?[smhd]?")
-# `timeout`의 시간 자리로 읽는 단어(`5`, `0.5`, `.5`, `1e3`, `inf`, `$T`). 아니면 명령으로 본다(`timeout git push`는 GNU에서는 실패하지만 막는다)
-TIMEOUT_SLOT = re.compile(r"(\d|\.\d).*|inf(inity)?[smhd]?|.*[$`].*", re.S)
+# `timeout`의 시간 자리로 읽는 단어. strtod가 받는 모양(앞 공백, 부호, `5`·`.5`·`1e3`·`0x5`, 대소문자 무관 `inf`·`nan`)과
+# 셸이 바꿔 넣는 단어(`$T`, 백틱, 글롭). 시간이 아닌 단어를 시간으로 읽어도 GNU timeout이 실패해 명령이 돌지 않으니 넓게 받는다.
+# 이 모양이 아니면 그 단어를 명령으로 본다(`timeout git push`)
+TIMEOUT_SLOT = re.compile(r"\s*[+-]?(\d|\.\d|inf|nan).*|.*[$`*?\[].*", re.S | re.I)
 
 
 def _command_of(words: list[str]) -> str | None:
@@ -1144,8 +1146,10 @@ ROLE_EXPORTERS = {"export", "declare", "typeset", "readonly"}  # 변수를 내�
 ROLE_ADVICE = ("`GS_ROLE`은 worker가 지우거나 바꿀 수 없다(바꾸면 worker 차단이 풀린다). "
                "중첩 세션은 `gs child -- <명령>`으로 띄운다(GS_*는 남고 Claude Code 세션 변수만 지운다)")
 ENV_VALUED_SHORT = "uCSPa"  # 값을 받는 `env` 짧은 옵션. 붙이거나(`-uX`) 다음 단어로 준다
-ENV_SPLIT_UNSURE = "#\\$"  # env -S가 셸과 다르게 푸는 글자(`#` 주석, `\_`·`\c`, `${VAR}`)
-ENV_SPLIT_UNREADABLE = ("`env -S` 문자열을 env와 같게 풀 수 없어(`#` 주석, `\\_` 공백, `\\c`, `${VAR}`, 닫히지 않은 따옴표) "
+# env -S가 셸과 다르게 푸는 글자(`#` 주석, `\_`·`\c`, `${VAR}`)와 셸이 먼저 바꿔 넣는 글자(`$( )`·백틱 치환, 글롭).
+# 바꿔 넣은 결과가 `#`일 수 있다(`env -S "`printf '#'`" git push`)
+ENV_SPLIT_UNSURE = "#\\$`*?["
+ENV_SPLIT_UNREADABLE = ("`env -S` 문자열을 env와 같게 풀 수 없어(`#` 주석, `\\_` 공백, `\\c`, `${VAR}`, 치환·글롭, 닫히지 않은 따옴표) "
                         "그 안의 명령을 판정할 수 없다. `-S` 없이 단어로 쓴다")
 
 
@@ -1219,7 +1223,8 @@ def _role_export(base: str, args: list[str]) -> str | None:
 
 def _env_split(value: str) -> list[str] | None:
     """`env -S`의 문자열을 단어로 나눈다. env와 같게 나눈다고 보장하지 못하면 None.
-    env는 `#`(주석), `\\`(`\\_` 공백, `\\c` 끝), `${VAR}`(펼침)를 셸(`shlex`)과 다르게 푼다. 이 글자가 있으면 나누지 않는다."""
+    env는 `#`(주석), `\\`(`\\_` 공백, `\\c` 끝), `${VAR}`(펼침)를 셸(`shlex`)과 다르게 푼다. 셸이 먼저 바꿔 넣는 치환·글롭은
+    결과를 모른다. 이 글자(`ENV_SPLIT_UNSURE`)가 있으면 나누지 않는다."""
     if any(c in value for c in ENV_SPLIT_UNSURE):
         return None
     try:

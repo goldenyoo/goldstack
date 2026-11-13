@@ -215,7 +215,10 @@ class GsChildTest(unittest.TestCase):
                         "env -S '${NOPE}' git push", "env -S '#' env -u GS_ROLE claude -p hi",
                         "env -S '-u\\_GS_ROLE' claude -p hi", "env -S '#' gs child -- claude -p hi",
                         "env -S 'gs\\_child -- claude -p hi'", "env --split-string='#' git status",
-                        "env -S \"'unclosed\" git status", "env -iS '#' claude -p hi", "setsid env -S '#' git push"):
+                        "env -S \"'unclosed\" git status", "env -iS '#' claude -p hi", "setsid env -S '#' git push",
+                        # 셸이 먼저 바꿔 넣는 치환·글롭은 결과가 `#`일 수 있다
+                        "env -S \"`python3 -c 'print(chr(35))'`\" git push", "env -S \"$(printf '#')\" git push",
+                        "env -S ? git push", "env -S '*' git push", "env -S [!a] git push"):
             with self.subTest(command=command):
                 self.assertEqual(self.verdict(command), hook.ENV_SPLIT_UNREADABLE, command)
         self.assertIsNone(self.verdict("env -S 'FOO=1 BAR=2' git status"))
@@ -224,9 +227,14 @@ class GsChildTest(unittest.TestCase):
         """`timeout` 옵션 뒤의 시간처럼 생긴 단어만 시간으로 건너뛴다. 아니면 그 단어가 명령이다."""
         for command in ("timeout git push", "timeout 5 git push", "timeout 0.5 git push", "timeout .5 git push",
                         "timeout 1e3 git push", "timeout inf git push", "timeout $T git push", "timeout ${T}s git push",
-                        "timeout -s KILL git push"):
+                        "timeout -s KILL git push",
+                        # strtod가 받는 모양: 부호, 앞 공백, 대소문자 무관 `inf`, 16진수
+                        "timeout +5 git push", "timeout ' 5' git push", "timeout INF git push", "timeout Infinity git push",
+                        "timeout -- INF git push", "timeout -s KILL +5 git push", "timeout 0x5 git push", "timeout ? git push"):
             with self.subTest(command=command):
                 self.assertEqual(self.verdict(command), PUSH, command)
+        self.assertIn("`env -u GS_ROLE`", self.verdict("timeout ' 5' env -u GS_ROLE claude -p hi") or "")
+        self.assertEqual(self.verdict("timeout +5 gs child -- claude -p hi"), hook.GS_CHILD_FRONT)
         self.assertEqual(hook.strip_prefix(["timeout", "git", "push"]), ["git", "push"])
         self.assertEqual(hook.strip_prefix(["timeout", "5", "git", "push"]), ["git", "push"])
 
