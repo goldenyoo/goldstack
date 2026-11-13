@@ -94,6 +94,8 @@ goldstack은 사용자 머신·레포를 가정하지 않는다. 레포마다 �
 3. state를 읽어 실행을 시작하고, integration worktree(`run/wt/integration`, 브랜치 `gs/<f>/integration`)를 준비한다: 남은 병합·변경을 버리고 `<remote>/<base>`를 합친 뒤, `[worktree] setup`이 있으면 처음 한 번 돌린다. `setup_when`이 있으면 마지막 준비 뒤 그 glob에 걸리는 파일이 바뀌었을 때도 다시 돌린다(`go._setup_integration`, 아래 "setup 재실행 시점"과 "준비 실패 위치별 처리").
 4. integration의 병합 표시(`gs-ticket: <f>/<NN>` 트레일러)로 이미 병합된 티켓을 회복한다. 지난 마무리가 CI 대기(`checks_*`), PR 병합 대기, gs PR 대기(`revert_pending`·`report_pending`), 병합 뒤, base 미검증, main 검증 실패에서 멈췄거나(`finish.RESUME_PHASES`), `verified`·`reverted`인데 base 보고서를 아직 시도하지 않았으면(`go._resuming`) 새 worker를 띄우기 전에 그것부터 이어 가고 그 실행은 멈춘다(아래 "재개는 멈춘다").
 5. 이어 갈 마무리가 없으면 티켓 루프(병렬, 리뷰, 재시도) → 마무리(보고서, PR, 병합, base 재검증).
+
+   **티켓 루프와 검증 스레드** — 티켓 검증 호출(`verify.run`)만 루프 밖 스레드에서 돈다(리뷰와 같은 준비 → 호출 → 반영). 병합 준비(catch-up, `merge --no-commit`, setup)와 결과 반영은 루프에서 하고, 병합·검증은 한 번에 하나다. integration worktree를 바꾸는 일(다른 티켓의 병합, `_reset_integration`)은 도는 검증이 끝날 때까지 미룬다(`[05] 병합 대기: 03 검증 중`). 그 밖의 일(worker 끝, 리뷰·재리뷰와 반영, 수정·수리·새 worker)은 검증 중에도 돈다. 중단하면 검증 프로세스 그룹을 끝내고, 다음 `gs go`는 첫 검증이었으면 그 티켓을 worker부터 새로 시작하고(재개 표시가 첫 검증 전에 지워진다), `verify_again` 중이었으면 다시 검증부터 잇는다. `NetworkAbort`는 도는 검증이 끝나 반영한 뒤 떠난다.
 6. `finished_at` 기록 → 요약 출력 → 알림.
 
 종료 코드는 모든 티켓이 병합되고 마무리가 끝났을 때(base 검증 통과, gs PR 대기 없음)만 0이다. 병합 대기, CI 실패·시간 초과, 승인 대기, 준비 실패, base 검증 실패, 재개 뒤 남은 티켓도 1이다. `중단(네트워크)`만 3이다(아래 "네트워크 끊김").
