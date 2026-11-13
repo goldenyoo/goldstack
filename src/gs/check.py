@@ -288,18 +288,34 @@ def environment_problems(repo: Path, cfg: config.Config, feat: featmod.Feature,
 AGY_WORST_CASE_PER_SLOT = 3
 
 
+def second_reviewer_worst_case(cfg: config.Config) -> int:
+    """두 번째 리뷰어 자리의 최악 호출 수: 첫 리뷰 1 + 부르는 재리뷰 회차(`[review] second_reviewer_rereview`).
+    all은 다른 자리와 같은 3(재리뷰 2), first는 2(1차 재리뷰만), none은 1(첫 리뷰만)이다. 수리 재리뷰는 다른 자리처럼 세지 않는다."""
+    return 1 + sum(cfg.review.calls_second(nth) for nth in (1, 2))
+
+
 def agy_problems(cfg: config.Config, feat: featmod.Feature,
                  scope: Iterable[str]) -> list[featmod.Problem]:
     """범위 안 티켓의 model·reviewer·second_reviewer 중 agy인 자리마다 최악 3회로 센다
-    (첫 호출 + 재리뷰 등 실행 중 되풀이). 재시도(실패 후 다시 부르기)는 세지 않는다."""
-    assigned = sum(family == "agy" for tid in scope
-                   for family in (feat.tickets[tid].model, feat.tickets[tid].reviewer,
-                                  feat.tickets[tid].second_reviewer))
-    calls = assigned * AGY_WORST_CASE_PER_SLOT
+    (첫 호출 + 재리뷰 등 실행 중 되풀이). 재시도(실패 후 다시 부르기)는 세지 않는다.
+
+    두 번째 리뷰어를 부르지 않는 재리뷰 회차(`[review] second_reviewer_rereview`가 first·none)는 세지 않는다: 그 자리는
+    second_reviewer_worst_case회다. 그 판정을 맡는 첫 리뷰어는 회차마다 한 번이라 그 자리의 3회 그대로다.
+    all이면 문구가 `배정 N × 3` 하나이고, 아니면 두 번째 리뷰어 자리를 `+ 두 번째 리뷰어 M × k`로 따로 적는다.
+    """
+    second = second_reviewer_worst_case(cfg)
+    tickets = [feat.tickets[tid] for tid in scope]
+    assigned = sum(family == "agy" for t in tickets for family in (t.model, t.reviewer)) \
+        + (sum(t.second_reviewer == "agy" for t in tickets) if second == AGY_WORST_CASE_PER_SLOT else 0)
+    seconds = 0 if second == AGY_WORST_CASE_PER_SLOT else sum(t.second_reviewer == "agy" for t in tickets)
+    calls = assigned * AGY_WORST_CASE_PER_SLOT + seconds * second
     limit = cfg.agy.max_calls_per_run
     if calls > limit:
+        parts = [f"배정 {assigned} × {AGY_WORST_CASE_PER_SLOT}"] if assigned or not seconds else []
+        if seconds:
+            parts.append(f"두 번째 리뷰어 {seconds} × {second}")
         return [featmod.Problem("경고", "",
-                f"범위 안 agy 최대 {calls}회(배정 {assigned} × {AGY_WORST_CASE_PER_SLOT})가 "
+                f"범위 안 agy 최대 {calls}회({' + '.join(parts)})가 "
                 f"상한 agy.max_calls_per_run={limit}회를 넘는다")]
     return []
 

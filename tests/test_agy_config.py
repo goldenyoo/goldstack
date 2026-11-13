@@ -164,6 +164,57 @@ class AgyCheckTest(unittest.TestCase):
         self.assertEqual(code, 0, out + err)
         self.assertIn("agy 최대 3회(배정 1 × 3)가 상한 agy.max_calls_per_run=0회", err)
 
+    def rereview(self, value, limit=None):
+        """config를 gs init 기본값으로 되돌린 뒤 `[review] second_reviewer_rereview`(와 agy 상한)를 적는다."""
+        path = self.repo / config.CONFIG_PATH
+        text = config.DEFAULT_CONFIG.format(base='"main"')
+        if limit is not None:
+            text = text.replace("max_calls_per_run = 3", f"max_calls_per_run = {limit}")
+        path.write_text(text + f'\n[review]\nsecond_reviewer_rereview = "{value}"\n')
+
+    def test_all_keeps_three_per_second_reviewer_slot_and_wording(self):
+        """goldstack-v38 04: all(키가 있어도)은 지금과 같은 수·문구다."""
+        self.rereview("all", limit=6)
+        self.add(model="agy", reviewer="codex")
+        self.add("02", second="agy")
+        with mock.patch("gs.adapters.agy_probe", return_value=None):
+            self.assert_clean()  # 배정 2 × 3 = 6
+            self.add("03", second="agy")
+            code, out, err = self.run_check()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(err.splitlines(),
+                         ["경고: 범위 안 agy 최대 9회(배정 3 × 3)가 상한 agy.max_calls_per_run=6회를 넘는다"])
+
+    def test_first_and_none_count_only_the_rereviews_the_second_reviewer_gets(self):
+        """first는 두 번째 리뷰어 자리를 2회(첫 리뷰 + 1차 재리뷰), none은 1회(첫 리뷰)로 센다. 다른 자리는 3회 그대로다."""
+        self.add(model="agy", reviewer="codex")
+        self.add("02", second="agy")
+        self.add("03", second="agy")
+        for value, per, total in (("first", 2, 7), ("none", 1, 5)):
+            with self.subTest(value):
+                with mock.patch("gs.adapters.agy_probe", return_value=None):
+                    self.rereview(value, limit=total)
+                    self.assert_clean()  # 배정 1 × 3 + 두 번째 리뷰어 2 × per = 상한: 경고 없음
+                    self.rereview(value, limit=total - 1)
+                    code, out, err = self.run_check()
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(err.splitlines(), [f"경고: 범위 안 agy 최대 {total}회(배정 1 × 3 + 두 번째 리뷰어 2 × {per})가 "
+                                                    f"상한 agy.max_calls_per_run={total - 1}회를 넘는다"])
+
+    def test_first_with_only_second_reviewer_slots(self):
+        self.rereview("first", limit=3)
+        self.add(second="agy")
+        self.add("02", second="agy")
+        code, out, err = self.run_check()
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(err.splitlines(),
+                         ["경고: 범위 안 agy 최대 4회(두 번째 리뷰어 2 × 2)가 상한 agy.max_calls_per_run=3회를 넘는다"])
+
+    def test_invalid_second_reviewer_rereview_is_check_error(self):
+        self.add()
+        self.rereview("2")
+        self.assert_error("`review.second_reviewer_rereview`는 all|first|none 중 하나여야 한다")
+
     def test_invalid_limit_is_check_error(self):
         self.add()
         self.limit(-1)

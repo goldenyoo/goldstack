@@ -19,6 +19,7 @@ IGNORE_LINES = (".goldstack/local.env", ".goldstack/work/*/run/", ".goldstack/fe
 FEEDBACK_MODES = ("off", "draft", "auto")
 FEEDBACK_DETAILS = ("errors", "minimal")
 OVERNIGHT_AUTONOMY = ("stop", "record")
+SECOND_REVIEWER_REREVIEW = ("all", "first", "none")  # `[review] second_reviewer_rereview`의 값(ReviewConfig)
 WORKER_TESTS_ENV = "GS_WORKER_TESTS"  # gs가 worker 환경에 넣는 `[hook.worker_tests]`(JSON). 빈 값이면 꺼짐. hook은 이것만 읽는다
 DEFAULT_CONFIG = '''[git]
 remote = "origin"
@@ -187,6 +188,21 @@ class AgyConfig:
 
 
 @dataclass(frozen=True)
+class ReviewConfig:
+    """`[review]`. second_reviewer_rereview: 두 번째 리뷰어(티켓 `second_reviewer`)를 어느 재리뷰까지 부르나.
+
+    all(기본. 절·키가 없는 옛 config도): 모든 재리뷰. first: 1차 재리뷰까지만(2차 재리뷰·수리 재리뷰에서는 부르지 않는다). none: 재리뷰에서 부르지 않는다.
+    부르지 않는 회차에는 그 리뷰어 기록의 판정할 지적을 첫 리뷰어 재리뷰가 함께 판정한다(go._rereview_slots). `gs init` 템플릿(DEFAULT_CONFIG)에는 없다.
+    """
+    second_reviewer_rereview: str = "all"
+
+    def calls_second(self, nth: int | str) -> bool:
+        """nth(1·2 재리뷰, review.REPAIR_ROUND 수리 재리뷰)에 두 번째 리뷰어를 부르나."""
+        value = self.second_reviewer_rereview
+        return value == "all" or (value == "first" and nth == 1)
+
+
+@dataclass(frozen=True)
 class GoldstackConfig:
     requires: str = ""
 
@@ -291,6 +307,7 @@ class Config:
     timeouts: TimeoutsConfig
     notify: NotifyConfig
     agy: AgyConfig = AgyConfig()
+    review: ReviewConfig = ReviewConfig()
     worktree: WorktreeConfig = WorktreeConfig()
     tiers: TiersConfig = TiersConfig()
     goldstack: GoldstackConfig = GoldstackConfig()
@@ -388,7 +405,7 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
         if section == "sandbox":
             sections[section] = _load_sandbox(data.get(section, {}), problems)
             continue
-        if section not in data and section not in ("agy", "worktree", "goldstack", "feedback", "overnight"):
+        if section not in data and section not in ("agy", "review", "worktree", "goldstack", "feedback", "overnight"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
             continue
         raw = data.get(section, {})
@@ -433,6 +450,8 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`{message}"))
             elif section == "overnight" and raw[key] not in OVERNIGHT_AUTONOMY:
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 " + "|".join(OVERNIGHT_AUTONOMY) + " 중 하나여야 한다"))
+            elif section == "review" and raw[key] not in SECOND_REVIEWER_REREVIEW:
+                problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 " + "|".join(SECOND_REVIEWER_REREVIEW) + " 중 하나여야 한다"))
             elif (section == "models" and key != "codex" and not raw[key].strip()
                   and (key != "failure_summary" or key in data[section])):
                 problems.append(Problem("오류", CONFIG_PATH, f"`{section}.{key}`는 비어 있으면 안 된다"))
