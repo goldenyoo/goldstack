@@ -702,7 +702,7 @@ worker가 성공 끝 이벤트를 냈는데 남긴 자식 프로세스(`setsid n
 - 수리 brief는 검증이 integration의 병합 트리에서 도는 것 자체는 정상이라고 하되, integration과 worktree의 환경 차이(setup을 돌린 시각, 설치 메타데이터)는 원인 후보로 확인하게 하고, 브랜치 안에서 고칠 수 없으면 위 줄을 쓰고 커밋하지 말라고 안내한다. 실패 요약도 같다.
 - 모든 worker의 brief는 전체 검증 대신 고친 곳에 닿는 좁은 시험만 시킨다. 첫 구현 worker(claude·codex·agy 계열 무관, 재개한 worker 포함)도 수리 worker와 [수정 worker](#리뷰와-재리뷰)와 같다. 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 하므로, 같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없앴다. 티켓 `verify`가 좁아도 같다. 뒤 실행에서 첫 검증 실패가 늘어 수리 시간이 줄어든 시간을 넘으면 되돌린다(goldstack-v20 결정 4-2). 모든 brief에는 "다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 다루고 `pkill`·`killall`로 찾아 죽이지 않는다"가 붙는다.
 - 첫·수정·수리 worker의 brief에는 "버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다"가 붙는다. worker는 복구한 뒤 커밋하고 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다. 재리뷰 지시에는 넣지 않는다.
-- 첫·재개 worker의 brief에는 그 티켓의 `touches` 줄(`- 이 티켓의 touches: …`)과 "touches 밖 파일은 고치지 않는다. 고쳐야 하면 `## 남긴 관찰`에 적는다"가 붙는다. `touches`가 없는 티켓은 이 줄이 없다. 수정·수리 worker는 이 줄을 받지 않는다: 고칠 수 있는 파일은 리뷰가 알려 주는 목록(이 티켓과 이미 병합된 티켓의 `touches`)이다. gs는 touches 밖 변경을 diff로 대조하거나 실패로 처리하지 않는다.
+- 첫·재개 worker의 brief에는 그 티켓의 `touches` 줄(`- 이 티켓의 touches: …`)과 "touches 밖 파일은 고치지 않는다. 고쳐야 하면 `## 남긴 관찰`에 적는다"가 붙는다. `touches`가 없는 티켓은 이 줄이 없다. 수정 worker와 수리 worker는 이 줄을 받지 않는다. 수정 worker가 고칠 수 있는 파일은 리뷰가 알려 주는 목록(이 티켓과 이미 병합된 티켓의 `touches`)이고, 수리 worker의 brief에는 그 목록도 없다. gs는 touches 밖 변경을 diff로 대조하거나 실패로 처리하지 않는다.
 - 모든 worker의 brief에는 고치지 않고 남긴 관찰(리뷰가 짚지 않은 의심, 돌리지 못한 확인, touches 밖에서 고쳐야 할 것)을 마지막 메시지 끝의 `## 남긴 관찰` 절에 한 줄에 하나씩 쓰라는 규칙이 붙는다. 이 절이 [리뷰 판정과 보고서 표](#worker가-남긴-관찰)로 이어진다.
 - 보고서 티켓별 결과의 이유 칸에 `수리: 시도 1 커밋 1개 → 다시 검증 통과` 같은 줄이 붙는다. gs가 죽거나 끊겨도 다음 `gs go`가 수리를 같은 worktree에서 잇는다.
 
@@ -1221,15 +1221,15 @@ $ gs remote check mac_mini
 같은 검사를 하고 grill 커밋(spec과 티켓)이 원격에 닿았는지 본다. 하나라도 빠지면 세션을 띄우지 않는다. feature는 grill 뒤 커밋·push돼 있어야 한다:
 ```console
 $ gs remote go mac_mini csv-export
-■ mac_mini에서 /goldstack:go csv-export 시작
+■ mac_mini에서 /go csv-export 시작
 workspace: …
 pane: …
 상태: gs remote status mac_mini csv-export
 화면: herdr --machine mac_mini pane read … --lines 40
 ```
-같은 feature의 `gs go`가 원격에서 이미 돌고 있으면 새 세션을 띄우지 않고 pid와 상태 명령을 보인다. `/goldstack:go` 전송 응답을 받지 못하면 전달됐을 수 있어 세션을 닫지 않는다. 안내된 `pane read`로 화면에 `/goldstack:go`가 있는지 보고, 없을 때만 `workspace close`로 닫고 다시 친다.
+같은 feature의 `gs go`가 원격에서 이미 돌고 있으면 새 세션을 띄우지 않고 pid와 상태 명령을 보인다. `/go` 전송 응답을 받지 못하면 전달됐을 수 있어 세션을 닫지 않는다. 안내된 `pane read`로 화면에 `/go`가 있는지 보고, 없을 때만 `workspace close`로 닫고 다시 친다.
 
-세션에 보내는 글은 `/goldstack:go <feature> -- ` 뒤에 "사람이 없다. 실행이 멈추면 로그를 읽어 원인 후보만 적고 멈춘다. 회고·수정·재실행은 하지 않는다."를 붙인 한 줄이다. `/goldstack:go`는 ` -- ` 뒤를 feature로 읽지 않고 실행 지침으로 따른다. 멈춘 실행을 본 세션이 스스로 고치러 들지 않게 하려는 것이다.
+세션에 보내는 글은 `/go <feature> -- ` 뒤에 "사람이 없다. 실행이 멈추면 로그를 읽어 원인 후보만 적고 멈춘다. 회고·수정·재실행은 하지 않는다."를 붙인 한 줄이다. `/goldstack:go`는 ` -- ` 뒤를 feature로 읽지 않고 실행 지침으로 따른다. 멈춘 실행을 본 세션이 스스로 고치러 들지 않게 하려는 것이다.
 
 ### `gs remote status <머신> <feature>`
 원격에서 `gs status`를 돌려 그 출력을 보인다. 끝나면 원격 레포의 `report.md`와 PR을 본다:
