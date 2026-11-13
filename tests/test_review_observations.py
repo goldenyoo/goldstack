@@ -57,6 +57,13 @@ class ExtractTest(unittest.TestCase):
             self.assertEqual(review.worker_observations(None), [])
 
 
+class WorkerRuleTest(unittest.TestCase):
+    def test_rule_asks_for_judged_actions_outside_touches_or_repo(self):
+        rule = worker.OBSERVATIONS_RULE
+        self.assertIn("touches 밖이나 레포 밖에서 판단해서 한 일(파일 추가·삭제, 예상 밖 외부 호출)도 이 절에 쓴다", rule)
+        self.assertIn(f"`{HEADING}` 제목 아래 한 줄에 하나씩 쓴다. 없으면 절을 쓰지 않는다", rule)
+
+
 class PromptTest(unittest.TestCase):
     FOUND = ["첫 관찰", "둘째 관찰"]
 
