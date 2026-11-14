@@ -1,4 +1,4 @@
-"""CLI의 오류 이벤트로 연결·DNS·5xx·429를 가린다. 모르는 오류는 빈 문자열이다.
+"""CLI의 오류 이벤트로 연결·DNS·5xx·429·Cloudflare 403을 가린다. 모르는 오류는 빈 문자열이다.
 
 작업 중 도구 출력과 모델 응답은 읽지 않는다. claude는 마지막 result, codex는
 error/turn.failed, agy는 오류 이벤트와 시작 실패의 stderr만 본다. 재시도는 호출자가 한다.
@@ -24,7 +24,7 @@ SAME_OUTAGE_MINUTES = 30  # 끊김이 끝난 뒤 이 안에 다시 끊기면 같
 
 # 429(rate limit)와 구독 사용량 한도는 다르다. 인증·구독 오류가 섞이면 재시도하지 않는다.
 _PERMANENT = re.compile(
-    r"authentication|unauthori[sz]ed|invalid[_ -]api[_ -]key|permission_denied|"
+    r"authentication|unauthori[sz]ed|invalid[_ -]api[_ -]key|permission[_ ]denied|"
     r"usage[_ -]limit|usage limit|you(?:'ve| have) (?:hit|reached) your limit|"
     r"insufficient_quota|quota exceeded|exceeded.*quota|credit balance|out of credits|"
     r"subscription.*limit|\b(?:401|403)\b", re.I)
@@ -41,6 +41,15 @@ _HTTP = re.compile(
     r"\b(429)\s+too many requests\b|"
     r"\b(5\d\d)\s+(?:internal server error|bad gateway|service unavailable|gateway timeout)\b", re.I)
 _STATUS_KEYS = {"status", "status_code", "http_status", "http_status_code"}
+_CLOUDFLARE = re.compile(r"attention required|cloudflare", re.I)
+
+
+def _cloudflare_403(text: str, statuses: list[int]) -> bool:
+    return _CLOUDFLARE.search(text) is not None and (403 in statuses or re.search(r"\b403\b", text) is not None)
+
+
+def _other_permanent(text: str) -> bool:
+    return bool(_PERMANENT.search(re.sub(r"\b(?:401|403)\b", "", text)))
 
 
 def _events(text: str) -> list[dict]:
@@ -80,10 +89,14 @@ def _statuses(value: object) -> list[int]:
 
 
 def _error_reason(value: object) -> str:
+    """선택된 오류의 일시 사유를 돌려준다. Cloudflare 403은 영구 403 판정보다 우선한다."""
     text = _strings(value)
     statuses = _statuses(value)
-    if _PERMANENT.search(text) or any(s in (401, 403) for s in statuses):
+    cloudflare = _cloudflare_403(text, statuses)
+    if _other_permanent(text) or (any(s in (401, 403) for s in statuses) and not cloudflare):
         return ""
+    if cloudflare:
+        return "HTTP 403 (Cloudflare)"
     for status in statuses:
         if status == 429 or 500 <= status <= 599:
             return f"HTTP {status}"
@@ -136,15 +149,17 @@ def _agy_error(events: list[dict]) -> dict:
 
 
 def agy_permanent(text: str) -> bool:
-    """agy 이벤트의 마지막 오류가 다시 불러도 소용없는 오류(인증·구독 한도·401·403·없는 모델)인가."""
+    """agy 이벤트의 마지막 오류가 영구 오류인가(Cloudflare 엣지 403은 제외)."""
     error = _agy_error(_events(text))
     message = _strings(error)
-    return bool(_PERMANENT.search(message) or "invalid model selection" in message.lower()
-                or any(s in (401, 403) for s in _statuses(error)))
+    statuses = _statuses(error)
+    cloudflare = _cloudflare_403(message, statuses)
+    return bool(_other_permanent(message) or "invalid model selection" in message.lower()
+                or (any(s in (401, 403) for s in statuses) and not cloudflare))
 
 
 def reason(family: str, text: str, *, model: str = "", cwd: Path | None = None) -> str:
-    """일시 오류의 이유. 정상·인증·구독 한도·설정 오류·알 수 없는 오류는 빈 문자열.
+    """일시 오류의 이유. Cloudflare 403은 재시도하며, 인증·한도·설정·알 수 없는 오류는 빈 문자열.
 
     agy의 invalid model selection만 `GS_AGY`(기본 agy) models로 확인한다.
     실행 중인 codex의 Reconnecting 이벤트도 받을 수 있도록 종료 코드는 받지 않는다.
@@ -182,7 +197,7 @@ def reason(family: str, text: str, *, model: str = "", cwd: Path | None = None) 
                                          r"connection (?:failed|error|refused)\b|failed to connect\b|"
                                          r"error sending request\b)", line, re.I))
             error = {"message": text}
-        if _PERMANENT.search(text):
+        if _other_permanent(text):
             return ""
         if "invalid model selection" in text.lower():
             return _agy_model_reason(text, model, cwd)
