@@ -766,6 +766,9 @@ class FormatTest(unittest.TestCase):
         rec = {"reviewer": "codex", "findings": [*ignored, *counted]}
         self.assertEqual([f["id"] for _, f in review.final_highs([rec])], [1, 2, 3])
         self.assertEqual(review.final_highs([{"reviewer": "codex", "findings": ignored}]), [])
+        # action이 없는 지적은 report로 보지 않고 전처럼 센다(goldstack-v40 03은 report만 뺀다)
+        no_action = {k: v for k, v in self.f(14, rereview=review.UNRESOLVED, rereview_round=2).items() if k != "action"}
+        self.assertEqual([f["id"] for _, f in review.final_highs([{"reviewer": "codex", "findings": [no_action]}])], [14])
 
     def test_any_reviewer_counts_and_new_highs_come_first(self):
         codex = {"reviewer": "codex", "findings": [self.f(1, action="fix", rereview=review.UNRESOLVED, rereview_round=2)]}

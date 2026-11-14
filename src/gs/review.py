@@ -1522,10 +1522,10 @@ def _unresolved_high(f: dict) -> bool:
     """2차 재리뷰가 기존 high를 unresolved로 판정했다. unchecked(재리뷰 실패·한도)와 1차 재리뷰의 판정은 세지 않는다.
 
     action이 report인 지적은 세지 않는다(goldstack-v40 03): 2차 재리뷰가 판정만 한 보고만 지적(is_report_check)은 고치라고 준 적이 없다.
-    판정받지 않은 report high가 병합을 막지 않는 것과 같다. action이 없는 지적은 report로 읽는다(report.finding_status와 같다).
+    판정받지 않은 report high가 병합을 막지 않는 것과 같다. action이 없는 지적은 전처럼 센다: 병합 관문은 모르면 막는 쪽이다.
     """
     return (f.get("severity") == "high" and f.get("rereview") == UNRESOLVED and f.get("rereview_round") == 2
-            and f.get("action", REPORT) != REPORT)
+            and f.get("action") != REPORT)
 
 
 def _new_final_high(f: dict) -> bool:
