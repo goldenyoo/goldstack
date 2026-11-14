@@ -2990,7 +2990,7 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
     중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 재리뷰부터 잇고, 뒤는 티켓 실패다: 확인 없이 병합하지 않는다.
     병합 전 대조로 다시 불려도 같은 지적을 본다(a.base..head이므로 수정 뒤에 생긴 커밋도 diff에 든다).
     2차면 수정 worker가 받은 지적에 더해 앞서 resolved인 지적과 1차 재리뷰의 새 report 지적(판정만, _to_rereview)도 최종 커밋에서 본다.
-    수정 커밋의 diff가 비면 받은 지적만 unresolved다:
+    수정 커밋의 diff가 비면 받은 지적만 unresolved다(이 회차가 앞 head에서 판정한 보고만 지적도. _empty_rereview):
     트리가 앞 재리뷰가 본 그대로이니 앞 판정은 그대로 맞다. catch-up이 기준을 옮긴 뒤의 빈 diff는 받은 지적의 판정도 그대로 두고 2차 수정을 띄우지 않는다(_empty_rereview).
     버린 수정 뒤의 늦은 커밋을 보는 재리뷰(_late_commit)는 판정만 적고 2차 수정을 띄우지 않는다: 실패한 수정 뒤에는 고치지 않는다.
     2차 재리뷰가 high를 새로 냈거나 기존 high를 unresolved로 판정했는지(빈 diff의 unresolved 포함)는 여기서 보지 않는다: 병합 전 대조 뒤에
@@ -3026,9 +3026,16 @@ def _empty_rereview(r: Run, a: Active, head: str) -> None:
     그 밖에는 고쳐졌을 수 없어 unresolved다: 앞서 이 회차 판정이 없거나(빈 수정 커밋, 버린 수정), 판정한 head가 기준 위에 있는데 diff가 비었다(늦은 커밋이 수정을 되돌렸다).
     유지했으면 기록에 남긴다(kept_round, _verdict_kept): reviewed_head는 여기서 빈 커밋으로 옮겨 가므로 재개해 다시 오면 판정한 head로 가릴 수 없다.
     그 기록의 지적에 결과를 새로 적으면 지운다: 재리뷰 결과(_apply_rereviews), 한도(_plan_rereviews), 뜻밖의 오류(_rereview). 남기면 다른 리뷰어의 새 판정까지 2차 수정에서 뺀다.
+    이 회차가 앞 head에서 판정한 보고만 지적(review.is_report_check)도 받은 지적과 같이 유지하거나 unresolved로 적는다(goldstack-v40 03):
+    늦은 커밋이 2차 수정을 되돌렸으면 트리는 그 지적을 낸 1차 재리뷰가 본 그대로라 해소됐을 수 없다. 이 회차 판정이 없는 보고만 지적은 그대로 둔다(판정하지 않는다).
     """
     nth = a.fix
-    for rec, found in _received(r, a.t, nth):
+    received = {id(rec): found for rec, found in _received(r, a.t, nth)}
+    for rec in state.reviews(r.st.ticket(a.t.id)):
+        found = received.get(id(rec), []) + [f for f in rec.get("findings", [])
+                                             if review.is_report_check(f, nth) and f.get("rereview_round") == nth]
+        if not found:
+            continue
         judged = rec.get("reviewed_head", "")
         moved_past = rec.get("kept_round") == nth or (
             judged != a.base and git.run(r.repo, "merge-base", "--is-ancestor", judged, a.base, check=False).returncode == 0)

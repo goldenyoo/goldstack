@@ -44,7 +44,8 @@
    병합을 막지 않는다(_unresolved_high는 report를 세지 않는다). resolved면 보고서가 "해소됨(재리뷰 확인)"으로 보여 남은 지적·남은 high에서 뺀다
    (report.finding_status, remaining). unresolved·unchecked는 그대로 보고만이다. 이 지적만 가진 리뷰 기록 때문에 리뷰어를 새로 부르지 않는다:
    그 기록을 판정할 리뷰어가 다른 지적으로 불릴 때만 함께 싣는다(go._to_rereview). 첫 리뷰의 report 지적과 2차 재리뷰의 새 지적은 판정하지 않는다.
-   2차 재리뷰가 없거나 diff가 비어 부르지 않았으면 이 지적도 판정하지 않는다(보고만).
+   2차 재리뷰가 없거나 diff가 비어 부르지 않았으면 이 지적도 판정하지 않는다(보고만). 단 앞 head에서 판정한 뒤 늦은 커밋이 diff를 비웠으면
+   (2차 수정을 되돌렸다) 받은 지적처럼 unresolved로 적는다(go._empty_rereview).
    재리뷰가 resolved로 확인한 지적만 남은 지적에서 빠진다. 재리뷰를 못 한 지적은 unchecked와 이유(한도, 재리뷰 실패)로
    남는다. 재리뷰 한 번의 시간 상한은 `timeouts.rereview_minutes`다.
 

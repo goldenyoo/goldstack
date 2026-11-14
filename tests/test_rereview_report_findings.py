@@ -10,8 +10,10 @@ import json
 import unittest
 from pathlib import Path
 
+import support
 import test_recheck_resolved
 from test_recheck_resolved import A, B, FIXED
+from test_review_target import at_call, integration_moved
 from test_second_review import finding
 from test_second_reviewer_rereview import set_rereview
 
@@ -137,6 +139,46 @@ class SecondRereviewTargetTest(Base):
         self.assertIn("상태: 보고만", self.report_line("NOTE R"))
         self.assertIn("남은 high 1(보고만 1)", self.final_report())
 
+    def test_late_commit_reverting_the_second_fix_unresolves_the_report_finding(self):
+        """2차 재리뷰가 R을 resolved로 본 뒤 늦은 커밋이 2차 수정을 되돌려 diff가 비면 R은 해소되지 않았다: 트리가 R을 낸 1차 재리뷰가 본 그대로다.
+        재리뷰를 더 부르지 않고 unresolved로 적는다. 보고서에는 보고만이고 남은 지적이다. 병합은 막지 않는다."""
+        self.findings("codex", A, B)
+        self.new_finding("codex", 1, R)
+        self.a_fixed_first("touch fixed_R")
+
+        def revert(r, a):
+            support.sh(a.wt, "git", "revert", "--no-edit", "HEAD")
+
+        with at_call("_merge_stage", revert):
+            self.run_ok()
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
+        self.assertNotIn("fixed_R", self.files())
+        rec = self.ts().review
+        r = self.by_claim(rec, R)
+        self.assertEqual(self.judged(r), (review.REPORT, 1, 0, review.UNRESOLVED, 2))
+        self.assertIn("diff가 비었다", r["rereview_evidence"])
+        self.assertEqual([f["claim"] for f in review.remaining(rec)], [B["claim"], R["claim"]])
+        self.assertIn("상태: 보고만", self.report_line("NOTE R"))
+
+    def test_empty_commit_after_catch_up_keeps_the_report_verdict(self):
+        """catch-up이 기준을 2차 재리뷰가 판정한 head 위로 옮긴 뒤의 빈 diff는 R의 resolved도 받은 지적처럼 유지한다."""
+        self.findings("codex", A, B)
+        self.new_finding("codex", 1, R)
+        self.a_fixed_first("touch fixed_R")
+
+        def empty_late_commit(r, _t):
+            support.sh(self.rundir / "wt/01", "git", "commit", "-q", "--allow-empty", "-m", "empty late")
+
+        with at_call("_catch_up", integration_moved), at_call("_verify", empty_late_commit):
+            self.run_ok()
+        self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
+        rec = self.ts().review
+        self.assertEqual(rec["kept_round"], 2)
+        r = self.by_claim(rec, R)
+        self.assertEqual(self.judged(r), (review.REPORT, 1, 0, review.RESOLVED, 2))
+        self.assertEqual(r["rereview_evidence"], "fixed_R 있음")
+        self.assertIn(f"상태: {RESOLVED_NOTE}", self.report_line("NOTE R"))
+
     def test_report_finding_is_not_judged_without_a_second_rereview(self):
         """2차 수정이 없으면 2차 재리뷰도 없다. 1차 재리뷰의 새 report 지적은 지금처럼 판정 없이 보고만이다."""
         self.findings("codex", A)
@@ -206,6 +248,22 @@ class SecondReviewerTest(Base):
         self.assertIn("리뷰(agy)", line)
         self.assertIn(f"상태: {RESOLVED_NOTE}", line)
         self.assertIn(FIXED, self.report_line("FIX B"))
+
+    def test_late_commit_reverting_the_second_fix_unresolves_the_lent_report_finding(self):
+        """first: codex가 빌려 판정한 agy의 R도 늦은 커밋이 2차 수정을 되돌려 diff가 비면 unresolved다. agy 기록에는 2차 수정이 받은 지적이 없다."""
+        set_rereview(self, "first")
+        self.report_only_on_second()
+
+        def revert(r, a):
+            support.sh(a.wt, "git", "revert", "--no-edit", "HEAD")
+
+        with at_call("_merge_stage", revert):
+            self.run_ok()
+        self.assertEqual(sorted(self.lines("rereview.calls")), ["agy 1", "codex 1", "codex 2"])
+        r = self.by_claim(self.ts().second_review, R)
+        self.assertEqual(self.judged(r), (review.REPORT, 1, 0, review.UNRESOLVED, 2))
+        self.assertIn("diff가 비었다", r["rereview_evidence"])
+        self.assertIn("상태: 보고만", self.report_line("NOTE R"))
 
     def test_all_does_not_call_a_reviewer_with_only_report_findings(self):
         """all: report 지적만 가진 agy를 2차 재리뷰에 새로 부르지 않는다. R은 판정 없이 보고만이다."""
