@@ -162,7 +162,7 @@ def agy_reached(st: State, limit: int) -> bool:
 
 
 PHASE_LABELS = {"worker": "worker", "review_wait": "리뷰 대기", "review": "리뷰", "fix_wait": "수정 대기", "fix": "수정",
-                "rereview": "재리뷰", "fix2": "수정 2", "repair_wait": "수리 대기", "repair": "수리", "verify": "검증",
+                "rereview": "재리뷰", "fix2": "수정 2", "repair_wait": "수리 대기", "repair": "수리", "merge_wait": "병합 대기", "verify": "검증",
                 "finish": "마무리", "checks": "CI 대기", "setup": "준비", "network": "네트워크 대기"}
 
 REPAIR_PASSED, REPAIR_FAILED = "passed", "failed"  # TicketState.repairs의 result

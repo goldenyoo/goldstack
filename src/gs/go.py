@@ -130,6 +130,7 @@ REOPENED = "reopened"  # 끝난 마무리 뒤에 새 티켓이 integration에 �
 REOPENED_OUTCOME = "새 티켓이 base에 없음 → 이어서 gs go"
 ONLY_STOPPED = "only_stopped"  # REOPENED인 채로 --only가 멈췄다(_stop_only)
 REVIEW_WAIT, FIX_WAIT, REPAIR_WAIT = "review_wait", "fix_wait", "repair_wait"  # 자리를 기다리는 단계(state.PHASE_LABELS)
+MERGE_WAIT = "merge_wait"  # 병합 줄에서 다른 티켓의 검증이 끝나기를 기다리는 단계. 다음 단계(보통 verify, 늦은 커밋이면 재리뷰)가 시작하며 닫는다
 # 수리의 진행(Active.repair, network_resume의 repair). 비어 있으면 이 시도는 아직 수리하지 않았다
 REPAIR_SEAT = "seat"  # 검증이 실패했고 수리 worker 자리를 기다린다
 REPAIR_RUN = "run"  # 수리 worker를 띄웠다
@@ -1312,7 +1313,8 @@ def _stop_reviews(r: Run) -> None:
 def _merge(r: Run, a: Active) -> None:
     """티켓을 병합·검증으로 보낸다(_merge_stage). 병합 자리가 비고 줄이 없으면 바로 준비하고 검증 호출을 루프 밖으로 보낸다(_merge_step).
 
-    아니면 줄을 서고 `[<id>] 병합 대기: <검증 중 id> 검증 중`을 한 번 출력한다. 줄은 검증이 반영된 뒤 순서대로 시작한다(_merge_next).
+    아니면 줄을 서고 `[<id>] 병합 대기: <검증 중 id> 검증 중`을 한 번 출력하고 단계 `merge_wait`를 연다(_wait_phase). 줄은 검증이 반영된 뒤 순서대로 시작한다(_merge_next).
+    `merge_wait`는 그 티켓의 다음 단계(보통 verify, 늦은 커밋이면 재리뷰)가 시작할 때 닫힌다: 줄에서 나온 뒤 그 단계까지의 준비 시간도 든다. 줄을 서지 않으면 이 단계는 없다.
     병합 단계(_merge_stage)는 여기서 만든다: 병합하기로 정한 때다. 그 몸은 차례가 와야 돈다(준비는 그때의 브랜치와 integration을 본다).
     줄 선 동안의 재개 표시는 줄을 서기 전 그대로다(_leave_review가 지운 것은 지운 채): gs가 멈추면 지금처럼 첫 검증 도중과 같게 잇는다.
     """
@@ -1323,6 +1325,7 @@ def _merge(r: Run, a: Active) -> None:
         _merge_step(r)
         return
     merges.queue.append(entry)
+    _wait_phase(r, a.t.id, MERGE_WAIT)
     why = f"{merges.now.a.t.id} 검증 중" if merges.now is not None else "네트워크 회복을 기다린다"
     say(f"[{a.t.id}] 병합 대기: {why}")
 
