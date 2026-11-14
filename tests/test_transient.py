@@ -83,6 +83,50 @@ class StructuredErrorsTest(unittest.TestCase):
                              if family == "codex" else {"event": "error", "message": message})
                     self.assertTrue(transient.reason(family, log(event)))
 
+    def test_cloudflare_403_is_transient_unless_other_permanent_error_is_present(self):
+        cloudflare_log = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
+        json_log = log({"event": "error", "status": 403,
+                        "message": "Attention Required! | Cloudflare"})
+        for family in ("claude", "codex", "agy"):
+            # A text-only, unmarked 403 remains permanent even when another phrase
+            # would otherwise trigger a retry.
+            unmarked = "403 Forbidden: error sending request"
+            unmarked_event = (claude(errors=[unmarked]) if family == "claude" else
+                              codex(unmarked) if family == "codex" else
+                              {"event": "error", "message": unmarked})
+            unmarked_text = log(unmarked_event)
+            with self.subTest(family=family, case="unmarked-text-403"):
+                self.assertEqual(transient.reason(family, unmarked_text), "")
+                if family == "agy":
+                    self.assertTrue(transient.agy_permanent(unmarked_text))
+            with self.subTest(family=family, case="text"):
+                event = (claude(result=cloudflare_log) if family == "claude" else
+                         codex(cloudflare_log) if family == "codex" else
+                         {"event": "error", "message": cloudflare_log})
+                text = log(event)
+                self.assertEqual(transient.reason(family, text), "HTTP 403 (Cloudflare)")
+                if family == "agy":
+                    self.assertFalse(transient.agy_permanent(text))
+            with self.subTest(family=family, case="structured"):
+                event = (claude(errors=[json.loads(json_log)]) if family == "claude" else
+                         {"type": "error", "status": 403, "message": "Attention Required! | Cloudflare"}
+                         if family == "codex" else json.loads(json_log))
+                self.assertEqual(transient.reason(family, log(event)), "HTTP 403 (Cloudflare)")
+            for message in ("403 Forbidden: permission denied",
+                            "API Error: 403 Attention Required! | Cloudflare usage limit reached"):
+                with self.subTest(family=family, message=message):
+                    event = (claude(errors=[message]) if family == "claude" else
+                             codex(message) if family == "codex" else
+                             {"event": "error", "message": message})
+                    self.assertEqual(transient.reason(family, log(event)), "")
+            with self.subTest(family=family, case="401"):
+                event = (claude(errors=[{"status": 401, "message": "Attention Required! | Cloudflare"}])
+                         if family == "claude" else
+                         {"type": "error", "status": 401, "message": "Attention Required! | Cloudflare"}
+                         if family == "codex" else
+                         {"event": "error", "status": 401, "message": "Attention Required! | Cloudflare"})
+                self.assertEqual(transient.reason(family, log(event)), "")
+
     def test_codex_network_messages_from_spec(self):
         for message in ("Reconnecting... waiting for network (Connection failed: offline)",
                         "stream disconnected before completion", "error sending request for url (https://api)"):

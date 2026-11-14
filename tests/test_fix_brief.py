@@ -111,6 +111,9 @@ class FixBriefTest(unittest.TestCase):
                     self.assertIn("본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다", text)
                     self.assertIn("복구한 뒤 커밋", text)
                     self.assertIn("문서 티켓에는 해당하지 않는다", text)
+                    self.assertIn("새 시험 하나(그 시험 파일, 가능하면 그 시험 이름)만 돌린다", text)
+                    self.assertIn("넓은 묶음이나 전체 시험을 돌리지 않는다", text)
+                    self.assertIn("캐시·빌드 산출물이 옛 코드를 쓰지 않게 한다", text)
 
     def test_every_worker_brief_asks_for_tests_that_fail_without_the_behavior(self):
         for model in ("claude", "codex", "agy"):
