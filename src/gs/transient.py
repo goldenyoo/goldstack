@@ -52,6 +52,10 @@ def _other_permanent(text: str) -> bool:
     return bool(_PERMANENT.search(re.sub(r"\b(?:401|403)\b", "", text)))
 
 
+def _permanent(text: str, cloudflare: bool) -> bool:
+    return _other_permanent(text) if cloudflare else bool(_PERMANENT.search(text))
+
+
 def _events(text: str) -> list[dict]:
     events = []
     for line in text.splitlines():
@@ -93,7 +97,7 @@ def _error_reason(value: object) -> str:
     text = _strings(value)
     statuses = _statuses(value)
     cloudflare = _cloudflare_403(text, statuses)
-    if _other_permanent(text) or (any(s in (401, 403) for s in statuses) and not cloudflare):
+    if _permanent(text, cloudflare) or (any(s in (401, 403) for s in statuses) and not cloudflare):
         return ""
     if cloudflare:
         return "HTTP 403 (Cloudflare)"
@@ -154,7 +158,7 @@ def agy_permanent(text: str) -> bool:
     message = _strings(error)
     statuses = _statuses(error)
     cloudflare = _cloudflare_403(message, statuses)
-    return bool(_other_permanent(message) or "invalid model selection" in message.lower()
+    return bool(_permanent(message, cloudflare) or "invalid model selection" in message.lower()
                 or (any(s in (401, 403) for s in statuses) and not cloudflare))
 
 
@@ -197,7 +201,8 @@ def reason(family: str, text: str, *, model: str = "", cwd: Path | None = None) 
                                          r"connection (?:failed|error|refused)\b|failed to connect\b|"
                                          r"error sending request\b)", line, re.I))
             error = {"message": text}
-        if _other_permanent(text):
+        cloudflare = _cloudflare_403(text, _statuses(error))
+        if _permanent(text, cloudflare):
             return ""
         if "invalid model selection" in text.lower():
             return _agy_model_reason(text, model, cwd)

@@ -84,12 +84,23 @@ class StructuredErrorsTest(unittest.TestCase):
                     self.assertTrue(transient.reason(family, log(event)))
 
     def test_cloudflare_403_is_transient_unless_other_permanent_error_is_present(self):
-        cloudflare_log = "API Error: 403 Forbidden. Attention Required! | Cloudflare"
+        cloudflare_log = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
         json_log = log({"event": "error", "status": 403,
                         "message": "Attention Required! | Cloudflare"})
         for family in ("claude", "codex", "agy"):
+            # A text-only, unmarked 403 remains permanent even when another phrase
+            # would otherwise trigger a retry.
+            unmarked = "403 Forbidden: error sending request"
+            unmarked_event = (claude(errors=[unmarked]) if family == "claude" else
+                              codex(unmarked) if family == "codex" else
+                              {"event": "error", "message": unmarked})
+            unmarked_text = log(unmarked_event)
+            with self.subTest(family=family, case="unmarked-text-403"):
+                self.assertEqual(transient.reason(family, unmarked_text), "")
+                if family == "agy":
+                    self.assertTrue(transient.agy_permanent(unmarked_text))
             with self.subTest(family=family, case="text"):
-                event = (claude(errors=[cloudflare_log]) if family == "claude" else
+                event = (claude(result=cloudflare_log) if family == "claude" else
                          codex(cloudflare_log) if family == "codex" else
                          {"event": "error", "message": cloudflare_log})
                 text = log(event)
