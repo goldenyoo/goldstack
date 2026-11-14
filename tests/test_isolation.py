@@ -87,13 +87,13 @@ class IsolationCommand(unittest.TestCase):
         self.listing(PLUGINS)
         cmd = adapters.Claude(MODELS).command(self.inp)
         self.assertTrue(cmd.startswith(adapters.Claude.BASE + " "), cmd)
-        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor', cmd)
+        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor ScheduleWakeup CronCreate', cmd)
         self.assertTrue(cmd.endswith(f"< {shlex.quote(str(self.inp.brief))}"), cmd)
         argv = self.argv(cmd)
         # 가변 인자 옵션(--disallowedTools, --mcp-config) 뒤에는 `--` 옵션이 와서 값이 섞이지 않는다
         tools = argv.index("--disallowedTools")
-        self.assertEqual(argv[tools + 1:tools + 4], ["Bash(git push *)", "Bash(gh *)", "Monitor"])
-        self.assertTrue(argv[tools + 4].startswith("--"))
+        self.assertEqual(argv[tools + 1:tools + 6], ["Bash(git push *)", "Bash(gh *)", "Monitor", "ScheduleWakeup", "CronCreate"])
+        self.assertTrue(argv[tools + 6].startswith("--"))
         self.assertTrue(argv[argv.index("--mcp-config") + 2].startswith("--"))
 
     def test_only_goldstack_installed_omits_settings(self):
