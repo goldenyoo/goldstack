@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -139,6 +140,71 @@ class GitQueriesTest(unittest.TestCase):
                 self.assertEqual((head, actual_branch, merge), ("", branch, ""))
                 self.assertTrue(tree)
 
+    def reftable(self):
+        self.wt = self.root / "reftable"
+        self.wt.mkdir()
+        result = git.run(self.wt, "init", "-q", "-b", "main", "--ref-format=reftable", check=False)
+        if result.returncode and "unknown option" in result.stderr and "ref-format" in result.stderr:
+            self.skipTest("이 Git은 reftable을 지원하지 않는다")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        git.run(self.wt, "config", "user.name", "test")
+        git.run(self.wt, "config", "user.email", "test@example.test")
+
+    def test_tree_state_reftable(self):
+        self.reftable()
+        self.test_tree_state_on_branch()
+        linked = self.root / "reftable linked"
+        git.run(self.wt, "worktree", "add", "-q", "-b", "linked", str(linked))
+        self.assertEqual(self.assert_tree_state(linked)[1], "refs/heads/linked")
+        git.run(self.wt, "update-ref", "refs/worktree/topic", "HEAD")
+        git.run(self.wt, "symbolic-ref", "HEAD", "refs/worktree/topic")
+        self.assertEqual(self.assert_tree_state()[1], "refs/worktree/topic")
+        git.run(self.wt, "checkout", "--detach", "-q")
+        self.assertEqual(self.assert_tree_state()[1], "")
+
+    def test_tree_state_reftable_conflict(self):
+        self.reftable()
+        self.test_tree_state_conflict()
+
+    def test_tree_state_reftable_unborn(self):
+        self.reftable()
+        for staged in (False, True):
+            with self.subTest(staged=staged):
+                if staged:
+                    (self.wt / "file").write_text("staged")
+                    git.run(self.wt, "add", "file")
+                expected = old_tree_state(self.wt)
+                with mock.patch.object(git, "run", wraps=git.run) as run:
+                    self.assertEqual(go._tree_state(self.wt), expected)
+                self.assertLessEqual(run.call_count, 3)
+                self.assertEqual(expected[:3], ("", "refs/heads/main", ""))
+
+    def test_tree_state_reftable_symbolic_ref_failure(self):
+        self.reftable()
+        head, _, merge, tree = old_tree_state(self.wt)
+        original = git.run
+
+        def run(wt, *args, **kwargs):
+            if args[:1] == ("symbolic-ref",):
+                return subprocess.CompletedProcess(args, 1, "", "unreadable")
+            return original(wt, *args, **kwargs)
+
+        with mock.patch.object(git, "run", side_effect=run) as calls:
+            self.assertEqual(go._tree_state(self.wt), (head, "", merge, tree))
+        self.assertLessEqual(calls.call_count, 3)
+
+    def test_tree_state_merge_path_unreadable(self):
+        self.test_tree_state_conflict()
+        exists = Path.exists
+
+        def check(path):
+            if path.name == "MERGE_HEAD":
+                raise PermissionError("denied")
+            return exists(path)
+
+        with mock.patch.object(Path, "exists", check):
+            self.assert_tree_state()
+
     def test_tree_state_linked_and_packed_refs(self):
         linked = self.linked()
         git.run(self.wt, "pack-refs", "--all")
@@ -162,15 +228,19 @@ class GitQueriesTest(unittest.TestCase):
     def test_tree_state_outside_repo(self):
         self.assertEqual(self.assert_tree_state(self.root), ("", "", "", ""))
 
-    def test_tree_state_unreadable_branch_is_empty(self):
+    def test_tree_state_unreadable_branch_fallback(self):
         self.commit()
         head, _, merge, tree = old_tree_state(self.wt)
         for error in (PermissionError("denied"), UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")):
             with self.subTest(error=type(error).__name__), \
                     mock.patch.object(Path, "read_text", side_effect=error), \
                     mock.patch.object(git, "run", wraps=git.run) as run:
-                self.assertEqual(go._tree_state(self.wt), (head, "", merge, tree))
+                branch = "refs/heads/main" if isinstance(error, OSError) else ""
+                self.assertEqual(go._tree_state(self.wt), (head, branch, merge, tree))
                 self.assertLessEqual(run.call_count, 2)
+        git.run(self.wt, "checkout", "--detach", "-q")
+        with mock.patch.object(Path, "read_text", side_effect=PermissionError("denied")):
+            self.assert_tree_state()
 
 
 if __name__ == "__main__":
