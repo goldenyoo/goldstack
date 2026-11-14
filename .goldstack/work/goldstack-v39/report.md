@@ -19,7 +19,7 @@ v39는 v38 회고에서 찾은 시간 손실 여섯 가지를 0.2.23으로 묶�
 - **01, 보고만 지적 [low]**: `Monitor`를 막는 고유 이유가 docstring에서 빠졌다. 원래 이유는 알림마다 다시 깨어나 비용을 쓰고 최종 보고를 되풀이한다는 것이었다. 지금은 세 도구가 한 가지 이유로 묶여 읽힌다. 동작은 바뀌지 않았다.
 - **효과는 다음 실행에서 확인**: spec은 다음 0.2.23 실행 보고서에서 사람이 세 가지를 보라고 정했다. `ScheduleWakeup` 대기가 사라졌는지, `병합 대기`가 따로 보이는지, 티켓 검증 시간이 v38의 621–670초보다 줄었는지다. 이번 실행의 티켓 검증은 여전히 644–789초였다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/76 병합 · main 검증 통과
 리뷰 지적: 수정됨 5 · 보고만 2
 
 ## Evidence
@@ -109,10 +109,17 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 665.0 |
+| total | 702.0 |
 | verify | 634.446 |
 | summary | 30.06 |
-| report | 0 |
+| report | 0.089 |
+| push | 2.327 |
+| publish | 3.422 |
+| checks | 24.335 |
+| merge-pr | 4.211 |
+| confirm-merge | 0.008 |
+| postmerge | 1.286 |
+| restore-reverts | 0.098 |
 
 ### 티켓별 결과
 
@@ -405,20 +412,51 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 0.56ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v39/run/gs-main-q3_r9vj_/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v39/run/gs-main-q3_r9vj_/base
+Prepared 1 package in 183ms
+Installed 1 package in 1ms
+ + goldstack==0.2.23 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v39/run/gs-main-q3_r9vj_/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 - integration: 통과 · 종료 코드 0 · 634.4초 · 로그 /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v39/run/finish/integration-verify.log
+
+#### finish/main-verify.log
+
+```text
+integration과 같은 코드(32b955f12988c1a4bde8d9365157a0615cf5b836), 건너뜀
+```
 
 
 agy 사용: 0/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/76
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `7093a24ce2a23c36633ab583ab90f24c21cd29e6`
 
 ### 되돌리는 법
 
@@ -428,7 +466,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 7093a24ce2a23c36633ab583ab90f24c21cd29e6
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v39/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
