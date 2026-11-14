@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 0.2.24 — 2026-11-14
+
+### goldstack-v40
+
+- 이 저장소 hook `[hook.worker_tests] deny`가 한 명령 안의 `tests/test_*`·`tests/*` 글로브와 `-m unittest|pytest`를 막는다(grep으로 고른 시험 묶음을 러너에 넘기는 우회).
+- worker brief: 바꾼 이름을 grep한 시험 파일이 hook 상한을 넘으면 `grep -lw`로 좁히고, 그래도 넘으면 import·호출하는 파일만 돌리고 안 돌린 파일을 적는다. `ps` 차단(`Operation not permitted: 'ps'`)으로 실패한 시험은 worker·리뷰어가 다시 돌리지 않고 이름만 적는다.
+- 2차 재리뷰가 1차 재리뷰의 새 `report` 지적도 판정한다. resolved면 보고서에서 `해소됨(재리뷰 확인)`이고, unresolved여도 병합을 막지 않는다.
+- grill 템플릿에 수치 기준의 우선순위와 측정형 기준의 재는 명령을 적게 하는 안내를 더했다.
+- #74(좀비 대기)는 0.2.19–0.2.20의 유예 정리(`[timeouts] result_grace_seconds`, 배경 작업 정리)로 이미 해결됐다. 닫는다.
+- `docs/guide.md`·`docs/internals.md`에 위 변경을 적었다.
+- 버전을 `0.2.24`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.23 — 2026-11-14
 
 ### goldstack-v39

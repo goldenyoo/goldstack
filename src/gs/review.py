@@ -28,7 +28,7 @@
    다시 재리뷰한다. 그 뒤로는 고치지 않는다: 남은 unresolved는 미해결, 2차 재리뷰의 새 지적은 report(판단 모델을
    부르지 않는다). 수정은 티켓당 최대 2회다. 리뷰를 깨끗해질 때까지 돌리지 않는다. 그러면 끝나지 않는다(ORIGINS 실패 6).
    단 마지막 재리뷰의 high는 보고만으로 병합하지 않는다(goldstack-v36 03, spec 1-6·1-7·3-2): 2차 재리뷰나 수리 재리뷰에서 리뷰어 하나라도
-   severity high 지적을 새로 냈거나 2차 재리뷰가 기존 high를 unresolved로 판정하면(unchecked는 세지 않는다) go가 그 시도를 병합하지 않고
+   severity high 지적을 새로 냈거나 2차 재리뷰가 기존 high를 unresolved로 판정하면(unchecked와 report 지적은 세지 않는다) go가 그 시도를 병합하지 않고
    티켓 실패로 적는다(final_highs, go._final_high). 판단 모델은 부르지 않는다. action은 그대로 report다. 첫 리뷰·1차 재리뷰에서 판단 모델이
    report·defer로 나눈 high와 medium·low는 지금처럼 보고만이다.
    병합 전 대조(go._review_again)가 같은 회차(2차 재리뷰·수리 재리뷰)를 같은 기준(base)에서 새 head로 다시 보면, 앞 head가 그 회차에 낸
@@ -39,6 +39,13 @@
    고쳐져 있지 않으면 unresolved(미해결)이고 더 고치지 않는다. 2차 수정이 없었거나, 실패해 버렸거나, diff가 비었으면 최종
    트리가 1차 재리뷰가 본 그대로이니 다시 보지 않는다. 다시 보는 사이 또 커밋이 생겨 브랜치 끝을 끝내 못 보면 그때의 resolved는
    unchecked(재리뷰 실패)로 내린다(go._uncheck_unseen). 그 늦은 커밋은 병합에 들지 않는다(go._merge_stage는 리뷰 대상 SHA를 병합한다).
+   1차 재리뷰가 새로 낸 지적 중 판단 모델이 report로 나눈 것도 2차 재리뷰가 판정한다(goldstack-v40 03, is_report_check). 고치라고 준 적이 없으니
+   이번 diff로 해소됐는지만 본다(프롬프트의 report_only 표시). 판정만 한다: 2차 수정 worker의 대상(fix_targets)이 아니고, unresolved여도
+   병합을 막지 않는다(_unresolved_high는 report를 세지 않는다). resolved면 보고서가 "해소됨(재리뷰 확인)"으로 보여 남은 지적·남은 high에서 뺀다
+   (report.finding_status, remaining). unresolved·unchecked는 그대로 보고만이다. 이 지적만 가진 리뷰 기록 때문에 리뷰어를 새로 부르지 않는다:
+   그 기록을 판정할 리뷰어가 다른 지적으로 불릴 때만 함께 싣는다(go._to_rereview). 첫 리뷰의 report 지적과 2차 재리뷰의 새 지적은 판정하지 않는다.
+   2차 재리뷰가 없거나 diff가 비어 부르지 않았으면 이 지적도 판정하지 않는다(보고만). 단 앞 head에서 판정한 뒤 늦은 커밋이 diff를 비웠으면
+   (2차 수정을 되돌렸다) 받은 지적처럼 unresolved로 적는다(go._empty_rereview).
    재리뷰가 resolved로 확인한 지적만 남은 지적에서 빠진다. 재리뷰를 못 한 지적은 unchecked와 이유(한도, 재리뷰 실패)로
    남는다. 재리뷰 한 번의 시간 상한은 `timeouts.rereview_minutes`다.
 
@@ -169,7 +176,7 @@ class Finding:
     rereview: str = ""  # 재리뷰 결과: "" | RESOLVED | UNRESOLVED | UNCHECKED
     rereview_reason: str = ""  # UNCHECKED의 이유: REASON_LIMIT | REASON_FAILED
     rereview_evidence: str = ""  # 판정 근거 또는 재리뷰를 못 한 자세한 내용
-    rereview_round: int = 0  # 그 결과를 낸 재리뷰 회차(1 | 2). fix_round가 1인데 2면 2차 재리뷰가 다시 본 지적이다(is_recheck)
+    rereview_round: int = 0  # 그 결과를 낸 재리뷰 회차(1 | 2). fix_round가 1인데 2면 2차 재리뷰가 다시 본 지적이다(is_recheck). report 지적이면 2차 재리뷰가 판정만 했다(is_report_check)
     found_round: int = 0  # 0 첫 리뷰, 1·2 그 회차 재리뷰가 새로 낸 지적. 수리 재리뷰의 지적은 REPAIR_ROUND다(apply_repair_review)
 
 
@@ -868,7 +875,8 @@ def _evidence_line(family: str, tail: str = "") -> str:
 def _run_line(family: str) -> str:
     return _by_family(
         family,
-        run="전체 시험을 돌리지 말고 지적을 확인할 좁은 재현만 돌린다. 전체 검증은 gs가 병합 전에 돌린다.",
+        run="전체 시험을 돌리지 말고 지적을 확인할 좁은 재현만 돌린다. 전체 검증은 gs가 병합 전에 돌린다. "
+            "`Operation not permitted: 'ps'`로 실패한 시험은 다시 돌리지 않고 그 시험 이름을 결과(checked 또는 evidence)에 적는다.",
         claude=CLAUDE_NO_RUN)
 
 
@@ -943,6 +951,11 @@ RECHECK_NOTE = """
    앞선 판정(rereview_evidence)을 믿지 말고 구현 worktree의 코드(병합될 최종 커밋)에서 다시 확인해 판정한다. 고쳐져 있으면 resolved, 아니면 unresolved."""
 
 
+REPORT_CHECK_NOTE = """
+   `report_only`가 true인 지적은 고치라고 준 적 없는 보고만 지적이다(앞선 재리뷰가 새로 냈다). 이번 diff로 해소됐는지만 판정한다.
+   고쳤어야 했다고 보지 말고, 구현 worktree의 코드(병합될 최종 커밋)에서 그 문제가 없어졌으면 resolved, 그대로면 unresolved."""
+
+
 def _lent_note(names: list[str], *, repair: bool = False) -> str:
     """다른 리뷰어의 지적을 함께 판정하라는 안내(go._rereview_slots). names가 비면 빈 문자열이라 프롬프트는 그대로다."""
     if not names:
@@ -957,12 +970,14 @@ def _lent_note(names: list[str], *, repair: bool = False) -> str:
 
 def rereview_prompt(diff: Path, found: Path, ticket: Path, spec: Path, worktree: Path, *, recheck: bool = False,
                     worker_last: Path | None = None, family: str = "", worker_commands: Path | None = None,
-                    observations: list[str] | None = None, lent: list[str] | None = None) -> str:
+                    observations: list[str] | None = None, lent: list[str] | None = None,
+                    report_check: bool = False) -> str:
     """recheck면 앞서 resolved인 지적을 최종 커밋에서 다시 보라는 안내를 넣는다. worker_last가 있으면 그 보고의 경로와 지시를 넣는다.
+    report_check면 고치라고 준 적 없는 보고만 지적(is_report_check, 목록의 report_only)은 해소됐는지만 판정하라는 안내를 넣는다(REPORT_CHECK_NOTE).
     observations(가장 최근 수정 worker가 남긴 관찰)가 있으면 review_prompt처럼 번호를 붙여 싣고 판정을 요구한다.
     lent(함께 판정할 지적을 낸 다른 리뷰어 이름)가 있으면 `reviewer`가 붙은 지적을 함께 판정하라는 안내를 넣는다(_lent_note).
     모두 아니면 프롬프트는 그대로다. family가 claude면 review_prompt처럼 코드 인용을 근거로 요구한다."""
-    note = (RECHECK_NOTE if recheck else "") + _lent_note(lent or [])
+    note = (RECHECK_NOTE if recheck else "") + (REPORT_CHECK_NOTE if report_check else "") + _lent_note(lent or [])
     listed, rule = _worker_last_lines(worker_last, bool(observations))
     listed_c, rule_c = _worker_commands_lines(worker_commands)
     listed, rule = listed + listed_c, rule + rule_c
@@ -1264,6 +1279,7 @@ def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, fo
     """수정 커밋 diff(base..head)와 이 리뷰어의 지적(found)을 주고 다시 보게 한다. nth는 몇 번째 재리뷰인가.
 
     found의 앞서 resolved인 지적(is_recheck)에는 목록에 `recheck`를 붙이고 프롬프트에 안내를 넣는다.
+    found의 보고만 지적(is_report_check: 1차 재리뷰가 새로 낸 report)에는 목록에 `report_only`를 붙이고 해소됐는지만 판정하라는 안내를 넣는다.
     found에 `reviewer`가 있는 지적은 이 회차에 부르지 않는 다른 리뷰어의 지적이다(id는 호출용, go._lent_ids). 목록에 그 키를 남기고 프롬프트에 안내를 넣는다.
     돌려주는 값은 apply_rereview가 쓴다: dir, base, head, note, failed(못 했으면 REASON_*), verdicts, findings.
     worker_log는 가장 최근 수정 worker의 로그다. 마지막 메시지를 fix.patch 옆 worker-last.txt로, 실행 기록을 worker-commands.txt로 준다.
@@ -1282,13 +1298,15 @@ def rereview(*, repo: Path, worktree: Path, rdir: Path, base: str, head: str, fo
     listed = (rdir / "fix-findings.json").resolve()
     listed.write_text(json.dumps({"findings": [{**{k: f.get(k, "") for k in ("id", *FIELDS, "rereview_evidence")},
                                                 **({"recheck": True} if is_recheck(f, nth) else {}),
+                                                **({"report_only": True} if is_report_check(f, nth) else {}),
                                                 **({"reviewer": f["reviewer"]} if f.get("reviewer") else {})} for f in found]},
                                  ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     observed = worker_observations(worker_log)
     prompt = rereview_prompt(diff, listed, ticket, spec, worktree, recheck=any(is_recheck(f, nth) for f in found),
                               worker_last=write_worker_last(rdir, worker_log), family=reviewer,
                               worker_commands=write_worker_commands(rdir, worker_log), observations=observed,
-                              lent=[f["reviewer"] for f in found if f.get("reviewer")])
+                              lent=[f["reviewer"] for f in found if f.get("reviewer")],
+                              report_check=any(is_report_check(f, nth) for f in found))
     (rdir / "prompt.md").write_text(prompt, encoding="utf-8")
     tier, selection = reviewer_selection(reviewer, cfg, rereview=True)
     res.update(tier=tier, actual_model=selection.model, effort=selection.effort)
@@ -1502,8 +1520,13 @@ def _final_why(f: Finding) -> str:
 
 
 def _unresolved_high(f: dict) -> bool:
-    """2차 재리뷰가 기존 high를 unresolved로 판정했다. unchecked(재리뷰 실패·한도)와 1차 재리뷰의 판정은 세지 않는다."""
-    return f.get("severity") == "high" and f.get("rereview") == UNRESOLVED and f.get("rereview_round") == 2
+    """2차 재리뷰가 기존 high를 unresolved로 판정했다. unchecked(재리뷰 실패·한도)와 1차 재리뷰의 판정은 세지 않는다.
+
+    action이 report인 지적은 세지 않는다(goldstack-v40 03): 2차 재리뷰가 판정만 한 보고만 지적(is_report_check)은 고치라고 준 적이 없다.
+    판정받지 않은 report high가 병합을 막지 않는 것과 같다. action이 없는 지적은 전처럼 센다: 병합 관문은 모르면 막는 쪽이다.
+    """
+    return (f.get("severity") == "high" and f.get("rereview") == UNRESOLVED and f.get("rereview_round") == 2
+            and f.get("action") != REPORT)
 
 
 def _new_final_high(f: dict) -> bool:
@@ -1582,6 +1605,21 @@ def deferred(rec: dict) -> list[dict]:
     return [f for f in rec.get("findings", []) if f.get("action") == DEFER]
 
 
+def is_report_check(f: dict, nth: int) -> bool:
+    """nth번째 재리뷰가 판정만 할 보고만 지적인가: 1차 재리뷰가 새로 냈고(found_round 1) 판단 모델이 report로 나눴다. 2차 재리뷰만 있다(goldstack-v40 03).
+
+    고치라고 준 적이 없어(fix_targets에 들지 않는다) 이번 diff로 해소됐는지만 본다. resolved면 보고서의 남은 지적에서 빠지고(report_resolved),
+    unresolved여도 병합을 막지 않는다(_unresolved_high). 첫 리뷰의 report 지적(found_round 0)과 2차 재리뷰·수리 재리뷰의 새 지적은 아니다.
+    있는 값(action, found_round)으로만 가리므로 옛 state도 그대로 읽고, 판정을 적은 뒤에도 참이다: 병합 전 대조로 다시 부르거나 중단 뒤 이어도 같은 지적을 본다.
+    """
+    return nth == 2 and f.get("action") == REPORT and f.get("found_round") == 1
+
+
+def report_resolved(f: dict) -> bool:
+    """보고만 지적(is_report_check)을 2차 재리뷰가 resolved로 판정했다. unresolved·unchecked와 판정이 없는 옛 state는 거짓이다(보고만으로 남는다)."""
+    return is_report_check(f, 2) and f.get("rereview") == RESOLVED
+
+
 def is_recheck(f: dict, nth: int) -> bool:
     """nth번째 재리뷰가 고치라고 준 적 없이 다시 볼 지적인가: 앞서 resolved로 확인했는데 그 위에 2차 수정이 커밋했다. 2차 재리뷰만 있다.
 
@@ -1604,12 +1642,17 @@ def fix_targets(rec: dict, nth: int) -> list[dict]:
 
 
 def rereview_targets(rec: dict, nth: int) -> list[dict]:
-    """nth번째 재리뷰가 판정할 이 리뷰의 지적: 그 수정 worker가 받은 지적과, 2차면 앞서 resolved인 지적(is_recheck)."""
-    return [f for f in rec.get("findings", []) if f.get("fix_round") == nth or is_recheck(f, nth)]
+    """nth번째 재리뷰가 판정할 이 리뷰의 지적: 그 수정 worker가 받은 지적과, 2차면 앞서 resolved인 지적(is_recheck)과
+    1차 재리뷰가 새로 낸 report 지적(is_report_check, 판정만 한다). 1차는 받은 지적뿐이다.
+
+    report 지적만 남은 기록 때문에 리뷰어를 새로 부르지 않는 것은 go._to_rereview가 가린다. 여기서는 기록 하나만 본다.
+    """
+    return [f for f in rec.get("findings", []) if f.get("fix_round") == nth or is_recheck(f, nth) or is_report_check(f, nth)]
 
 
 def remaining(rec: dict) -> list[dict]:
     """남은 지적: 재리뷰가 resolved로 확인한 것만 뺀다. 수정을 시도했어도 확인되지 않았으면 남은 지적이다.
+    2차 재리뷰가 해소됐다고 판정한 보고만 지적(report_resolved)도 빠진다. 판정받지 않았거나 unresolved인 report 지적은 남는다.
 
     지적의 수정·재리뷰 결과는 지적의 `fix_attempt`·`rereview` 등에, 수정 worker 결과 요약은 기록의 `fix`에 있다.
     """

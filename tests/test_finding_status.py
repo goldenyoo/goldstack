@@ -45,6 +45,9 @@ class FindingStatusTest(unittest.TestCase):
               "fix_reason": "수정 worker 실패"}, "미해결"),
             ({"action": review.REPORT}, "보고만"),
             ({"found_round": 2}, "보고만"),
+            ({"action": review.REPORT, "found_round": 1, "rereview": review.RESOLVED, "rereview_round": 2},
+             report.REPORT_RESOLVED),
+            ({"action": review.REPORT, "found_round": 1, "rereview": review.UNRESOLVED, "rereview_round": 2}, "보고만"),
             ({"fix_reason": "한도"}, "수정 못 함(한도)"),
             ({"fix_attempt": review.DISCARDED, "fix_reason": "수정 worker 실패: 종료 코드 3"},
              "수정 못 함(수정 worker 실패: 종료 코드 3)"),
@@ -117,6 +120,24 @@ class FindingStatusTest(unittest.TestCase):
         ts.review = {"findings": [finding(rereview=review.RESOLVED)]}
         ts.second_review = {}
         self.assertEqual(report.remaining_line(self.r), "")
+
+    def test_report_finding_resolved_by_the_second_rereview_is_not_remaining(self):
+        """goldstack-v40 03: 1차 재리뷰의 새 report high를 2차 재리뷰가 resolved로 판정하면 해소됨이고 남은 high·남은 지적에서 빠진다."""
+        new = {**finding("1차 재리뷰의 새 문제"), "action": review.REPORT, "found_round": 1}
+        resolved = {**new, "rereview": review.RESOLVED, "rereview_round": 2, "rereview_evidence": "코드에서 확인"}
+        unresolved = {**new, "id": 2, "claim": "그대로인 문제", "rereview": review.UNRESOLVED, "rereview_round": 2}
+        ts = self.r.st.ticket("01")
+        ts.review = {"reviewer": "codex", "findings": [resolved, unresolved]}
+        self.assertEqual(report.remaining_line(self.r), "남은 high 1(보고만 1)")
+        self.assertEqual(report.finding_counts(self.r), "리뷰 지적: 해소됨 1 · 보고만 1")
+        self.assertEqual([f["claim"] for f in review.remaining(ts.review)], ["그대로인 문제"])
+        with mock.patch.object(report.git, "out", return_value="a.py | 1 +"), \
+                mock.patch.object(review, "_call", return_value="요약") as call:
+            report.summarize(self.r)
+        self.assertIn("해소됨(재리뷰 확인", call.call_args.kwargs["prompt"])
+        facts = (self.r.rundir / "finish/report-input.md").read_text()
+        self.assertIn(f"1차 재리뷰의 새 문제 — 상태: {report.REPORT_RESOLVED}", facts)
+        self.assertIn("그대로인 문제 — 상태: 보고만", facts)
 
     def test_prior_findings_show_in_their_own_section_and_not_in_counts(self):
         ts = self.r.st.ticket("01")

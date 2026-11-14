@@ -25,6 +25,8 @@ unresolved로 판정했으면(unchecked는 세지 않는다. review.final_highs)
 _merge_stage가 늦은 커밋 대조 뒤에 같은 판정으로 병합하지 않는다. 실패는 _fail이 한 번 센다.
 수정 worker가 커밋하면 지적을 낸 리뷰어가 수정 커밋을 다시 본다(재리뷰). 고쳐지지 않았거나 새로 고칠 것이 있으면 2차 수정
 worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서 resolved인 지적도 최종 커밋에서 다시 보고, 그 지적을 낸 리뷰어도 부른다.
+1차 재리뷰가 새로 낸 report 지적도 2차 재리뷰가 해소됐는지만 판정한다(goldstack-v40 03, _to_rereview). 수정 대상도 병합을 막는 high도 아니고,
+그 지적만 가진 기록 때문에 리뷰어를 새로 부르지 않는다: 그 기록을 판정할 리뷰어가 다른 지적으로 불릴 때만 함께 싣는다.
 두 번째 리뷰어(second_reviewer)를 어느 재리뷰까지 부를지는 config `[review] second_reviewer_rereview`가 정한다(goldstack-v38 04): all(기본, 키가 없어도)은
 모든 재리뷰, first는 1차 재리뷰까지(2차 재리뷰·수리 재리뷰에서 빠진다), none은 모든 재리뷰에서 빠진다. 빠진 회차에는 그 리뷰어 기록의 판정할 지적(수리 재리뷰는
 defer 지적)을 첫 리뷰어 재리뷰에 함께 싣는다(_rereview_slots). 지적 id는 기록마다 겹치므로 호출용 id를 주고(_lent_ids) 판정은 (원래 기록, 원래 id)의 지적에
@@ -2551,8 +2553,17 @@ def _verdict_kept(r: Run, t: Ticket, nth: int) -> bool:
 
 
 def _to_rereview(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
-    """(리뷰 기록, 그 기록 안의 nth번째 재리뷰가 판정할 지적). 받은 지적에 더해 2차면 앞서 resolved인 지적도 있다. 그 지적만 낸 리뷰어도 든다."""
+    """(리뷰 기록, 그 기록 안의 nth번째 재리뷰가 판정할 지적). 받은 지적에 더해 2차면 앞서 resolved인 지적도 있다. 그 지적만 낸 리뷰어도 든다.
+
+    2차면 1차 재리뷰가 새로 낸 report 지적(review.is_report_check)도 판정한다(goldstack-v40 03). 단 그 지적 때문에 리뷰어를 새로 부르지 않는다:
+    그 기록을 판정할 리뷰어(_judge_rec. second_reviewer_rereview가 first·none이면 두 번째 기록은 첫 리뷰어)가 다른 지적으로 불릴 때만 넣는다.
+    all이면 report 지적만 가진 두 번째 리뷰어는 부르지 않고 그 지적은 판정 없이 보고만이다. first면 두 번째 기록의 report 지적도 첫 리뷰어 자리에 싣는다.
+    state의 지적 필드(review.rereview_targets)와 config로만 가리므로 중단 뒤 이어도, 병합 전 대조로 다시 불려도 같은 지적을 고른다.
+    """
     pairs = [(rec, review.rereview_targets(rec, nth)) for rec in state.reviews(r.st.ticket(t.id))]
+    called = [_judge_rec(r, t, rec, nth) for rec, found in pairs if any(not review.is_report_check(f, nth) for f in found)]
+    pairs = [(rec, found if any(_judge_rec(r, t, rec, nth) is x for x in called)
+              else [f for f in found if not review.is_report_check(f, nth)]) for rec, found in pairs]
     return [(rec, found) for rec, found in pairs if found]
 
 
@@ -2978,7 +2989,8 @@ def _rereview(r: Run, a: Active) -> ReviewFlow:
     호출은 루프 밖 스레드에서 돈다(_review_stage). 재리뷰 자체의 오류는 병합을 막지 않는다: 이 head의 결과가 없는 지적은 unchecked(재리뷰 실패)다.
     중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 재리뷰부터 잇고, 뒤는 티켓 실패다: 확인 없이 병합하지 않는다.
     병합 전 대조로 다시 불려도 같은 지적을 본다(a.base..head이므로 수정 뒤에 생긴 커밋도 diff에 든다).
-    2차면 수정 worker가 받은 지적에 더해 앞서 resolved인 지적도 최종 커밋에서 본다. 수정 커밋의 diff가 비면 받은 지적만 unresolved다:
+    2차면 수정 worker가 받은 지적에 더해 앞서 resolved인 지적과 1차 재리뷰의 새 report 지적(판정만, _to_rereview)도 최종 커밋에서 본다.
+    수정 커밋의 diff가 비면 받은 지적만 unresolved다(이 회차가 앞 head에서 판정한 보고만 지적도. _empty_rereview):
     트리가 앞 재리뷰가 본 그대로이니 앞 판정은 그대로 맞다. catch-up이 기준을 옮긴 뒤의 빈 diff는 받은 지적의 판정도 그대로 두고 2차 수정을 띄우지 않는다(_empty_rereview).
     버린 수정 뒤의 늦은 커밋을 보는 재리뷰(_late_commit)는 판정만 적고 2차 수정을 띄우지 않는다: 실패한 수정 뒤에는 고치지 않는다.
     2차 재리뷰가 high를 새로 냈거나 기존 high를 unresolved로 판정했는지(빈 diff의 unresolved 포함)는 여기서 보지 않는다: 병합 전 대조 뒤에
@@ -3014,9 +3026,16 @@ def _empty_rereview(r: Run, a: Active, head: str) -> None:
     그 밖에는 고쳐졌을 수 없어 unresolved다: 앞서 이 회차 판정이 없거나(빈 수정 커밋, 버린 수정), 판정한 head가 기준 위에 있는데 diff가 비었다(늦은 커밋이 수정을 되돌렸다).
     유지했으면 기록에 남긴다(kept_round, _verdict_kept): reviewed_head는 여기서 빈 커밋으로 옮겨 가므로 재개해 다시 오면 판정한 head로 가릴 수 없다.
     그 기록의 지적에 결과를 새로 적으면 지운다: 재리뷰 결과(_apply_rereviews), 한도(_plan_rereviews), 뜻밖의 오류(_rereview). 남기면 다른 리뷰어의 새 판정까지 2차 수정에서 뺀다.
+    이 회차가 앞 head에서 판정한 보고만 지적(review.is_report_check)도 받은 지적과 같이 유지하거나 unresolved로 적는다(goldstack-v40 03):
+    늦은 커밋이 2차 수정을 되돌렸으면 트리는 그 지적을 낸 1차 재리뷰가 본 그대로라 해소됐을 수 없다. 이 회차 판정이 없는 보고만 지적은 그대로 둔다(판정하지 않는다).
     """
     nth = a.fix
-    for rec, found in _received(r, a.t, nth):
+    received = {id(rec): found for rec, found in _received(r, a.t, nth)}
+    for rec in state.reviews(r.st.ticket(a.t.id)):
+        found = received.get(id(rec), []) + [f for f in rec.get("findings", [])
+                                             if review.is_report_check(f, nth) and f.get("rereview_round") == nth]
+        if not found:
+            continue
         judged = rec.get("reviewed_head", "")
         moved_past = rec.get("kept_round") == nth or (
             judged != a.base and git.run(r.repo, "merge-base", "--is-ancestor", judged, a.base, check=False).returncode == 0)

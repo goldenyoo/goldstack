@@ -370,7 +370,7 @@ class ConfigTest(unittest.TestCase):
         rules = this_repo.hook.worker_tests
         self.assertEqual(problems, [])
         self.assertEqual((rules.runner, rules.file, rules.max_files), ("unittest|pytest", r"test_\w+\.py", 10))
-        self.assertEqual(len(rules.deny), 3)
+        self.assertEqual(len(rules.deny), 4)
 
     def test_missing_config_stops_check_and_go_before_any_work(self):
         self.path.unlink()

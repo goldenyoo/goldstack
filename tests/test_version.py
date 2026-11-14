@@ -20,7 +20,7 @@ class VersionTest(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         project = tomllib.loads((root / "pyproject.toml").read_text())
         plugin = json.loads((root / ".claude-plugin/plugin.json").read_text())
-        self.assertEqual(project["project"]["version"], "0.2.23")
+        self.assertEqual(project["project"]["version"], "0.2.24")
         self.assertEqual(plugin["version"], project["project"]["version"])
         self.assertEqual(metadata.version("goldstack"), project["project"]["version"])
 
@@ -39,4 +39,4 @@ class VersionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = subprocess.run([sys.executable, "-m", "gs.cli", "--version"],
                                     cwd=directory, capture_output=True, text=True)
-        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "gs 0.2.23\n", ""))
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, "gs 0.2.24\n", ""))
