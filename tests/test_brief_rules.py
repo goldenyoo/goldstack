@@ -10,7 +10,7 @@ import support
 
 FINDING = {"id": "1", "severity": "high", "location": "a.py:1", "claim": "틀렸다", "evidence": "e"}
 GREP_RULE = ("서명이나 읽는 속성을 바꾼 함수·클래스는 그 이름을 시험 폴더(이 레포는 profile을 본다. 예: `tests/`)에서도 grep한다. "
-             "나온 시험 파일을 모두 파일마다 따로 돌리고, 돌린 파일 목록을 마지막 메시지에 적는다.")
+             "나온 시험 파일을 파일마다 따로 돌리고, 돌린 파일 목록을 마지막 메시지에 적는다.")
 BRANCHES = "diff가 더한 새 분기와 바꾼 호출 지점 모두를 시험한다"
 
 
@@ -41,7 +41,7 @@ class BriefRulesTest(unittest.TestCase):
             with self.subTest(brief=name):
                 self.assertIn(GREP_RULE, text)
                 self.assertIn(worker.CHANGED_NAMES_RULE, text)
-                self.assertEqual(text.count("나온 시험 파일을 모두 파일마다 따로 돌리고"), 1)
+                self.assertEqual(text.count("나온 시험 파일을 파일마다 따로 돌리고"), 1)
 
     def test_grep_rule_does_not_assume_the_test_folder(self):
         self.assertIn("시험 폴더(이 레포는 profile을 본다", worker.CHANGED_NAMES_RULE)
@@ -64,6 +64,32 @@ class BriefRulesTest(unittest.TestCase):
         for name, text in self.briefs().items():
             with self.subTest(brief=name):
                 self.assertIn("`gs child -- <명령>`으로 띄우고 모델·effort를 명령에 명시한다. `GS_*`를 지우지 않는다", text)
+
+    def test_every_brief_caps_grep_scope_and_skips_ps_failures(self):
+        for name, text in self.briefs().items():
+            with self.subTest(brief=name):
+                self.assertIn("`grep -lw`", text)
+                self.assertIn("import하거나 부르는 파일만", text)
+                self.assertIn("Operation not permitted: 'ps'", text)
+                self.assertIn(worker.PS_RULE, text)
+
+    def test_review_run_line_has_ps_sentence_except_claude(self):
+        p = Path("x")
+        ps = "Operation not permitted: 'ps'"
+        for family in ("codex", "agy"):
+            with self.subTest(family=family):
+                for text in (review.review_prompt(p, p, p, p, family=family),
+                             review.rereview_prompt(p, p, p, p, p, family=family),
+                             review.repair_review_prompt(p, "log", p, p, p, family=family)):
+                    self.assertIn(ps, text)
+                    self.assertIn("그 시험 이름을 결과(checked 또는 evidence)에 적는다", text)
+                    self.assertIn("ps 실행이 필요한 단계", text)
+        for text in (review.review_prompt(p, p, p, p, family="claude"),
+                     review.rereview_prompt(p, p, p, p, p, family="claude"),
+                     review.repair_review_prompt(p, "log", p, p, p, family="claude")):
+            self.assertNotIn(ps, text)
+            self.assertNotIn("그 시험 이름을 결과(checked 또는 evidence)에 적는다", text)
+            self.assertIn("ps 실행이 필요한 단계", text)
 
     def test_every_brief_tells_to_split_test_runs_without_dropping_files(self):
         for name, text in self.briefs().items():
