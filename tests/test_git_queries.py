@@ -129,6 +129,16 @@ class GitQueriesTest(unittest.TestCase):
         self.assertEqual((head, branch, merge), ("", "refs/heads/main", ""))
         self.assertTrue(tree)
 
+    def test_tree_state_unborn_ref_path_collision(self):
+        self.commit()
+        git.run(self.wt, "branch", "topic/child")
+        for branch in ("refs/heads/topic", "refs/heads/main/child"):
+            with self.subTest(branch=branch):
+                git.run(self.wt, "symbolic-ref", "HEAD", branch)
+                head, actual_branch, merge, tree = self.assert_tree_state()
+                self.assertEqual((head, actual_branch, merge), ("", branch, ""))
+                self.assertTrue(tree)
+
     def test_tree_state_linked_and_packed_refs(self):
         linked = self.linked()
         git.run(self.wt, "pack-refs", "--all")

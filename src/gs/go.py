@@ -3287,7 +3287,7 @@ def _tree_state(wt: Path) -> tuple[str, str, str, str]:
         for _ in range(5):
             try:
                 content = path.read_text(encoding="utf-8").strip()
-            except FileNotFoundError:
+            except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
                 break
             except (OSError, UnicodeError):
                 branch = ""
