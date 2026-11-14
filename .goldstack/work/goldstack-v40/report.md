@@ -17,7 +17,7 @@ v40은 v39 회고에서 찾은 손실 네 가지를 줄인다. 시험 실행 범
   - ps 문장은 글로 하는 지시일 뿐이다. 이 지시가 실제로 재실행을 줄이는지는 시험으로 단언하지 않았다.
   - 다음 실행(0.2.24) worker 로그에서 사람이 확인해야 할 것: 글로브 묶음 명령이 막혀 나눠 돌았는지, ps 차단 실패 시험의 재실행이 줄었는지.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/77 병합 · main 검증 통과
 리뷰 지적: 수정됨 3 · 보고만 1
 
 ## Evidence
@@ -96,10 +96,17 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 664.0 |
+| total | 703.0 |
 | verify | 639.557 |
 | summary | 24.019 |
-| report | 0 |
+| report | 0.076 |
+| push | 2.587 |
+| publish | 2.994 |
+| checks | 24.921 |
+| merge-pr | 3.651 |
+| confirm-merge | 0.005 |
+| postmerge | 1.419 |
+| restore-reverts | 0.099 |
 
 ### 티켓별 결과
 
@@ -325,20 +332,55 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 18ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v40/run/gs-main-zpmukz4g/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v40/run/gs-main-zpmukz4g/base
+Prepared 1 package in 257ms
+Installed 1 package in 1ms
+ + goldstack==0.2.24 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v40/run/gs-main-zpmukz4g/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 - integration: 통과 · 종료 코드 0 · 639.5초 · 로그 /Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v40/run/finish/integration-verify.log
+
+#### finish/main-verify.log
+
+```text
+integration과 같은 코드(4f81fee6f582f04396ae8d38ed86e49dbbd1e2a3), 건너뜀
+```
 
 
 agy 사용: 0/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/77
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `7d198d2f4e7a7f891947b3771dff868a79579f26`
+
+### issue
+
+- #74 닫음: `7d198d2f4e7a7f891947b3771dff868a79579f26`에 반영
 
 ### 되돌리는 법
 
@@ -348,7 +390,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 7d198d2f4e7a7f891947b3771dff868a79579f26
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v40/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
