@@ -269,7 +269,8 @@ class SecondFixTest(Base):
     def test_new_fix_finding_of_first_rereview_goes_to_second_fix(self):
         self.findings("codex", finding("FIX A: 값이 틀렸다"))
         self.answer("codex", 1, [(1, "resolved", "고침")], [finding("FIX N: 수정이 낳은 버그"), finding("이름이 길다", "low")])
-        self.answer("codex", 2, [(1, "resolved", "A는 그대로 고쳐져 있다"), (2, "resolved", "N 고침")],
+        # 3(1차 재리뷰의 새 report 지적)은 2차 재리뷰가 판정만 한다(goldstack-v40 03): unresolved여도 2차 수정이 받지 않는다
+        self.answer("codex", 2, [(1, "resolved", "A는 그대로 고쳐져 있다"), (2, "resolved", "N 고침"), (3, "unresolved", "이름이 그대로 길다")],
                     [finding("FIX Z: 또 새 문제", "low")])  # high면 병합하지 않는다(test_final_high)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
@@ -280,7 +281,7 @@ class SecondFixTest(Base):
         self.assertNotIn("이름이 길다", brief)
         fs = self.ts().review["findings"]
         self.assertEqual([(f["id"], f["found_round"], f["action"], f["fix_round"], f["rereview"]) for f in fs],
-                         [(1, 0, "fix", 1, review.RESOLVED), (2, 1, "fix", 2, review.RESOLVED), (3, 1, "report", 0, ""),
+                         [(1, 0, "fix", 1, review.RESOLVED), (2, 1, "fix", 2, review.RESOLVED), (3, 1, "report", 0, review.UNRESOLVED),
                           (4, 2, "report", 0, "")])  # 2차 재리뷰의 새 지적은 FIX라도 보고만
         self.assertIn("2차 재리뷰의 새 지적", fs[3]["why"])
         self.assertEqual((self.ts().status, self.ts().failures), ("merged", 0))
