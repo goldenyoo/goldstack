@@ -85,8 +85,8 @@ class Base(test_recheck_resolved.Base):
 
 
 class SecondRereviewTargetTest(Base):
-    def test_report_finding_of_the_first_rereview_is_judged_and_leaves_the_remaining(self):
-        """(a) 2차 재리뷰가 R을 report_only로 받고 프롬프트에 구분 표시가 있다. (b) resolved면 남은 지적·남은 high에서 빠진다."""
+    def run_with_r_fixed(self):
+        """codex가 A·B·Q를 내고 1차 재리뷰가 R을 새로 낸다. 1차 수정은 A만, 2차 수정은 B와 R을 고친다."""
         self.findings("codex", A, B, Q)
         self.new_finding("codex", 1, R)
         self.a_fixed_first("touch fixed_R")
@@ -94,8 +94,11 @@ class SecondRereviewTargetTest(Base):
         self.assertEqual(self.lines("rereview.calls"), ["codex 1", "codex 2"])
         self.assert_second_fix_got_only_b()
         self.assertNotIn("NOTE R", (self.rundir / "01/1/fix2/brief.md").read_text())  # 고칠 대상이 아니다
+        return out
 
-        # (a) 대상과 프롬프트. 첫 리뷰의 report 지적(Q)은 대상이 아니고, 1차 재리뷰는 그대로다
+    def test_report_finding_of_the_first_rereview_is_a_second_target_with_a_mark(self):
+        """(a) 2차 재리뷰가 R을 report_only로 받고 프롬프트에 구분 표시가 있다. 첫 리뷰의 report 지적(Q)은 대상이 아니고, 1차 재리뷰는 그대로다."""
+        self.run_with_r_fixed()
         self.assertEqual(self.listed("codex", 2), [(1, A["claim"], False, None), (2, B["claim"], False, None),
                                                    (4, R["claim"], True, None)])
         for text in MARK:
@@ -103,7 +106,9 @@ class SecondRereviewTargetTest(Base):
             self.assertNotIn(text, self.prompt("codex", 1))
         self.assertNotIn("report_only", (self.bin / "rereview.findings.codex.1").read_text())
 
-        # (b) 판정이 지적에 적히고 보고서·남은 지적에서 빠진다
+    def test_resolved_report_finding_leaves_the_remaining(self):
+        """(b) resolved 판정이 지적에 적히고 보고서 상태·남은 지적·남은 high에서 빠진다. 첫 리뷰의 report 지적은 그대로 보고만이다."""
+        out = self.run_with_r_fixed()
         rec = self.ts().review
         r, q = self.by_claim(rec, R), self.by_claim(rec, Q)
         self.assertEqual(self.judged(r), (review.REPORT, 1, 0, review.RESOLVED, 2))
