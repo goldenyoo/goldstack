@@ -70,6 +70,8 @@ deny = [
   '''\bls(\s+-\w+)*\s+(\./)?tests/?\s*\|[\s\S]*\bxargs\b''',
   '''\bunittest\s+discover\b(?![^\n;&|]*\s(-p|--pattern))''',
   '''\bunittest\s+discover\b[^\n;&|]*\s(-p|--pattern)[\s=]*['"]?(test_?)?\*(\.py)?['"]?(?=[\s;&|)]|$)''',
+  # grep으로 고른 tests/test_*.py를 러너에 넘기는 모양 차단: goldstack-v39 03의 max_files 우회.
+  '''\btests/(test_?)?\*[\s\S]*-m\s+(unittest|pytest)\b|-m\s+(unittest|pytest)\b[\s\S]*\btests/(test_?)?\*''',
 ]
 runner = 'unittest|pytest'
 file = 'test_\w+\.py'
