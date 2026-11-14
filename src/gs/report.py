@@ -20,6 +20,8 @@ defer 지적(review.DEFER: 재현됐지만 고칠 수 있는 파일 밖을 고�
 남은 high와 "재현된 미수리 결함" 절에서 빠진다(goldstack-v38 02). unresolved·판정 없음·근거 없음·재리뷰 실패는 그대로 "재현된 미수리"다. 판정 키가 없는 옛 state도 그렇다.
 병합 전 대조가 같은 회차를 같은 기준에서 새 head로 다시 봐 대체한 앞 head의 새 지적(review._supersede, 지적의 superseded)은 상태가 "대체됨"이고
 남은 high로 세지 않는다(goldstack-v38 01). 지적 줄과 지적 집계에는 남는다.
+1차 재리뷰가 새로 낸 report 지적을 2차 재리뷰가 resolved로 판정했으면(review.report_resolved, goldstack-v40 03) 상태가 "보고만"이 아니라
+"해소됨(재리뷰 확인)"이라 남은 high에서 빠지고 아이디어 파일(findings.py)도 쓰지 않는다. unresolved·unchecked·판정 없음은 그대로 "보고만"이다.
 티켓별 결과의 이유 칸에는 첫 리뷰가 남긴 touches 밖 경로가 `touches 밖: <경로들>` 줄로 붙는다(goldstack-v38 05. touches_outside_line). 없으면 줄이 없다.
 Evidence의 `### 남은 위험` 절(remaining_risks, 실패한 검증 절 다음)은 gs가 원본 그대로 싣는다: 격리 경고 줄 다음에 worker가 남긴 관찰 표 `| 티켓 | 관찰 | 리뷰 판정 |`
 (goldstack-v35 05, spec 3-2. observation_table). 관찰은 리뷰 기록이 아니라 티켓마다 가장 최근 worker 로그(수정·수리 worker가 있으면 그것)의
@@ -45,7 +47,8 @@ FAILURE_LINE_LIMIT = 1000  # 긴 실패 줄도 후보·티켓 결과·되돌리�
 DEFERRED = "재현된 미수리"  # defer 지적의 상태(finding_status). 심각도와 상관없이 남은 high다
 SUPERSEDED = "대체됨"  # 병합 전 대조가 같은 회차를 새 head로 다시 봐 대체한 앞 head의 새 지적(review._supersede). 남은 high가 아니다
 REPAIR_RESOLVED = "수정됨(수리 재리뷰 확인)"  # 수리로 해소됐다고 수리 재리뷰가 확인한 defer 지적. 남은 high가 아니다
-FINDING_STATUSES = ("수정됨", "미해결", "보고만", DEFERRED, SUPERSEDED, "수정 못 함", "확인 못 함")
+REPORT_RESOLVED = "해소됨(재리뷰 확인)"  # 고치라고 준 적 없는 보고만 지적을 2차 재리뷰가 해소됐다고 확인했다(review.report_resolved). 남은 high가 아니다
+FINDING_STATUSES = ("수정됨", "해소됨", "미해결", "보고만", DEFERRED, SUPERSEDED, "수정 못 함", "확인 못 함")
 REMAINING_STATUSES = ("보고만", DEFERRED, "미해결", "수정 못 함", "확인 못 함")  # high 지적(defer는 모두)이 이 상태면 남은 high다(수정됨·대체됨은 뺀다)
 
 
@@ -90,11 +93,14 @@ def finding_status(finding: dict) -> str:
     수리 재리뷰가 defer 지적을 근거와 함께 resolved로 판정했으면 REPAIR_RESOLVED다(review.repair_resolved). 그 밖은 DEFERRED다.
 
     대체된 지적(superseded)은 action과 상관없이 SUPERSEDED다: 그 회차의 판정은 새 head를 다시 본 재리뷰의 것이다. 옛 state에는 이 키가 없다.
+
+    report 지적은 "보고만"이다. 단 1차 재리뷰가 새로 낸 report 지적을 2차 재리뷰가 resolved로 판정했으면 REPORT_RESOLVED다(review.report_resolved,
+    goldstack-v40 03): 고치라고 준 적은 없지만 재리뷰가 해소를 확인했다. unresolved·unchecked면 그대로 "보고만"이다(병합도 막지 않았다).
     """
     if finding.get("superseded"):
         return SUPERSEDED
     if finding.get("action", review.REPORT) == review.REPORT or finding.get("found_round") == 2:
-        return "보고만"
+        return REPORT_RESOLVED if review.report_resolved(finding) else "보고만"
     if finding.get("action") == review.DEFER:
         return REPAIR_RESOLVED if review.repair_resolved(finding) else DEFERRED
     result = finding.get("rereview")
@@ -127,6 +133,7 @@ def remaining_line(r) -> str:
 
     판정·종료 코드는 바꾸지 않고 보이기만 한다(spec 2-2). 건너뛴 리뷰는 note가 `건너뜀(한도)`로 시작하는 리뷰 기록이다.
     defer 지적(DEFERRED)은 원래 심각도와 상관없이 high로 센다: 재현된 결함인데 고치지 않았다. 대체된 지적(SUPERSEDED)은 high여도 세지 않는다.
+    재리뷰가 해소를 확인한 보고만 지적(REPORT_RESOLVED)도 세지 않는다.
     옛 state에 심각도·상태·note가 없어도 오류 없이 센다(없는 심각도는 high가 아니다).
     """
     counts, skipped = Counter(), []
@@ -622,6 +629,7 @@ def summarize(r, on_wait=None) -> str:
               "변경의 의미와 남은 위험을 설명하라. 티켓 결과·검증 출력·되돌리는 법은 gs가 원본 그대로 붙인다. "
               "리뷰 지적의 상태를 반영하라. 수정됨(재리뷰 확인)은 해결된 지적이므로 남은 위험에 넣지 마라. "
               "수정됨(수리 재리뷰 확인)도 마찬가지다. "
+              "해소됨(재리뷰 확인: 고치라고 준 적 없는 보고만 지적이 해소됐다고 재리뷰가 확인했다)도 해결된 지적이라 남은 위험에 넣지 마라. "
               "미해결·보고만·수정 못 함·확인 못 함은 남은 지적이며, 수정 커밋만으로 해결됐다고 쓰지 마라. "
               "재현된 미수리(재현됐지만 고칠 수 있는 파일 밖이라 고치지 않은 결함)도 남은 지적이다. "
               "대체됨(병합 전 대조가 새 head를 다시 리뷰해 대체한 앞 head의 지적)은 남은 지적이 아니다. "

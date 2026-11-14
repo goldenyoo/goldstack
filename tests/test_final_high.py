@@ -760,10 +760,15 @@ class FormatTest(unittest.TestCase):
                    self.f(7, action="fix", rereview=review.UNRESOLVED, rereview_round=1),
                    self.f(8, found_round=0), self.f(9, found_round=1), self.f(10, action=review.DEFER),
                    self.f(11, "medium", action="fix", rereview=review.UNRESOLVED, rereview_round=2),
-                   self.f(12, action="fix", rereview=review.RESOLVED, rereview_round=2)]
+                   self.f(12, action="fix", rereview=review.RESOLVED, rereview_round=2),
+                   # 1차 재리뷰의 새 report 지적: 2차 재리뷰가 판정만 한다. unresolved여도 병합을 막지 않는다(goldstack-v40 03)
+                   self.f(13, found_round=1, rereview=review.UNRESOLVED, rereview_round=2)]
         rec = {"reviewer": "codex", "findings": [*ignored, *counted]}
         self.assertEqual([f["id"] for _, f in review.final_highs([rec])], [1, 2, 3])
         self.assertEqual(review.final_highs([{"reviewer": "codex", "findings": ignored}]), [])
+        # action이 없는 지적은 report로 보지 않고 전처럼 센다(goldstack-v40 03은 report만 뺀다)
+        no_action = {k: v for k, v in self.f(14, rereview=review.UNRESOLVED, rereview_round=2).items() if k != "action"}
+        self.assertEqual([f["id"] for _, f in review.final_highs([{"reviewer": "codex", "findings": [no_action]}])], [14])
 
     def test_any_reviewer_counts_and_new_highs_come_first(self):
         codex = {"reviewer": "codex", "findings": [self.f(1, action="fix", rereview=review.UNRESOLVED, rereview_round=2)]}

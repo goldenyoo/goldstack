@@ -678,7 +678,7 @@ class TargetsTest(unittest.TestCase):
             {"id": 1, "action": "fix", "fix_round": 1, "rereview": "resolved", "rereview_round": 1},  # 다시 본다
             {"id": 2, "action": "fix", "fix_round": 1, "rereview": "unresolved", "rereview_round": 1},  # 2차 대상
             {"id": 3, "action": "fix", "fix_round": 1, "rereview": "unchecked", "rereview_round": 1},  # 확인된 적 없다
-            {"id": 4, "action": "report", "found_round": 1},
+            {"id": 4, "action": "report", "found_round": 1},  # 1차 재리뷰의 새 report 지적: 2차 재리뷰가 판정만 한다(goldstack-v40 03)
             {"id": 5, "action": "fix", "found_round": 1},  # 1차 재리뷰의 새 fix 지적: 2차 대상
         ]
 
@@ -688,7 +688,7 @@ class TargetsTest(unittest.TestCase):
     def test_before_second_fix(self):
         rec = {"findings": self.findings()}
         self.assertEqual(self.ids(review.fix_targets(rec, 2)), [2, 5])
-        self.assertEqual(self.ids(review.rereview_targets(rec, 2)), [1])  # 받은 지적은 수정 worker가 커밋한 뒤 fix_round가 2다
+        self.assertEqual(self.ids(review.rereview_targets(rec, 2)), [1, 4])  # 받은 지적은 수정 worker가 커밋한 뒤 fix_round가 2다
         self.assertEqual(self.ids(review.fix_targets(rec, 1)), [1, 2, 3, 5])
 
     def test_second_round_stays_the_same_whatever_the_verdicts(self):
@@ -697,11 +697,12 @@ class TargetsTest(unittest.TestCase):
                 fs = self.findings()
                 for f in (fs[1], fs[4]):
                     f["fix_round"] = 2
-                for f in (fs[0], fs[1], fs[4]):
+                for f in (fs[0], fs[1], fs[3], fs[4]):
                     f.update(rereview=verdict, rereview_round=2)
                 rec = {"findings": fs}
-                self.assertEqual(self.ids(review.rereview_targets(rec, 2)), [1, 2, 5])
+                self.assertEqual(self.ids(review.rereview_targets(rec, 2)), [1, 2, 4, 5])
                 self.assertNotIn(1, self.ids(review.fix_targets(rec, 2)))
+                self.assertNotIn(4, self.ids(review.fix_targets(rec, 2)))
 
     def test_first_round_has_no_recheck(self):
         rec = {"findings": self.findings()}
