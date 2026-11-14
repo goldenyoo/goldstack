@@ -44,6 +44,11 @@ def listed(n):
 
 
 BLOCKED = [V25_03, listed(11), listed(12),
+           r'''grep -l "cli.main\|cli\.main\|main(\[" tests/test_*.py | xargs -n1 basename | grep -v test_jail.py | xargs -P 6 -I{} sh -c '.venv/bin/python -m unittest discover -s tests -p {} 2>&1 | tail -1 | sed "s|^|{}: |"' ''',
+           r'''git diff src/gs/worker.py | grep -c '^[+-]' ; files=$(grep -ln "write_brief\|worker\.\(CHANGED_NAMES_RULE\|MACHINE_RULE\)\|fix_brief\|repair_brief\|profile.md" tests/test_*.py | xargs -n1 basename); echo $files; for f in $files; do echo "== $f"; .venv/bin/python -m unittest discover -s tests -p $f 2>&1 | tail -3 | tr '\n' ' '; echo; done''',
+           r'''{ grep -lE "fix_brief|_review_stage|_merge_stage|_rereview\b|_repair_review\b|MergeBlocked|_final_high|_seen_final_high" tests/test_*.py | xargs -n1 basename; echo test_feedback_format.py; echo test_result_grace.py; } | sort -u > /tmp/gs03_r2/files.txt; wc -l < /tmp/gs03_r2/files.txt
+cat /tmp/gs03_r2/files.txt | xargs -P 4 -n 1 sh -c '.venv/bin/python -m unittest discover -s tests -p "$0" > /tmp/gs03_r2/t_$0.log 2>&1; echo "$0 $?" >> /tmp/gs03_r2/done.txt'; sort /tmp/gs03_r2/done.txt''',
+           r'''files=$(grep -lE "phases|PHASE_LABELS|_merge\b|병합 대기|merge_wait" tests/test_*.py | xargs -n1 basename | sort -u); echo $files; echo $files | tr ' ' '\n' | xargs -P 4 -n 1 sh -c '.venv/bin/python -m unittest discover -s tests -p $0 >/tmp/mw_$0.log 2>&1 && echo "OK $0" || echo "FAIL $0"' ''',
            ".venv/bin/python -m unittest discover -s tests",
            "python -m unittest discover -s tests",
            ".venv/bin/python -m unittest discover -s tests -p 'test_*.py'",
@@ -51,7 +56,10 @@ BLOCKED = [V25_03, listed(11), listed(12),
            # `|` 뒤 줄바꿈 변형
            "ls tests | grep \"^test_\" |\nxargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p"]
 PASSED = [listed(8), listed(10),
+          "for t in test_a.py test_b.py; do .venv/bin/python -m unittest discover -s tests -p $t; done",
+          'grep -ln "write_brief" tests/*.py',
           ".venv/bin/python -m unittest discover -s tests -p test_x.py",
+          ".venv/bin/python -m unittest discover -s tests -p test_hook.py",
           "uv run python -m unittest discover -s tests -p test_hook.py",
           "git add " + " ".join(f"tests/{name}" for name in NAMES),
           "ls tests | grep -E '^test_(hook|config)'"]
@@ -100,6 +108,19 @@ class Base(unittest.TestCase):
 
 class RepoRulesTest(Base):
     """이 레포의 config 값으로 막고 통과시킨다."""
+
+    def test_v40_glob_runner_rule(self):
+        blocked = BLOCKED[3:7]
+        passed = [PASSED[2], PASSED[3], PASSED[5], PASSED[-1]]
+        for command in blocked:
+            with self.subTest(command=command[:80]):
+                reason, err = self.verdict(command)
+                self.assertIsNotNone(reason)
+                self.assertIn("deny", reason)
+                self.assertEqual(err, "")
+        for command in passed:
+            with self.subTest(command=command[:80]):
+                self.assertEqual(self.verdict(command), (None, ""))
 
     def test_full_runs_are_blocked_with_the_advice(self):
         self.assertTrue(self.env[config.WORKER_TESTS_ENV])
