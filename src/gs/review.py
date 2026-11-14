@@ -869,7 +869,7 @@ def _run_line(family: str) -> str:
     return _by_family(
         family,
         run="전체 시험을 돌리지 말고 지적을 확인할 좁은 재현만 돌린다. 전체 검증은 gs가 병합 전에 돌린다. "
-            "`Operation not permitted: 'ps'`로 실패한 시험은 다시 돌리지 않는다.",
+            "`Operation not permitted: 'ps'`로 실패한 시험은 다시 돌리지 않고 그 시험 이름을 결과(checked 또는 evidence)에 적는다.",
         claude=CLAUDE_NO_RUN)
 
 

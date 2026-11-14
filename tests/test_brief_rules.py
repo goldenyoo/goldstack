@@ -82,11 +82,13 @@ class BriefRulesTest(unittest.TestCase):
                              review.rereview_prompt(p, p, p, p, p, family=family),
                              review.repair_review_prompt(p, "log", p, p, p, family=family)):
                     self.assertIn(ps, text)
+                    self.assertIn("그 시험 이름을 결과(checked 또는 evidence)에 적는다", text)
                     self.assertIn("ps 실행이 필요한 단계", text)
         for text in (review.review_prompt(p, p, p, p, family="claude"),
                      review.rereview_prompt(p, p, p, p, p, family="claude"),
                      review.repair_review_prompt(p, "log", p, p, p, family="claude")):
             self.assertNotIn(ps, text)
+            self.assertNotIn("그 시험 이름을 결과(checked 또는 evidence)에 적는다", text)
             self.assertIn("ps 실행이 필요한 단계", text)
 
     def test_every_brief_tells_to_split_test_runs_without_dropping_files(self):
