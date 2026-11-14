@@ -127,6 +127,17 @@ class GrillBreakdownTest(unittest.TestCase):
         text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
         self.assertIn("완료 조건의 동작을 지우면 실패하는", text)
 
+    def test_ticket_template_orders_numeric_limits_and_remeasures(self):
+        text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
+        for phrase in ("어느 쪽이 우선인지 함께 적는다", "재는 명령을 함께 적고",
+                       "리뷰어가 이 명령으로 다시 잰다"):
+            self.assertIn(phrase, text)
+
+    def test_spec_template_decision_comment_asks_priority_and_measure(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 3. 결정")[2].partition("-->")[0]
+        for phrase in ("수치 결정이면", "우선순위", "재는 방법"):
+            self.assertIn(phrase, comment)
+
     def test_ticket_template_asks_for_final_observation_point_and_its_test(self):
         text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
         self.assertIn("고친 동작이 사람·호출자에게 보이는 최종 관측 지점과 그곳의 시험 하나", text)
