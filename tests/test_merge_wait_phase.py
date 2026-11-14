@@ -6,10 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from test_async_verify import Base
 
-from gs import report, state
+from gs import go, report, state, transient
 
 
 def clock(minute):
@@ -46,6 +47,35 @@ class MergeWaitPhaseTest(Base):
         self.assert_no_timeouts()
         self.assertNotIn("merge_wait", self.phases("11"))
         self.assertIn("verify", self.phases("11"))
+
+    def test_ticket_that_queues_again_after_a_network_abort_gets_a_new_merge_wait(self):
+        self.setup_verify(3, "11", "12", "13")
+        self.signal("hold_11_1", "hold_12_1")
+        self.hook("start_12", 'await "$here/verifying_11" up\n')
+        self.hook("start_13", 'await "$here/verifying_11" up\n')
+        real, fired = go._wait_any, []
+
+        def wait_any(r, active, runner, *, once=False):
+            if not fired and {e.a.t.id for e in r.merges.queue} >= {"12", "13"}:  # 11 검증 중에 12·13이 줄을 섰다
+                fired.append(True)
+                self.signal("release_11")
+                raise transient.NetworkAbort("시험 끊김")
+            return real(r, active, runner, once=once)
+
+        with mock.patch.object(go, "_wait_any", wait_any):
+            code, out, err = self.go(*self.only("11", "12", "13"))
+        self.assertEqual(code, go.EXIT_NETWORK, out + err)
+        self.assertEqual(self.phases("13").count("merge_wait"), 1, self.phases("13"))
+        with self.when_queued("13", lambda: self.signal("release_12")):  # 재개한 12가 검증 중일 때 13이 다시 줄을 선다
+            code, out, err = self.go(*self.only("11", "12", "13"))
+        self.assertEqual(code, 0, out + err)
+        self.assert_no_timeouts()
+        self.assertEqual(self.merged(), ["11", "12", "13"])
+        waits = [p for p in self.ts("13").phases if p["phase"] == "merge_wait"]
+        self.assertEqual(len(waits), 2, self.ts("13").phases)
+        self.assertTrue(all(p["ended_at"] for p in waits), waits)
+        phases = self.phases("13")
+        self.assertEqual(phases[phases.index("verify") - 1], "merge_wait", phases)
 
 
 class MergeWaitReportTest(unittest.TestCase):

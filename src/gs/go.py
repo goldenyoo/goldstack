@@ -1325,7 +1325,11 @@ def _merge(r: Run, a: Active) -> None:
         _merge_step(r)
         return
     merges.queue.append(entry)
-    _wait_phase(r, a.t.id, MERGE_WAIT)
+    phases = r.st.ticket(a.t.id).phases
+    if phases and phases[-1]["phase"] == MERGE_WAIT and phases[-1]["ended_at"]:
+        _phase(r, a.t.id, MERGE_WAIT, "")  # 끊김 뒤 재개해 다시 줄을 섰다: 닫힌 앞 merge_wait와 따로 연다
+    else:
+        _wait_phase(r, a.t.id, MERGE_WAIT)
     why = f"{merges.now.a.t.id} 검증 중" if merges.now is not None else "네트워크 회복을 기다린다"
     say(f"[{a.t.id}] 병합 대기: {why}")
 
