@@ -130,6 +130,7 @@ REOPENED = "reopened"  # 끝난 마무리 뒤에 새 티켓이 integration에 �
 REOPENED_OUTCOME = "새 티켓이 base에 없음 → 이어서 gs go"
 ONLY_STOPPED = "only_stopped"  # REOPENED인 채로 --only가 멈췄다(_stop_only)
 REVIEW_WAIT, FIX_WAIT, REPAIR_WAIT = "review_wait", "fix_wait", "repair_wait"  # 자리를 기다리는 단계(state.PHASE_LABELS)
+MERGE_WAIT = "merge_wait"  # 병합 줄에서 다른 티켓의 검증이 끝나기를 기다리는 단계. 다음 단계(보통 verify, 늦은 커밋이면 재리뷰)가 시작하며 닫는다
 # 수리의 진행(Active.repair, network_resume의 repair). 비어 있으면 이 시도는 아직 수리하지 않았다
 REPAIR_SEAT = "seat"  # 검증이 실패했고 수리 worker 자리를 기다린다
 REPAIR_RUN = "run"  # 수리 worker를 띄웠다
@@ -1312,7 +1313,8 @@ def _stop_reviews(r: Run) -> None:
 def _merge(r: Run, a: Active) -> None:
     """티켓을 병합·검증으로 보낸다(_merge_stage). 병합 자리가 비고 줄이 없으면 바로 준비하고 검증 호출을 루프 밖으로 보낸다(_merge_step).
 
-    아니면 줄을 서고 `[<id>] 병합 대기: <검증 중 id> 검증 중`을 한 번 출력한다. 줄은 검증이 반영된 뒤 순서대로 시작한다(_merge_next).
+    아니면 줄을 서고 `[<id>] 병합 대기: <검증 중 id> 검증 중`을 한 번 출력하고 단계 `merge_wait`를 연다(_wait_phase). 줄은 검증이 반영된 뒤 순서대로 시작한다(_merge_next).
+    `merge_wait`는 그 티켓의 다음 단계(보통 verify, 늦은 커밋이면 재리뷰)가 시작할 때 닫힌다: 줄에서 나온 뒤 그 단계까지의 준비 시간도 든다. 줄을 서지 않으면 이 단계는 없다.
     병합 단계(_merge_stage)는 여기서 만든다: 병합하기로 정한 때다. 그 몸은 차례가 와야 돈다(준비는 그때의 브랜치와 integration을 본다).
     줄 선 동안의 재개 표시는 줄을 서기 전 그대로다(_leave_review가 지운 것은 지운 채): gs가 멈추면 지금처럼 첫 검증 도중과 같게 잇는다.
     """
@@ -1323,6 +1325,11 @@ def _merge(r: Run, a: Active) -> None:
         _merge_step(r)
         return
     merges.queue.append(entry)
+    phases = r.st.ticket(a.t.id).phases
+    if phases and phases[-1]["phase"] == MERGE_WAIT and phases[-1]["ended_at"]:
+        _phase(r, a.t.id, MERGE_WAIT, "")  # 끊김 뒤 재개해 다시 줄을 섰다: 닫힌 앞 merge_wait와 따로 연다
+    else:
+        _wait_phase(r, a.t.id, MERGE_WAIT)
     why = f"{merges.now.a.t.id} 검증 중" if merges.now is not None else "네트워크 회복을 기다린다"
     say(f"[{a.t.id}] 병합 대기: {why}")
 
@@ -3264,12 +3271,60 @@ def _merge_state(r: Run) -> tuple[str, str, str, str]:
 
 
 def _tree_state(wt: Path) -> tuple[str, str, str, str]:
-    """_merge_state를 경로로 읽는다. 검증 호출의 스레드도 이것을 부른다(Run을 넘기지 않는다)."""
-    def get(*args: str) -> str:
-        cp = git.run(wt, *args, check=False)
-        return cp.stdout.strip() if cp.returncode == 0 else ""
-    return (get("rev-parse", "-q", "--verify", "HEAD"), get("symbolic-ref", "-q", "HEAD"),
-            get("rev-parse", "-q", "--verify", "MERGE_HEAD"), get("write-tree"))
+    """HEAD·MERGE_HEAD·브랜치를 함께 묻고 미생성 브랜치는 HEAD 파일에서도 읽는다.
+
+    보통 index까지 git 두 번이며, 함께 조회하지 못하고 파일에서도 못 읽은 브랜치는 symbolic-ref를 추가로 묻는다.
+    _merge_state와 같은 네 값이며 읽지 못한 값은 빈 문자열이다. 검증 스레드도 경로만 넘겨 부른다.
+    """
+    try:
+        has_merge = (setup.marker(wt).parent / "MERGE_HEAD").exists()
+    except git.GitError:
+        return "", "", "", ""
+    except OSError:
+        has_merge = True
+    refs = git.run(wt, "rev-parse", "--path-format=absolute", "--absolute-git-dir", "--git-common-dir",
+                   "--revs-only", "HEAD", *(("MERGE_HEAD",) if has_merge else ()),
+                   "--symbolic-full-name", "HEAD", check=False)
+    values = refs.stdout.splitlines() if refs.returncode == 0 else []
+    symbolic = None
+    if len(values) > 2 and (values[-1] == "HEAD" or values[-1].startswith("refs/")):
+        symbolic = values.pop()
+
+    def branch_from_git() -> str:
+        if symbolic is not None:
+            return "" if symbolic == "HEAD" else symbolic
+        result = git.run(wt, "symbolic-ref", "-q", "HEAD", check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    head, merge = (values[2:] + ["", ""])[:2]
+    branch = ""
+    if len(values) >= 2:
+        gitdir, common = map(Path, values[:2])
+        path = gitdir / "HEAD"
+        # symbolic-ref처럼 연결을 따라간다. 없는 끝 참조(아직 커밋 없음)도 브랜치 이름은 남긴다.
+        for _ in range(5):
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+            except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+                break
+            except OSError:
+                branch = branch_from_git()
+                break
+            except UnicodeError:
+                branch = ""
+                break
+            if not content.startswith("ref:"):
+                break
+            branch = content[4:].strip()
+            if branch == "refs/heads/.invalid":
+                branch = branch_from_git()
+                break
+            local = branch.startswith(("refs/bisect/", "refs/worktree/", "refs/rewritten/"))
+            path = (gitdir if local else common) / branch
+        else:
+            branch = ""
+    index = git.run(wt, "write-tree", check=False)
+    return head, branch, merge, index.stdout.strip() if index.returncode == 0 else ""
 
 
 def _catch_up(r: Run, a: Active) -> bool:

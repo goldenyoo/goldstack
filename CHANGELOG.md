@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 0.2.23 — 2026-11-14
+
+### goldstack-v39
+
+- claude worker `--disallowedTools`에 `ScheduleWakeup`과 `CronCreate`를 더했다. worker가 건 wakeup으로 끝난 뒤에도 노는 시간이 없다.
+- `transient`가 Cloudflare 차단 403(`Attention Required`·`cloudflare` 문구가 함께 있는 403)을 일시 오류로 본다. 대기 일정은 429·5xx와 같다. 인증 403·401은 그대로 영구 오류다.
+- 병합 줄에서 기다린 시간을 새 단계 `merge_wait`(보고서 `병합 대기`)로 남긴다. 옛 state는 그대로 읽는다.
+- `setup.marker`는 git을 부르지 않고 worktree의 `.git`을 직접 읽고, `go._tree_state`의 git 호출을 줄였다.
+- worker brief의 변이 확인 규칙은 새 시험 하나만 돌리게 하고, grill `templates/spec.md` touches 주석은 충돌 시험을 넣게 한다. profile에 Python 캐시 우회(`PYTHONPYCACHEPREFIX`)를 적었다.
+- `docs/guide.md`·`docs/internals.md`에 위 변경을 적었다.
+- 버전을 `0.2.23`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.22 — 2026-11-13
 
 ### goldstack-v38

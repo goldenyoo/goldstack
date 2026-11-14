@@ -1,6 +1,6 @@
 [project]
 name = "goldstack"
-version = "0.2.22"
+version = "0.2.23"
 description = "grill → go 한 번 → 자율 실행 → main 병합까지 가는 개인 운영 kit"
 requires-python = ">=3.12"
 dependencies = []

@@ -194,8 +194,9 @@ class Adapter:
 # ---------------------------------------------------------------- claude
 
 class Claude(Adapter):
-    """도구 차단으로 push와 gh를 막고, `Monitor`도 끈다(걸어 두면 일을 마친 뒤에도 알림마다 다시 깨어나 비용을 쓰고
-    최종 보고를 되풀이한다. 백그라운드 Bash는 끝나면 스스로 알려서 `Monitor` 없이도 결과를 받는다). 수정·수리 worker도
+    """도구 차단으로 push와 gh를 막고, `Monitor`, `ScheduleWakeup`, `CronCreate`도 끈다.
+    이 도구들은 일을 마친 뒤에도 세션을 붙잡는다. 백그라운드 Bash는 끝나면 스스로 알려서
+    이 도구 없이도 결과를 받는다. 수정·수리 worker도
     같은 `command`를 쓴다. 09의 plugin hook(`gs hook pretooluse`, GS_ROLE=worker일 때)과
     겹치는 이중 장치로 남겨 둔다: plugin이 설치되지 않았거나 hook이 따라가지 못한 형태도 여기서 한 번 더 막힌다.
 
@@ -207,7 +208,7 @@ class Claude(Adapter):
     """
     name = "claude"
     BASE = ('claude -p --output-format stream-json --verbose --permission-mode bypassPermissions '
-            '--disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor')
+            '--disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor ScheduleWakeup CronCreate')
     ISOLATION = "--strict-mcp-config --mcp-config '{\"mcpServers\":{}}' --disable-slash-commands"
 
     def isolation(self, inp: WorkerInput) -> str:

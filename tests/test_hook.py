@@ -575,7 +575,7 @@ class PluginTest(unittest.TestCase):
         self.assertIn("if [ \"${GS_ROLE:-}\" != worker ]; then exit 0; fi", self.hook_command())
 
     def test_worker_keeps_tool_block_as_second_guard(self):
-        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor', adapters.Claude.BASE)
+        self.assertIn('--disallowedTools "Bash(git push *)" "Bash(gh *)" Monitor ScheduleWakeup CronCreate', adapters.Claude.BASE)
 
     def test_force_push_message_says_force(self):
         env = {"GS_ROLE": "worker", "GS_WORKTREE": "/w"}
