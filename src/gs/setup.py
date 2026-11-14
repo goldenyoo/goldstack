@@ -47,7 +47,21 @@ def _restore_tracked(wt: Path) -> str:
 
 
 def marker(wt: Path) -> Path:
-    """worktree별 git 관리 디렉터리에 둔다. reset·clean에도 남고 새 worktree에는 없다."""
+    """.git 디렉터리·gitdir 파일에서 표지 경로를 읽고, 읽을 수 없으면 git에 묻는다.
+
+    worktree별 관리 디렉터리에 있어 reset·clean에도 남고 새 worktree에는 없다.
+    """
+    dotgit = wt / ".git"
+    try:
+        if dotgit.is_dir():
+            return dotgit.resolve() / "gs-setup-done"
+        lines = dotgit.read_text(encoding="utf-8").splitlines()
+        if len(lines) == 1 and lines[0].startswith("gitdir: "):
+            target = lines[0][8:]
+            if target:
+                return (wt / target).resolve() / "gs-setup-done"
+    except (OSError, UnicodeError, ValueError):
+        pass
     return Path(git.out(wt, "rev-parse", "--absolute-git-dir")) / "gs-setup-done"
 
 

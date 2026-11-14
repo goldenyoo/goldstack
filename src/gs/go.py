@@ -3271,12 +3271,36 @@ def _merge_state(r: Run) -> tuple[str, str, str, str]:
 
 
 def _tree_state(wt: Path) -> tuple[str, str, str, str]:
-    """_merge_state를 경로로 읽는다. 검증 호출의 스레드도 이것을 부른다(Run을 넘기지 않는다)."""
-    def get(*args: str) -> str:
-        cp = git.run(wt, *args, check=False)
-        return cp.stdout.strip() if cp.returncode == 0 else ""
-    return (get("rev-parse", "-q", "--verify", "HEAD"), get("symbolic-ref", "-q", "HEAD"),
-            get("rev-parse", "-q", "--verify", "MERGE_HEAD"), get("write-tree"))
+    """HEAD·MERGE_HEAD를 한 번에 묻고 HEAD 파일에서 브랜치를 읽는다. index까지 git 두 번이다.
+
+    _merge_state와 같은 네 값이며 읽지 못한 값은 빈 문자열이다. 검증 스레드도 경로만 넘겨 부른다.
+    """
+    refs = git.run(wt, "rev-parse", "--path-format=absolute", "--absolute-git-dir", "--git-common-dir",
+                   "--revs-only", "HEAD", "MERGE_HEAD", check=False)
+    values = refs.stdout.splitlines() if refs.returncode == 0 else []
+    head, merge = (values[2:] + ["", ""])[:2]
+    branch = ""
+    if len(values) >= 2:
+        gitdir, common = map(Path, values[:2])
+        path = gitdir / "HEAD"
+        # symbolic-ref처럼 연결을 따라간다. 없는 끝 참조(아직 커밋 없음)도 브랜치 이름은 남긴다.
+        for _ in range(5):
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+            except FileNotFoundError:
+                break
+            except (OSError, UnicodeError):
+                branch = ""
+                break
+            if not content.startswith("ref:"):
+                break
+            branch = content[4:].strip()
+            local = branch.startswith(("refs/bisect/", "refs/worktree/", "refs/rewritten/"))
+            path = (gitdir if local else common) / branch
+        else:
+            branch = ""
+    index = git.run(wt, "write-tree", check=False)
+    return head, branch, merge, index.stdout.strip() if index.returncode == 0 else ""
 
 
 def _catch_up(r: Run, a: Active) -> bool:
