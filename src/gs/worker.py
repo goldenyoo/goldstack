@@ -43,7 +43,12 @@ REAL_TEST_RULE = (
     "기존 단언을 약하게 만들거나 지우지 않는다(티켓이 요구한 변경은 예외다).")
 CHANGED_NAMES_RULE = (
     "- 서명이나 읽는 속성을 바꾼 함수·클래스는 그 이름을 시험 폴더(이 레포는 profile을 본다. 예: `tests/`)에서도 grep한다. "
-    "나온 시험 파일을 모두 파일마다 따로 돌리고, 돌린 파일 목록을 마지막 메시지에 적는다.")
+    "나온 시험 파일을 파일마다 따로 돌리고, 돌린 파일 목록을 마지막 메시지에 적는다. "
+    "나온 파일이 hook이 막는 수를 넘으면 단어 단위(`grep -lw`)로 좁히고, 그래도 넘으면 그 이름을 import하거나 부르는 파일만 돌린다. 나눠 돌리기는 이렇게 고른 파일 안에서 한다. "
+    "돌리지 않은 시험 파일 이름은 마지막 메시지에 적는다(gs가 병합 트리에서 전체를 돈다).")
+PS_RULE = (
+    "- `Operation not permitted: 'ps'`로 실패한 시험은 다시 돌리지 않고 이름만 마지막 메시지에 적는다. "
+    "레포 profile에 그런 시험 목록이 있으면 그 시험은 처음부터 돌리지 않는다.")
 SPLIT_RUN_RULE = "- hook이 한 명령의 시험 파일 수를 막으면 명령을 나눠 돌린다. 일부를 빼지 않는다."
 OBSERVATIONS_HEADING = "## 남긴 관찰"  # worker가 마지막 메시지 끝에 쓰는 절의 제목. 05가 이 제목으로 절을 뽑는다
 OBSERVATIONS_RULE = (
@@ -158,7 +163,8 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     모든 brief에 `MACHINE_RULE`도 붙는다: 다른 티켓이 같은 기계에서 함께 도니 자기가 띄운 프로세스만 PID로 다룬다.
     어느 brief든 버그를 고치면 새 시험의 실패를 직접 보라는 규칙이 붙는다(`SEE_FAIL_RULE`). 되돌린 상태에서는 새 시험 하나만 돌리고 넓은 묶음·전체 시험은 돌리지 않으며 캐시·빌드 산출물이 옛 코드를 쓰지 않게 하라는 문장도 같은 규칙에 든다(언어·환경 변수 이름은 적지 않는다. 레포 profile이 맡는다).
     시험은 완료 조건의 동작을 지우면 실패하게 쓰고(diff가 더한 새 분기와 바꾼 호출 지점 모두) 기존 단언을 약하게 하지 않는다는 규칙도 모든 brief에 붙는다(`REAL_TEST_RULE`).
-    서명이나 읽는 속성을 바꾼 이름을 시험 폴더에서도 grep해 나온 시험 파일을 모두 따로 돌리고 목록을 적으라는 규칙도 모든 brief에 붙는다(`CHANGED_NAMES_RULE`).
+    서명이나 읽는 속성을 바꾼 이름을 시험 폴더에서도 grep해 나온 시험 파일을 모두 따로 돌리고 목록을 적으라는 규칙도 모든 brief에 붙는다(`CHANGED_NAMES_RULE`). 나온 파일이 hook 상한을 넘으면 `grep -lw`로 좁히고, 그래도 넘으면 그 이름을 import하거나 부르는 파일만 돌리며 돌리지 않은 파일 이름을 적는다(상한 숫자는 적지 않는다).
+    `Operation not permitted: 'ps'`로 실패한 시험은 다시 돌리지 않고 이름만 적으며, 레포 profile의 그런 시험 목록은 처음부터 돌리지 않는다(`PS_RULE`, 모든 brief).
     merged는 첫·재개 worker만 넘긴다: worktree의 base에 이미 병합된 이번 실행의 티켓 (id, 커밋). 주면 base 줄이 붙고(없으면 `없음`), 이 티켓의 `blocked_by` 중 병합되지 않은 것은 따로 적는다(`base_lines`). None이면(수정·수리 worker, replay) 줄이 없다.
     한 명령의 시험 파일 수를 hook이 막으면 명령을 나눠 돌리고 일부를 빼지 않는다는 규칙(`SPLIT_RUN_RULE`), 측정용 claude·codex 세션은 `gs child`로 띄운다는 규칙(`NESTED_SESSION_RULE`),
     고치지 않고 남긴 관찰을 마지막 메시지 끝의 `OBSERVATIONS_HEADING` 절에 쓴다는 규칙(`OBSERVATIONS_RULE`)도 모든 brief에 붙는다. 상한 숫자는 적지 않는다(레포 config 값이다).
@@ -193,6 +199,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 {REAL_TEST_RULE}
 {CHANGED_NAMES_RULE}
 {SPLIT_RUN_RULE}
+{PS_RULE}
 {NESTED_SESSION_RULE}
 {OBSERVATIONS_RULE}
 {MACHINE_RULE}
