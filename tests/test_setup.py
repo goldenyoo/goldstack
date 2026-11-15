@@ -111,6 +111,7 @@ class WorktreeSetupTest(unittest.TestCase):
         return f'echo "$PWD" >> {self.bin / "setups"}; '
 
     def test_installed_files_visible_to_worker_and_all_verifies(self):
+        support.verify_integration(self)  # 마무리 integration 검증도 준비한 파일을 보는지 본다
         self.configure(self.record_setup + 'test -z "$GS_ROLE" && echo ready > installed && echo secret > .env',
                        f'test -f installed && echo "$PWD" >> {self.bin / "verifies"}')
         path = self.bin / "worker.sh"

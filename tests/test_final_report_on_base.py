@@ -95,8 +95,10 @@ class FinalReportOnBaseTest(unittest.TestCase):
         f = state.load(self.rundir, "demo").finish
         self.assertEqual(f["phase"], "verified")
         line = f"마무리: verified · PR {URL} 병합 · main 검증 통과"
+        # 01이 spec verify로 검증한 트리 그대로라 마무리 integration 검증을 건너뛰었다. 그 근거는 마무리 줄 다음의 따로 된 줄이다
+        skipped = "integration 검증 건너뜀: ticket-01 전체 검증과 같은 트리"
         # 마무리 줄은 Summary 바로 아래, 코드가 쓴다. judge에게는 마무리 상태 문장을 쓰지 말라고 했다
-        self.assertIn(f"## Summary\n\n티켓의 변경을 integration에서 모아 검증했다.\n\n{line}\n\n## Evidence",
+        self.assertIn(f"## Summary\n\n티켓의 변경을 integration에서 모아 검증했다.\n\n{line}\n{skipped}\n\n## Evidence",
                       self.final_report())
         prompt = (self.bin / "judge.input").read_text()
         self.assertIn("report-input.md", prompt)
@@ -144,6 +146,7 @@ class FinalReportOnBaseTest(unittest.TestCase):
         self.assertIn("\n마무리: not_merged · merged 티켓 없음\n", self.final_report())
 
     def test_integration_failure_pushes_nothing(self):
+        support.verify_integration(self)  # 티켓 검증만 통과하는 verify: 마무리 integration 검증이 실패해야 한다
         self.parallel(1, verify="git rev-parse -q --verify MERGE_HEAD >/dev/null")
         before = self.tip()
         self.assertEqual(self.go("--only", "01")[0], 1)

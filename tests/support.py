@@ -163,6 +163,28 @@ def isolate_git_env(test):
             os.environ.pop(name)
 
 
+def verify_integration(test):
+    """이 시험의 마무리는 integration 전체 검증을 건너뛰지 않는다(finish._skip_reason이 늘 근거 없음, goldstack-v41 01).
+
+    GoTest의 티켓은 spec `verify`로 검증하니 마무리가 그 트리를 다시 검증하지 않는다. integration 검증의 실패·시간 초과·flaky·측정을
+    일부러 만드는 시험은 이것을 불러 검증을 지금처럼 거치게 한다. 건너뛰기 자체는 test_finish_skip_verify가 본다."""
+    patch = mock.patch("gs.finish._skip_reason", return_value="")
+    patch.start()
+    test.addCleanup(patch.stop)
+
+
+def ticket_verify(test, tid, command):
+    """GoTest 레포의 티켓 tid에 `verify: <command>`를 적고 커밋·push한다.
+
+    command가 spec `verify`와 다르면 그 티켓은 좁은 검증이라, 이 티켓만 병합된 실행의 마무리는 integration 전체 검증을 건너뛰지 않는다
+    (finish._skip_reason). gs를 자식 프로세스로 띄워 verify_integration의 mock이 닿지 않는 시험이 쓴다."""
+    sh(test.repo, "git", "pull", "-q", "--ff-only", test.REMOTE, test.BASE)
+    path = test.repo / ".goldstack/work/demo/tickets" / f"{tid}-t.md"
+    path.write_text(path.read_text().replace("reviewer: codex\n", f"reviewer: codex\nverify: {json.dumps(command)}\n", 1))
+    sh(test.repo, "git", "commit", "-qam", f"ticket {tid} verify")
+    sh(test.repo, "git", "push", "-q", test.REMOTE, test.BASE)
+
+
 def git_clean(wt):
     return subprocess.run(["git", "status", "--porcelain"], cwd=wt, capture_output=True, text=True).stdout == ""
 

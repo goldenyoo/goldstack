@@ -399,6 +399,7 @@ class MetricsExecutionTest(support.GoTest):
         self.assertTrue(all(x['worker_exited_at'] and x['processing_started_at'] for x in rows))
 
     def test_worker_review_fix_finish_metrics_reach_state_and_report(self):
+        support.verify_integration(self)  # 마무리 integration 검증의 측정 줄을 본다
         with self.review_with([{'severity': 'high', 'location': 'file_01', 'claim': 'FIX value', 'evidence': 'wrong'}]):
             code, out, err = self.go('--only', '01')
         self.assertEqual(code, 0, out + err)

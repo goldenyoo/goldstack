@@ -7,6 +7,8 @@
 "gs 검증별 측정" 표는 검증의 재시도 하나가 한 줄이다. 열 뜻: 티켓 시도 = 그때의 티켓 worker 시도, 재시도 = 한 검증 안의 재시도,
 integration head = 검증한 integration 끝(티켓 검증이어도 티켓 코드가 아니고 여러 검증이 같을 수 있다), 티켓 head = 병합하려던 티켓 커밋.
 판단 입력 `report-input.md`에는 실패한 검증의 시험 줄(failing_tests)과 티켓별 worker 마지막 보고(worker_reports, 믿을 수 없는 자료)가 들어간다. 로그가 없으면 없다고 적는다.
+마무리가 integration 전체 검증을 건너뛰었으면(finish `integration_skipped`, goldstack-v41 01) Summary의 마무리 줄 바로 다음 줄이
+`integration 검증 건너뜀: <근거>`다. 마무리 줄 자체는 그대로이고, 건너뛴 검증은 측정 표에 줄이 없다.
 base 검증이 실패한 보고서(reverted)는 Evidence 맨 앞에 그 실패 줄·로그 경로를 싣고, Summary 맨 위 줄에 revert 상태와 `gs go <feature>`를 코드로 넣는다.
 후보 티켓(추정)이 없으면 병합된 티켓별 실제 변경 파일을 함께 보인다.
 landlock 모드로 돈 실행의 보고서는 제목 바로 아래에 `샌드박스: landlock(네트워크 열림)` 줄이 있다(sandbox_line). os 모드면 없다.
@@ -888,6 +890,8 @@ def _render(r, summary: str, tail: int) -> str:
     summary_status = status_line(r)
     if remaining := remaining_line(r):
         summary_status += f" · {remaining}"
+    if skipped := f.get("integration_skipped"):  # 마무리 줄은 그대로 두고 따로 된 줄(finish._skip_reason)
+        summary_status += f"\nintegration 검증 건너뜀: {skipped}"
     if counts := finding_counts(r):
         summary_status += f"\n{counts}"
     if flaky := flaky_lines(r):

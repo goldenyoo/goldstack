@@ -385,6 +385,7 @@ class PointsTest(unittest.TestCase):
     configure, change_code_with_report = V.configure, V.change_code_with_report
 
     def test_every_point_triages_with_the_running_config(self):
+        support.verify_integration(self)  # 마무리 integration 검증의 판별도 본다
         script = self.bin / "verify.sh"
         script.write_text(f'''\
 here={self.bin}
