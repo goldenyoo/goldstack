@@ -13,3 +13,4 @@ feature: "goldstack-v40"
 보고서: .goldstack/work/goldstack-v39/report.md
 
 - 2026-11-14 goldstack-v40 grill: 해결 확인으로 닫는다. main(b8c0d76)의 `_tree_state`가 reftable 레포와 그 worktree에서 `symbolic-ref`와 같은 브랜치를 돌려준다(`.invalid`면 git에 묻는 분기, goldstack-v39 04 2차 수정).
+버린 이유: 이미 해결됨(goldstack-v39 04 2차 수정. goldstack-v40 grill에서 reftable 레포로 확인).

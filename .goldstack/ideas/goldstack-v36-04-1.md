@@ -2,8 +2,8 @@
 date: "2026-11-13"
 severity: "medium"
 source: "goldstack-v36 리뷰 04"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v41"
 ---
 새 시험은 replay 경로를 거치지 않습니다. 시험이 `worker.write_brief`를 `touches=`와 함께 직접 부르기 때문에, 이 티켓의 실제 동작 변경인 `src/gs/replay.py:571`의 `touches=list(frozen.touches)`를 원래대로 되돌려도 시험이 통과합니다. replay가 touches를 넘기지 않게 되는 회귀를 어떤 시험도 잡지 못합니다. touches 때문에 `tests/test_replay_run.py`를 고칠 수 없었다면 그 사정을 `## 남긴 관찰`에 적었어야 하는데 적지 않았습니다.
 
