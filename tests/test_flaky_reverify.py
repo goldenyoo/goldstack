@@ -1,7 +1,7 @@
 """goldstack-v43 02: 판별에서 따로 통과한 파일만 판별 뒤 전체 실행에서 다시 실패하면 수리 대신 같은 트리를 한 번 다시 검증한다(go._flaky_files, go._verify_flaky).
 
 가짜 verify는 n번째 전체 실행이 무엇을 할지 정한다(실패면 unittest 실패 줄을 찍는다). 판별 명령(config `[verify] rerun`)은 받은 값을 rerun.calls에 적고 통과한다.
-그 틀은 이 레포 config처럼 `{file}.py`라 diff 대조의 시험 파일 확장자가 `.py`다(go._rerun_suffix).
+그 틀은 이 레포 config처럼 `{file}.py`라 diff 대조의 시험 파일 확장자가 `.py`다(go._rerun_suffix). integration 트리에 그 시험 파일(tests/test_a.py)이 있을 때만 그렇다(go._test_suffix).
 `[verify]`는 main checkout의 config에만 적는다(실행 중인 config로 판별한다). 가짜 worker·리뷰어는 test_verify_repair.Base의 것이다. 시간에 기대지 않는다.
 """
 import json
@@ -33,10 +33,12 @@ def fail(*modules):
 
 
 class Base(test_verify_repair.Base):
+    END = ".py"  # rerun 틀에서 `{file}` 바로 뒤에 붙은 끝
+
     def setUp(self):
         super().setUp()
         with (self.repo / config.CONFIG_PATH).open("a") as f:
-            f.write(f"\n[verify]\nfailed_file = '{FAILED_FILE}'\nrerun = \"f={{file}}.py; echo ${{f%.py}} >> {self.bin}/rerun.calls\"\n")
+            f.write(f"\n[verify]\nfailed_file = '{FAILED_FILE}'\nrerun = \"f={{file}}{self.END}; echo ${{f%{self.END}}} >> {self.bin}/rerun.calls\"\n")
 
     def verifies(self, *runs, retries=0):
         """n번째 티켓 전체 검증(미완 병합에서 돈다)은 runs[n-1]을 돌고, 넘어간 검증은 통과한다. 마무리 검증은 세지 않고 통과한다. 판별 실행도 세지 않는다(다른 명령이다)."""
@@ -52,6 +54,14 @@ class Base(test_verify_repair.Base):
 
     def full_runs(self):
         return int((self.bin / "verifies").read_text())
+
+    def base_test_file(self):
+        """실패할 시험 파일 tests/test_a.py를 base에 둔다(티켓 diff 밖)."""
+        (self.repo / "tests").mkdir(exist_ok=True)
+        (self.repo / "tests/test_a.py").write_text("base\n")
+        support.sh(self.repo, "git", "add", "tests/test_a.py")
+        support.sh(self.repo, "git", "commit", "-qm", "test_a")
+        support.sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
 
     @property
     def log(self):
@@ -119,8 +129,9 @@ class FlakyReverifyTest(Base):
         self.assertEqual((self.full_runs(), self.lines("rerun.calls")), (3, ["test_a"]))
 
     def test_file_with_the_same_name_and_another_suffix_is_not_the_failed_test(self):
-        # 시험 파일 확장자는 rerun 틀의 `{file}.py`다. 티켓은 docs/test_a.md만 바꿨고 tests/test_a.py는 diff 밖이다
+        # 시험 파일 확장자는 rerun 틀의 `{file}.py`다(트리에 tests/test_a.py가 있다). 티켓은 docs/test_a.md만 바꿨고 tests/test_a.py는 diff 밖이다
         self.verifies(fail("test_a"), fail("test_a"))
+        self.base_test_file()
         self.worker(SAME_NAME, REPAIR)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
@@ -160,6 +171,21 @@ class FlakyReverifyTest(Base):
         self.assertIn("같은 브랜치에서 수리한다", out)
         self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed")] * 4 + [("ticket-01-repair", "passed")])
         self.assertNotIn(go.FLAKY_AGAIN, self.log.read_text())  # 다시 검증이 통과하지 않았다
+
+
+class NotAFileEndTest(Base):
+    """rerun 틀에서 `{file}` 뒤에 붙은 것이 파일 끝이 아니다(`tests.{file}.Case`의 클래스 선택자 같은 것). integration 트리에 tests/test_a.Case가 없어 끝으로 쓰지 않는다(go._test_suffix)."""
+    END = ".Case"
+
+    def test_changed_test_file_is_in_the_diff(self):
+        # 티켓이 실패할 시험 파일 tests/test_a.py를 바꿨다. `.Case`를 확장자로 보면 diff 밖으로 보고 수리 없이 병합한다
+        self.verifies(fail("test_a"), fail("test_a"))
+        self.base_test_file()
+        self.worker(IN_DIFF, REPAIR)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assert_repaired(out)
+        self.assertEqual((self.full_runs(), self.lines("rerun.calls")), (3, ["test_a"]))
 
 
 class Late(Base):
@@ -382,13 +408,27 @@ class OldMarkTest(Base):
 
 class InDiffTest(unittest.TestCase):
     """판별 값과 티켓 diff의 바뀐 경로 대조(go._in_diff). 넓게 맞으면 수리로 갈 뿐이라 놓치지 않는 쪽을 본다.
-    끝(suffix, go._rerun_suffix)이 있으면 그것으로 끝나는 경로만 그것을 뺀다. 없으면 어떤 확장자든 뺀다."""
+    끝(suffix, go._rerun_suffix)은 integration 트리에 그것으로 끝나는 그 시험 파일이 있을 때만 쓴다(go._test_suffix). 쓰면 그것으로 끝나는 경로만 그것을 뺀다. 아니면 어떤 확장자든 뺀다."""
 
     def test_rerun_suffix(self):
         for rerun, suffix in ((".venv/bin/python -m unittest discover -s tests -p {file}.py", ".py"), ("pytest 'tests/{file}.py::Case'", ".py"),
                               ("go test ./{file}_test.go", "_test.go"), ("python -m unittest {file}", ""), ("echo {file} >> x", "")):
             with self.subTest(rerun=rerun):
                 self.assertEqual(go._rerun_suffix(rerun), suffix)
+
+    def test_test_suffix(self):
+        for name, suffix, tree in (("test_a", ".py", ["README.md", "tests/test_a.py"]), ("test_a.Case", ".py", ["tests/test_a.py"]),
+                                   ("pkg.test_a", ".py", ["tests/pkg/test_a.py"]), ("a", "_test.go", ["pkg/a_test.go"])):
+            with self.subTest(name=name, suffix=suffix, tree=tree):
+                self.assertEqual(go._test_suffix(name, suffix, tree), suffix)
+
+    def test_test_suffix_without_the_test_file(self):
+        # 트리에 `<name><suffix>` 파일이 없으면 끝으로 쓰지 않는다: `.Case`처럼 파일 끝이 아닌 것, 그 시험 파일이 없는 것
+        for name, suffix, tree in (("test_a", ".Case", ["tests/test_a.py"]), ("test_a", ".py", ["docs/test_a.md"]),
+                                   ("test_a", ".py", ["tests/test_ab.py", "tests/my_test_a.py", ""]), ("test_a", ".py", []),
+                                   ("test_a", "", ["tests/test_a.py"])):
+            with self.subTest(name=name, suffix=suffix, tree=tree):
+                self.assertEqual(go._test_suffix(name, suffix, tree), "")
 
     def test_matches_with_a_suffix(self):
         for name, paths in (("test_a", ["tests/test_a.py"]), ("pkg.test_a", ["tests/pkg/test_a.py"]), ("test_a.Case", ["tests/test_a.py"]),

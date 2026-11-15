@@ -53,7 +53,7 @@ gs만 SIGKILL로 죽으면 돌던 검증은 살아 남는다. 다음 gs go가 �
 따로 통과한 파일이고 하나도 티켓 diff에 없으면 flaky로 보고 수리 worker 없이 같은 트리로 한 번 다시 검증한다(goldstack-v43 02, _flaky_files, _verify_flaky). 방식은 끊김의 다시 검증과 같다.
 조건 하나라도 어긋나면(판별 안 함, 실패 파일 뽑기 실패, 따로 통과하지 않은 파일, diff 안 파일) 전처럼 수리다. 다시 검증(끊김·flaky)의 결과와 수리 뒤의 검증에는 쓰지 않는다.
 한 시도에 한 번이다: 쓴 것을 표시(network_resume의 flaky_used)에 남겨 늦은 커밋으로 재리뷰를 거친 뒤(_late_commit)와 재개 뒤에도 다시 쓰지 않는다. 옛 state에는 이 값이 없고 쓰지 않은 것으로 읽는다.
-diff 대조의 시험 파일 확장자는 config `[verify] rerun`에서 `{file}` 바로 뒤에 붙은 것이다(_rerun_suffix).
+diff 대조의 시험 파일 확장자는 config `[verify] rerun`에서 `{file}` 바로 뒤에 붙은 것이다(_rerun_suffix). integration 트리에 그것으로 끝나는 그 시험 파일이 있을 때만 쓴다(_test_suffix).
 다시 검증이 통과하면 병합하고 그 로그에 flaky 줄을 남겨 보고서 flaky 목록에 나온다. 티켓 결과의 이유는 FLAKY_AGAIN과 파일들이다. 끊김이 아닌 실패면 수리로 가고(spec 결정 3-1),
 끊기면 끊김의 다시 검증을 한 번 한다(flaky 파일을 들고 가서 그것이 통과해도 flaky 줄을 남긴다). 시간 초과, 병합 충돌, integration 변경의 처리는 그대로다.
 수리 worker의 agy 상한은 수정 worker와 같다: 닿으면 띄우지 않고 티켓을 실패시키지 않고 다음 단계(다시 검증)로 간다. 끊긴 수리 worker를 상한 때문에 다시 띄우지 못하면 실패한 수리다.
@@ -2812,7 +2812,7 @@ def _flaky_files(r: Run, a: Active, res: verify.Result, log: Path) -> tuple[str,
     """끊김·시간 초과가 아닌 티켓 검증 실패(integration도 그대로)가 flaky로 보이면 그 실패 시험 파일들, 아니면 빈 tuple이다(수리로 간다, _verify_failed).
 
     flaky로 보는 것(goldstack-v43 02): 판별을 해서 판별 뒤 전체 실행이 이 결과이고(res.triaged), 그 실행의 출력에서 config `[verify] failed_file`로 뽑은 실패 시험 파일
-    (verify.failed_files)이 하나 이상이고 모두 판별에서 따로 통과한 파일이며, 그중 어느 것도 티켓 diff에 없다(_in_diff, 시험 파일 확장자는 _rerun_suffix).
+    (verify.failed_files)이 하나 이상이고 모두 판별에서 따로 통과한 파일이며, 그중 어느 것도 티켓 diff에 없다(_in_diff, 시험 파일 확장자는 _rerun_suffix·_test_suffix).
     출력은 그 실행의 것만 읽는다(_after_triage): 같은 로그의 앞 실행·앞 재시도·다시 검증 앞의 끊긴 검증이 남긴 실패는 세지 않는다. 로그나 diff를 읽지 못하면 flaky로 보지 않는다.
     한 시도에 한 번이다: 이 시도에서 flaky 다시 검증을 했으면(a.flaky_used) 쓰지 않는다. 늦은 커밋으로 재리뷰를 거친 뒤의 검증과 재개 뒤에도 그렇다.
     다시 검증(끊김·flaky)의 결과와 수리 뒤의 검증(a.repair)에도 쓰지 않는다. 수리 뒤의 실패는 지금처럼 시도의 실패다.
@@ -2828,7 +2828,11 @@ def _flaky_files(r: Run, a: Active, res: verify.Result, log: Path) -> tuple[str,
         return ()
     cp = git.run(r.repo, "diff", "--name-only", "--no-renames", "-z", f"{r.ihead}...{a.target}", check=False)
     suffix = _rerun_suffix(r.cfg.verify.rerun)
-    if cp.returncode or any(_in_diff(name, cp.stdout.split("\0"), suffix) for name in files):
+    tree = git.run(r.repo, "ls-tree", "-r", "--full-tree", "--name-only", "-z", r.ihead, check=False) if suffix else None
+    if cp.returncode or (tree and tree.returncode):
+        return ()
+    paths = tree.stdout.split("\0") if tree else []
+    if any(_in_diff(name, cp.stdout.split("\0"), _test_suffix(name, suffix, paths)) for name in files):
         return ()
     return files
 
@@ -2849,19 +2853,33 @@ def _after_triage(log: Path, files: tuple[str, ...]) -> str | None:
 
 
 def _rerun_suffix(rerun: str) -> str:
-    """config `[verify] rerun` 틀에서 `{file}` 바로 뒤에 붙은 파일 이름 글자(SAFE_FILE): 시험 파일 이름이 판별 값에 붙이는 끝이다(`-p {file}.py` → `.py`).
-    붙은 것이 없으면 빈 문자열이다(_in_diff는 어떤 확장자든 뺀다)."""
+    """config `[verify] rerun` 틀에서 `{file}` 바로 뒤에 붙은 파일 이름 글자(SAFE_FILE): 시험 파일 이름이 판별 값에 붙이는 끝일 수 있다(`-p {file}.py` → `.py`).
+    파일 끝이 아닐 수도 있어(`tests.{file}.Case` → `.Case`) 쓰기 전에 트리에서 확인한다(_test_suffix). 붙은 것이 없으면 빈 문자열이다(_in_diff는 어떤 확장자든 뺀다)."""
     m = re.search(r"\{file\}([A-Za-z0-9_.-]+)", rerun)
     return m.group(1) if m else ""
+
+
+def _test_suffix(name: str, suffix: str, tree: list[str]) -> str:
+    """판별 값 name의 시험 파일 끝으로 쓸 suffix(_rerun_suffix), 못 믿으면 빈 문자열이다(_in_diff는 어떤 확장자든 뺀다).
+    tree(integration head의 파일: 티켓 diff 밖의 시험 파일은 검증한 트리에 거기서 온다)에 suffix로 끝나고 그것을 빼면 name에 맞는(_in_diff와 같은 규칙) 파일이 있어야 믿는다.
+    `tests.{file}.Case`의 `.Case`처럼 파일 끝이 아닌 것을 믿으면 티켓이 바꾼 `tests/<name>.py`를 diff 밖으로 본다. 넓게 맞으면 수리로 갈 뿐이다."""
+    wanted = _wanted(name)
+    stems = [path[:-len(suffix)] for path in tree if suffix and path.endswith(suffix)]
+    return suffix if any(stem == w or stem.endswith("/" + w) for stem in stems for w in wanted) else ""
+
+
+def _wanted(name: str) -> set[str]:
+    """판별 값 name을 점으로 나눈 앞부분들(점이나 `/`로 이어): 경로 끝과 맞출 꼴이다(_in_diff)."""
+    parts = name.split(".")
+    return {sep.join(parts[:n]) for n in range(1, len(parts) + 1) for sep in (".", "/")}
 
 
 def _in_diff(name: str, paths: list[str], suffix: str = "") -> bool:
     """판별 값 name(시험 파일 이름, SAFE_FILE)이 바뀐 경로 중 하나를 가리키나. 경로 전체나 끝을 뺀 경로가 name, 또는 name을 점으로 나눈 앞부분(점이나 `/`로 이어)과
     같거나 `/<그것>`으로 끝나면 그렇다: `tests/<name>.py`, 확장자까지 적은 `<name>.py`, 점으로 적은 모듈(`pkg.test_x` → `…/pkg/test_x`),
     모듈 뒤에 클래스가 붙은 값(`test_x.Case` → `…/test_x`)이 모두 맞는다. 넓게 맞으면 수리로 갈 뿐이다.
-    끝은 suffix(_rerun_suffix)다: 있으면 그것으로 끝나는 경로만 그것을 뺀다(`.py`면 `docs/<name>.md`는 맞지 않는다). 없으면 어떤 확장자든 뺀다."""
-    parts = name.split(".")
-    wanted = {sep.join(parts[:n]) for n in range(1, len(parts) + 1) for sep in (".", "/")}
+    끝은 suffix(_test_suffix)다: 있으면 그것으로 끝나는 경로만 그것을 뺀다(`.py`면 `docs/<name>.md`는 맞지 않는다). 없으면 어떤 확장자든 뺀다."""
+    wanted = _wanted(name)
     for path in filter(None, paths):
         if suffix:
             keys = (path, path[:-len(suffix)]) if path.endswith(suffix) else (path,)
