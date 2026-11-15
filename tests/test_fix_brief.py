@@ -130,6 +130,7 @@ class FixBriefTest(unittest.TestCase):
                     with self.subTest(model=model, ticket_verify=ticket_verify, brief=name):
                         self.assertIn(MACHINE, text)
                         self.assertIn(worker.MACHINE_RULE, text)
+                        self.assertIn(worker.TASK_OUTPUT_RULE, text)
                         self.assertEqual(text.count(MACHINE), 1)
 
     def test_brief_does_not_clash_with_codex_note(self):

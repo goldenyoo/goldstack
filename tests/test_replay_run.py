@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gs import cli, config, replay
+from gs import cli, config, replay, worker
 from support import alive, isolate_git_env, kill_quietly, sh
 
 FEATURE, TID = "demo", "03"
@@ -207,6 +207,7 @@ class ReplayRunTest(unittest.TestCase):
         brief = (logdir / "brief.md").read_text(encoding="utf-8")
         self.assertIn("너는 goldstack worker다", brief)
         self.assertIn("03 원래 목표", brief)
+        self.assertIn(f"{worker.TOUCHES_LABEL}`src/a.py`", brief)  # replay가 티켓 touches를 brief에 넘긴다
         self.assertIn("replay-test-deny", (self.bin / "worker_tests").read_text())
         for name in ("worker.log", "verify.log", "review/diff.patch", "result.json", f"input/{TID}-t.md", "input/spec.md"):
             self.assertTrue((logdir / name).is_file(), name)

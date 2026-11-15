@@ -61,6 +61,9 @@ NESTED_SESSION_RULE = (
 TOUCHES_LABEL = "- 이 티켓의 touches: "
 BASE_TICKETS_LABEL = "- base에 이미 병합된 티켓: "
 PENDING_BLOCKERS_LABEL = "- base에 아직 병합되지 않은 blocked_by 티켓: "
+TASK_OUTPUT_RULE = (
+    "- 백그라운드 작업의 출력은 그 작업의 출력 파일 하나를 경로로 읽는다. 출력 디렉터리를 글로브로 읽지 않는다"
+    "(예: `tasks/*.output`은 지금 도는 명령의 출력까지 읽어 끝없이 커진다).")
 MACHINE_RULE = (
     "- 다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 기다리고 끝낸다. "
     "이름이나 패턴으로 프로세스를 찾아 죽이지 않는다(`pkill`, `killall`).")
@@ -168,6 +171,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
     merged는 첫·재개 worker만 넘긴다: worktree의 base에 이미 병합된 이번 실행의 티켓 (id, 커밋). 주면 base 줄이 붙고(없으면 `없음`), 이 티켓의 `blocked_by` 중 병합되지 않은 것은 따로 적는다(`base_lines`). None이면(수정·수리 worker, replay) 줄이 없다.
     한 명령의 시험 파일 수를 hook이 막으면 명령을 나눠 돌리고 일부를 빼지 않는다는 규칙(`SPLIT_RUN_RULE`), 측정용 claude·codex 세션은 `gs child`로 띄운다는 규칙(`NESTED_SESSION_RULE`),
     고치지 않고 남긴 관찰을 마지막 메시지 끝의 `OBSERVATIONS_HEADING` 절에 쓴다는 규칙(`OBSERVATIONS_RULE`)도 모든 brief에 붙는다. 상한 숫자는 적지 않는다(레포 config 값이다).
+    백그라운드 작업의 출력은 그 작업의 출력 파일 하나를 경로로 읽고 출력 디렉터리를 글로브로 읽지 않는다는 규칙도 모든 brief에 붙는다(`TASK_OUTPUT_RULE`).
     첫·재개 worker brief(merged가 있을 때)와 replay brief(touches를 넘길 때)에는 이 티켓의 touches 목록과 touches 밖 파일은 고치지 않는다는 줄도 붙는다(`TOUCHES_LABEL`). touches가 없는 티켓은 이 줄이 없다.
     수정·수리 worker는 이 줄을 받지 않는다: 고칠 수 있는 파일은 `review._fixable_lines`가 병합된 티켓의 touches까지 합쳐 알린다.
     같은 티켓의 앞 시도 로그가 있고 거기 성공한 명령이 있으면 그 목록이 믿을 수 없는 자료로 표시되어 붙는다(`prior_commands`). 첫 시도나 기록이 없으면 이 부분이 없다."""
@@ -202,6 +206,7 @@ def write_brief(job: Job, spec: Spec, feature: str, branch: str, failure_summary
 {PS_RULE}
 {NESTED_SESSION_RULE}
 {OBSERVATIONS_RULE}
+{TASK_OUTPUT_RULE}
 {MACHINE_RULE}
 - sandbox에서 네트워크, localhost, 홈 디렉터리 쓰기, ps 실행이 필요한 검증 단계만 돌릴 수 없다면 실패로 보지 않는다. 그 밖의 실패는 sandbox 탓으로 돌리지 말고 고친다. 돌릴 수 없던 단계와 이유를 마지막 메시지에 적고 변경을 커밋한다. gs가 커밋된 내용을 sandbox 밖 병합 트리에서 다시 검증한다.
 - 사람에게 묻지 않는다. 막히면 이유를 마지막 메시지에 적고 끝낸다.
