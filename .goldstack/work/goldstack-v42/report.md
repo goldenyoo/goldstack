@@ -20,7 +20,7 @@ v42 티켓 넷 가운데 02(두 번째 리뷰어 재리뷰 생략)만 병합됐�
 - **02 변경의 효과를 직접 검증한 근거가 약하다**: worker는 수정을 제거했을 때 시험이 실패한다고 보고했다. 리뷰어는 이 결과를 직접 확인하지 않았다고 밝혔다.
 - **빠진 범위**: 01·03·04가 빠졌다. brief 관찰 규칙, hook의 `max_outside_files` 누적 차단, 문서와 버전 0.2.26 반영이 모두 들어가지 않았다. 버전은 0.2.25 그대로이고, 02 동작을 설명하는 guide·internals 문서와 CHANGELOG도 갱신되지 않았다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/79 병합 · main 검증 통과
 integration 검증 건너뜀: ticket-02 전체 검증과 같은 트리
 리뷰 지적: 보고만 1
 - flaky: 02 티켓 검증 (전체 재시도 1번 만에 통과, 시험 파일 모름)
@@ -81,9 +81,16 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 30.0 |
+| total | 74.0 |
 | summary | 29.938 |
-| report | 0 |
+| report | 0.067 |
+| push | 2.537 |
+| publish | 5.059 |
+| checks | 27.782 |
+| merge-pr | 5.203 |
+| confirm-merge | 0.004 |
+| postmerge | 1.784 |
+| restore-reverts | 0.116 |
 
 ### 티켓별 결과
 
@@ -402,10 +409,39 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 17ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v42/run/gs-main-3fdrzpmc/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v42/run/gs-main-3fdrzpmc/base
+Prepared 1 package in 288ms
+Installed 1 package in 1ms
+ + goldstack==0.2.25 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v42/run/gs-main-3fdrzpmc/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 ```text
 integration: ticket-02 전체 검증과 같은 트리, 건너뜀
+```
+
+#### finish/main-verify.log
+
+```text
+integration과 같은 코드(523224d1234be4c6e79c10fdb8a7a7e84fcc6c4d), 건너뜀
 ```
 
 
@@ -413,13 +449,15 @@ agy 사용: 0/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/79
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `79883a0d07dba14b4e01ab0242e0687c22ba1d84`
 
 ### 되돌리는 법
 
@@ -429,7 +467,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 79883a0d07dba14b4e01ab0242e0687c22ba1d84
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v42/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
