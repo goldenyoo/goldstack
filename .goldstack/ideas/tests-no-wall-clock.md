@@ -2,7 +2,7 @@
 date: "2026-11-13"
 severity: "medium"
 source: "/retro goldstack-v36"
-status: "open"
+status: "dropped"
 issues: []
 feature: ""
 ---
@@ -13,3 +13,4 @@ feature: ""
 - 02의 가짜 worker 시험이 실제 sleep 때문에 2라운드 재지적됐다. 개별 지적은 열린 아이디어 `goldstack-v36-02-1`에 있다.
 - 고칠 곳: 리뷰 기준이나 시험 규칙에 "벽시계 sleep 금지, 가짜 시계 사용"을 넣는다. 기계로 잡을 수 있으면 시험 파일의 `time.sleep`을 grep하는 검사를 verify에 넣는다. 실제 프로세스가 꼭 필요한 통합 시험은 예외로 둘 기준도 함께 정한다.
 - 근거 출처: retro subagent 보고. 이 세션이 다시 확인하지는 않았다.
+닫은 이유(goldstack-v43 grill 1-7, 2026-11-15): 범위 밖 `tests-no-wall-clock`로 옮겼다.

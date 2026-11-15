@@ -2,7 +2,7 @@
 date: "2026-11-13"
 severity: "medium"
 source: "/retro goldstack-v36"
-status: "open"
+status: "dropped"
 issues: []
 feature: ""
 ---
@@ -14,3 +14,4 @@ hook 셸 해석의 우회를 리뷰어와 사람이 손으로 찾는다. 우회 
 - [반복] goldstack-v35: 회고의 high도 같은 hook 우회였다(v36 spec.md 12행).
 - 고칠 곳: tests/에 우회 명령 표 기반 회귀 시험을 두고 verify에 넣는다. 가능하면 실제 env·sh 실행 결과와 판정을 비교하는 차분 시험으로 만든다.
 - 근거 출처: retro subagent 보고. 이 세션이 다시 확인하지는 않았다.
+닫은 이유(goldstack-v43 grill 1-6, 2026-11-15): 범위 밖 `hook-bypass-table-test`로 옮겼다.

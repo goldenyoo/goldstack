@@ -2,9 +2,9 @@
 date: "2026-11-15"
 severity: "medium"
 source: "issue #71 (goldstack-v42 grill 라운드 1-4)"
-status: "open"
+status: "taken"
 issues: [71]
-feature: ""
+feature: "goldstack-v43"
 ---
 worktree 밖 쓰기 판정이 경로마다 다르다. `/tmp`·홈 임시 디렉터리는 통과하고 공유 디스크(`/shared/…`)는 막혀, 레포 밖에 써야 하는 실험 티켓의 수 GB 원자료가 휘발성 `/tmp`에 남았다.
 

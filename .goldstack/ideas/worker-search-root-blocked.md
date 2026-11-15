@@ -2,9 +2,9 @@
 date: "2026-11-12"
 severity: "low"
 source: "goldstack-v35 grill 라운드 2(#59 pod 로그 확인 중)"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v43"
 ---
 worker가 `/`·`~`·`~/workspace`를 시작점으로 검색하다 "비밀 파일을 품는다"로 여러 번 막힌다.
 
