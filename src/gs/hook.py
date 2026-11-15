@@ -1649,11 +1649,11 @@ def check_git(args: list[str], ctx: Ctx) -> str | None:
     if sub != "add" and force:
         return f"force 계열(`git {sub} --force…`)은 되돌릴 수 없다"
     if sub in GIT_WRITES and "$" not in gitdir and outside(gitdir, ctx):
-        return f"worktree 밖 `{gitdir}`에서 `git {sub}`를 한다(worker는 `{ctx.worktree}` 안만 바꾼다)"
+        return f"worktree 밖 `{gitdir}`에서 `git {sub}`를 한다(worker는 `{ctx.worktree}` 안만 바꾼다). {OUTSIDE_WRITE_HINT}"
     there = Ctx(worktree=ctx.worktree, cwd=gitdir, env=ctx.env)
     for p in paths:
         if sub in GIT_WRITES and outside(p, there):
-            return f"worktree 밖 `{p}`를 가리켜 `git {sub}`를 한다(worker는 `{ctx.worktree}` 안만 바꾼다)"
+            return f"worktree 밖 `{p}`를 가리켜 `git {sub}`를 한다(worker는 `{ctx.worktree}` 안만 바꾼다). {OUTSIDE_WRITE_HINT}"
     return check_shared_git(sub, rest, gitdir, [*paths, *ctx.located], ctx)
 
 
@@ -1922,7 +1922,8 @@ def allowed_outside(ctx: Ctx) -> list[str]:
     if not isinstance(roots, list):
         roots = []
     return temporary_outside(ctx) + [os.path.realpath(p) for p in roots
-                                   if isinstance(p, str) and os.path.isabs(p)]
+                                   if isinstance(p, str) and os.path.isabs(p)
+                                   and not _within(ctx.worktree, os.path.realpath(p))]
 
 
 def outside(path: str, ctx: Ctx) -> bool:

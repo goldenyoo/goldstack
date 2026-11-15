@@ -608,12 +608,19 @@ def _load_sandbox(raw, problems: list[Problem], repo: Path) -> SandboxConfig:
             problems.append(Problem("오류", CONFIG_PATH, f'`sandbox.{key}`는 빈 값이 아닌 경로 문자열 목록이어야 한다. 예: ["~/shared"]'))
             continue
         values[key] = tuple(paths)
-    main = repo.resolve()
+    repos = [repo.resolve()]
+    if values.get("writes"):
+        cp = git.run(repo, "worktree", "list", "--porcelain", "-z", check=False)
+        if cp.returncode == 0:
+            repos.append(Path(cp.stdout.split("\0", 1)[0].removeprefix("worktree ")).resolve())
     for raw_path in values.get("writes", ()):
-        path = Path(os.path.expanduser(raw_path))
+        expanded = os.path.expanduser(raw_path)
+        if expanded.startswith("~"):
+            continue
+        path = Path(expanded)
         if not path.is_absolute():
             problems.append(Problem("오류", CONFIG_PATH, f"`sandbox.writes`는 절대 경로여야 한다: {raw_path}"))
-        elif path.resolve().is_relative_to(main) or main.is_relative_to(path.resolve()):
+        elif any(path.resolve().is_relative_to(main) or main.is_relative_to(path.resolve()) for main in repos):
             problems.append(Problem("오류", CONFIG_PATH, f"`sandbox.writes`가 주 레포와 겹친다: {raw_path}"))
     return SandboxConfig(**values)
 

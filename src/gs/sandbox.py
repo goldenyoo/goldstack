@@ -220,10 +220,14 @@ def worker_writes(worktree: Path) -> list[Path]:
     cp = git.run(worktree, "worktree", "list", "--porcelain", "-z", check=False)
     if cp.returncode:
         return []
-    repo = Path(cp.stdout.split("\0", 1)[0].removeprefix("worktree "))
+    repos = [Path(field.removeprefix("worktree ")).resolve() for field in cp.stdout.split("\0")
+             if field.startswith("worktree ")]
+    parents = [repo for repo in repos if repo != worktree.resolve() and worktree.resolve().is_relative_to(repo)]
+    repo = max(parents, key=lambda p: len(p.parts)) if parents else repos[0]
     if not (repo / config.CONFIG_PATH).exists():
         return []
     cfg, problems = config.load(repo)
     if cfg is None:
         raise ValueError("; ".join(p.message for p in problems if p.level == "오류"))
-    return list(dict.fromkeys(Path(os.path.expanduser(raw)).resolve() for raw in cfg.sandbox.writes))
+    expanded = [os.path.expanduser(raw) for raw in cfg.sandbox.writes]
+    return list(dict.fromkeys(Path(path).resolve() for path in expanded if not path.startswith("~")))

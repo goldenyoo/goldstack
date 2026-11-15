@@ -170,3 +170,103 @@ class SandboxWritesTest(unittest.TestCase):
             with self.subTest(value=value):
                 env[config.SANDBOX_WRITES_ENV] = value
                 self.assertIsNotNone(self.verdict('claude', env, 'Write', file_path=str(self.shared / 'y')))
+
+    def test_git_outside_messages_include_config_hint(self):
+        self.write_config()
+        for family in ('claude', 'agy'):
+            env = self.adapter(family).env(self.inp)
+            for command in (f'git -C {shlex.quote(str(self.shared))} add out.bin',
+                            f'git --work-tree={shlex.quote(str(self.shared))} checkout -- out.bin'):
+                with self.subTest(family=family, command=command):
+                    reason = self.verdict(family, env, 'Bash', command=command)
+                    self.assertIn('worktree 밖', reason)
+                    self.assertIn('.goldstack/config.toml', reason)
+                    self.assertIn('[sandbox] writes', reason)
+
+    def test_unknown_home_user_is_preserved_but_not_granted(self):
+        raw = '~gs-missing-user/exp'
+        self.write_config([raw, str(self.shared)])
+        with mock.patch('pwd.getpwnam', side_effect=KeyError):
+            cfg, problems = config.load(self.repo)
+            self.assertEqual(problems, [])
+            self.assertEqual(cfg.sandbox.writes, (raw, str(self.shared)))
+            for family in ('claude', 'agy', 'codex'):
+                env = self.adapter(family).env(self.inp)
+                self.assertEqual(json.loads(env[config.SANDBOX_WRITES_ENV]), [str(self.shared)])
+
+    def linked_caller(self):
+        caller = self.root / 'caller'
+        sh(self.repo, 'git', 'worktree', 'add', '-qb', 'caller', str(caller))
+        self.wt = caller / '.goldstack/work/demo/run/wt/02'
+        sh(caller, 'git', 'worktree', 'add', '-qb', 'gs/demo/02', str(self.wt))
+        self.inp = adapters.WorkerInput(self.run / 'brief.md', self.wt, self.run / 'worker.log')
+        return caller
+
+    def test_linked_caller_config_reaches_all_workers(self):
+        self.write_config([str(self.missing)])
+        self.repo = self.linked_caller()
+        self.write_config([str(self.shared)])
+        (self.wt / '.goldstack').mkdir()
+        (self.wt / config.CONFIG_PATH).write_text('[sandbox]\nwrites = ["/untrusted"]\n')
+        for family in ('claude', 'agy', 'codex'):
+            adapter = self.adapter(family)
+            env = adapter.env(self.inp)
+            self.assertEqual(json.loads(env[config.SANDBOX_WRITES_ENV]), [str(self.shared)])
+            if family != 'codex':
+                self.assertIsNone(self.verdict(family, env, 'Write', file_path=str(self.shared / 'y')))
+                self.assertIsNone(self.verdict(family, env, 'Bash',
+                                             command=f'cp x {shlex.quote(str(self.shared / "y"))}'))
+        for mode, flag in [('os', '--add-dir'), ('landlock', '--write')]:
+            with mock.patch.dict(os.environ, {'CODEX_HOME': str(self.root / 'codex-home')}):
+                argv = shlex.split(self.adapter('codex', mode).command(self.inp))
+            paths = [argv[i + 1] for i, arg in enumerate(argv) if arg == flag]
+            self.assertIn(str(self.shared), paths)
+            self.assertNotIn(str(self.missing), paths)
+
+    def test_linked_caller_rejects_main_and_caller_overlap(self):
+        main = self.repo
+        self.repo = self.linked_caller()
+        for root in (main, self.repo):
+            for suffix in ('', '.git', '.goldstack/work'):
+                with self.subTest(root=root, suffix=suffix):
+                    self.write_config([str(root / suffix)])
+                    cfg, problems = config.load(self.repo)
+                    self.assertIsNone(cfg)
+                    self.assertTrue(any('주 레포와 겹친다' in p.message for p in problems))
+
+    def test_hook_ignores_roots_containing_worker(self):
+        caller = self.linked_caller()
+        env = self.adapter('claude').env(self.inp)
+        alias = self.root / 'caller-alias'
+        alias.symlink_to(caller, target_is_directory=True)
+        for root in (caller, alias):
+            env[config.SANDBOX_WRITES_ENV] = json.dumps([str(root), str(self.shared)])
+            for family in ('claude', 'agy'):
+                with self.subTest(root=root, family=family):
+                    target = self.wt.parent / 'integration/evil.py'
+                    self.assertIsNotNone(self.verdict(family, env, 'Write', file_path=str(target)))
+                    self.assertIsNone(self.verdict(family, env, 'Write', file_path=str(self.shared / 'y')))
+
+    def test_codex_skips_inaccessible_write_roots(self):
+        locked = self.root / 'locked/exp'
+        self.write_config([str(locked), str(self.shared)])
+        stat = os.stat
+
+        def guarded_stat(path, *args, **kwargs):
+            if os.fspath(path) == str(locked):
+                raise PermissionError(13, 'Permission denied', str(locked))
+            return stat(path, *args, **kwargs)
+
+        with mock.patch('os.stat', side_effect=guarded_stat), \
+                mock.patch.dict(os.environ, {'CODEX_HOME': str(self.root / 'codex-home')}):
+            cfg, problems = config.load(self.repo)
+            self.assertEqual(problems, [])
+            self.assertIsNotNone(cfg)
+            for mode, flag in [('os', '--add-dir'), ('landlock', '--write')]:
+                with self.subTest(mode=mode):
+                    adapter = self.adapter('codex', mode)
+                    adapter.prepare(self.inp)
+                    argv = shlex.split(adapter.command(self.inp))
+                    paths = [argv[i + 1] for i, arg in enumerate(argv) if arg == flag]
+                    self.assertNotIn(str(locked), paths)
+                    self.assertIn(str(self.shared), paths)

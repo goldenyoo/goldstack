@@ -323,7 +323,7 @@ class Codex(Adapter):
         dirs = [own, common / "objects", common / refdir, common / "logs" / refdir]
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)  # add-dir은 있는 디렉터리여야 한다
-        return list(dict.fromkeys([*dirs, *(p for p in self.outside_writes(worktree) if p.is_dir())]))
+        return list(dict.fromkeys([*dirs, *(p for p in self.outside_writes(worktree) if os.path.isdir(p))]))
 
     def prepare(self, inp: WorkerInput) -> None:
         try:
