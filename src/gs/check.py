@@ -126,6 +126,7 @@ def _touches_overlap(left: str, right: str) -> str | None:
 
 def touches_problems(feat: featmod.Feature, g: graph.Graph,
                      scope: Iterable[str]) -> list[featmod.Problem]:
+    """touches가 겹치는데 순서가 없는 쌍의 경고. g는 blocked_by와 after를 합친 그래프(graph.combine)라 둘 다 순서로 친다."""
     tickets = [feat.tickets[tid] for tid in sorted(scope) if feat.tickets[tid].touches]
     ancestors = {}
     for ticket in tickets:
@@ -315,16 +316,20 @@ def check(repo: Path, name: str, only: list[str] | None = None) -> tuple[featmod
         problems.append(featmod.Problem("경고", "", f"옛 모델 기본값 {len(old_defaults)}칸(gs doctor로 확인)"))
     feat = featmod.load(repo, name)
     feat.problems[:0] = problems + notify_problems(repo, cfg)
-    g = {t.id: t.blocked_by for t in feat.tickets.values()}
+    blocked = {t.id: t.blocked_by for t in feat.tickets.values()}
+    after = {t.id: t.after for t in feat.tickets.values()}
+    g = graph.combine(blocked, after)  # 순환·순서는 blocked_by와 after를 함께 본다
     full_graph = g
 
     def err(tid: str, msg: str) -> None:
         feat.problems.append(featmod.Problem("오류", featmod.rel(feat.tickets[tid].path, repo), msg))
 
-    for tid, missing in graph.unknown_refs(g).items():
+    for tid, missing in graph.unknown_refs(blocked).items():
         err(tid, f"blocked_by에 없는 티켓이 있다: {', '.join(missing)}")
+    for tid, missing in graph.unknown_refs(after, blocked).items():
+        err(tid, f"after에 없는 티켓이 있다: {', '.join(missing)}")
     for path in graph.cycles(g):
-        err(path[0], "순환: " + " → ".join(path) + " (화살표는 blocked_by 방향)")
+        err(path[0], "순환: " + " → ".join(path) + " (화살표는 blocked_by·after 방향)")
 
     lines: list[str] = []
     if only is not None:
