@@ -93,7 +93,8 @@ class GrillBreakdownTest(unittest.TestCase):
         for text in ("일렬 경로", "평균 동시", "`일렬 경로 01→03→04 예상 110분 · 평균 동시 2.1`",
                      "tier: small|medium|large와 이유 한 줄", "문서 small", "재개 흐름 large",
                      "코드와 상한 있는 skill 글을 함께 고치는 티켓은 `small`로 잡지 않는다(goldstack-v11 09",
-                     '"같은 파일" 또는 "앞 결과 필요"', "한 장으로 묶는다",
+                     '이유는 "앞 결과 필요"로 적는다', "순서만 필요한 쌍은 `after`로 줄 세운다",
+                     "`blocked_by(이유)` 칸에 `after 01 같은 파일`처럼 적는다", "한 장으로 묶는다",
                      "두 번째 리뷰어(`second_reviewer`)", "verify: 문서·설정 티켓은 좁은 명령, 코드 티켓은 `전체`"):
             self.assertIn(text, comment)
 
@@ -122,6 +123,18 @@ class GrillBreakdownTest(unittest.TestCase):
         for text in ("skill 글(`skills/*/SKILL.md`)을 고치는 티켓", "`WORD_LIMITS`의 상한과 지금 단어 수",
                      "좁은 verify에 `test_skills.py`를 넣는다"):
             self.assertIn(text, comment)
+
+    def test_ticket_template_has_after_line(self):
+        text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")
+        head = text.partition("\n---\n## ")[0]
+        self.assertIn('# after: ["<NN>"]', head)
+        self.assertIn("순서만 필요한 상류", head)
+        self.assertIn("blocked_by와 같은 id를 겹쳐 적지 않는다", head)
+
+    def test_spec_template_after_rule_keeps_column_names(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        self.assertNotIn('"같은 파일" 또는 "앞 결과 필요"', comment)
+        self.assertEqual(comment.count("`blocked_by(이유)` 칸에 `after 01 같은 파일`"), 1)
 
     def test_ticket_template_asks_for_tests_that_fail_without_the_behavior(self):
         text = (TEMPLATES / "ticket.md").read_text(encoding="utf-8")

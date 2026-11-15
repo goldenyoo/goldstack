@@ -87,6 +87,15 @@ class TouchesTest(unittest.TestCase):
                 self.add("02", ["src/a.py"], b)
                 self.assert_clean()
 
+    def test_after_orders_touches_like_blocked_by(self):
+        for a, b in ((["02"], []), ([], ["01"])):
+            with self.subTest(a=a, b=b):
+                self.write("01-ticket.md", test_check.ticket("01", "[]", touches=test_check.NO_TOUCHES,
+                                                             extra=f'touches: ["src/a.py"]\nafter: {json.dumps(a)}\n'))
+                self.write("02-ticket.md", test_check.ticket("02", "[]", touches=test_check.NO_TOUCHES,
+                                                             extra=f'touches: ["src/a.py"]\nafter: {json.dumps(b)}\n'))
+                self.assert_clean()
+
     def test_transitive_dependency_orders_tickets(self):
         self.add("01", ["src/a.py"], ["03"])
         self.add("03", ["src/c.py"], ["02"])

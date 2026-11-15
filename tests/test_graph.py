@@ -24,6 +24,22 @@ class GraphTest(unittest.TestCase):
         self.assertEqual(graph.frontier(V0, done={"01", "11"}), ["02"])
         self.assertEqual(graph.frontier(V0, done={"01", "02", "11"}), ["03", "05", "09"])
 
+    def test_frontier_after_starts_once_upstream_ended_even_if_not_merged(self):
+        g = graph.combine({"01": [], "03": []}, {"03": ["01"]})
+        self.assertEqual(g, {"01": [], "03": ["01"]})
+        self.assertEqual(graph.frontier(g, after={"03": ["01"]}), ["01"])
+        self.assertEqual(graph.frontier(g, ended=["01"], after={"03": ["01"]}), ["01", "03"])  # 01은 병합되지 않아 아직 후보다
+        self.assertEqual(graph.frontier(g, done={"01"}, ended=["01"], after={"03": ["01"]}), ["03"])
+        # after 표지가 없는 의존은 ended로 풀리지 않는다(blocked_by는 병합만 기다린다)
+        self.assertEqual(graph.frontier(g, ended=["01"]), ["01"])
+
+    def test_combine_merges_both_kinds_once(self):
+        self.assertEqual(graph.combine({"a": [], "b": ["a"], "c": []}, {"b": ["a", "c"], "c": ["a"]}),
+                         {"a": [], "b": ["a", "c"], "c": ["a"]})
+
+    def test_unknown_refs_against_other_nodes(self):
+        self.assertEqual(graph.unknown_refs({"a": ["x"], "b": ["a"]}, {"a": [], "b": []}), {"a": ["x"]})
+
     def test_topo_order_with_done(self):
         self.assertEqual(graph.topo_order({"a": [], "b": ["a"]}, done={"a"}), ["b"])
 

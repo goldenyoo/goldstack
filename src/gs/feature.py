@@ -16,7 +16,7 @@ SPEC_REQUIRED = ("feature", "verify")
 SPEC_DEFAULTS = {"max_workers": 3, "idle_minutes": 20, "verify_minutes": 20, "verify_retries": 0}
 SPEC_OPTIONAL = ("verify_ticket",)
 TICKET_KEYS = ("id", "title", "blocked_by", "model", "reviewer")
-TICKET_OPTIONAL = ("touches", "second_reviewer", "verify", "tier", "closes")
+TICKET_OPTIONAL = ("touches", "second_reviewer", "verify", "tier", "closes", "after")
 WORK = ".goldstack/work"  # 대상 레포 루트 기준 feature 디렉터리들의 부모
 
 
@@ -64,7 +64,7 @@ class Spec:
 class Ticket:
     id: str
     title: str
-    blocked_by: list[str]
+    blocked_by: list[str]  # 상류가 모두 병합돼야 시작한다. 상류가 실패·건너뜀이면 이 티켓도 건너뛴다
     model: str
     reviewer: str
     path: Path
@@ -74,6 +74,7 @@ class Ticket:
     verify: str | None = None
     tier: str | None = None
     closes: list[int] = field(default_factory=list)
+    after: list[str] = field(default_factory=list)  # 순서만 필요한 상류: 끝나면(병합·실패·건너뜀) 시작한다. 실패해도 건너뛰지 않는다
 
 
 @dataclass
@@ -225,6 +226,18 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
     deps = data["blocked_by"]
     if len(set(deps)) != len(deps):
         err("`blocked_by`에 같은 id가 두 번 있다")
+    after = data.get("after", [])
+    if not isinstance(after, list) or any(not isinstance(value, str) for value in after):
+        err("`after`는 티켓 id 문자열 목록이어야 한다(없으면 [])")
+        after = []
+    else:
+        if len(set(after)) != len(after):
+            err("`after`에 같은 id가 두 번 있다")
+        if tid in after:
+            err(f"`after`에 자기 자신 `{tid}`가 있다")
+        both = [d for d in dict.fromkeys(after) if d in deps]
+        if both:
+            err(f"`after`와 `blocked_by`에 같은 id가 있다: {', '.join(both)}")
     touches = data.get("touches", [])
     if not isinstance(touches, list):
         err("`touches`는 문자열 목록이어야 한다(없으면 [])")
@@ -247,7 +260,7 @@ def _load_ticket(path: Path, repo: Path, problems: list[Problem]) -> Ticket | No
         err("`closes`는 양의 issue 번호 목록이어야 한다(예: [12])")
         closes = []
     # 값 오류가 있어도 그래프에는 넣는다. 빼면 이 티켓을 참조하는 티켓마다 "없는 id" 오류가 덧붙는다.
-    return Ticket(id=tid, title=data["title"], blocked_by=list(deps), model=data["model"],
+    return Ticket(id=tid, title=data["title"], blocked_by=list(deps), after=list(after), model=data["model"],
                   reviewer=data["reviewer"], path=path, body=body, touches=valid_touches,
                   second_reviewer=second_reviewer, tier=data.get("tier"), closes=list(dict.fromkeys(map(int, closes))),
                   verify=data["verify"] if _valid_command(data.get("verify")) else None)
