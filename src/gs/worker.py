@@ -268,11 +268,12 @@ def guard_exports(worktree: Path) -> str:
 def write_script(job: Job, adapter: Adapter) -> None:
     """worker를 돌리고 종료 코드를 exit 파일에 원자적으로 남기는 bash 스크립트. 명령과 환경은 어댑터가 정한다.
     push·gh 차단은 어댑터 env 뒤에 넣는다(어댑터가 덮어쓰지 못하게).
-    hook의 시험 규칙(`GS_WORKER_TESTS`)은 어댑터가 넣지 않았어도 빈 값으로 내보낸다. gs를 띄운 셸의 값이 worker로 새지 않게.
+    hook의 시험 규칙(`GS_WORKER_TESTS`)과 쓰기 루트(`GS_SANDBOX_WRITES`)는 어댑터가 넣지 않았어도 빈 값으로 내보낸다. gs를 띄운 셸의 값이 worker로 새지 않게.
     같은 이유로 `GS_NOEQUALS`는 지운 뒤 어댑터가 넣었을 때만 내보낸다(전달 폴더를 준비한 worker만 noequals 셸이다).
     gs jail로 가둔 worker(landlock 모드의 codex)는 어댑터가 고른 토큰·ssh agent 변수(adapters.JAIL_DROP_ENV)도 지운다(drop_env)."""
     q = shlex.quote
-    env = {config.WORKER_TESTS_ENV: "", **adapter.env(job.input), "GS_ROLE": "worker", "GS_TICKET": job.ticket.id}
+    env = {config.WORKER_TESTS_ENV: "", config.SANDBOX_WRITES_ENV: "", **adapter.env(job.input),
+           "GS_ROLE": "worker", "GS_TICKET": job.ticket.id}
     command = adapter.command(job.input)
     exports = "\n".join(f"export {k}={q(v)}" for k, v in env.items())
     dropped = "".join(f" {name}" for name in adapter.drop_env())

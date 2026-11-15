@@ -8,7 +8,7 @@
 - 공용 git 설정 쓰기(`git remote` 변경, `git config` 쓰기), 자기 브랜치 밖의 ref를 옮기는 `update-ref`·`branch -f`·`symbolic-ref`.
   worktree는 설정과 ref를 주 레포와 공유한다. 임시 디렉터리의 버리는 레포는 공유하지 않아 통과한다(`--global`·`--system` 제외)
 - `gh` 쓰기 명령(읽기 전용 명령만 통과)
-- worktree 밖 쓰기(임시 디렉터리와 /dev는 통과)
+- worktree 밖 쓰기(임시 디렉터리, /dev, config `[sandbox] writes` 루트는 통과)
 - 비밀 파일 읽기(`~/.ssh`, `.env` 등)
 - 이름으로 프로세스를 끄는 `pkill`·`killall`(기계 전체의 같은 이름 프로세스를 끄니 다른 티켓의 검증도 죽는다). `kill <PID>`와 `pgrep`은 통과한다
 - worker 환경의 `GS_ROLE`을 지우거나 바꾸는 명령(`check_role_strip`): `env -u GS_ROLE`·`env --unset=GS_ROLE`·`env -i`·`env GS_ROLE=<worker 아닌 값>`,
@@ -505,6 +505,10 @@ def malformed(payload) -> str | None:
     return None
 
 
+OUTSIDE_WRITE_HINT = "레포 밖에 써야 하면 `.goldstack/config.toml` `[sandbox] writes`에 경로를 적는다"
+SEARCH_ROOT_HINT = "실행 파일은 `command -v`, 파일은 비밀 파일을 품지 않는 좁은 경로에서 찾는다"
+
+
 def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
     """막을 이유를 돌려준다. 통과면 None. `GS_ROLE=worker`가 아니면 언제나 None."""
     if env.get("GS_ROLE") != "worker" or not isinstance(payload, Mapping):
@@ -525,7 +529,7 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
         if tool != "Write" and is_secret(path, ctx):
             return f"비밀 파일 `{path}`을 연다"
         if path and outside(path, ctx):
-            return f"worktree 밖 `{path}`에 쓴다(worker는 `{ctx.worktree}` 안만 바꾼다)"
+            return f"worktree 밖 `{path}`에 쓴다(worker는 `{ctx.worktree}` 안만 바꾼다). {OUTSIDE_WRITE_HINT}"
         return None
     if tool in ("Read", "Grep", "Glob"):
         for key in ("file_path", "path", "pattern"):
@@ -535,7 +539,7 @@ def decide(payload: Mapping, env: Mapping[str, str]) -> str | None:
             if path and secret_read(path, ctx, recursive=tool in ("Grep", "Glob")):
                 return f"비밀 파일 `{path}`을 읽는다"
         if tool in ("Grep", "Glob") and not inp.get("path") and secret_read(".", ctx, recursive=True):
-            return f"검색 시작점 `{ctx.cwd}`이 비밀 파일을 품는다"
+            return f"검색 시작점 `{ctx.cwd}`이 비밀 파일을 품는다\n{SEARCH_ROOT_HINT}"
     return None
 
 
@@ -1482,7 +1486,7 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
             return reason
     for root in search_roots(name, args):
         if secret_read(root, seg, recursive=True):
-            return f"검색 시작점 `{root}`이 비밀 파일을 품는다"
+            return f"검색 시작점 `{root}`이 비밀 파일을 품는다\n{SEARCH_ROOT_HINT}"
 
     # worktree 밖 쓰기
     targets = [t for op, t in redirects if ">" in op and not re.match(r"^(\d+|-)$", t)]
@@ -1497,7 +1501,7 @@ def check_segment(argv: list[str], redirects: list[tuple[str, str]], cwd: str, c
         targets += in_place_files(name, args)
     for t in targets:
         if t and outside(t, seg):
-            return f"worktree 밖 `{t}`에 쓴다(worker는 `{ctx.worktree}` 안만 바꾼다)"
+            return f"worktree 밖 `{t}`에 쓴다(worker는 `{ctx.worktree}` 안만 바꾼다). {OUTSIDE_WRITE_HINT}"
     return None
 
 
@@ -1706,7 +1710,7 @@ def _at_worktree(gitdir: str, paths: list[str], ctx: Ctx) -> bool:
 def _scratch_repo(gitdir: str, paths: list[str], ctx: Ctx) -> bool:
     """git이 볼 곳이 전부 임시 디렉터리인가. 모르는 변수가 낀 경로는 아니라고 본다."""
     there = Ctx(worktree=ctx.worktree, cwd=gitdir, env=ctx.env)
-    temp = allowed_outside(ctx)
+    temp = temporary_outside(ctx)
     return all(real is not None and not _within(real, ctx.worktree) and any(_within(real, root) for root in temp)
                for real in (resolve(gitdir, ctx), *(resolve(path, there) for path in paths)))
 
@@ -1899,13 +1903,26 @@ def _within(path: str, root: str) -> bool:
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
-def allowed_outside(ctx: Ctx) -> list[str]:
+def temporary_outside(ctx: Ctx) -> list[str]:
     """밖이어도 쓸 수 있는 곳: /dev와 임시 디렉터리. worktree를 품은 임시 디렉터리는 뺀다(형제가 다른 worktree다)."""
     roots = ["/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]
     if ctx.env.get("TMPDIR"):
         roots.append(ctx.env["TMPDIR"])
     real = [os.path.realpath(r) for r in roots]
     return ["/dev"] + [r for r in real if not _within(ctx.worktree, r)]
+
+
+def allowed_outside(ctx: Ctx) -> list[str]:
+    """쓰기 허용 루트. config 루트는 임시 git 레포 예외에는 쓰지 않는다."""
+    from .config import SANDBOX_WRITES_ENV
+    try:
+        roots = json.loads(ctx.env.get(SANDBOX_WRITES_ENV) or "[]")
+    except ValueError:
+        roots = []
+    if not isinstance(roots, list):
+        roots = []
+    return temporary_outside(ctx) + [os.path.realpath(p) for p in roots
+                                   if isinstance(p, str) and os.path.isabs(p)]
 
 
 def outside(path: str, ctx: Ctx) -> bool:
