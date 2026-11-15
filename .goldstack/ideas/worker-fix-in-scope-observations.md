@@ -1,0 +1,13 @@
+---
+date: "2026-11-15"
+severity: "high"
+source: "/retro goldstack-v41"
+status: "taken"
+issues: []
+feature: "goldstack-v42"
+---
+worker가 touches 안의 결함이나 완료 조건 위반을 알아채고도 고치지 않고 `## 남긴 관찰`에만 적는다. 그 관찰이 그대로 리뷰 fix 지적이 되어 수정·재리뷰가 일렬 경로에 붙는다.
+
+- goldstack-v41 01: worker 관찰 #1(재개 때 건너뛰기 판정을 잃음)과 #3(라벨 접미어 `-repair`를 티켓 id로 오인)이 fix 지적이 됐다(`state.json` 01 `observation_verdicts` n=1·3 "지적"). #1은 "티켓 규칙 밖이라 하지 않았다"고 적었지만 완료 조건에 "끊긴 뒤 다음 `gs go`가 같은 판정"이 있었다. 수정 약 11분 + 재리뷰 약 10분이 01→04 일렬 경로에 붙었다(retro subagent 보고, `run/retro-log.md` L121–124).
+- [반복] goldstack-v38 01(관찰 1건이 codex·agy 지적), v37 02(1건), v36 03(4건)(retro subagent 보고).
+- 고칠 곳 후보: `src/gs/worker.py` `OBSERVATIONS_RULE`. "touches 안에서 고칠 수 있는 결함이나 완료 조건을 어기는 것은 관찰로 남기지 말고 고친다. 관찰은 touches 밖이거나 판단이 필요한 것만"을 더한다.
