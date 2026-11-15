@@ -18,7 +18,7 @@ import subprocess
 from collections.abc import Iterable
 from pathlib import Path
 
-from . import config, hook, jail
+from . import config, git, hook, jail
 from .feature import Ticket
 
 MODE_ENV = "GS_SANDBOX"
@@ -210,3 +210,24 @@ def doctor_row(repo: Path) -> str:
     if detail:
         return f"os: 빠짐 — {_codex_problem(detail)}"
     return "os: codex 샌드박스 동작함"
+
+
+def worker_writes(worktree: Path) -> list[Path]:
+    """worker 실행 준비 때 주 레포의 쓰기 루트를 푼다. 없는 루트도 hook 판정을 위해 보존한다.
+
+    worktree의 config는 읽지 않는다. config 없는 옛 호출·시험은 빈 목록이다.
+    """
+    cp = git.run(worktree, "worktree", "list", "--porcelain", "-z", check=False)
+    if cp.returncode:
+        return []
+    repos = [Path(field.removeprefix("worktree ")).resolve() for field in cp.stdout.split("\0")
+             if field.startswith("worktree ")]
+    parents = [repo for repo in repos if repo != worktree.resolve() and worktree.resolve().is_relative_to(repo)]
+    repo = max(parents, key=lambda p: len(p.parts)) if parents else repos[0]
+    if not (repo / config.CONFIG_PATH).exists():
+        return []
+    cfg, problems = config.load(repo)
+    if cfg is None:
+        raise ValueError("; ".join(p.message for p in problems if p.level == "오류"))
+    expanded = [os.path.expanduser(raw) for raw in cfg.sandbox.writes]
+    return list(dict.fromkeys(Path(path).resolve() for path in expanded if not path.startswith("~")))

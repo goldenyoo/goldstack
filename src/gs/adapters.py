@@ -3,7 +3,8 @@
 입력은 모두 같다(WorkerInput: brief 경로, worktree, 로그 경로). 어댑터가 하는 일은 다섯이다.
 - prepare: 띄우기 전 준비와 확인. 차단 장치를 걸 수 없으면 AdapterError로 거부한다.
 - env: worker 환경. 모든 어댑터가 `GS_ROLE=worker`를 넣는다(09 hook이 이 값을 본다). config `[hook.worker_tests]`도
-  `GS_WORKER_TESTS`로 넣는다(hook은 worktree의 config가 아니라 이 값을 읽는다). 비었으면 빈 값으로 덮어쓴다.
+  `GS_WORKER_TESTS`로, 주 레포의 `[sandbox] writes`는 `GS_SANDBOX_WRITES`로 넣는다. hook은 이 값만 읽고,
+  부모 환경의 값은 비어 있는 설정으로도 덮어쓴다.
   zsh `=` 확장 끄기(shellenv.py, goldstack-v28 01): 실측 통과 CLI(`shellenv.NOEQUALS_CLIS`)면 실행 디렉터리(worktree 밖)에
   전달 폴더 `zdotdir/`를 만들고 `ZDOTDIR=<그 폴더>`와 `GS_NOEQUALS=1`을 넣는다. 폴더의 `.zshenv`가 `ZDOTDIR`을 원래 값으로
   되돌리고 원래 `.zshenv`를 읽은 뒤 `setopt noequals`를 켠다. 목록 밖 CLI이거나 폴더를 준비하지 못하면 둘 다 넣지 않는다
@@ -37,7 +38,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import config, git, jail, shellenv, transient
+from . import config, git, jail, sandbox as sandbox_config, shellenv, transient
 
 q = shlex.quote
 
@@ -170,8 +171,18 @@ class Adapter:
     def prepare(self, inp: WorkerInput) -> None:
         pass
 
+    def outside_writes(self, worktree: Path) -> list[Path]:
+        """주 레포의 쓰기 루트를 어댑터에 고정한다. 환경과 codex 명령이 같은 목록을 쓴다."""
+        if not hasattr(self, "_outside_writes"):
+            try:
+                self._outside_writes = sandbox_config.worker_writes(worktree)
+            except ValueError as e:
+                raise AdapterError(f"sandbox 쓰기 루트 설정 오류: {e}") from e
+        return self._outside_writes
+
     def env(self, inp: WorkerInput) -> dict[str, str]:
         return {"GS_ROLE": "worker", "GS_BRIEF": str(inp.brief), "GS_WORKTREE": str(inp.worktree),
+                config.SANDBOX_WRITES_ENV: json.dumps([str(p) for p in self.outside_writes(inp.worktree)]),
                 config.WORKER_TESTS_ENV: self.worker_tests.env_value(), **shellenv.worker_env(self.name, inp.rundir)}
 
     def command(self, inp: WorkerInput) -> str:
@@ -291,7 +302,7 @@ class Codex(Adapter):
     열린 디렉터리 자신과 그 아래는 만들 수 있으므로 `gs`를 열어 둔다. push는 네트워크를 꺼서 막는다.
 
     landlock 모드(`Sandbox`)에서는 OS 샌드박스 대신 gs jail로 가두고 `-s danger-full-access`로 띄운다. 쓰기 목록은 위의 같은 곳
-    (worktree, writable_dirs, `/tmp`, `$TMPDIR`)과 `/dev`, codex 홈이다(jail_writes). 네트워크는 열린다(spec 2-7).
+    (worktree, git 디렉터리와 config `[sandbox] writes`인 writable_dirs, `/tmp`, `$TMPDIR`)과 `/dev`, codex 홈이다(jail_writes). 네트워크는 열린다(spec 2-7).
 
     sandbox 안에서 못 도는 시험(네트워크, localhost, 홈 디렉터리 쓰기, ps 실행: ORIGINS 실패 13)은 gs가 verify로 다시 돌린다.
     그 밖의 실패는 sandbox 탓으로 돌리지 말고 고치도록, 그런 실패만으로 멈추지 말고 커밋하라는 한 줄을 brief 앞에 붙인다(brief는 stdin으로 들어가 뒤에 붙는다).
@@ -305,13 +316,14 @@ class Codex(Adapter):
             "gs가 sandbox 밖 병합 트리에서 검증을 다시 돌린다.")
 
     def writable_dirs(self, worktree: Path) -> list[Path]:
+        """커밋용 git 디렉터리와 존재하는 config `[sandbox] writes` 디렉터리."""
         common = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-common-dir"))
         own = Path(git.out(worktree, "rev-parse", "--path-format=absolute", "--git-dir"))
         refdir = f"refs/heads/{GS_BRANCH_ROOT}"  # 브랜치는 gs/<feature>/NN. 그 위 gs까지 열어 다시 만들 수 있게 한다
         dirs = [own, common / "objects", common / refdir, common / "logs" / refdir]
         for d in dirs:
             d.mkdir(parents=True, exist_ok=True)  # add-dir은 있는 디렉터리여야 한다
-        return list(dict.fromkeys(dirs))
+        return list(dict.fromkeys([*dirs, *(p for p in self.outside_writes(worktree) if os.path.isdir(p))]))
 
     def prepare(self, inp: WorkerInput) -> None:
         try:
@@ -324,8 +336,8 @@ class Codex(Adapter):
         return self.sandbox.jails(self.name)
 
     def jail_writes(self, worktree: Path) -> list[Path]:
-        """landlock 모드의 쓰기 목록: worktree, writable_dirs, `/tmp`, `$TMPDIR`(gs의 값, 있으면), `/dev`, codex 홈.
-        `workspace-write`가 쓰게 하던 곳과 같다(spec 2-6)."""
+        """landlock 모드의 쓰기 목록: worktree, git·config `[sandbox] writes` 디렉터리(writable_dirs), `/tmp`, `$TMPDIR`(gs의 값, 있으면), `/dev`, codex 홈.
+        `workspace-write`가 쓰게 하던 곳(spec 2-6)에 선언한 레포 밖 쓰기 루트를 더한다."""
         tmpdir = os.environ.get("TMPDIR")
         return jail_writes(self.name, [worktree, *self.writable_dirs(worktree), SHARED_TMP, *([tmpdir] if tmpdir else [])])
 
