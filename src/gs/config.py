@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import tomllib
 from dataclasses import MISSING, dataclass, fields as dataclass_fields
@@ -20,6 +21,7 @@ FEEDBACK_MODES = ("off", "draft", "auto")
 FEEDBACK_DETAILS = ("errors", "minimal")
 OVERNIGHT_AUTONOMY = ("stop", "record")
 SECOND_REVIEWER_REREVIEW = ("all", "first", "none")  # `[review] second_reviewer_rereview`의 값(ReviewConfig)
+SANDBOX_WRITES_ENV = "GS_SANDBOX_WRITES"  # gs가 worker에 고정해 넘기는 쓰기 루트(JSON)
 WORKER_TESTS_ENV = "GS_WORKER_TESTS"  # gs가 worker 환경에 넣는 `[hook.worker_tests]`(JSON). 빈 값이면 꺼짐. hook은 이것만 읽는다
 DEFAULT_CONFIG = '''[git]
 remote = "origin"
@@ -292,12 +294,14 @@ class VerifyConfig:
 
 @dataclass(frozen=True)
 class SandboxConfig:
-    """`[sandbox]`: Landlock 모드(`GS_SANDBOX=landlock`)에서 읽지 못하게 할 경로를 기본 비밀 목록에 더한다(sandbox.denies).
+    """`[sandbox]`: worker의 레포 밖 쓰기 루트와 Landlock 추가 비밀 경로(sandbox.denies).
 
     secrets: 경로 문자열 목록. `~`로 시작하면 실행하는 머신의 홈으로, 상대 경로는 주 레포 기준으로 푼다. 없는 경로는 건너뛴다.
-    값은 풀지 않고 적힌 그대로 둔다(머신마다 홈이 다르다). 절이 없으면 빈 목록이다.
+    writes: 모든 worker가 쓸 레포 밖 루트. `~`를 풀어 절대 경로여야 하고 주 레포와 겹치면 오류다. 없어도 허용한다.
+    두 목록의 값은 풀지 않고 적힌 그대로 둔다(머신마다 홈이 다르다). 절·키가 없으면 빈 목록이다.
     """
     secrets: tuple[str, ...] = ()
+    writes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -403,7 +407,7 @@ def load(repo: Path) -> tuple[Config | None, list[Problem]]:
             sections[section] = _load_verify(data.get(section, {}), problems)
             continue
         if section == "sandbox":
-            sections[section] = _load_sandbox(data.get(section, {}), problems)
+            sections[section] = _load_sandbox(data.get(section, {}), problems, repo)
             continue
         if section not in data and section not in ("agy", "review", "worktree", "goldstack", "feedback", "overnight"):
             problems.append(Problem("오류", CONFIG_PATH, f"`{section}`가 없다"))
@@ -590,18 +594,35 @@ def _load_verify(raw, problems: list[Problem]) -> VerifyConfig:
     return VerifyConfig(failed_file, rerun, max_files)
 
 
-def _load_sandbox(raw, problems: list[Problem]) -> SandboxConfig:
-    """`[sandbox]`. 절이 없으면 빈 목록이다."""
+def _load_sandbox(raw, problems: list[Problem], repo: Path) -> SandboxConfig:
+    """`[sandbox]`. 값은 보존하고 쓰기 루트의 절대 경로·주 레포 겹침을 검사한다."""
     if not isinstance(raw, dict):
         problems.append(Problem("오류", CONFIG_PATH, "`sandbox`는 테이블이어야 한다"))
         return SandboxConfig()
     for key in raw.keys() - {f.name for f in dataclass_fields(SandboxConfig)}:
         problems.append(Problem("경고", CONFIG_PATH, f"알 수 없는 키 `sandbox.{key}`"))
-    secrets = raw.get("secrets", [])
-    if not isinstance(secrets, list) or not all(isinstance(p, str) and p.strip() for p in secrets):
-        problems.append(Problem("오류", CONFIG_PATH, '`sandbox.secrets`는 빈 값이 아닌 경로 문자열 목록이어야 한다. 예: ["~/.hyperdev/token"]'))
-        return SandboxConfig()
-    return SandboxConfig(tuple(secrets))
+    values = {}
+    for key in ("secrets", "writes"):
+        paths = raw.get(key, [])
+        if not isinstance(paths, list) or not all(isinstance(p, str) and p.strip() for p in paths):
+            problems.append(Problem("오류", CONFIG_PATH, f'`sandbox.{key}`는 빈 값이 아닌 경로 문자열 목록이어야 한다. 예: ["~/shared"]'))
+            continue
+        values[key] = tuple(paths)
+    repos = [repo.resolve()]
+    if values.get("writes"):
+        cp = git.run(repo, "worktree", "list", "--porcelain", "-z", check=False)
+        if cp.returncode == 0:
+            repos.append(Path(cp.stdout.split("\0", 1)[0].removeprefix("worktree ")).resolve())
+    for raw_path in values.get("writes", ()):
+        expanded = os.path.expanduser(raw_path)
+        if expanded.startswith("~"):
+            continue
+        path = Path(expanded)
+        if not path.is_absolute():
+            problems.append(Problem("오류", CONFIG_PATH, f"`sandbox.writes`는 절대 경로여야 한다: {raw_path}"))
+        elif any(path.resolve().is_relative_to(main) or main.is_relative_to(path.resolve()) for main in repos):
+            problems.append(Problem("오류", CONFIG_PATH, f"`sandbox.writes`가 주 레포와 겹친다: {raw_path}"))
+    return SandboxConfig(**values)
 
 
 def worker_tests(raw: dict) -> tuple[WorkerTestsConfig, list[str]]:
