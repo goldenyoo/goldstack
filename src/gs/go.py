@@ -31,7 +31,8 @@ worker를 한 번 더 띄우고 다시 재리뷰한다. 2차 재리뷰는 앞서
 모든 재리뷰, first는 1차 재리뷰까지(2차 재리뷰·수리 재리뷰에서 빠진다), none은 모든 재리뷰에서 빠진다. 빠진 회차에는 그 리뷰어 기록의 판정할 지적(수리 재리뷰는
 defer 지적)을 첫 리뷰어 재리뷰에 함께 싣는다(_rereview_slots). 지적 id는 기록마다 겹치므로 호출용 id를 주고(_lent_ids) 판정은 (원래 기록, 원래 id)의 지적에
 판정한 리뷰어와 함께 적는다. 첫 리뷰어도 부를 수 없으면(agy 상한, 구현과 같은 계열) 그 지적은 unchecked다. 빠진 회차의 호출은 agy 상한에 세지 않는다.
-회차와 config로만 고르므로 재개·병합 전 대조로 같은 회차를 다시 해도 같은 리뷰어를 부른다(_second_skipped).
+단 두 번째 리뷰어의 첫 리뷰 fix 지적이 하나 이상이고 모두 첫 리뷰어의 첫 리뷰 지적(action 무관)과 같은 파일·±5줄 안에서 겹치면 모든 재리뷰에서 뺀다.
+줄 번호가 없는 위치는 겹치지 않는다. 회차·config·state의 첫 리뷰 지적으로 고르므로 재개·병합 전 대조에서도 같은 리뷰어를 부른다(_second_skipped).
 수정은 티켓당 최대 2회고, 리뷰·재리뷰는 위의 마지막 재리뷰 high 말고는 병합을 막지 않는다.
 순서: 구현 → 리뷰 → 수정 → 재리뷰 → (2차 수정 → 재리뷰) → verify(통과할 때 한 번, 실패하면 아래 수리 뒤 한 번 더, 끊기면 바로 한 번 더) → 병합.
 티켓 검증이 실패하면(_verify_failed) 시도 하나에 한 번 새 시도 대신 수리 worker가 같은 브랜치·worktree에서 돈다(_start_repair, brief에 verify.log 경로, 단계 repair).
@@ -101,6 +102,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import signal
 import sys
 import tempfile
@@ -2557,7 +2559,8 @@ def _to_rereview(r: Run, t: Ticket, nth: int) -> list[tuple[dict, list[dict]]]:
 
     2차면 1차 재리뷰가 새로 낸 report 지적(review.is_report_check)도 판정한다(goldstack-v40 03). 단 그 지적 때문에 리뷰어를 새로 부르지 않는다:
     그 기록을 판정할 리뷰어(_judge_rec. second_reviewer_rereview가 first·none이면 두 번째 기록은 첫 리뷰어)가 다른 지적으로 불릴 때만 넣는다.
-    all이면 report 지적만 가진 두 번째 리뷰어는 부르지 않고 그 지적은 판정 없이 보고만이다. first면 두 번째 기록의 report 지적도 첫 리뷰어 자리에 싣는다.
+    두 번째 리뷰어를 부르는 회차에는 report 지적만 가진 두 번째 리뷰어는 부르지 않고 그 지적은 판정 없이 보고만이다.
+    config나 첫 리뷰 겹침으로 두 번째 리뷰어를 빼면 그 기록의 report 지적도 첫 리뷰어 자리에 싣는다.
     state의 지적 필드(review.rereview_targets)와 config로만 가리므로 중단 뒤 이어도, 병합 전 대조로 다시 불려도 같은 지적을 고른다.
     """
     pairs = [(rec, review.rereview_targets(rec, nth)) for rec in state.reviews(r.st.ticket(t.id))]
@@ -2873,7 +2876,7 @@ def _repair_review(r: Run, a: Active) -> ReviewFlow:
     """수리 커밋(a.base..head)을 리뷰어들이 tiers.rereview 등급으로 다시 본다. 고칠 지적은 돌려주지 않는다: 지적은 보고만 하고 수리 뒤에는 고치지 않는다.
 
     호출은 루프 밖 스레드에서 돈다(_review_stage). 받은 지적이 없으니 지적을 낸 리뷰어만이 아니라 구현과 다른 계열의 리뷰어를 모두 부른다.
-    단 config `[review] second_reviewer_rereview`가 first·none이면 두 번째 리뷰어는 부르지 않고 그 defer 지적은 첫 리뷰어가 함께 판정한다(_plan_repair_reviews).
+    단 config가 빼거나 첫 리뷰 fix가 모두 겹치면 두 번째 리뷰어는 부르지 않고 그 defer 지적은 첫 리뷰어가 함께 판정한다(_plan_repair_reviews).
     _rereview처럼 재리뷰 자체의 오류는 병합을 막지 않는다. 중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 수리 재리뷰부터 잇고, 뒤는 티켓 실패다.
     순서는 준비(_plan_repair_reviews) → 호출(경계는 _call_repair_reviewers) → 반영(_apply_repair_reviews)이다.
     반영한 지적의 high는 여기서 보지 않는다: 병합 전 대조 뒤에 _review_stage가 MergeBlocked로 끊는다(_final_high). 포괄 예외 처리 밖이라 삼켜지지 않는다.
@@ -2907,7 +2910,7 @@ def _plan_repair_reviews(r: Run, a: Active, head: str) -> tuple[list[tuple[dict,
     """수리 재리뷰 준비: 구현과 다른 계열의 리뷰 기록마다 그 리뷰어를 부른다. agy는 상한에 닿았으면 부르지 않고 기록에 남긴다. 부를 리뷰어를 세고 단계를 적는다.
     (부를 (기록, 함께 판정할 defer 지적), 호출 값).
 
-    config `[review] second_reviewer_rereview`가 first·none이면 두 번째 리뷰어는 수리 재리뷰에 부르지 않는다(_rereview_slots): 띄우지도 agy 호출로 세지도
+    config `[review] second_reviewer_rereview`가 first·none이거나 첫 리뷰 fix가 모두 겹치면 두 번째 리뷰어는 수리 재리뷰에 부르지 않는다(_rereview_slots): 띄우지도 agy 호출로 세지도
     않고 그 기록에 메모를 남긴다. 그 리뷰어의 defer 지적은 첫 리뷰어 호출의 defer에 호출용 id와 원래 리뷰어(`reviewer`)를 달아 함께 싣는다(_lent_ids).
     첫 리뷰어도 부를 수 없으면(agy 상한, 구현과 같은 계열) 그 defer 지적은 판정 없이 남는다(재현된 미수리). 두 번째 리뷰어를 대신 부르지 않는다.
     """
@@ -2915,7 +2918,9 @@ def _plan_repair_reviews(r: Run, a: Active, head: str) -> tuple[list[tuple[dict,
     ts = r.st.ticket(t.id)
     launch = []
     if _second_skipped(r, t, review.REPAIR_ROUND) and ts.review and ts.second_review:
-        msg = (f"수리 재리뷰: 부르지 않았다(second_reviewer_rereview = {r.cfg.review.second_reviewer_rereview})"
+        reason = ("fix 지적이 모두 첫 리뷰어와 겹침" if _second_overlap(ts)
+                  else f"second_reviewer_rereview = {r.cfg.review.second_reviewer_rereview}")
+        msg = (f"수리 재리뷰: 부르지 않았다({reason})"
                + (f". defer 지적은 {ts.review['reviewer']}가 판정한다" if review.deferred(ts.second_review) else ""))
         _append_fix(ts.second_review, msg)
         say(f"[{t.id}] {msg} ({ts.second_review['reviewer']})")
@@ -2984,7 +2989,7 @@ def _repair_review_dir(a: Active, rec: dict) -> Path:
 
 def _rereview(r: Run, a: Active) -> ReviewFlow:
     """지적을 낸 리뷰어들에게 수정 커밋을 다시 보게 하고, 결과를 지적에 적는다. 2차 수정이 고칠 지적을 돌려준다.
-    두 번째 리뷰어를 부르지 않는 회차(config `[review] second_reviewer_rereview`)에는 그 지적을 첫 리뷰어가 함께 판정한다(_plan_rereviews).
+    두 번째 리뷰어를 부르지 않는 회차(config 또는 첫 리뷰 겹침)에는 그 지적을 첫 리뷰어가 함께 판정한다(_plan_rereviews).
 
     호출은 루프 밖 스레드에서 돈다(_review_stage). 재리뷰 자체의 오류는 병합을 막지 않는다: 이 head의 결과가 없는 지적은 unchecked(재리뷰 실패)다.
     중단 예외(NetworkAbort)와 스레드의 뜻밖의 오류(ReviewThreadError)는 올린다. 앞은 다음 gs go가 재리뷰부터 잇고, 뒤는 티켓 실패다: 확인 없이 병합하지 않는다.
@@ -3108,12 +3113,46 @@ def _run_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]], he
 Lent = list[tuple[dict, dict, int]]  # 첫 리뷰어가 함께 판정할 다른 기록의 지적: (원래 기록, 원래 지적, 호출 id). _lent_ids
 
 
-def _second_skipped(r: Run, t: Ticket, nth: int | str) -> bool:
-    """nth 회차(1·2 재리뷰, review.REPAIR_ROUND 수리 재리뷰)에 두 번째 리뷰어를 부르지 않나(config `[review] second_reviewer_rereview`, goldstack-v38 04).
+def _location_ranges(location: str) -> list[tuple[str, int, int]]:
+    """`파일:줄[-줄][,줄…][;파일:줄…]`을 파일·닫힌 줄 범위로 푼다. 줄 번호가 없으면 제외한다."""
+    ranges = []
+    for part in location.split(";"):
+        path, colon, lines = part.rpartition(":")
+        if not colon or not path.strip():
+            continue
+        for span in lines.split(","):
+            match = re.fullmatch(r"\s*(\d+)\s*(?:[-–]\s*(\d+)\s*)?", span)
+            if match:
+                start, end = int(match[1]), int(match[2] or match[1])
+                if 0 < start <= end:
+                    ranges.append((path.strip(), start, end))
+    return ranges
 
-    회차 이름과 config로만 정한다: 다음 gs go가 그 회차부터 이어도(재개, 병합 전 대조) 같은 리뷰어를 고른다.
+
+def _second_overlap(ts: state.TicketState) -> list[tuple[dict, dict]]:
+    """두 번째 기록의 첫 리뷰 fix가 모두 겹치면 (두 번째 지적, 첫 지적) 쌍을 돌려준다. fix가 없거나 하나라도 안 겹치면 빈 목록이다."""
+    first = [(f, _location_ranges(f.get("location", ""))) for f in (ts.review or {}).get("findings", [])
+             if f.get("found_round", 0) == 0]
+    fixes = [f for f in (ts.second_review or {}).get("findings", [])
+             if f.get("found_round", 0) == 0 and f.get("action") == review.FIX]
+    pairs = []
+    for second in fixes:
+        spans = _location_ranges(second.get("location", ""))
+        match = next((f for f, ranges in first
+                      if any(p == q and start <= hi + 5 and lo <= end + 5
+                             for p, start, end in spans for q, lo, hi in ranges)), None)
+        if match is None:
+            return []
+        pairs.append((second, match))
+    return pairs
+
+
+def _second_skipped(r: Run, t: Ticket, nth: int | str) -> bool:
+    """nth 회차(1·2 재리뷰, review.REPAIR_ROUND 수리 재리뷰)에 config가 빼거나 첫 리뷰 fix가 모두 겹치면 두 번째 리뷰어를 부르지 않는다.
+
+    회차·config·state의 첫 리뷰 지적으로만 정한다: 다음 gs go가 그 회차부터 이어도(재개, 병합 전 대조) 같은 리뷰어를 고른다.
     """
-    return bool(t.second_reviewer) and not r.cfg.review.calls_second(nth)
+    return bool(t.second_reviewer) and (not r.cfg.review.calls_second(nth) or bool(_second_overlap(r.st.ticket(t.id))))
 
 
 def _rereview_slots(r: Run, t: Ticket, pairs: list[tuple[dict, list[dict]]],
@@ -3122,12 +3161,16 @@ def _rereview_slots(r: Run, t: Ticket, pairs: list[tuple[dict, list[dict]]],
 
     이 회차에 두 번째 리뷰어를 부르지 않으면(_second_skipped) 그 기록의 자리를 빼고, 판정할 지적이 있으면 첫 리뷰 기록(ts.review)의 자리에 싣는다.
     첫 리뷰어에게 자기 판정할 지적이 없어도 그 자리를 만든다(맨 앞). 첫 리뷰 기록이 없으면(만들어지지 않는다) 빼지 않는다: 판정할 리뷰어가 없다.
-    그 밖의 자리는 pairs 그대로다(all이면 지금과 같다).
+    config가 빼는 회차와 첫 리뷰 fix가 모두 겹쳐 빠지는 모든 회차에 같은 인계를 쓴다. 그 밖의 자리는 pairs 그대로다.
     """
     ts = r.st.ticket(t.id)
     first, second = ts.review, ts.second_review
     if not _second_skipped(r, t, nth) or not second or not first:
         return [(rec, found, []) for rec, found in pairs]
+    overlap = _second_overlap(ts)
+    if overlap:
+        ids = ", ".join(f"{second['reviewer']}-{s['id']}~{first['reviewer']}-{f['id']}" for s, f in overlap)
+        say(f"[{t.id}] 두 번째 리뷰어({second['reviewer']}) 재리뷰 건너뜀: fix 지적이 모두 첫 리뷰어와 겹침({ids})")
     slots = [(rec, found, []) for rec, found in pairs if rec is not second]
     lent = [(rec, found) for rec, found in pairs if rec is second and found]
     if lent:
@@ -3174,7 +3217,7 @@ def _plan_rereviews(r: Run, a: Active, targets: list[tuple[dict, list[dict]]],
     """재리뷰 준비: 부를 리뷰어를 정하고(_rereview_slots), 부르지 못하는 리뷰어의 지적은 unchecked로 적고, 부를 리뷰어를 세고, 단계를 적는다.
     (부를 (기록, 지적, 함께 판정할 지적), 호출 값).
 
-    두 번째 리뷰어를 이 회차에 부르지 않으면(config `[review] second_reviewer_rereview`가 first면 2차, none이면 1·2차) 그 리뷰어를 띄우지도
+    두 번째 리뷰어를 이 회차에 부르지 않으면(config가 빼는 회차 또는 첫 리뷰 fix가 모두 겹치는 모든 회차) 그 리뷰어를 띄우지도
     agy 호출로 세지도 않는다. 그 판정할 지적은 첫 리뷰어 호출에 함께 싣는다: 호출 값의 found에 호출용 id와 원래 리뷰어(`reviewer`)를 달아 붙인다(_lent_ids).
     agy 상한에 닿은 리뷰어는 자기 지적과 함께 판정할 지적을 모두 unchecked(한도)로 적는다. 첫 리뷰어가 구현과 같은 계열이면(첫 리뷰를 거부했다)
     함께 판정할 지적만 unchecked(재리뷰 실패)다. 어느 쪽이든 두 번째 리뷰어를 대신 부르지 않는다.
