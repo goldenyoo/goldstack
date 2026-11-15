@@ -266,7 +266,7 @@ codex 리뷰어는 `-C`가 worktree가 아니라 호출마다(끊겨서 다시 �
 - `state.push_record`가 없으면(`gs clean`이 읽는 옛 state) 대조를 건너뛴다. `gs clean`은 `ls-remote`도 대조 뒤에 한다.
 - 범위는 push뿐이다. 바뀐 `core.hooksPath`의 hook은 gs의 commit·merge에서 push 전에 돌 수 있고, fetch도 바뀐 주소로 간다(worker가 hook을 우회했을 때). `.git/hooks/` 파일과 `core.sshCommand`는 기록하지 않는다.
 
-1. integration 검증(`integration`). 실패하면 integration을 되돌린다.
+1. integration 검증(`integration`). 실패하면 integration을 되돌린다. 이번 실행이 이미 전체 검증한 트리면 돌지 않는다(아래 "integration 검증 건너뛰기").
 2. 보고서: 새 판단 모델 호출(`models.judge`, 제한 `timeouts.judge_minutes`)이 증거 파일(`finish/report-input.md`, `finish/diff-stat.txt`, spec)을 읽고 Summary를 쓴다. 증거 파일에는 git의 `gs-ticket` 표시만으로 읽은 `## 티켓 병합 사실(git)` 절(티켓별 병합 커밋 또는 `병합 안 됨`, 병합될 때 이미 품은 다른 티켓. `report.merge_facts`)이 있고, 프롬프트는 병합 순서·상태 주장을 그 절과 대조해 맞는 것만 남은 위험으로 쓰라고 한다. 프롬프트는 마무리 상태·병합 여부 문장을 쓰지 말라고 한다(그 시점에는 아직 모른다). `## Summary` 같은 제목도 쓰지 말라고 하고, 그래도 붙은 제목은 gs가 뗀다(`report.strip_heading`: 답 앞의 `#` 제목 `Summary` 줄. 옛 `summary.md`도 렌더링 때 뗀다). 제목은 보고서가 한 번만 붙인다. gs가 원본 증거를 붙여 `.goldstack/work/<f>/report.md`를 integration에 커밋한다: Summary, 마무리 상태 줄(아래), Evidence(티켓별 결과, 단계별 소요 `단계별 소요: worker 9분 · 리뷰 4분 · 수정 2분 · 검증 3분`, 남은 리뷰 지적, verify 출력. 깨끗이 통과한 검증은 로그 끝 대신 `- <라벨>: 통과 · 종료 코드 0 · <초>초 · 로그 <경로>` 한 줄이다: 측정 기록상 표본 하나·종료 0·트리 그대로·판별 없음이고 로그의 종료 코드 줄이 `0` 하나일 때만이며 `report.passed_line`, 실패·flaky·시간 초과·끊김·측정 기록 없는 옛 state는 끝 4000자를 붙인다), Merge Danger(`결과:` 줄, PR, verify 결과, 병합·revert 커밋, 되돌리는 법). PR 본문 상한(60,000자)을 넘으면 로그를 줄이고, 그래도 길면 자른다. 판단 모델이 실패하면 그 사실을 Summary에 쓴다.
 3. integration을 `<remote>`에 일반 push하고 `gh pr create --repo <owner/repo> --base <base>`(열린 PR이 있으면 `gh pr edit`). PR 본문은 보고서와 같다.
 4. 보고서 커밋까지 포함한 PR head를 다시 검증(`integration-final`). 1과 달라진 것이 `report.md`뿐이면 건너뛴다(아래 "integration-final 건너뛰기").
@@ -389,6 +389,12 @@ gs는 base에 아무것도 push하지 않는다. base로 갈 gs 커밋(revert, �
 **추적 파일 변경**(`setup._restore_tracked`) — 세 위치 모두 `setup.run`이 끝날 때(성공·실패·시간 초과·중단 모두) `git status --porcelain`의 `??` 밖 경로를 `git reset`으로 unstage하고, HEAD에 있던 경로만 `git checkout --`으로 되돌린다. HEAD에 없던 경로(setup이 stage한 설치 파일)는 untracked 산출물로 남긴다. 되돌렸으면 `경고: setup이 추적 파일을 바꿨다 → 되돌림: <파일>, …`를 출력과 `setup.log`에 쓴다. 실패로 치지 않고 setup의 종료 코드만 결과다. 그래서 lockfile을 고치는 setup이 worker·verify가 쓰는 트리를 바꾸지 않고, integration의 "worker가 integration을 바꿨다"나 base `_verify`의 "worktree가 바뀌었다" → `main_failed` → revert로 이어지지 않는다. 보고서는 로그에서 다시 읽는다(`setup.warnings`, 지난 시도 포함): 티켓은 티켓별 결과의 이유, integration·base는 Merge Danger의 `<위치>: <경고>`.
 
 표시 파일 `gs-setup-done`을 worktree별 git 디렉터리에 둬(`setup.marker`는 git을 부르지 않고 worktree의 `.git`을 직접 읽는다: 디렉터리면 그 경로, `gitdir: …` 한 줄 파일이면 그 경로. 못 읽으면 `git rev-parse --absolute-git-dir`로 돌아간다. `reset`·`clean`에도 남고 새 worktree에는 없다) integration을 재개할 때 다시 준비하지 않는다. 이 파일에 준비 때 생긴 untracked 파일 목록을 함께 적어(`setup.remember`), gitignore에 없는 산출물도 `git clean`과 "worktree가 바뀌었나" 검사(`setup.is_clean`)가 지우거나 문제 삼지 않는다. 티켓 worktree도 준비 뒤 같은 표시를 남긴다(시도마다 새 worktree라 준비는 다시 한다). 그래서 산출물이 미커밋 변경으로 잡혀 `kept_worktrees`에 남지 않고, 병합 뒤 정리가 기억한 산출물만 지운 뒤(`setup.discard_artifacts`) `--force` 없이 worktree를 지운다. 티켓 worker의 `git add -A`를 막아 주지는 않으니 산출물은 gitignore에 둔다. 로그 끝부분은 보고서 Evidence에 붙고, 티켓이면 `failure.log`에도 들어간다.
+
+### integration 검증 건너뛰기
+
+`finish._skip_reason`이 1 앞에서 판정한다(v41). 근거는 state `metrics.validations`의 받아들여진(`accepted`) 티켓 검증 기록과 그 `tree_sha`다. 기록의 순서·라벨이 아니라 트리 일치로 커밋과 잇는다. integration HEAD에서 첫 부모를 따라 거슬러 가며 커밋마다 본다: spec `verify`로 돈 기록과 같은 트리면 건너뛴다. 좁은 검증(`verify_for(t)`가 spec `verify`와 다름) 기록과 같은 트리이고 첫 부모와의 차이가 모두 그 티켓의 `touches` 안이면 첫 부모로 가서 다시 본다(`_narrow_ticket`은 라벨과 명령이 함께 맞는 티켓이 하나일 때만 티켓을 정한다). 그 밖의 커밋(base 합치기, revert 복원, 병합이 취소된 트리), 기록이 없거나 `tree_sha`가 비었을 때, integration worktree가 깨끗하지 않을 때는 검증한다.
+
+건너뛰면 `finish/integration-verify.log`에 `integration: <근거>, 건너뜀` 한 줄을 쓰고 통과했을 때처럼 `verified_head`와 `integration_ok`를 남긴다. 근거는 `integration_skipped`에 남아 보고서 마무리 줄 다음 줄(`integration 검증 건너뜀: <근거>`)이 된다. 그래서 `_verify_final`과 첫 base 검증(`_same_as_verified`)이 `verified_head`를 그대로 이어 쓴다. 보고서 커밋 뒤에 끊겨 다시 판정할 트리가 없으면 `_resumed_skip`이 남긴 `verified_head`와 지금 HEAD의 차이가 보고서·아이디어 파일뿐일 때 남긴 근거를 쓴다.
 
 ### integration-final 건너뛰기
 

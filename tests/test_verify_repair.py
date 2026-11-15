@@ -1211,6 +1211,8 @@ class StaleResumeTest(Base):
 
     def test_stale_finish_verify_is_ended(self):
         self.verifies(NOTHING, HANG)  # 첫 검증은 티켓, 둘째는 마무리의 integration이다
+        # gs가 자식 프로세스라 mock이 닿지 않는다. 티켓을 좁은 검증으로 돌려 마무리가 integration 검증을 건너뛰지 않게 한다
+        support.ticket_verify(self, "01", f"bash {self.bin / 'verify.sh'} narrow")
         self.worker(GOOD, REPAIRS)
         group = self.gs_killed_in_verify("finish/integration-verify.log")
         code, out, err = self.go("--only", "01")

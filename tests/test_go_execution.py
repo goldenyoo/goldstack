@@ -18,6 +18,7 @@ from support import FAKE_HERDR, alive, git_clean, kill_quietly, sh, ticket
 class GoExecutionTest(support.GoTest):
     # --- 병렬(04) ---
     def test_parallel_overlaps_and_respects_dependencies(self):
+        support.verify_integration(self)  # 마무리 integration 검증도 한 번에 하나인지 본다
         for tid in ("11", "12", "13"):
             self.add_ticket(tid)
         vlog = self.bin / "verify.log"

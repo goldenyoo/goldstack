@@ -250,6 +250,7 @@ class TicketVerifyRunTest(support.GoTest):
         self.assertIn(f"티켓 검증 명령: `{fast}`", body)
 
     def test_spec_verify_is_last_and_report_shows_only_own(self):
+        support.verify_integration(self)  # 마무리 integration 검증이 spec verify로 도는지 본다
         own, full = self.record("own"), self.record("full")
         self.configure(full, tickets={"01": own})
         code, out, err = self.go("--only", "01,04")
@@ -262,6 +263,7 @@ class TicketVerifyRunTest(support.GoTest):
         self.assertNotIn("티켓 검증 명령: ", body)
 
     def test_no_override_runs_spec_verify_without_ticket_line(self):
+        support.verify_integration(self)  # 마무리 integration 검증이 spec verify로 도는지 본다
         full = self.record("full")
         self.configure(full)
         code, out, err = self.go("--only", "01")

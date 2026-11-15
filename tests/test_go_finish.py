@@ -341,6 +341,7 @@ fi
         self.assertIn(str((self.rundir / "finish" / "main-verify.log").resolve()), body)  # 전체 로그 경로
 
     def test_integration_verify_timeout_does_not_merge(self):
+        support.verify_integration(self)  # 마무리 integration 검증이 시간을 넘겨야 한다
         self.hang_verify("integration")
         initial = sh(self.remote, "git", "rev-parse", "main")
         with mock.patch.dict(os.environ, {"GS_VERIFY_TIMEOUT": "1"}), support.times_out_once_ready(self.bin / "hung"):  # 멈춘 verify만 시간 초과
