@@ -1,7 +1,8 @@
 ---
 id: "<NN>"
 title: "<한 줄 제목>"
-blocked_by: []
+blocked_by: []  # 앞 티켓의 결과가 필요한 상류 id 목록. 상류가 실패하면 이 티켓도 건너뛴다
+# after: ["<NN>"]  # 같은 파일 때문에 순서만 필요한 상류 id 목록(선택). 상류가 실패·건너뜀이어도 이 티켓은 돈다. blocked_by와 같은 id를 겹쳐 적지 않는다
 touches: []
 # closes: [12]  # 이 티켓이 고치는 issue 번호 목록(선택)
 tier: medium  # small|medium|large

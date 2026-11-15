@@ -170,7 +170,8 @@ class Run:
     only: list[str] | None
     cfg: config.Config  # 실행 시작 시 읽은 설정을 모든 모델 호출에 함께 쓴다
     st: state.State | None = None  # 상태의 원천. 요약·PR 본문도 이것을 읽는다
-    g: dict[str, list[str]] = field(default_factory=dict)
+    g: dict[str, list[str]] = field(default_factory=dict)  # blocked_by와 after를 합친 의존(순서·ETA). 둘의 뜻은 after로 가른다
+    after: dict[str, list[str]] = field(default_factory=dict)  # {티켓: 순서만 필요한 상류}. 상류가 실패·건너뜀이어도 하류는 건너뛰지 않는다
     order: list[str] = field(default_factory=list)
     prior: set[str] = field(default_factory=set)  # 이번 실행 전에 이미 병합돼 있던 티켓(표시용)
     ihead: str = ""  # gs가 아는 integration 끝. 병합할 때만 움직인다
@@ -214,7 +215,7 @@ class Run:
         self.st.progress = state.calculate_progress(
             self.st, self.order, self.feat.spec.max_workers, prior=self.prior,
             models={tid: self.feat.tickets[tid].model for tid in self.order},
-            history_median_s=self.history_median_s, deps=self.g, finish_median_s=self.finish_median_s,
+            history_median_s=self.history_median_s, deps=_eta_deps(self), finish_median_s=self.finish_median_s,
             tiers={tid: getattr(self.feat.tickets[tid], "tier", None) for tid in self.order},
             tier_medians_s=self.tier_medians_s)
         state.save(self.rundir, self.st)
@@ -429,6 +430,7 @@ def _begin(r: Run) -> None:
     st = state.load(r.rundir, r.name)
     metrics.close_interrupted_stages(st)
     r.g = _graph(r)
+    r.after = {t.id: list(getattr(t, "after", [])) for t in getattr(getattr(r, "feat", None), "tickets", {}).values()}
     r.order = graph.topo_order(r.g)
     # Keep the document warning across a finish-only resume. The retry loop
     # below resets FAILED/SKIPPED tickets to PENDING before finish renders again.
@@ -650,7 +652,9 @@ def _setup_stale(r: Run, tree: str) -> str:
 
 
 def _graph(r: Run) -> dict[str, list[str]]:
-    g = {t.id: t.blocked_by for t in r.feat.tickets.values()}
+    """blocked_by와 after를 합친 그래프. `--only`면 범위 안 티켓만 남기고 범위 밖 의존은 끝난 것으로 본다."""
+    g = graph.combine({t.id: t.blocked_by for t in r.feat.tickets.values()},
+                      {t.id: list(getattr(t, "after", [])) for t in r.feat.tickets.values()})
     if r.only is not None:
         g, _, _ = graph.subgraph(g, r.only)
     return g
@@ -1027,6 +1031,7 @@ def _loop(r: Run) -> None:
     끊김 중에도 도는 검증의 결과는 반영한다(검증은 로컬이다). 줄 선 병합은 회복까지 시작하지 않는다.
     중단(NetworkAbort)이면 worker·리뷰어를 끝내고, 도는 검증은 끝날 때까지 기다려 반영한 뒤 떠난다(_finish_verify). 줄 선 병합은 시작하지 않는다.
     어떻게 떠나든 돌던 worker, 리뷰어, 검증(프로세스 그룹)을 남기지 않는다(_stop_reviews, _stop_merges).
+    시작 조건은 두 의존으로 갈린다: blocked_by 상류는 모두 병합돼야 하고 실패·건너뜀이면 하류를 건너뛴다(_skip_blocked). after 상류는 끝나기만 하면(병합·실패·건너뜀) 하류가 그때의 integration 위에서 돈다(_frontier). 병합되지 않은 after 상류가 있으면 시작할 때 한 줄 남긴다(_say_after_missing).
     """
     cap = max(1, r.feat.spec.max_workers)
     say(f"■ 순서: {' '.join(r.order)}")
@@ -1048,6 +1053,7 @@ def _loop(r: Run) -> None:
                 ready = [tid for tid in _frontier(r) if tid not in active]
                 if not ready:
                     break
+                _say_after_missing(r, ready[0])
                 a = _start(r, r.feat.tickets[ready[0]], runner)
                 if a is None:  # 띄우지 못했다(그 티켓만 실패). 막힌 티켓을 다시 고른다
                     _skip_blocked(r)
@@ -1607,20 +1613,49 @@ def _net_abort(r: Run, active: dict[str, Active]) -> None:
 
 
 def _frontier(r: Run) -> list[str]:
-    """state에서 다시 계산한 frontier: 대기 중이고 막는 티켓이 모두 병합된 것. r.order 순."""
+    """state에서 다시 계산한 frontier: 대기 중이고 blocked_by가 모두 병합되고 after가 모두 끝난(병합·실패·건너뜀) 것. r.order 순."""
     st = r.st.tickets
     merged = [tid for tid in r.order if st[tid].status == state.MERGED]
-    ready = set(graph.frontier(r.g, merged))
+    ended = [tid for tid in r.order if st[tid].status in (state.MERGED, *_BAD)]
+    ready = set(graph.frontier(r.g, merged, ended=ended, after=getattr(r, "after", {})))
     return [tid for tid in r.order if tid in ready and st[tid].status == state.PENDING]
 
 
+_BAD = (state.FAILED, state.SKIPPED)
+
+
+def _after_of(r: Run, tid: str) -> list[str]:
+    """tid의 after 상류. after를 모르는 Run(옛 호출, 시험의 가짜)은 빈 목록이다."""
+    return list(getattr(r, "after", {}).get(tid, ()))
+
+
+def _after_missing(r: Run, tid: str) -> list[str]:
+    """tid의 after 상류 중 병합되지 않은 채 끝난 것(범위 안). 범위 밖 상류는 끝난 것으로 본다."""
+    return [d for d in _after_of(r, tid) if d in r.g and r.st.tickets[d].status in _BAD]
+
+
+def _say_after_missing(r: Run, tid: str) -> None:
+    """after 상류가 병합되지 않은 채 하류를 시작한다고 알린다: `[03] 01 없이 시작한다(after, 01 실패)`."""
+    missing = _after_missing(r, tid)
+    if missing:
+        why = ", ".join(f"{d} {'실패' if r.st.tickets[d].status == state.FAILED else '건너뜀'}" for d in missing)
+        say(f"[{tid}] {', '.join(missing)} 없이 시작한다(after, {why})")
+
+
+def _eta_deps(r: Run) -> dict[str, list[str]]:
+    """남은 시간 흉내(state.simulate_schedule)에 줄 의존. 실패·건너뜀인 after 상류는 뺀다: 하류는 그 상류를 기다리지 않고 돈다."""
+    return {tid: [d for d in deps if not (d in _after_of(r, tid) and r.st.tickets[d].status in _BAD)]
+            for tid, deps in r.g.items() if tid in r.st.tickets}
+
+
 def _skip_blocked(r: Run) -> None:
-    """실패·건너뜀 티켓에 막힌 대기 티켓을 건너뜀으로 적는다(줄줄이)."""
-    bad = (state.FAILED, state.SKIPPED)
+    """실패·건너뜀 티켓에 막힌 대기 티켓을 건너뜀으로 적는다(줄줄이). blocked_by만 센다: 실패·건너뜀인 after 상류는 하류를 막지 않는다."""
     for tid in r.order:  # r.order는 위상 순서라 한 번 훑으면 줄줄이 막힌 것까지 닿는다
         if r.st.tickets[tid].status != state.PENDING:
             continue
-        blockers = [d for d in r.g[tid] if d in r.g and r.st.tickets[d].status in bad]  # 범위 밖 의존은 끝난 것
+        order_only = _after_of(r, tid)
+        blockers = [d for d in r.g[tid] if d in r.g and d not in order_only
+                    and r.st.tickets[d].status in _BAD]  # 범위 밖 의존은 끝난 것
         if blockers:
             _set(r, tid, status=state.SKIPPED, reason=f"막힘: {', '.join(blockers)}", ended_at=state.now())
             say(f"[{tid}] 건너뜀: {', '.join(blockers)} 실패")
