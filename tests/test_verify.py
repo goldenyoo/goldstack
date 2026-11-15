@@ -260,8 +260,9 @@ class StaleTest(Case):
         self.run_dir = self.dir / "feature/run"
 
     def rows(self):
-        out = subprocess.run(["ps", "-A", "-ww", "-o", "pgid=,command="], capture_output=True).stdout.decode("utf-8", errors="replace")
-        return [row.strip().split(None, 1) for row in out.split("\n") if len(row.split(None, 1)) == 2]
+        out = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,pgid=,command="], capture_output=True).stdout.decode("utf-8", errors="replace")
+        rows = (row.split(None, 2) for row in out.split("\n"))
+        return [(int(pid), int(pgid), cmd) for pid, pgid, cmd in (r for r in rows if len(r) == 3) if pid.isdigit() and pgid.isdigit()]
 
     def left_behind(self, log, command="sleep 300", ready=None):
         """부모가 command를 검증으로 띄우고 SIGKILL로 죽는다. 살아 남은 프로세스 그룹을 돌려준다."""
@@ -275,7 +276,7 @@ class StaleTest(Case):
         while group is None or (ready and not ready.exists()):
             self.assertIsNone(parent.poll(), "부모가 먼저 끝났다")
             self.assertLess(time.monotonic(), deadline, "표지가 ps에 보이지 않는다")
-            group = next((int(pgid) for pgid, cmd in self.rows() if cmd.endswith(suffix)), None)
+            group = next((pgid for pid, pgid, cmd in self.rows() if pid == pgid and cmd.endswith(suffix)), None)
             time.sleep(0.02)
         self.addCleanup(support.kill_group_quietly, group)
         os.kill(parent.pid, signal.SIGKILL)
@@ -326,7 +327,7 @@ class StaleTest(Case):
     def test_mark_is_the_last_word_and_differs_per_verify(self):
         log = self.run_dir / "01/1/verify.log"
         group = self.left_behind(log)
-        [command] = [cmd for pgid, cmd in self.rows() if int(pgid) == group and cmd.startswith("bash ")]
+        [command] = [cmd for pid, pgid, cmd in self.rows() if pid == pgid == group and cmd.startswith("bash ")]
         self.assertTrue(command.startswith("bash -c sleep 300"), command)
         self.assertTrue(command.endswith(f" gs-verify:{log.resolve()}"), command)
         marks = {verify.mark(self.run_dir / rel) for rel in ("01/1/verify.log", "01/2/verify.log", "02/1/verify.log", "finish/main-verify.log")}
@@ -366,13 +367,14 @@ class StaleTest(Case):
 
     def test_rows_that_are_not_stale_verifies_are_left_alone(self):
         mine = verify.mark(self.run_dir / "01/1/verify.log")
-        rows = [(os.getpgrp(), "S", f"bash -c x\\012exit $? {mine}"),  # gs 자신의 그룹
-                (1, "S", f"bash -c x\\012exit $? {mine}"),
-                (4242, "Z", f"bash -c x\\012exit $? {mine}"),
-                (4243, "S", f"bash -c x\\012exit $? {verify.mark(self.dir / 'other/run/01/1/verify.log')}"),
-                (4244, "S", f"grep x exit $? {mine}"),
-                (4245, "S", f"bash -c grep {mine}"),  # 사람이나 worker가 표지를 찾는 명령
-                (4246, "S", f"bash -c x\\012exit $? {verify.mark(self.run_dir / 'gs-main-x/base/.goldstack/work/other/run/finish/main-verify.log')}")]  # 임시 worktree 안의 다른 feature
+        rows = [(os.getpgrp(), os.getpgrp(), "S", f"bash -c x\\012exit $? {mine}"),  # gs 자신의 그룹
+                (1, 1, "S", f"bash -c x\\012exit $? {mine}"),
+                (4242, 4242, "Z", f"bash -c x\\012exit $? {mine}"),
+                (4243, 4243, "S", f"bash -c x\\012exit $? {verify.mark(self.dir / 'other/run/01/1/verify.log')}"),
+                (4244, 4244, "S", f"grep x exit $? {mine}"),
+                (4245, 4245, "S", f"bash -c grep {mine}"),  # 사람이나 worker가 표지를 찾는 명령
+                (4246, 4246, "S", f"bash -c x\\012exit $? {verify.mark(self.run_dir / 'gs-main-x/base/.goldstack/work/other/run/finish/main-verify.log')}"),
+                (4247, 4200, "S", f"bash -c x\\012exit $? {mine}")]  # setsid 전: 표지는 있고 그룹은 부모의 것
         with mock.patch.object(verify, "_ps", return_value=rows), mock.patch.object(verify, "_signal") as send:
             self.assertEqual(verify.stop_stale(self.run_dir), [])
         send.assert_not_called()
@@ -393,7 +395,7 @@ class StaleTest(Case):
 
     def test_ps_failing_while_ending_warns_instead_of_raising(self):
         mine = verify.mark(self.run_dir / "01/1/verify.log")
-        rows = [(4242, "S", f"bash -c x\\012exit $? {mine}")]
+        rows = [(4242, 4242, "S", f"bash -c x\\012exit $? {mine}")]
         with mock.patch.object(verify, "_ps", side_effect=[rows, OSError("ps 없음")]), mock.patch.object(verify, "_signal", return_value=False):
             [line] = verify.stop_stale(self.run_dir)
         self.assertTrue(line.startswith("경고: 지난 실행의 검증을 끝내지 못했다"), line)

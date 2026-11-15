@@ -380,16 +380,16 @@ def stop_stale(rundir: Path) -> list[str]:
 
 
 def _marked_groups(rundir: Path) -> dict[int, str]:
-    """{프로세스 그룹: 표지}. `/`까지 대조해 `run2`나 다른 feature를 잡지 않는다. gs 자신의 그룹은 끝내지 않는다.
+    """{프로세스 그룹: 표지}. 세션 리더(pid == pgid)인 행만 그룹으로 받는다: 아직 setsid 전인 bash는 명령줄에 표지가 있어도 부모의 그룹에 있다. `/`까지 대조해 `run2`나 다른 feature를 잡지 않는다. gs 자신의 그룹은 끝내지 않는다.
 
     worktree도 레포 루트가 되어(feature.find_repo_root) 다른 feature의 run이 rundir 아래에 생길 수 있다. 그 run은 잠금이 따로라 옛 검증으로 볼 수 없으므로, rundir 뒤에 WORK가 또 나오는 표지는 잡지 않는다.
     """
     under = mark(rundir) + "/"
     other_run = f"/{WORK}/"
     groups = {}
-    for pgid, stat, command in _ps():
+    for pid, pgid, stat, command in _ps():
         row = MARKED_ROW.match(command)
-        if row and row[1].startswith(under) and other_run not in row[1][len(under) - 1:] and not stat.startswith("Z") and pgid not in (0, 1, os.getpgrp()):
+        if pid == pgid and row and row[1].startswith(under) and other_run not in row[1][len(under) - 1:] and not stat.startswith("Z") and pgid not in (0, 1, os.getpgrp()):
             groups[pgid] = row[1]
     return groups
 
@@ -410,17 +410,17 @@ def _end_group(pgid: int) -> bool:
 
 def _group_alive(pgid: int) -> bool:
     """좀비는 죽은 것으로 본다."""
-    return any(group == pgid and not stat.startswith("Z") for group, stat, _ in _ps())
+    return any(group == pgid and not stat.startswith("Z") for _, group, stat, _ in _ps())
 
 
-def _ps() -> list[tuple[int, str, str]]:
-    """[(프로세스 그룹, stat, 명령줄)]. ps가 실패하면 예외다."""
-    cp = subprocess.run(["ps", "-A", "-ww", "-o", "pgid=,stat=,command="], capture_output=True, stdin=subprocess.DEVNULL, timeout=PS_SECONDS)
+def _ps() -> list[tuple[int, int, str, str]]:
+    """[(pid, 프로세스 그룹, stat, 명령줄)]. ps가 실패하면 예외다."""
+    cp = subprocess.run(["ps", "-A", "-ww", "-o", "pid=,pgid=,stat=,command="], capture_output=True, stdin=subprocess.DEVNULL, timeout=PS_SECONDS)
     if cp.returncode:
         raise OSError(f"ps 종료 코드 {cp.returncode}: {cp.stderr.decode('utf-8', errors='replace').strip()}")
     rows = []
     for line in cp.stdout.decode("utf-8", errors="replace").split("\n"):
-        parts = line.split(None, 2)
-        if len(parts) >= 2 and parts[0].isdigit():
-            rows.append((int(parts[0]), parts[1], parts[2] if len(parts) > 2 else ""))
+        parts = line.split(None, 3)
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            rows.append((int(parts[0]), int(parts[1]), parts[2], parts[3] if len(parts) > 3 else ""))
     return rows
