@@ -193,6 +193,11 @@ class GrillBreakdownTest(unittest.TestCase):
         comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
         self.assertIn("동작을 바꾸는 티켓은 바뀌는 함수·fixture·상수 이름을 시험 폴더에서 grep해 나온 시험 파일을 touches에 넣는다", comment)
 
+    def test_spec_template_touches_includes_config_key_tests(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        for text in ("설정 키", "목록 항목 수", "그 키 이름도 시험 폴더에서 grep", "`deny`를 grep한다", "tests/test_config.py"):
+            self.assertIn(text, comment)
+
     def test_ticket_template_keys(self):
         ticket = fill((TEMPLATES / "ticket.md").read_text(encoding="utf-8"), NN="01")
         data, _ = frontmatter.split(ticket)
