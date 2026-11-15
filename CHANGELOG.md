@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.2.25 — 2026-11-15
+
+### goldstack-v41
+
+- 마무리 integration 전체 검증을 이번 실행이 이미 전체 검증한 트리면 건너뛴다. 근거는 `metrics.validations`의 받아들여진 티켓 검증 `tree_sha`이고, 그 뒤 차이가 좁은 검증을 통과한 티켓의 `touches` 안 파일뿐일 때도 건너뛴다. `verified_head`를 남겨 integration-final·base 검증도 이어서 건너뛴다. `integration-verify.log`와 보고서 마무리 줄 다음 줄(`integration 검증 건너뜀: …`)에 표시한다.
+- worker brief: 백그라운드 작업의 출력은 그 작업의 출력 파일 하나만 읽고 `tasks/*.output` 글로브를 쓰지 않는다.
+- grill 템플릿 touches 안내에 바뀌는 설정 키·항목 개수를 시험 폴더에서 grep하게 했다.
+- replay brief의 touches를 시험으로 지킨다.
+- `docs/guide.md`·`docs/internals.md`에 위 변경을 적었다.
+- 버전을 `0.2.25`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.24 — 2026-11-14
 
 ### goldstack-v40

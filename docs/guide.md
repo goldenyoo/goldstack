@@ -260,6 +260,7 @@ idle_minutes: 30
 - `verify_ticket`: brief에 이 명령이 들어가지만 worker는 고친 곳에 닿는 좁은 시험만 돌리고, gs가 그 티켓을 integration에 합친 **병합 트리**에서 돌린다. worktree의 커밋 안 된 파일로는 통과할 수 없다. 검증이 트리를 바꾸면(gitignore 밖에 쓰면) `검증 중 worktree가 바뀌었다`로 실패하니 출력은 gitignore 안이나 레포 밖으로 보낸다(`uv build -o "$(mktemp -d)"`).
 - 티켓 하나만 다르게 돌리려면 [티켓 `verify`](#verify--이-티켓만의-검증-명령)를 쓴다.
 - `verify`: integration, 보고서 커밋 뒤 integration-final, 병합 뒤 main에서 돌린다. 바뀐 것이 `report.md`뿐이면 integration-final은 건너뛴다.
+- 마무리 integration 검증도 이번 실행이 이미 전체 검증한 트리면 돌지 않는다(v41). integration 끝 트리가 받아들여진 전체 티켓 검증의 트리와 같거나, 그 뒤 차이가 좁은 검증(티켓 `verify`·`verify_ticket`)을 통과한 티켓의 `touches` 안 파일뿐이면 건너뛴다. base 합치기·revert 복원처럼 검증 기록이 없는 커밋이 끼거나 `touches` 밖이 바뀌었거나 기록이 없는 옛 state면 평소처럼 돈다. 건너뛰면 `■ integration: <근거>, 건너뜀`을 출력하고 `run/finish/integration-verify.log`에 그 한 줄만 남기며, 보고서 Summary의 마무리 줄 바로 다음 줄에 `integration 검증 건너뜀: <근거>`가 붙는다. 끄는 설정 키는 없다. 좁은 검증은 `uv build` 같은 단계를 돌리지 않을 수 있는데, 이 위험은 받아들였다.
 - `verify_retries`: 실패하면(시간 초과 포함) 그만큼 다시 돌린다. 단 [`[verify]` 판별](#1회성-시험-실패-다시-돌리기verify)에서 따로 돌린 파일이 시간 안에 신호 없이 실패하면(판별이 실패로 끝남) 재시도 없이 바로 수리로 간다. 한 번의 상한은 `verify_minutes`라 최악은 (1 + `verify_retries`) × `verify_minutes`다. 모든 검증 지점에 같이 적용된다.
 - `idle_minutes`: worker가 출력 없이 시험을 돌리는 시간보다 길게 둔다.
 
@@ -730,6 +731,7 @@ worker가 성공 끝 이벤트를 냈는데 남긴 자식 프로세스(`setsid n
 - 모든 worker의 brief는 전체 검증 대신 고친 곳에 닿는 좁은 시험만 시킨다. 첫 구현 worker(claude·codex·agy 계열 무관, 재개한 worker 포함)도 수리 worker와 [수정 worker](#리뷰와-재리뷰)와 같다. 전체 검증은 gs가 커밋된 내용만으로 병합 트리에서 하므로, 같은 전체 시험을 worker와 gs가 두 번 돌리는 시간을 없앴다. 티켓 `verify`가 좁아도 같다. 뒤 실행에서 첫 검증 실패가 늘어 수리 시간이 줄어든 시간을 넘으면 되돌린다(goldstack-v20 결정 4-2). 모든 brief에는 "다른 티켓이 같은 기계에서 함께 돈다. 네가 띄운 프로세스는 그 PID로 다루고 `pkill`·`killall`로 찾아 죽이지 않는다"가 붙는다.
 - 첫·수정·수리 worker의 brief에는 "버그를 고치는 티켓이면 새 시험을 쓴 뒤, 고친 코드만 잠깐 되돌려(커밋하지 않고) 그 시험이 실패하는 것을 직접 본다"가 붙는다. worker는 복구한 뒤 커밋하고 본 실패(시험 이름과 실패 메시지)를 마지막 메시지에 적는다. 시험이 없는 문서 티켓에는 해당하지 않는다. 재리뷰 지시에는 넣지 않는다.
 - 첫·재개 worker의 brief에는 그 티켓의 `touches` 줄(`- 이 티켓의 touches: …`)과 "touches 밖 파일은 고치지 않는다. 고쳐야 하면 `## 남긴 관찰`에 적는다"가 붙는다. `touches`가 없는 티켓은 이 줄이 없다. 수정 worker와 수리 worker는 이 줄을 받지 않는다. 수정 worker가 고칠 수 있는 파일은 리뷰가 알려 주는 목록(이 티켓과 이미 병합된 티켓의 `touches`)이고, 수리 worker의 brief에는 그 목록도 없다. gs는 touches 밖 변경을 diff로 대조하거나 실패로 처리하지 않는다.
+- 모든 worker의 brief에는 백그라운드 작업의 출력을 그 작업의 출력 파일 하나를 경로로 읽고 `tasks/*.output` 같은 글로브로 출력 디렉터리를 읽지 않는다는 규칙이 붙는다(지금 도는 명령의 출력까지 읽어 끝없이 커진다).
 - 모든 worker의 brief에는 고치지 않고 남긴 관찰(리뷰가 짚지 않은 의심, 돌리지 못한 확인, touches 밖에서 고쳐야 할 것)을 마지막 메시지 끝의 `## 남긴 관찰` 절에 한 줄에 하나씩 쓰라는 규칙이 붙는다. 이 절이 [리뷰 판정과 보고서 표](#worker가-남긴-관찰)로 이어진다.
 - 보고서 티켓별 결과의 이유 칸에 `수리: 시도 1 커밋 1개 → 다시 검증 통과` 같은 줄이 붙는다. gs가 죽거나 끊겨도 다음 `gs go`가 수리를 같은 worktree에서 잇는다.
 
