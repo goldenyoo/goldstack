@@ -1,6 +1,7 @@
 """설정 스키마, 비밀 파일, 초기화와 CLI 사전 검사."""
 import contextlib
 import io
+import json
 import os
 import subprocess
 import tempfile
@@ -46,6 +47,38 @@ class ConfigTest(unittest.TestCase):
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(["--repo", str(self.repo), *args])
         return code, out.getvalue(), err.getvalue()
+
+    def test_sandbox_writes_defaults_types_and_raw_values(self):
+        for extra in ('', '\n[sandbox]\n'):
+            self.path.write_text(CONFIG + extra)
+            cfg, problems = config.load(self.repo)
+            self.assertEqual(problems, [])
+            self.assertEqual(cfg.sandbox.writes, ())
+        for bad in ('"/shared"', 'true', '[1]', '[""]', '["  "]'):
+            with self.subTest(bad=bad):
+                self.path.write_text(CONFIG + '\n[sandbox]\nwrites = ' + bad)
+                cfg, problems = config.load(self.repo)
+                self.assertIsNone(cfg)
+                self.assertTrue(any(p.level == '오류' and 'sandbox.writes' in p.message for p in problems))
+        with mock.patch.dict(os.environ, {'HOME': str(self.repo.parent)}):
+            self.path.write_text(CONFIG + '\n[sandbox]\nwrites = ["~/shared-missing"]')
+            cfg, problems = config.load(self.repo)
+        self.assertEqual(problems, [])
+        self.assertEqual(cfg.sandbox.writes, ('~/shared-missing',))
+        self.assertNotIn('[sandbox]', config.DEFAULT_CONFIG)
+
+    def test_sandbox_writes_reject_relative_and_repo_overlap(self):
+        link = self.repo / 'alias'
+        link.symlink_to(self.repo, target_is_directory=True)
+        paths = ['relative', './shared', str(self.repo.parent), str(self.repo),
+                 str(self.repo / '.git'), str(self.repo / '.goldstack/work'), str(link), '~']
+        with mock.patch.dict(os.environ, {'HOME': str(self.repo.parent)}):
+            for path in paths:
+                with self.subTest(path=path):
+                    self.path.write_text(CONFIG + '\n[sandbox]\nwrites = ' + json.dumps([path]))
+                    cfg, problems = config.load(self.repo)
+                    self.assertIsNone(cfg)
+                    self.assertTrue(any(p.level == '오류' and 'sandbox.writes' in p.message for p in problems))
 
     def test_all_values(self):
         cfg, problems = config.load(self.repo)
