@@ -28,12 +28,15 @@ revert PR을 기다리는 동안 base가 움직였으면 옛 revert를 병합하
 근거는 state `metrics.validations`에서 받아들여진(`accepted`) 티켓 검증 기록의 `tree_sha`다. 티켓 검증은 integration의 미완 병합 트리에서 돌고
 병합 커밋은 그 트리로 만드니, 기록의 순서·라벨이 아니라 트리 일치로 커밋과 잇는다. integration HEAD에서 첫 부모를 따라 거슬러 가며 커밋마다 본다:
 spec `verify`로 돈 기록과 같은 트리면 건너뛴다. 좁은 검증(`verify_for(t)`가 spec `verify`와 다름) 기록과 같은 트리이고 첫 부모와의 차이가 모두
-그 티켓의 touches(glob) 안이면 첫 부모로 가서 다시 본다. 그 밖(base 합치기, revert 복원, 보고서 커밋 등 검증 기록이 없는 커밋, 병합이 취소되어
-이력에 없는 트리), 기록이 없을 때(옛 state, 빈 `tree_sha`), integration worktree가 깨끗하지 않을 때는 지금처럼 검증한다.
+그 티켓의 touches(glob) 안이면 첫 부모로 가서 다시 본다. 좁은 검증의 티켓은 라벨과 `verify_for(t)`가 함께 맞는 티켓이 하나일 때만 정한다
+(`_narrow_ticket`. 티켓 `01`의 수리 검증과 티켓 `01-repair`처럼 둘 이상이 맞으면 그 기록을 쓰지 않는다). 그 밖(base 합치기, revert 복원,
+보고서 커밋 등 검증 기록이 없는 커밋, 병합이 취소되어 이력에 없는 트리), 기록이 없을 때(옛 state, 빈 `tree_sha`),
+integration worktree가 깨끗하지 않을 때는 지금처럼 검증한다.
 건너뛰면 `integration-verify.log`에 근거 한 줄(`integration: <근거>, 건너뜀`)을 쓰고 통과했을 때처럼 `verified_head`·`integration_ok`를 남긴다.
 근거는 `integration_skipped`에 남아 보고서 Summary 마무리 줄 다음 줄이 된다. 검증별 측정 표에는 줄이 없다. `integration-final`(`_verify_final`)과
 첫 base 검증(`_same_as_verified`)은 지금 규칙 그대로 `verified_head`를 잇는다. 끊긴 뒤 다음 `gs go`가 마무리를 이으면 남긴 값을 쓰고,
-마무리를 새로 시작하면 같은 트리로 다시 판정한다.
+마무리를 새로 시작하면 같은 트리로 다시 판정한다. 보고서 커밋 뒤(push·publish)에 끊겨 다시 판정할 트리가 없으면, 남긴 `verified_head`와
+지금 HEAD의 차이가 보고서·아이디어 파일뿐일 때 남긴 근거를 쓴다(`_resumed_skip`).
 
 base 검증이 처음 실패했고 마지막으로 통과한 integration 커밋(`verified_head`)과 병합 커밋의 차이가 `.goldstack/`뿐이면 revert 전에 한 번 다시 검증한다(`main-retry`).
 phase `main_retry`를 남기고 임시 worktree를 치운 뒤 처음부터 다시 읽으니 끊겨서 다음 `gs go`가 잇는 길과 같다. 통과하면 verified이고 outcome에 flaky를 적으며, 실패하면 revert한다.
@@ -461,29 +464,31 @@ def _verify(r, wt: Path, label: str) -> bool:
     return ok
 
 
-def _ticket_of(label) -> str | None:
-    """티켓 검증의 측정 라벨(`ticket-<id>`, 뒤에 `-repair`·`-끊김`이 붙을 수 있다)의 티켓 id. 마무리 검증 라벨이면 None."""
-    if not isinstance(label, str) or not label.startswith("ticket-"):
-        return None
-    return label[len("ticket-"):].removesuffix("-끊김").removesuffix("-repair")
+def _narrow_ticket(r, label: str, command) -> str | None:
+    """좁은 검증 기록의 티켓 id. 라벨이 그 티켓의 검증 라벨(`ticket-<id>`, 뒤에 `-repair`·`-끊김`·`-repair-끊김`) 중 하나이고
+    그 티켓의 `verify_for(t)`가 기록의 명령인 티켓이 하나뿐일 때만이다. 라벨에서 접미어를 떼어 내지 않는다:
+    티켓 id 자체가 `-repair`로 끝나면(`32`와 `32-repair`) 떼어 낸 id가 다른 티켓이 된다. 둘 이상이 맞으면 어느 touches인지 몰라 None(검증한다)."""
+    found = [tid for tid, t in r.feat.tickets.items() if r.feat.spec.verify_for(t) == command
+             and label in {f"ticket-{tid}{x}" for x in ("", "-repair", "-끊김", "-repair-끊김")}]
+    return found[0] if len(found) == 1 else None
 
 
 def _verified_trees(r) -> tuple[dict[str, str], dict[str, list[str]]]:
     """받아들여진(`accepted`) 티켓 검증이 본 트리. ({트리: 전체 검증 라벨}, {트리: [좁은 검증 티켓]}).
 
-    전체 검증은 spec `verify`로 돈 기록, 좁은 검증은 그 밖의 명령(`verify_for(t)`)으로 돈 기록이다. 라벨은 티켓을 찾는 데만 쓴다.
+    전체 검증은 spec `verify`로 돈 기록, 좁은 검증은 그 밖의 명령(`verify_for(t)`)으로 돈 기록이다. 라벨은 좁은 검증의 티켓을 찾는 데만 쓴다(`_narrow_ticket`).
     `tree_sha`가 빈 기록(옛 state)과 마무리 검증(트리를 남기지 않는다)은 쓰지 않는다."""
     full: dict[str, str] = {}
     narrow: dict[str, list[str]] = {}
     for x in r.st.metrics.get("validations", []):
         if not isinstance(x, dict) or x.get("accepted") is not True or not isinstance(x.get("tree_sha"), str):
             continue
-        tid, tree = _ticket_of(x.get("label")), x["tree_sha"]
-        if tid is None or not tree:
+        label, tree = x.get("label"), x["tree_sha"]
+        if not isinstance(label, str) or not label.startswith("ticket-") or not tree:
             continue
         if x.get("command") == r.feat.spec.verify:
-            full[tree] = x["label"]
-        elif tid in r.feat.tickets and tid not in narrow.setdefault(tree, []):
+            full[tree] = label
+        elif (tid := _narrow_ticket(r, label, x.get("command"))) is not None and tid not in narrow.setdefault(tree, []):
             narrow[tree].append(tid)
     return full, narrow
 
@@ -516,6 +521,23 @@ def _skip_reason(r) -> str:
                 return ""
             passed.append(tid)
             commit = parents[0]
+    except (git.GitError, OSError):
+        return ""
+
+
+def _resumed_skip(r, prev: dict) -> str:
+    """보고서 커밋 뒤(push·publish)에 끊긴 마무리(phase `preparing`)가 남긴 건너뛰기 근거. 빈 문자열이면 쓰지 않는다.
+
+    integration 끝이 그 보고서 커밋이라 `_skip_reason`은 맞는 트리를 찾지 못한다. 그때 남긴 `verified_head`가 지금 HEAD의 조상이고
+    둘의 차이가 보고서·이 feature의 아이디어 파일뿐이며(`_verify_final`과 같은 규칙) worktree가 깨끗하면 남긴 근거를 그대로 쓴다."""
+    reason, head = prev.get("integration_skipped"), prev.get("verified_head")
+    if prev.get("phase") != "preparing" or not reason or not head:
+        return ""
+    try:
+        if not setup.is_clean(r.iwt) or not _ancestor(r.iwt, head, "HEAD"):
+            return ""
+        changed = git.run(r.iwt, "diff", "--no-renames", "--name-only", "-z", head, "HEAD").stdout
+        return reason if set(changed.split("\0")) - {""} <= _report_paths(r) else ""
     except (git.GitError, OSError):
         return ""
 
@@ -1340,7 +1362,8 @@ def _run(r, cleanup: bool) -> tuple[str | None, bool]:
         f.update({key: prev[key] for key in ("issues", "issues_error") if key in prev})  # issue는 PR이 바뀌어도 같다
         _save(r, phase="preparing", outcome="integration 검증 중")
         # 이번 실행이 이미 전체 검증한 트리면 다시 돌지 않는다(_skip_reason). 통과로 남기니 아래 _verify_final·base 검증이 그대로 잇는다.
-        if skip := _skip_reason(r):
+        # 보고서 커밋 뒤에 끊긴 마무리면 그때 남긴 근거를 쓴다(_resumed_skip).
+        if skip := _skip_reason(r) or _resumed_skip(r, prev):
             _skip_integration(r, skip)
         ok = bool(skip) or _verify(r, r.iwt, "integration")
         verified_head = git.sha(r.iwt, "HEAD") if ok else ""

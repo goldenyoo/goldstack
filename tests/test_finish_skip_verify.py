@@ -49,6 +49,11 @@ class SkipIntegrationVerifyTest(support.GoTest):
         text = support.ticket(tid, deps).replace("reviewer: codex\n", "reviewer: codex\n" + extra)
         (self.repo / ".goldstack/work/demo/tickets" / f"{tid}-t.md").write_text(text)
 
+    def commit_tickets(self):
+        sh(self.repo, "git", "add", "-A")
+        sh(self.repo, "git", "commit", "-qm", "more tickets")
+        sh(self.repo, "git", "push", "-q", self.REMOTE, self.BASE)
+
     def verifies(self, where="integration"):
         return [line for line in self.lines("verifies") if line == where]
 
@@ -124,6 +129,47 @@ class SkipIntegrationVerifyTest(support.GoTest):
         self.assertEqual(self.lines("verifies")[:2], ["ticket", "ticket narrow"])
         self.assert_verified()
         self.assertIn(f"HEAD: {self.merge_commit('33')}\n", self.log())
+
+    # 티켓 id가 라벨 접미어(`-repair`)로 끝난다: 접미어를 떼어 낸 다른 티켓(32)의 touches로 보지 않는다
+    def test_c_repair_id_label_of_two_tickets_verifies(self):
+        """32-repair의 검증 라벨 `ticket-32-repair`는 32의 수리 검증 라벨이기도 하다. 둘 다 좁은 검증이면 어느 touches인지 몰라 검증한다."""
+        self.write_ticket("32", deps='["31"]', touches=["file_*"], verify=self.narrow)
+        self.write_ticket("32-repair", deps='["31"]', touches=["docs/"], verify=self.narrow)  # file_32-repair는 touches 밖
+        self.commit_tickets()
+        code, out, err = self.go("--only", "31,32-repair")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("verifies")[:2], ["ticket", "ticket narrow"])
+        self.assert_verified()
+        self.assertIn(f"HEAD: {self.merge_commit('32-repair')}\n", self.log())
+
+    def test_c_repair_id_uses_its_own_touches_verifies(self):
+        """32는 전체 검증이라 좁은 검증 기록 `ticket-32-repair`는 32-repair의 것이다. 그 touches(docs/) 밖이니 검증한다."""
+        self.write_ticket("32", deps='["31"]', touches=["file_*"])
+        self.write_ticket("32-repair", deps='["31"]', touches=["docs/"], verify=self.narrow)
+        self.commit_tickets()
+        code, out, err = self.go("--only", "31,32-repair")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("verifies")[:2], ["ticket", "ticket narrow"])
+        self.assert_verified()
+
+    def test_b_repair_id_of_full_verify_prefix_skips(self):
+        """32는 전체 검증이라 좁은 검증 기록 `ticket-32-repair`는 32-repair의 것이다. 그 touches 안이니 건너뛴다."""
+        self.write_ticket("32", deps='["31"]', touches=["file_*"])
+        self.write_ticket("32-repair", deps='["31"]', touches=["file_32-*"], verify=self.narrow)
+        self.commit_tickets()
+        code, out, err = self.go("--only", "31,32-repair")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("verifies"), ["ticket", "ticket narrow"])
+        self.assert_skipped("ticket-31 전체 검증 뒤 좁은 검증 티켓(32-repair)만 바뀜", self.merge_commit("32-repair"))
+
+    def test_b_repair_id_inside_its_touches_skips(self):
+        """접두 티켓(35)이 없는 35-repair의 좁은 검증 기록도 35-repair의 touches로 본다."""
+        self.write_ticket("35-repair", deps='["31"]', touches=["file_35*"], verify=self.narrow)
+        self.commit_tickets()
+        code, out, err = self.go("--only", "31,35-repair")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.lines("verifies"), ["ticket", "ticket narrow"])
+        self.assert_skipped("ticket-31 전체 검증 뒤 좁은 검증 티켓(35-repair)만 바뀜", self.merge_commit("35-repair"))
 
     # (d) 전체 검증 기록 없음 → 검증
     def test_d_no_full_verify_record_verifies(self):
@@ -211,6 +257,39 @@ class SkipIntegrationVerifyTest(support.GoTest):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.lines("verifies"), ["ticket"])
         self.assert_skipped("ticket-31 전체 검증과 같은 트리", head)
+
+    def test_g_interrupted_after_report_commit_keeps_skip(self):
+        """보고서 커밋 뒤 push에서 멈춘 마무리. integration 끝이 보고서 커밋이라 맞는 트리가 없지만, 다음 gs go는 남긴 근거로 그대로 건너뛴다."""
+        reason = "ticket-31 전체 검증과 같은 트리"
+        with mock.patch("gs.finish._push", side_effect=git.GitError("push 실패(시험)")):
+            code, out, err = self.go("--only", "31")
+        self.assertNotEqual(code, 0, out + err)
+        self.assertEqual((self.finish()["phase"], self.finish()["integration_skipped"]), ("preparing", reason))
+        self.assertEqual(self.verifies(), [])
+        report_commit = self.integration("rev-parse", "gs/demo/integration")
+        self.assertEqual(self.integration("log", "-1", "--format=%s", report_commit), "gs: demo 최종 보고서")
+        self.assertEqual(self.integration("rev-parse", f"{report_commit}^"), self.merge_commit("31"))
+        code, out, err = self.go("--only", "31")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn(f"■ integration: {reason}, 건너뜀", out)
+        self.assertEqual(self.lines("verifies"), ["ticket"])
+        self.assert_skipped(reason, report_commit)
+
+    def test_g_interrupted_after_report_then_code_commit_verifies(self):
+        """보고서 커밋 뒤 멈춘 마무리 위에 보고서 밖 커밋이 더해졌으면 남긴 근거를 쓰지 않고 검증한다."""
+        with mock.patch("gs.finish._push", side_effect=git.GitError("push 실패(시험)")):
+            code, out, err = self.go("--only", "31")
+        self.assertNotEqual(code, 0, out + err)
+        self.assertEqual(self.finish()["phase"], "preparing")
+        iwt = self.rundir / "wt/integration"
+        (iwt / "file_extra").write_text("extra\n")
+        sh(iwt, "git", "add", "file_extra")
+        sh(iwt, "git", "commit", "-qm", "extra")
+        extra = sh(iwt, "git", "rev-parse", "HEAD")
+        code, out, err = self.go("--only", "31")
+        self.assertEqual(code, 0, out + err)
+        self.assert_verified()
+        self.assertIn(f"HEAD: {extra}\n", self.log())
 
     def test_g_restarted_finish_judges_same(self):
         """보고서 커밋 전에 멈춘 마무리는 다음 gs go가 새로 시작해 같은 트리로 다시 판정한다."""
