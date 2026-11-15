@@ -22,7 +22,7 @@ v42에서 티켓이 범위를 잃은 연쇄를 끊는 변경이다. 연쇄는 �
 - **landlock 실제 시험은 이 머신에서 돌지 않았다 (04):** Landlock을 실제로 거는 시험 두 개는 macOS라서 건너뛰었다. 실제 landlock 동작은 Linux CI에 맡긴다.
 - **StaleTest 측정은 worker 주장뿐이다 (01):** spec 완료 조건인 `StaleTest` 6벌 동시 실행 0/36은 worker가 보고한 값이다. 리뷰어는 sandbox가 `ps`를 막아 이 측정을 다시 하지 못했다.
 
-마무리: preparing · 병합 전
+마무리: verified · PR https://github.com/goldenyoo/goldstack/pull/80 병합 · main 검증 통과
 integration 검증 건너뜀: ticket-02 전체 검증 뒤 좁은 검증 티켓(05)만 바뀜
 리뷰 지적: 수정됨 12 · 미해결 2 · 보고만 5
 
@@ -121,9 +121,16 @@ gs 검증별 측정(한 줄 = 검증의 재시도 하나. 티켓 시도는 티�
 
 | 단계 | 소요(초) |
 |---|---|
-| total | 35.0 |
+| total | 97.0 |
 | summary | 34.534 |
-| report | 0 |
+| report | 0.115 |
+| push | 9.905 |
+| publish | 3.633 |
+| checks | 36.408 |
+| merge-pr | 4.452 |
+| confirm-merge | 0.007 |
+| postmerge | 1.383 |
+| restore-reverts | 0.113 |
 
 ### 티켓별 결과
 
@@ -492,10 +499,39 @@ Installed 1 package in 1ms
 종료 코드: 0
 ```
 
+#### finish/setup.log
+
+```text
+Using CPython 3.12.13
+Creating virtual environment at: .venv
+Resolved 1 package in 13ms
+   Building goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v43/run/gs-main-1k9ckvv9/base
+      Built goldstack @ file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v43/run/gs-main-1k9ckvv9/base
+Prepared 1 package in 201ms
+Installed 1 package in 1ms
+ + goldstack==0.2.26 (from file:///Users/sj.yoo/workspace/goldstack/.goldstack/work/goldstack-v43/run/gs-main-1k9ckvv9/base)
+
+종료 코드: 0
+```
+
+integration-final: 보고서만 바뀜, 건너뜀
+
+#### finish/integration-final-verify.log
+
+```text
+integration-final: 보고서만 바뀜, 건너뜀
+```
+
 #### finish/integration-verify.log
 
 ```text
 integration: ticket-02 전체 검증 뒤 좁은 검증 티켓(05)만 바뀜, 건너뜀
+```
+
+#### finish/main-verify.log
+
+```text
+integration과 같은 코드(d6780607c844edd7546baa297db99101512f6157), 건너뜀
 ```
 
 
@@ -503,13 +539,19 @@ agy 사용: 5/24
 
 ## Merge Danger
 
-결과: integration 검증 중
+결과: integration·main 검증 통과, PR 병합 완료
 
-PR: 아직 없음
+PR: https://github.com/goldenyoo/goldstack/pull/80
 
 integration verify: True
 
-main verify: 미실행
+main verify: True
+
+병합 커밋: `3a4d7fb449479c01cacd3f2fe8461b5cd43b5327`
+
+### issue
+
+- #71 닫음: `3a4d7fb449479c01cacd3f2fe8461b5cd43b5327`에 반영
 
 ### 되돌리는 법
 
@@ -519,7 +561,7 @@ main의 최신 커밋에서 별도 worktree를 만들고 병합 커밋을 revert
 git fetch origin main
 dir="$(mktemp -d)"
 git worktree add --detach "$dir" origin/main
-git -C "$dir" revert --no-edit -m 1 <PR의 mergeCommit.oid>
+git -C "$dir" revert --no-edit -m 1 3a4d7fb449479c01cacd3f2fe8461b5cd43b5327
 # report.md에서 충돌하면(병합 뒤 gs가 main에 올린 최종 보고서 커밋) 지금 보고서를 남기고 이어 간다:
 #   git -C "$dir" checkout HEAD -- .goldstack/work/goldstack-v43/report.md && git -C "$dir" revert --continue --no-edit
 git -C "$dir" push origin HEAD:refs/heads/main
