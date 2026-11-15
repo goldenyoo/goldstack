@@ -60,6 +60,13 @@ class BriefRulesTest(unittest.TestCase):
                 self.assertIn(f"`{worker.OBSERVATIONS_HEADING}` 제목 아래 한 줄에 하나씩 쓴다. 없으면 절을 쓰지 않는다", text)
                 self.assertIn("리뷰가 짚지 않은 의심, 돌리지 못한 확인, touches 밖에서 고쳐야 할 것", text)
 
+    def test_every_brief_tells_to_read_only_own_task_output_file(self):
+        for name, text in self.briefs().items():
+            with self.subTest(brief=name):
+                self.assertIn(worker.TASK_OUTPUT_RULE, text)
+                self.assertIn("출력 디렉터리를 글로브로 읽지 않는다", text)
+                self.assertIn("`tasks/*.output`", text)
+
     def test_every_brief_tells_to_start_nested_sessions_with_gs_child(self):
         for name, text in self.briefs().items():
             with self.subTest(brief=name):
