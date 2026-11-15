@@ -146,7 +146,10 @@ class FlakyReverifyTest(Base):
 
 
 class LogBoundaryTest(Base):
-    """(f) 판별 뒤 전체 실행의 출력만 읽는다. 같은 로그의 앞 실행·앞 재시도의 실패 파일을 합쳐 읽지 않는다."""
+    """(f) 판별 뒤 전체 실행의 출력만 읽는다. 같은 로그의 앞 실행·앞 재시도의 실패 파일을 합쳐 읽지 않는다.
+
+    첫 시험(A·B → C)은 첫 실행만 읽거나 판별 파일과 겹치기만 보는 구현을 잡는다. 판별 파일 전체가 첫 실행의 실패라 모두 합쳐 읽어도 C 때문에 수리로 가서,
+    합쳐 읽는 구현은 둘째 시험(앞 재시도의 test_a가 마지막 판별 밖)이 잡는다."""
 
     def test_last_run_failing_another_file_is_repaired(self):
         self.verifies(fail("test_a", "test_b"), fail("test_c"))
@@ -191,7 +194,8 @@ class ResumeTest(Base):
         self.assertEqual(self.log.read_text().count("같은 트리로 다시 돌린다\n"), 2)
 
     def test_interrupted_second_run_after_a_restart_gets_its_own_second_run(self):
-        # 끊김의 다시 검증이었으면 또 끊긴 것이라 실패다. flaky 다시 검증의 끊김은 첫 끊김이다
+        # 끊김의 다시 검증이었으면 또 끊긴 것이라 실패다. flaky 다시 검증의 끊김은 첫 끊김이다.
+        # 끊김의 다시 검증으로 바뀌어도 flaky 판정의 파일을 들고 가서, 통과하면 flaky 줄이 남는다(수리를 건너뛴 병합이 보고서에 보인다)
         self.verifies(fail("test_a"), fail("test_a"), TERM_SELF)
         self.worker(GOOD, REPAIR)
         self.stop_at_verify()
@@ -202,9 +206,16 @@ class ResumeTest(Base):
         ts = self.ts()
         self.assertEqual((ts.status, ts.attempts, ts.failures, ts.network_resume, ts.repairs), ("merged", 1, 0, {}, []))
         self.assertEqual(self.calls(), ["01"])
-        self.assertEqual(ts.reason, f"검증 끊김 뒤 다시 검증 통과(로그 {self.log})")
+        reason = f"{go.FLAKY_AGAIN}: test_a, 검증 끊김 뒤 다시 검증 통과(로그 {self.log})"
+        self.assertEqual(ts.reason, reason)
         self.assertIn(f"검증 끊김(종료 코드 ", out)
         self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed")] * 2 + [("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
+        text = self.log.read_text()
+        self.assertIn("\n끊긴 검증을 같은 트리로 다시 돌린다\n", text)
+        self.assertTrue(text.endswith("\n종료 코드: 0\n" + self.flaky_line("test_a")), text)
+        report = self.final_report()
+        self.assertIn(f"- flaky: 01 티켓 검증 test_a {go.FLAKY_AGAIN}. (따로 돌려 통과, 전체 다시 통과)", report)
+        self.assertIn(f"| merged | {reason}", report)
 
     def test_ordinary_failure_after_a_restart_goes_to_repair(self):
         self.verifies(fail("test_a"), fail("test_a"), fail("test_a"), fail("test_a"))
@@ -249,7 +260,8 @@ class InDiffTest(unittest.TestCase):
 
     def test_matches(self):
         for name, paths in (("test_a", ["tests/test_a.py"]), ("test_a", ["test_a.py"]), ("test_a.py", ["tests/test_a.py"]),
-                            ("pkg.test_a", ["tests/pkg/test_a.py"]), ("test_a", ["src/x.py", "tests/sub/test_a.py", ""])):
+                            ("pkg.test_a", ["tests/pkg/test_a.py"]), ("test_a.Case", ["tests/test_a.py"]),
+                            ("test_a", ["src/x.py", "tests/sub/test_a.py", ""])):
             with self.subTest(name=name, paths=paths):
                 self.assertTrue(go._in_diff(name, paths))
 
