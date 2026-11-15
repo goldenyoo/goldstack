@@ -293,7 +293,7 @@ class StopTest(Base):
             self.go(*self.only("11"))
         self.assert_verify_gone("11")
         self.assert_no_timeouts()  # 검증이 풀리기를 기다리다 스스로 끝난 것이 아니다
-        self.assertTrue(self.ts("11").network_resume["verify_again"])
+        self.assertEqual(self.ts("11").network_resume["verify_again"], go.AGAIN_INTERRUPTED)
         code, out, err = self.go(*self.only("11"))
         self.assertEqual(code, 0, out + err)
         self.assertIn("[11] 지난 실행이 중간에 끝나 running으로 남았다. 실패로 세지 않고 끊긴 검증을 같은 worktree에서 다시 한다", out)
@@ -395,7 +395,7 @@ class StopTest(Base):
         self.assertIn("■ 중단(네트워크): 11 검증을 마치고 멈춘다", out)
         self.assertEqual(self.verifies(), ["verify 11 1"])  # 다시 검증은 떠나는 중에 시작하지 않는다
         ts = self.ts("11")
-        self.assertEqual((ts.status, ts.reason, ts.network_resume["verify_again"]), (state.PENDING, go.NETWORK_ABORT, True))
+        self.assertEqual((ts.status, ts.reason, ts.network_resume["verify_again"]), (state.PENDING, go.NETWORK_ABORT, go.AGAIN_INTERRUPTED))
         code, out, err = self.go(*self.only("11"))
         self.assertEqual(code, 0, out + err)
         self.assertIn("[11] 지난 검증이 끊겼다. 같은 worktree에서 다시 검증부터 잇는다", out)

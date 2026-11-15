@@ -1249,7 +1249,7 @@ class InterruptedResumeTest(Base):
         self.worker(GOOD, REPAIRS)
         group = self.gs_killed_in_verify("01/1/verify.log")  # 다시 검증은 끊긴 검증의 로그에 이어 쓴다
         mark = self.ts().network_resume
-        self.assertEqual((self.ts().status, mark["verify_again"], mark["done"]), ("running", True, True))
+        self.assertEqual((self.ts().status, mark["verify_again"], mark["done"]), ("running", go.AGAIN_INTERRUPTED, True))
         code, out, err = self.go("--only", "01")
         self.assert_stale_ended(group, out)
         self.assertEqual(code, 0, out + err)
@@ -1266,7 +1266,7 @@ class InterruptedResumeTest(Base):
         self.verifies(TERM_SELF, TERM_SELF)
         self.worker(GOOD, REPAIRS)
         self.stop_at_verify()
-        self.assertTrue(self.ts().network_resume["verify_again"])
+        self.assertEqual(self.ts().network_resume["verify_again"], go.AGAIN_INTERRUPTED)
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         ts = self.ts()
@@ -1289,7 +1289,7 @@ class InterruptedResumeTest(Base):
         self.worker(BREAKS, REPAIRS)
         self.stop_at_verify(3)
         mark = self.ts().network_resume
-        self.assertEqual((mark["repair"], mark["verify_again"]), (go.REPAIR_VERIFY, True))
+        self.assertEqual((mark["repair"], mark["verify_again"]), (go.REPAIR_VERIFY, go.AGAIN_INTERRUPTED))
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         ts = self.assert_same_attempt()
