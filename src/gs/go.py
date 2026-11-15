@@ -1049,6 +1049,7 @@ def _loop(r: Run) -> None:
             _skip_blocked(r)
             _net_tick(r, active, runner)
             _review_tick(r, active, runner)
+            _skip_blocked(r)  # 리뷰·끊김 처리에서 떨어진 티켓에 막힌 티켓도 이 틱에 건너뛴다
             while not r.net.active and len(active) < cap and not r.reviews.fix_waiting():
                 ready = [tid for tid in _frontier(r) if tid not in active]
                 if not ready:
@@ -1644,7 +1645,7 @@ def _say_after_missing(r: Run, tid: str) -> None:
 
 def _eta_deps(r: Run) -> dict[str, list[str]]:
     """남은 시간 흉내(state.simulate_schedule)에 줄 의존. 실패·건너뜀인 after 상류는 뺀다: 하류는 그 상류를 기다리지 않고 돈다."""
-    return {tid: [d for d in deps if not (d in _after_of(r, tid) and r.st.tickets[d].status in _BAD)]
+    return {tid: [d for d in deps if not (d in _after_of(r, tid) and d in r.st.tickets and r.st.tickets[d].status in _BAD)]
             for tid, deps in r.g.items() if tid in r.st.tickets}
 
 

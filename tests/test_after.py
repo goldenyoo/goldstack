@@ -12,7 +12,7 @@ from unittest import mock
 
 import support
 import test_check
-from gs import feature, go, state
+from gs import feature, go, review, state
 from support import sh
 
 
@@ -90,6 +90,29 @@ class AfterGoTest(support.GoTest):
         raw = json.loads((self.rundir / "state.json").read_text())
         self.assertEqual(raw["tickets"]["03"]["reason"], "막힘: 06")
         self.assertNotIn("03", self.calls())
+
+    def test_only_with_after_upstream_out_of_scope_runs_downstream(self):
+        self.tickets(**{"01": ([], None), "03": ([], ["01"])})
+        code, out, err = self.go("--only", "03")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.states(), {"03": "merged"})
+        self.assertEqual(self.merged(), ["03"])
+
+    def test_chain_after_failure_in_review_tick_still_skips_and_runs(self):
+        # 01이 리뷰 거부(_review_tick)로 실패한다: 01에 blocked_by인 04는 건너뛰고, 04에 after인 09는 돈다
+        self.tickets(**{"01": ([], None), "04": (["01"], None), "09": ([], ["04"])})
+        real = go._review_step
+
+        def refuse(r, rv, *args, **kwargs):
+            if rv.a.t.id == "01":
+                raise review.Refused("거부")
+            return real(r, rv, *args, **kwargs)
+
+        with mock.patch("gs.go._review_step", side_effect=refuse):
+            code, out, err = self.go()
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.states(), {"01": "failed", "04": "skipped", "09": "merged"})
+        self.assertEqual(self.merged(), ["09"])
 
 
 class AfterFrontierTest(unittest.TestCase):
