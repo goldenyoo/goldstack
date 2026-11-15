@@ -250,6 +250,7 @@ class CleanTest(unittest.TestCase):
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "reverted")
 
     def test_failed_finish_is_not_automatically_cleaned(self):
+        support.verify_integration(self)  # 티켓 검증만 통과하는 verify: 마무리 integration 검증이 실패해야 한다
         self.parallel(1, verify="git rev-parse -q --verify MERGE_HEAD >/dev/null")
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 1, out + err)

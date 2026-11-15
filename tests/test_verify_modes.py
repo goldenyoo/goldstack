@@ -137,6 +137,7 @@ echo passed-$point
         return f"bash {script}"
 
     def test_all_points_retry_once_and_record_flaky_in_report(self):
+        support.verify_integration(self)  # 마무리 integration 검증의 재시도·flaky 줄을 본다
         command = self.retry_script()
         self.configure(verify=command, verify_ticket=command, verify_retries=1)
         with self.change_code_with_report():
@@ -155,6 +156,7 @@ echo passed-$point
         self.assertEqual(state.load(self.rundir, "demo").finish["phase"], "verified")
 
     def test_exhausted_retries_leave_integration_failed(self):
+        support.verify_integration(self)  # 마무리 integration 검증이 재시도 끝에 실패해야 한다
         command = self.retry_script(always_fail="integration")
         self.configure(verify=command, verify_ticket=command, verify_retries=2)
         code, out, err = self.go("--only", "01")
