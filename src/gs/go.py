@@ -1849,6 +1849,8 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
     """최신 integration 끝에서 티켓 브랜치를 새로 만들고 worker를 띄운다. 띄우지 못하면 실패로 적고 None.
 
     네트워크로 끊겼던 티켓(network_resume)은 같은 worktree에서 잇는다.
+    아직 worker를 시작한 적 없는 티켓(attempts 0)의 brief에만, 이번 실행의 다른 티켓 리뷰에서 `범위 밖`으로 판정된 관찰 중 경로가 이 티켓 touches에 맞는 것을
+    믿을 수 없는 자료 절로 싣는다(report.handoff_observations, goldstack-v45 03). 재시도·재개·수정·수리 brief는 그대로다.
     어떤 오류든(git, herdr, 파일, 어댑터 준비) 이 티켓만 실패시킨다. 이미 띄운 worker가 있으면 끝낸다.
     """
     mark = r.st.ticket(t.id).network_resume
@@ -1866,6 +1868,7 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
     try:
         _recheck_kept(r, t.id)
         ts = r.st.ticket(t.id)
+        first = ts.attempts == 0  # 이미 worker가 시작한 티켓(재시도)의 brief에는 앞 티켓 관찰을 싣지 않는다
         summary = _failure_summary(r, ts)
         # 실패·중단 worktree는 지우지 않는다. 실행 디렉터리 번호로 브랜치와 경로도 새로 고른다.
         while True:
@@ -1894,7 +1897,8 @@ def _start(r: Run, t: Ticket, runner) -> Active | None:
                 return None
             setup.remember(wt)
             _phase(r, t.id, "worker", t.model)
-        worker.write_brief(job, r.feat.spec, r.name, branch, summary, merged=_base_tickets(r, base))
+        worker.write_brief(job, r.feat.spec, r.name, branch, summary, merged=_base_tickets(r, base),
+                           handoff=report.handoff_observations(r, t) if first else None)
         adapter = _worker_adapter(r, t)
         adapter.prepare(job.input)  # agy: 차단 장치가 걸리지 않으면 여기서 거부한다
         worker.write_script(job, adapter)

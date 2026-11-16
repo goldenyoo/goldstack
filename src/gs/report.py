@@ -38,8 +38,9 @@ import json
 import re
 import shlex
 from collections import Counter
+from collections.abc import Iterable
 from fnmatch import fnmatchcase
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import config, git, metrics, review, sandbox, setup, state, streamfmt, transient, worker
 from .feature import WORK
@@ -571,6 +572,73 @@ def observation_verdict(ts, n: int, text: str) -> str:
                              + (f": {v['reason']}" if v.get("reason") else ""))
                 break
     return "\n".join(lines) or NO_OBSERVATION_VERDICT
+
+
+OUT_OF_SCOPE = "범위 밖"  # review.OBSERVATION_VERDICTS 중 이 티켓의 일이 아니라는 판정
+_BACKTICK = re.compile(r"`([^`\n]+)`")
+_LINE_SUFFIX = re.compile(r":\d+(?::\d+)?$")  # `:148`·`:148:3` 줄 번호 접미어
+_TRAILING_HANGUL = re.compile(r"[가-힣]+$")
+_PATH_SHAPE = re.compile(r"/|\.[A-Za-z0-9]{1,10}$")  # 경로꼴: `/`가 있거나 `.확장자`로 끝난다(`go._verifying_again`·`148`은 아니다)
+
+
+def observation_paths(text: str, bare: Iterable[str] = ()) -> list[str]:
+    """관찰 글 속 경로 후보(글에 나온 순서, 중복 없음). 백틱으로 싼 조각(공백·한글·`[slug]` 포함 가능)과 공백으로 나눈 낱말 중 경로꼴만 든다.
+
+    조각 앞뒤의 따옴표·괄호·쉼표와 끝 점, `:148` 줄 번호 접미어는 경로에 들지 않는다. 줄 번호는 따로 후보가 되지 않는다.
+    백틱 밖 낱말은 끝에 붙은 한글(조사)을 뗀 꼴도 후보다(`docs/설계.md가` → `docs/설계.md`).
+    경로꼴이 아니어도 bare에 든 이름(확장자 없는 touches 항목: `LICENSE`·`Makefile`)과 같은 조각은 후보다.
+    """
+    bare = set(bare)
+    quoted = _BACKTICK.findall(text)
+    pieces = [(p, False) for p in quoted] + [(p, True) for p in _BACKTICK.sub(" ", text).split()]
+    found = []
+    for piece, loose in pieces:
+        token = _LINE_SUFFIX.sub("", piece.strip().strip("\"'()<>,;").rstrip(".:")).removeprefix("./")
+        token = _LINE_SUFFIX.sub("", token)
+        variants = [token]
+        if loose and (cut := _TRAILING_HANGUL.sub("", token)) != token:
+            variants.append(cut)
+        for cand in variants:
+            if cand and (_PATH_SHAPE.search(cand) or cand in bare) and not cand.endswith("/") and cand not in found:
+                found.append(cand)
+    return found
+
+
+def handoff_observations(r, ticket) -> list[tuple[str, str]]:
+    """이 실행의 다른 티켓 리뷰 기록에서 `범위 밖`으로 판정된 관찰 중 경로가 ticket의 touches에 맞는 것 (출처 티켓 id, 관찰 글)(spec 2-1).
+
+    리뷰 기록마다(두 리뷰어 모두) 첫 리뷰와 rereviews의 모든 회차를 본다: 첫 리뷰에서만 판정되고 재리뷰 회차에 없는 관찰도 싣는다.
+    회차가 프롬프트에 실은 n번 관찰 글(observations)에 그 회차의 판정(observation_verdicts)을 번호로 잇는다. 같은 글은 한 번만 싣는다.
+    경로는 글에서만 뽑고(observation_paths) 리뷰어 이유 글의 티켓 id는 보지 않는다. touches가 없으면 빈 목록이다.
+    보조 입력이라 기록이 이상해도 그 기록만 건너뛴다.
+    """
+    touches = list(getattr(ticket, "touches", None) or [])
+    if not touches or r.st is None:
+        return []
+    bare = [PurePosixPath(t).as_posix() for t in touches if "/" not in t and not any(c in t for c in "*?[")]
+    ids = [*r.order, *(tid for tid in r.st.tickets if tid not in r.order)]
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for tid in ids:
+        ts = r.st.tickets.get(tid)
+        if tid == ticket.id or ts is None:
+            continue
+        for rec in state.reviews(ts):
+            rounds = [rec, *(x for x in rec.get("rereviews") or [] if isinstance(x, dict))]
+            for rnd in rounds:
+                shown = rnd.get("observations") or []
+                for v in rnd.get("observation_verdicts") or []:
+                    if not isinstance(v, dict) or v.get("verdict") != OUT_OF_SCOPE:
+                        continue
+                    n = v.get("n")
+                    if not (isinstance(n, int) and 0 < n <= len(shown)) or not isinstance(shown[n - 1], str):
+                        continue
+                    text = shown[n - 1]
+                    if text in seen or not any(review.in_touches(p, touches) for p in observation_paths(text, bare)):
+                        continue
+                    seen.add(text)
+                    out.append((tid, text))
+    return out
 
 
 @metrics.best_effort
