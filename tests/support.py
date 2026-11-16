@@ -135,6 +135,13 @@ def bypass_git_shim():
 
 bypass_git_shim()
 
+# GIT_CONFIG_PARAMETERS는 local push의 receive-pack에서 제거되므로 설정 파일로
+# 공유한다. git push의 양쪽 프로세스가 같은 maintenance 설정을 읽는다.
+_TEST_GIT_CONFIG = tempfile.NamedTemporaryFile(prefix="gs-test-git-", delete=False)
+_TEST_GIT_CONFIG.write(b"[maintenance]\n\tauto = false\n")
+_TEST_GIT_CONFIG.close()
+atexit.register(lambda: Path(_TEST_GIT_CONFIG.name).unlink(missing_ok=True))
+
 
 def fake_clis(test, *names):
     """가짜 CLI를 PATH 앞에 올린다. `gs check`는 CLI가 PATH에 있는지만 보므로, 진짜 CLI가 있는 머신과 없는 머신(CI)에서 같게 돈다."""
@@ -158,6 +165,8 @@ def isolate_git_env(test):
     patch.start()
     test.addCleanup(patch.stop)
     os.environ[ONLY_MERGES] = "1"
+    # 별도 config 파일을 써 GIT_CONFIG_COUNT 계열과 충돌하지 않게 한다.
+    os.environ["GIT_CONFIG_GLOBAL"] = _TEST_GIT_CONFIG.name
     for name in tuple(os.environ):
         if name in ("GIT_CONFIG_COUNT", "GH_TOKEN") or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
             os.environ.pop(name)
@@ -437,7 +446,7 @@ class GoTest(unittest.TestCase):
             "GS_GH": str(self.bin / "gh"),
             "GS_JUDGE": str(self.bin / "judge"),
             "GS_FAKE_BASE": self.BASE, "GS_FAKE_REMOTE": self.REMOTE,
-            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_GLOBAL": _TEST_GIT_CONFIG.name,
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
         })

@@ -243,6 +243,18 @@ class GrillCrossReviewTest(unittest.TestCase):
             self.assertIn(text, step5)
         self.assertLess(step5.index("교차 검토를 한다"), step5.index("확인받고"))
 
+    def test_step5_cross_review_checks_criteria_against_profile(self):
+        step5 = steps(self.body())[5]
+        for text in ("완료 조건이 profile 관례(경로·확장자 하드코딩 등)와 부딪히는지",
+                     "티켓에 config 키를 쓰게 하거나 하드코딩을 허용한다고 적는다"):
+            self.assertIn(text, step5)
+
+    def test_spec_template_doc_ticket_verify_greps_doc_names(self):
+        comment = (TEMPLATES / "spec.md").read_text(encoding="utf-8").partition("## 5. 티켓 그래프")[2].partition("-->")[0]
+        for text in ("문서 티켓의 좁은 verify에는 그 문서 파일 이름을 시험 폴더에서 grep해 나온 시험을 넣는다",
+                     r"`grep -rlE 'guide\.md|internals\.md' tests`"):
+            self.assertIn(text, comment)
+
     def test_step5_records_when_review_cannot_run(self):
         step5 = steps(self.body())[5]
         self.assertIn('"교차 검토 못 함: <이유>"를 적고 진행한다', step5)
