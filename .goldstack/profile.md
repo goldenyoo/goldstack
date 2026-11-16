@@ -1,5 +1,5 @@
 # goldstack profile
-갱신: 2026-11-14 (goldstack-v40 grill. sandbox `ps` 차단 시험 목록). 2026-11-13 (goldstack-v39 grill. 변이 확인 명령). 2026-11-13 (goldstack-v36 grill. macOS·zsh와 codex sandbox 메모). 2026-11-12 (goldstack-v33. CI 절). 2026-11-05 (goldstack-v11 grill. 줄 수·시험 수처럼 환경에서 찾을 수 있는 값은 지웠다)
+갱신: 2026-11-16 (goldstack-v44 grill. 전체 시험 시간 실측). 2026-11-14 (goldstack-v40 grill. sandbox `ps` 차단 시험 목록). 2026-11-13 (goldstack-v39 grill. 변이 확인 명령). 2026-11-13 (goldstack-v36 grill. macOS·zsh와 codex sandbox 메모). 2026-11-12 (goldstack-v33. CI 절). 2026-11-05 (goldstack-v11 grill. 줄 수·시험 수처럼 환경에서 찾을 수 있는 값은 지웠다)
 
 ## 구조
 - `src/gs/`: `gs` CLI(Python, 외부 의존성 없음). 큰 파일은 `go.py`(코디네이터), `finish.py`(마무리·병합·재개), `feedback.py`(결함 수집·전송), `hook.py`(worker 차단), `review.py`, `adapters.py`(claude·codex·agy 실행). 모듈 표는 `docs/internals.md`.
@@ -14,7 +14,7 @@
 ## 빌드·시험
 - Python 3.12(`.python-version`), `uv`. 설치: `uv tool install --reinstall .`.
 - 시험은 **unittest**다(pytest 아님). 린터·포맷터 설정 없음.
-- 전체 병렬: `ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p`. worker와 함께 돌면 5–10분 걸린다(goldstack-v10 보고서). `uv run`을 쓰면 신호 줄이 남지 않아 끊김으로 판정되지 않으므로 쓰지 않는다. 대신 `verify` 앞에 `uv sync --locked -q`를 둔다. 없으면 버전을 올린 뒤 `.venv` 메타데이터가 옛 값으로 남는다. 순차 실행은 훨씬 느리니 쓰지 않는다.
+- 전체 병렬: `ls tests | grep '^test_' | xargs -P 6 -n 1 .venv/bin/python -m unittest discover -s tests -p`. 다른 gs 실행이 없는 10코어 맥에서 약 13분 걸린다(2026-11-16 실측 766–818초, 139파일). 병렬 수를 10으로 올려도 730–748초라 6으로 둔다. `uv run`을 쓰면 신호 줄이 남지 않아 끊김으로 판정되지 않으므로 쓰지 않는다. 대신 `verify` 앞에 `uv sync --locked -q`를 둔다. 없으면 버전을 올린 뒤 `.venv` 메타데이터가 옛 값으로 남는다. 순차 실행은 훨씬 느리니 쓰지 않는다.
 - 한 파일: `uv run python -m unittest discover -s tests -p test_x.py`.
 - skill 시험은 `tests/test_skill_<이름>.py`(grill, go, idea, retro, adopt, feedback, overnight)로 나뉜다. `/overnight` 문장 일부는 `tests/test_skill_go.py`가 단언하니 overnight 글을 고치면 그 시험도 돌린다. `WORD_LIMITS`와 모든 skill 공통 시험은 `tests/test_skills.py`에 있다. skill 글만 고치면 해당 `test_skill_<이름>.py`를 쓰고, 상한을 바꿀 때만 `test_skills.py`를 건드린다.
 - sandbox(codex worker)에서 쓸 한 파일 시험: `.venv/bin/python -m unittest discover -s tests -p test_x.py`. `.venv`는 worktree setup(`uv sync --locked`)이 sandbox 전에 만든다. `uv run`은 `~/.cache/uv` 쓰기 차단으로 sandbox에서 실패한다.

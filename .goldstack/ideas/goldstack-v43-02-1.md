@@ -2,8 +2,8 @@
 date: "2026-11-16"
 severity: "medium"
 source: "goldstack-v43 리뷰 02"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v44"
 ---
 flaky 재검증이 끊기거나 시간 초과되면 수리로 가야 하는데, 끊김은 추가 재검증으로, 시간 초과는 새 구현 시도로 보낸다.
 

@@ -2,8 +2,8 @@
 date: "2026-11-16"
 severity: "medium"
 source: "goldstack-v43 리뷰 02"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v44"
 ---
 관찰 1: 확장자 없는 rerun에서는 이름만 같은 문서를 시험 파일 변경으로 오인해 필요한 flaky 재검증을 생략한다.
 

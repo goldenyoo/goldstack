@@ -2,8 +2,8 @@
 date: "2026-11-16"
 severity: "medium"
 source: "goldstack-v43 리뷰 02"
-status: "open"
-feature: ""
+status: "taken"
+feature: "goldstack-v44"
 ---
 아직 flaky 재검증을 사용하지 않았어도 수리 뒤 검증과 끊김 뒤 검증을 무조건 제외하여, 완료 조건을 만족하는 실패를 수리하거나 새 시도로 보낸다.
 
