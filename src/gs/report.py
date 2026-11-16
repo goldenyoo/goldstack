@@ -785,11 +785,12 @@ def _failure_block(log: Path, command: str) -> str:
 
 def _failed_verification(r) -> tuple[str, Path] | None:
     """보고서가 실패 증거로 보일 검증(라벨, 로그). integration 실패는 not_merged, base 실패는 revert 단계에서 본다."""
+    from . import finish  # finish가 이 모듈을 import한다
     f = r.st.finish
     finish_dir = r.rundir / "finish"
     if f.get("phase") == "not_merged" and f.get("failed_verify") in ("integration", "integration-final"):
         return f["failed_verify"], finish_dir / f"{f['failed_verify']}-verify.log"
-    if f.get("phase") in ("reverted", "main_failed", "revert_pending") and f.get("main_ok") is False:
+    if finish.read_phase(f) in ("reverted", "main_failed", "revert_pending") and f.get("main_ok") is False:
         # 재검증(main-recheck)이 있으면 마지막으로 돈 쪽이 최종 실패다.
         found = [(label, finish_dir / f"{label}-verify.log") for label in ("main", "main-recheck")]
         found = [x for x in found if x[1].is_file()]
@@ -824,8 +825,9 @@ def verification_failure(r) -> str:
 
 def status_line(r) -> str:
     """spec §4 보고서 마무리 상태 줄. judge의 Summary가 아니라 r.st.finish에서 만든다."""
+    from . import finish  # finish가 이 모듈을 import한다
     f = r.st.finish
-    phase = f.get("phase") or "preparing"
+    phase = finish.read_phase(f) or "preparing"
     pr = f"PR {f['url']}" if f.get("url") else "PR 없음"
     revert = (f.get("revert_sha") or "")[:8]
     if phase == "verified":

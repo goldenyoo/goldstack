@@ -19,7 +19,7 @@ import test_review_target
 from support import sh, ticket
 from test_second_review import finding
 
-from gs import git, go, review, state, transient, worker
+from gs import config, git, go, review, setup, state, transient, worker
 
 STAGES = ("_check_worker", "_review_stage", "_merge_stage")
 STEPS = ("_net_hold", "_net_park", "_end_fix", "_review", "_rereview", "_call_reviewers", "_call_rereviewers",
@@ -397,6 +397,44 @@ class BaseFailureTest(support.GoTest):
         self.assert_reverted_once()
         self.assertEqual(self.runs(), [])
         self.assertFalse((self.rundir / "finish/main-verify.log").exists())
+
+    def test_old_retry_state_reports_base_failure_when_integration_setup_fails(self):
+        # 옛 main_retry를 잇다 integration 준비가 실패하면 _postmerge 전에 보고서를 쓴다. 그 보고서도 main_failed로 읽는다.
+        blocked = self.bin / "setup-blocked"
+        path = self.repo / config.CONFIG_PATH
+        path.write_text(path.read_text().replace('setup = ""', "setup = " + json.dumps(
+            f"test ! -f {blocked} || {{ echo integration-boom; exit 8; }}")))
+        self.main_fails(1)  # 커밋·push한다. 돌면 두 번째부터 통과한다
+        real = git.run
+
+        def run(cwd, *args, **kwargs):
+            if args[:1] == ("revert",):
+                raise RuntimeError("gs가 죽었다")
+            return real(cwd, *args, **kwargs)
+
+        with mock.patch("gs.git.run", side_effect=run), self.assertRaisesRegex(RuntimeError, "gs가 죽었다"):
+            self.go_01()  # 첫 main 검증이 실패해 기록을 남기고 revert 전에 죽는다
+        state_path = self.rundir / "state.json"
+        old = json.loads(state_path.read_text())
+        self.assertEqual((old["finish"]["phase"], old["finish"]["main_ok"]), ("main_failed", False))
+        old["finish"].update(phase="main_retry", outcome="main 검증 실패, 코드가 같아 다시 검증 중")
+        state_path.write_text(json.dumps(old))
+        blocked.touch()
+        wt = self.rundir / "wt/integration"
+        setup.marker(wt).unlink()
+        code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("integration 준비 실패", out + err)
+        report = (wt / ".goldstack/work/demo/report.md").read_text()
+        self.assertIn("마무리: main_failed · main 검증 실패 · revert push 안 됨", report)
+        self.assertIn("### 검증 실패\n\n검증: `main`", report)
+        self.assertIn("file_01", self.remote_files())  # 준비 실패는 revert하지 않는다
+
+        blocked.unlink()
+        code, out, err = self.go_01()
+        self.assertEqual(code, 1, out + err)
+        self.assert_reverted_once()
+        self.assertEqual(len(self.runs()), 1)
 
 
 class CallBoundaryTest(unittest.TestCase):

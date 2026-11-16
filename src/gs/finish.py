@@ -39,7 +39,8 @@ integration worktree가 깨끗하지 않을 때는 지금처럼 검증한다.
 지금 HEAD의 차이가 보고서·아이디어 파일뿐일 때 남긴 근거를 쓴다(`_resumed_skip`).
 
 base 검증이 실패하면 코드가 integration에서 통과한 것과 같아도 다시 검증하지 않고 revert한다. 0.2.26 이하가 남긴 재시도 phase는
-마무리 재개로 보고(`RESUME_PHASES`) `_postmerge`가 `main_failed`로 바꿔 읽는다(goldstack-v44 결정 2-2).
+마무리 재개로 보고(`RESUME_PHASES`) `read_phase`가 `main_failed`로 읽는다(goldstack-v44 결정 2-2). `_postmerge`가 그 값을 저장하고,
+그 전에 쓰는 보고서(integration 준비 실패)도 `read_phase`로 읽는다.
 
 첫 base 검증 차례(`next_step`이 `VERIFY_MAIN`을 고른 자리)에 받아 온 base 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가
 보고서와 이 feature의 아이디어 파일(`findings.paths`)뿐이면 base 검증을 돌리지 않는다(`_same_as_verified`, `_verify_final`과 같은 기준).
@@ -88,7 +89,7 @@ CHECK_PHASES = ("checks_pending", "checks_failed", "checks_timeout", "checks_mis
 # 보호된 base에서 gs의 revert·보고서 PR이 사람을 기다린다. 다음 gs go가 그 PR을 다시 읽는다.
 PENDING_PHASES = ("revert_pending", "report_pending")
 # gs go가 새 worker보다 먼저 마무리를 회복하는 phase. revert_closing: 재검증을 통과했고 revert PR 닫기가 남았다.
-# main_retry: 0.2.26 이하가 남긴 옛 state다. `_postmerge`가 main_failed로 바꿔 읽는다.
+# main_retry: 0.2.26 이하가 남긴 옛 state다. `read_phase`가 main_failed로 읽는다.
 RESUME_PHASES = (*CHECK_PHASES, "merge_requested", "merge_pending", "merged", "main_failed", "main_retry", "base_unverified",
                  "revert_closing", *PENDING_PHASES)
 # 마무리 결과(verified·reverted)가 아직 정해지지 않은 phase. report_pending은 결과가 report_result에 정해져 있다.
@@ -96,6 +97,12 @@ UNSETTLED_PHASES = tuple(phase for phase in RESUME_PHASES if phase != "report_pe
 REVERT_LINE = re.compile(r"^This reverts commit ([0-9a-f]{40,64})", re.M)  # git revert의 기본 메시지
 CHECK_INTERVAL = 10
 MAX_FINISH_ERRORS = 20  # state.finish_errors에 남길 서로 다른 오류 수. 넘으면 오래된 것부터 잊는다
+
+
+def read_phase(f: dict) -> str | None:
+    """finish의 phase. 0.2.26 이하가 남긴 재시도 차례 `main_retry`는 확인한 실패 `main_failed`로 읽는다(goldstack-v44 결정 2-2)."""
+    phase = f.get("phase")
+    return "main_failed" if phase == "main_retry" else phase
 
 
 def _save(r, **fields) -> None:
@@ -1051,8 +1058,8 @@ def _postmerge(r) -> bool:
 
     첫 검증 차례에 base가 integration에서 통과한 코드 그대로면(`SKIP_MAIN`) 검증하지 않고 `main-verify.log`에 건너뜀을 남긴 뒤 verified다."""
     f = r.st.finish
-    if f.get("phase") == "main_retry":  # 0.2.26 이하가 남긴 재시도 차례. 확인한 실패로 읽는다(goldstack-v44 결정 2-2)
-        _save(r, phase="main_failed", outcome=f"{r.base} 검증 실패, 병합 커밋 revert 중")
+    if (phase := read_phase(f)) != f["phase"]:  # 옛 재시도 차례. 확인한 실패로 저장한다
+        _save(r, phase=phase, outcome=f"{r.base} 검증 실패, 병합 커밋 revert 중")
     sha, pushed = f.get("revert_sha"), f.get("revert_head")
     facts = revert_decision.Facts(phase=f["phase"], direct_push=r.cfg.git.direct_push, has_revert=bool(sha),
                                   revert_head_matches=pushed == sha, revert_pushed=bool(pushed),
