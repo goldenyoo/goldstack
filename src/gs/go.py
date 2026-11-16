@@ -3623,7 +3623,7 @@ def _outcome(r: Run) -> str:
     if r.st.network.get("aborted"):
         return abort_label(r.st)
     f = r.st.finish
-    return f.get("outcome", f.get("phase", "미완료"))
+    return finish.read_outcome(f, r.base, f.get("phase", "미완료"))
 
 
 def _left(r: Run) -> int:

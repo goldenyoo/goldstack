@@ -147,9 +147,8 @@ class SameCodeTest(unittest.TestCase):
         self.assertFalse(self.log().exists())  # 대역 `_verify`는 로그를 쓰지 않는다. 건너뜀 글이 남지 않았다
 
     def test_other_goldstack_file_runs_verify(self):
-        # `.goldstack/` 전체를 허용하는 `_code_same`이면 같은 코드다. 건너뛰기는 그 기준을 쓰지 않는다.
+        # 보고서·아이디어 파일이 아닌 `.goldstack/` 파일(config)이 바뀌었다. 건너뛰지 않는다.
         self.merge(before={".goldstack/config.toml": "[git]\nbase = \"main\"\ndirect_push = false\n"})
-        self.assertTrue(finish._code_same(self.r))
         self.assertTrue(self.postmerge())
         self.assertEqual(self.labels, ["main"])
 
@@ -181,15 +180,17 @@ class SameCodeTest(unittest.TestCase):
         self.assertEqual((self.f["phase"], self.f["main_ok"], self.f["main_head"]), ("verified", True, merge))
         self.assertEqual(self.log().read_text(), f"integration과 같은 코드({self.passed}), 건너뜀\n")
 
-    # 아래는 건너뛸 조건이 참이어도 이미 정한 길(재시도, 지난 실패, 만들어 둔 revert, 열린 revert PR, 외부 revert)을 따른다.
-    def test_main_retry_still_retries(self):
+    # 아래는 건너뛸 조건이 참이어도 이미 정한 길(지난 실패, 만들어 둔 revert, 열린 revert PR, 외부 revert)을 따른다.
+    def test_old_main_retry_reverts_like_main_failed(self):
+        # 0.2.26 이하가 남긴 재시도 차례. 지난 실패로 읽어 다시 검증하지 않고 revert한다.
         merge = self.merge(phase="main_retry", main_ok=False)
         self.f["main_head"] = merge  # 지난 실패와 같은 커밋
         self.assert_skip_condition()
-        self.assertTrue(self.postmerge(verify_ok=True))
-        self.assertEqual(self.labels, ["main-retry"])
-        self.assertEqual(self.f["phase"], "verified")
-        self.assertIn("flaky: main 재시도 1번 만에 통과", self.f["outcome"])
+        self.assertFalse(self.postmerge(verify_ok=True))
+        self.assertEqual(self.labels, [])
+        self.assertEqual(self.f["phase"], "reverted")
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main^"), merge)
+        self.assertEqual(sh(self.remote, "git", "rev-parse", "main"), self.f["revert_sha"])
         self.assertFalse(self.log().exists())
 
     def test_main_failed_still_reverts(self):

@@ -166,8 +166,6 @@ TABLE = [
     ("같은 코드여도 실패 뒤 움직인 base는 재검증", ready(phase="main_failed", same_as_verified=True), rd.RECHECK_MAIN),
     ("같은 코드여도 실패 뒤 base 그대로면 지난 실패를 믿는다", ready(phase="main_failed", base_moved=False, same_as_verified=True),
      rd.MAKE_REVERT_PUSH),
-    ("같은 코드여도 재시도", ready(phase="main_retry", base_moved=False, same_as_verified=True), rd.RETRY_MAIN),
-    ("같은 코드여도 재시도 전에 base가 움직였으면 재검증", ready(phase="main_retry", same_as_verified=True), rd.RECHECK_MAIN),
     ("같은 코드여도 이미 돈 검증의 실패는 그대로", ready(main_ok=False, same_as_verified=True), rd.MAKE_REVERT_PUSH),
 
     ("검증 통과", ready(main_ok=True), rd.RECORD_VERIFIED),
@@ -179,35 +177,6 @@ TABLE = [
     ("실패 뒤 base 그대로, 보호된 base", ready(phase="main_failed", base_moved=False, direct_push=False), rd.MAKE_REVERT_PR),
     ("재검증도 실패", ready(phase="main_failed", main_ok=False), rd.MAKE_REVERT_PUSH),
 
-    # 코드가 같으면 revert 전에 한 번 다시 돌린다. 이 위의 줄은 code_same이 없어 코드가 다른 경우이기도 하다.
-    *[("첫 실패, 코드가 같다: 재시도를 남긴다", ready(phase=phase, main_ok=False, code_same=True), rd.MARK_RETRY)
-      for phase in ("merged", "base_unverified")],
-    ("보호된 base도 revert 전에 재시도를 남긴다", ready(main_ok=False, code_same=True, direct_push=False), rd.MARK_RETRY),
-    ("첫 실패, 코드가 다르다: 재시도 없이 revert", ready(main_ok=False, code_same=False), rd.MAKE_REVERT_PUSH),
-    ("첫 실패, 코드가 다르다, 보호된 base", ready(main_ok=False, code_same=False, direct_push=False), rd.MAKE_REVERT_PR),
-
-    ("재시도 재개도 base부터", facts(phase="main_retry"), rd.READ_BASE),
-    ("재시도 재개: 남이 되돌렸으면 다시 돌리지도 revert하지도 않는다", facts(**{**BASE_READ, "external_revert": True}, phase="main_retry"),
-     rd.RECORD_EXTERNAL_REVERT),
-    ("재시도 재개: 준비부터 다시", facts(**BASE_READ, phase="main_retry"), rd.PREPARE_BASE),
-    ("재시도 재개: 준비 실패는 재시도를 쓴 것이 아니다", ready(phase="main_retry", base_ready=False, base_moved=False), rd.KEEP_RETRY),
-    ("재시도 재개: base가 움직여도 준비 실패면 표시를 지우지 않는다", ready(phase="main_retry", base_ready=False), rd.KEEP_RETRY),
-    ("같은 커밋: 재시도", ready(phase="main_retry", base_moved=False), rd.RETRY_MAIN),
-    ("재시도 차례에 코드가 같다는 사실은 답을 바꾸지 않는다", ready(phase="main_retry", base_moved=False, code_same=True), rd.RETRY_MAIN),
-    ("재시도 전에 base가 움직였다: 같은 코드가 아니니 재검증", ready(phase="main_retry"), rd.RECHECK_MAIN),
-
-    ("재시도 통과", ready(phase="main_retry", base_moved=False, main_ok=True), rd.RECORD_FLAKY),
-    ("재검증 통과는 flaky가 아니다", ready(phase="main_retry", main_ok=True), rd.RECORD_VERIFIED),
-    ("재시도도 실패", ready(phase="main_retry", base_moved=False, main_ok=False, code_same=True), rd.MAKE_REVERT_PUSH),
-    ("재시도도 실패, 보호된 base", ready(phase="main_retry", base_moved=False, main_ok=False, code_same=True, direct_push=False),
-     rd.MAKE_REVERT_PR),
-    ("움직인 base의 재검증도 실패", ready(phase="main_retry", main_ok=False, code_same=True), rd.MAKE_REVERT_PUSH),
-
-    ("재검증 실패에는 재시도가 없다", ready(phase="main_failed", main_ok=False, code_same=True), rd.MAKE_REVERT_PUSH),
-    ("지난 실패를 믿는 길에도 재시도가 없다", ready(phase="main_failed", base_moved=False, code_same=True), rd.MAKE_REVERT_PUSH),
-    ("옛 revert가 있으면 이미 revert로 가기로 정한 뒤다",
-     revert(phase="base_unverified", revert_parent_is_tip=False, base_ready=True, main_ok=False, code_same=True), rd.MAKE_REVERT_PUSH),
-    ("옛 PR이 있어도 그렇다", waiting(phase="revert_pending", base_ready=True, main_ok=False, code_same=True), rd.MAKE_REVERT_PR),
 ]
 
 
@@ -257,12 +226,11 @@ class NextStepTest(unittest.TestCase):
 
     def test_invariants_over_every_combination(self):
         unread = (None, False, True)
-        for (phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok, branch, pr_merged, same,
+        for (phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok, branch, pr_merged,
              verified_same, checked) in itertools.product(
-                (*OPEN_PHASES, "main_retry", "revert_closing", "verified", "reverted"), (False, True), (False, True), (False, True),
-                unread, unread, unread, unread, (False, True), unread, (False, True), unread, (False, True), (False, True),
-                (False, True)):
-            given = Facts(phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok, branch, pr_merged, same,
+                (*OPEN_PHASES, "revert_closing", "verified", "reverted"), (False, True), (False, True), (False, True),
+                unread, unread, unread, unread, (False, True), unread, (False, True), unread, (False, True), (False, True)):
+            given = Facts(phase, direct, has, matches, in_base, external, parent, base_ready, moved, ok, branch, pr_merged,
                           verified_same, checked)
             step = next_step(given)
             self.assertIn(step, all_steps(), given)
@@ -281,8 +249,8 @@ class NextStepTest(unittest.TestCase):
             if not direct or branch:  # 보호된 base에는 직접 push하지 않는다. 올린 PR을 두고 직접 push하지도 않는다
                 self.assertNotIn(step, (rd.PUSH_REVERT, rd.MAKE_REVERT_PUSH), given)
             if ok is not None:  # 이미 돈 검증을 다시 돌리지 않는다
-                self.assertNotIn(step, (rd.VERIFY_MAIN, rd.RETRY_MAIN, rd.RECHECK_MAIN, rd.SKIP_MAIN), given)
-            if step == rd.SKIP_MAIN:  # integration과 같은 코드의 첫 검증에만. 실패·재시도·revert·외부 revert를 덮지 않는다
+                self.assertNotIn(step, (rd.VERIFY_MAIN, rd.RECHECK_MAIN, rd.SKIP_MAIN), given)
+            if step == rd.SKIP_MAIN:  # integration과 같은 코드의 첫 검증에만. 실패·revert·외부 revert를 덮지 않는다
                 self.assertTrue(verified_same and phase in ("merged", "base_unverified") and base_ready is True and ok is None
                                 and not has and not branch and not external and not checked, given)
             if checked:  # 지난 검증 결과는 건너뛰기만 막는다. 다른 답은 그대로다
@@ -291,18 +259,6 @@ class NextStepTest(unittest.TestCase):
             if verified_same:  # 그 사실은 첫 검증(VERIFY_MAIN)만 건너뛰기로 바꾼다. 다른 답은 그대로다
                 plain = next_step(replace(given, same_as_verified=False))
                 self.assertEqual(rd.VERIFY_MAIN if step == rd.SKIP_MAIN else step, plain, given)
-            if step == rd.RETRY_MAIN:  # 지난 실패와 같은 커밋이다
-                self.assertTrue(phase == "main_retry" and not moved, given)
-            if step == rd.MARK_RETRY:  # 코드가 같은 첫 실패에 한 번. revert를 만든 적이 없다
-                self.assertTrue(same and ok is False and phase in ("merged", "base_unverified", "revert_pending")
-                                and not has and not branch, given)
-            if step == rd.RECORD_FLAKY:  # 같은 커밋이 실패했다가 통과했을 때만 flaky다
-                self.assertTrue(phase == "main_retry" and ok is True and not moved, given)
-            if phase == "main_retry":  # 재시도는 한 번이다. 재시도 표시를 지우지 않는다
-                self.assertNotEqual(step, rd.MARK_RETRY, given)
-                self.assertNotEqual(step, rd.RECORD_UNVERIFIED, given)
-            if step == rd.KEEP_RETRY:  # 재시도 차례의 준비 실패에만 phase를 그대로 둔다
-                self.assertTrue(phase == "main_retry" and base_ready is False, given)
             if step in (rd.MAKE_REVERT_PUSH, rd.MAKE_REVERT_PR):  # 실패가 확인됐을 때만 되돌린다
                 self.assertTrue(ok is False or (ok is None and (phase == "main_failed" or branch) and not moved), given)
             if step == rd.RECHECK_MAIN:
@@ -337,19 +293,17 @@ class NextStepTest(unittest.TestCase):
 
 MERGE, TIP, OLD_TIP, REVERT, THEIRS, NEW_REVERT = (c * 40 for c in "abcdef")
 PASSED = "1" * 40  # 마지막으로 통과한 integration 커밋
-FLAKY = "flaky: main 재시도 1번 만에 통과"
 
 
 class FakeGit:
     """`git.run` 대역. 명령을 기록하고 정해 둔 base 상태로 답한다."""
 
-    def __init__(self, *, in_base=(), parents=None, theirs="", changed=(".goldstack/work/demo/report.md",), diff_code=0):
+    def __init__(self, *, in_base=(), parents=None, theirs="", changed=(".goldstack/work/demo/report.md",)):
         self.calls: list[tuple[str, ...]] = []
         self.in_base = {MERGE, *in_base}
         self.parents = parents or {}
         self.theirs = theirs
         self.changed = changed  # 통과한 integration 커밋과 병합 커밋의 차이
-        self.diff_code = diff_code
         self.head = TIP
 
     def __call__(self, cwd, *args, check=True, env=None):
@@ -377,7 +331,7 @@ class FakeGit:
             case "revert":
                 self.head = NEW_REVERT
             case "diff":
-                return "".join(f"{path}\0" for path in self.changed), self.diff_code
+                return "".join(f"{path}\0" for path in self.changed), 0
         return "", 0
 
     def count(self, command: str) -> int:
@@ -694,193 +648,56 @@ class PostmergeTest(unittest.TestCase):
         self.assertEqual(self.verified_labels(), ["main-recheck"])
         self.assertEqual((self.stored["phase"], self.stored["revert_sha"]), ("reverted", NEW_REVERT))
 
-    # 코드가 같은 첫 실패의 재시도
+    # 코드가 같은 실패도 다시 검증하지 않는다
 
-    def assert_kept_merge(self):
-        self.assertEqual(self.fake.count("revert"), 0)
-        self.push.assert_not_called()
-        self.revert_pr.assert_not_called()
-        self.assertNotIn("revert_sha", self.stored)
-
-    def test_retry_passing_keeps_the_merge_and_says_flaky(self):
-        self.assertTrue(self.postmerge(phase="merged", verified_head=PASSED, verify_ok=[False, True]))
-        self.assertEqual(self.verified_labels(), ["main", "main-retry"])
-        self.assertEqual((self.stored["phase"], self.stored["main_ok"], self.stored["main_head"]), ("verified", True, TIP))
-        self.assertIn(FLAKY, self.stored["outcome"])
-        self.assert_kept_merge()
-
-    def test_retry_failing_reverts_once(self):
-        self.assertFalse(self.postmerge(phase="merged", verified_head=PASSED, verify_ok=[False, False]))
-        self.assertEqual(self.verified_labels(), ["main", "main-retry"])
+    def test_same_code_failure_reverts_without_verifying_again(self):
+        # 통과한 integration 커밋과 병합 커밋의 차이가 `.goldstack/`뿐이다(FakeGit 기본). 다시 돌렸다면 통과해 병합을 남겼을 것이다.
+        self.assertFalse(self.postmerge(phase="merged", verified_head=PASSED, verify_ok=[False, True]))
+        self.assertEqual(self.verified_labels(), ["main"])
+        self.assertEqual(self.fake.count("fetch"), 1)  # 처음부터 다시 읽지 않는다
         self.assertEqual(self.fake.count("revert"), 1)
         self.assertEqual(self.push.call_count, 1)
         self.assertEqual((self.stored["phase"], self.stored["revert_sha"], self.stored["main_ok"]),
                          ("reverted", NEW_REVERT, False))
-        self.assertNotIn(FLAKY, self.stored["outcome"])
 
-    def test_retry_on_protected_base_opens_the_revert_pr_only_after_it_fails(self):
-        self.assertTrue(self.postmerge(phase="merged", verified_head=PASSED, direct_push=False, verify_ok=[False, True]))
-        self.assert_kept_merge()
-        self.assertFalse(self.postmerge(phase="merged", verified_head=PASSED, direct_push=False, verify_ok=[False, False]))
-        self.assertEqual(self.verified_labels(), ["main", "main-retry"])
+    def test_same_code_failure_on_protected_base_opens_the_revert_pr(self):
+        self.assertFalse(self.postmerge(phase="merged", verified_head=PASSED, direct_push=False, verify_ok=[False, True]))
+        self.assertEqual(self.verified_labels(), ["main"])
         self.revert_pr.assert_called_once_with(self.run_, NEW_REVERT)
         self.push.assert_not_called()
 
-    def test_retry_goes_through_the_same_preparation_on_a_new_worktree(self):
-        self.assertTrue(self.postmerge(phase="merged", verified_head=PASSED, setup_cmd="make", verify_ok=[False, True]))
-        self.assertEqual(self.setups, 2)
-        added = [args for args in self.fake.calls if args[:2] == ("worktree", "add")]
-        self.assertEqual(len(added), 2)
-        self.assertEqual(self.remove.call_count, 2)  # 앞 검증이 더럽힌 worktree를 재시도에 쓰지 않는다
-        self.assertEqual(self.fake.count("fetch"), 2)  # 첫 검증이 도는 동안 움직인 base와 남이 한 revert를 본다
+    # 0.2.26 이하가 남긴 phase main_retry(재시도 차례)는 main_failed로 읽는다
 
-    def test_base_moved_during_first_verify_is_rechecked_and_not_called_flaky(self):
-        fake = FakeGit()
-        real = fake.answer
+    @staticmethod
+    def old_retry(**rest) -> dict:
+        return {"phase": "main_retry", "main_ok": False, "main_head": TIP, "verified_head": PASSED,
+                "outcome": "main 검증 실패, 코드가 같아 다시 검증 중", **rest}
 
-        def answer(args):
-            # 첫 검증이 끝나 phase를 남긴 뒤의 fetch부터 base가 움직여 있다.
-            if args[:2] == ("rev-parse", "origin/main") and fake.count("fetch") > 1:
-                return THEIRS, 0
-            return real(args)
-
-        fake.answer = answer
-        self.assertTrue(self.postmerge(phase="merged", verified_head=PASSED, gitfake=fake, verify_ok=[False, True]))
-        self.assertEqual(self.verified_labels(), ["main", "main-recheck"])
-        self.assertEqual(self.stored["phase"], "verified")
-        self.assertNotIn("flaky", self.stored["outcome"])
-        self.assert_kept_merge()
-
-    def test_code_outside_goldstack_reverts_without_retry(self):
-        fake = FakeGit(changed=(".goldstack/work/demo/report.md", "src/gs/finish.py"))
-        self.assertFalse(self.postmerge(phase="merged", verified_head=PASSED, gitfake=fake))
-        self.assertEqual(self.verified_labels(), ["main"])
-        self.assertEqual(self.fake.count("fetch"), 1)
-        self.assertEqual(self.fake.count("revert"), 1)
-        self.assertEqual((self.stored["phase"], self.stored["main_ok"]), ("reverted", False))
-
-    def test_old_state_without_verified_head_reverts_without_retry_or_diff(self):
-        self.assertFalse(self.postmerge(phase="merged"))
-        self.assertEqual(self.verified_labels(), ["main"])
-        self.assertEqual(self.fake.count("diff"), 0)
-        self.assertEqual(self.stored["phase"], "reverted")
-
-    def test_unreadable_difference_reverts_without_retry(self):
-        # 통과한 커밋이 레포에 없다(gc 등). 오류로 멈추지 않고 지금처럼 revert한다.
-        self.assertFalse(self.postmerge(phase="merged", verified_head=PASSED, gitfake=FakeGit(diff_code=128)))
-        self.assertEqual(self.verified_labels(), ["main"])
-        self.assertEqual(self.stored["phase"], "reverted")
-
-    def test_difference_compares_passed_integration_with_merge_commit(self):
-        self.postmerge(phase="merged", verified_head=PASSED)
-        diff = next(args for args in self.fake.calls if args[0] == "diff")
-        self.assertEqual(diff[-2:], (PASSED, MERGE))
-        self.assertIn("--no-renames", diff)  # src/에서 .goldstack/로 옮긴 파일은 src/ 쪽도 차이다
-
-    def test_code_same_table(self):
-        for changed, same in (((), True),
-                              ((".goldstack/work/demo/report.md",), True),
-                              ((".goldstack/ideas/a.md", ".goldstack/config.toml"), True),
-                              (("src/gs/finish.py",), False),
-                              ((".goldstack/ideas/a.md", "README.md"), False),
-                              ((".goldstack-old/a.md",), False),
-                              (("docs/.goldstack/a.md",), False)):
-            with self.subTest(changed=changed), mock.patch("gs.finish.git.run", FakeGit(changed=changed)):
-                r = SimpleNamespace(repo=self.rundir, st=SimpleNamespace(finish={"merge_sha": MERGE, "verified_head": PASSED}))
-                self.assertIs(finish._code_same(r), same)
-
-    def test_recheck_failure_is_not_retried(self):
-        self.assertFalse(self.postmerge(phase="main_failed", main_head=OLD_TIP, verified_head=PASSED))
-        self.assertEqual(self.verified_labels(), ["main-recheck"])
-        self.assertEqual(self.stored["phase"], "reverted")
-
-    def test_failure_trusted_from_last_run_is_not_retried(self):
-        # 재시도까지 실패한 뒤 revert를 만들기 전에 끊겼다.
-        self.assertFalse(self.postmerge(phase="main_failed", main_head=TIP, verified_head=PASSED))
+    def test_old_retry_state_reverts_without_verifying(self):
+        self.assertFalse(self.postmerge(**self.old_retry(), verify_ok=True))
         self.assertEqual(self.verified_labels(), [])
-        self.assertEqual(self.fake.count("revert"), 1)
-
-    # 재시도의 준비가 실패했다
-
-    def retry_setup_failed(self) -> dict:
-        self.assertFalse(self.postmerge(phase="merged", verified_head=PASSED, setup_cmd="make", setup_ok=[True, False],
-                                        verify_ok=[False]))
-        self.assertEqual(self.verified_labels(), ["main"])
-        left = dict(self.stored)
-        self.assertEqual((left["phase"], left["main_ok"], left["main_head"]), ("main_retry", False, TIP))
-        self.assertEqual(left["outcome"], "base 미검증(준비 실패)")
-        self.assert_kept_merge()
-        return left
-
-    def test_retry_setup_failure_passing_on_next_run_says_flaky(self):
-        self.assertTrue(self.postmerge(**self.retry_setup_failed(), setup_cmd="make", verify_ok=True))
-        self.assertEqual(self.verified_labels(), ["main-retry"])
-        self.assertEqual(self.stored["phase"], "verified")
-        self.assertIn(FLAKY, self.stored["outcome"])
-        self.assert_kept_merge()
-
-    def test_retry_setup_failure_failing_on_next_run_reverts_without_a_third_run(self):
-        self.assertFalse(self.postmerge(**self.retry_setup_failed(), setup_cmd="make", verify_ok=[False, True]))
-        self.assertEqual(self.verified_labels(), ["main-retry"])
         self.assertEqual(self.fake.count("revert"), 1)
         self.assertEqual(self.push.call_count, 1)
         self.assertEqual((self.stored["phase"], self.stored["main_ok"]), ("reverted", False))
+        self.assertEqual((self.saved[0]["phase"], self.saved[0]["outcome"]), ("main_failed", "main 검증 실패, 병합 커밋 revert 중"))
 
-    def test_retry_setup_failing_again_still_keeps_the_retry(self):
-        self.assertFalse(self.postmerge(**self.retry_setup_failed(), setup_cmd="make", setup_ok=False))
-        self.assertEqual(self.verified_labels(), [])
-        self.assertEqual((self.stored["phase"], self.stored["main_ok"], self.stored["main_head"]), ("main_retry", False, TIP))
-        self.assert_kept_merge()
-        self.assertTrue(self.postmerge(**self.stored, setup_cmd="make", verify_ok=True))
-        self.assertEqual(self.verified_labels(), ["main-retry"])
-        self.assertIn(FLAKY, self.stored["outcome"])
-
-    # 재시도 도중 gs가 죽었다
-
-    def died_during_retry(self) -> dict:
-        with self.assertRaisesRegex(RuntimeError, "gs가 죽었다"):
-            self.postmerge(phase="merged", verified_head=PASSED, verify_ok=[False, RuntimeError("gs가 죽었다")])
-        left = dict(self.stored)
-        self.assertEqual((left["phase"], left["main_ok"], left["main_head"]), ("main_retry", False, TIP))
-        self.assert_kept_merge()
-        return left
-
-    def test_dead_retry_passing_on_next_run(self):
-        self.assertTrue(self.postmerge(**self.died_during_retry(), verify_ok=True))
-        self.assertEqual(self.verified_labels(), ["main-retry"])  # 첫 검증과 재시도를 다시 쌓지 않는다
-        self.assertEqual(self.stored["phase"], "verified")
-        self.assertIn(FLAKY, self.stored["outcome"])
-        self.assert_kept_merge()
-
-    def test_dead_retry_failing_on_next_run_reverts_once(self):
-        self.assertFalse(self.postmerge(**self.died_during_retry(), verify_ok=False))
-        self.assertEqual(self.verified_labels(), ["main-retry"])
-        self.assertEqual(self.fake.count("revert"), 1)
-        self.assertEqual(self.push.call_count, 1)
-        self.assertEqual(self.stored["phase"], "reverted")
-
-    def test_dead_retry_after_someone_reverted_verifies_nothing(self):
-        self.assertFalse(self.postmerge(**self.died_during_retry(), gitfake=FakeGit(theirs=THEIRS)))
-        self.assertEqual((self.stored["phase"], self.stored["revert_sha"]), ("reverted", THEIRS))
-        self.assertEqual(self.verified_labels(), [])
-        self.assertEqual(self.fake.count("revert"), 0)
-        self.push.assert_not_called()
-
-    def test_dead_retry_after_base_moved_is_a_recheck_not_flaky(self):
-        left = self.died_during_retry()
-        left["main_head"] = OLD_TIP
-        self.assertTrue(self.postmerge(**left, verify_ok=True))
+    def test_old_retry_state_after_base_moved_is_rechecked(self):
+        self.assertTrue(self.postmerge(**self.old_retry(main_head=OLD_TIP), verify_ok=True))
         self.assertEqual(self.verified_labels(), ["main-recheck"])
         self.assertEqual((self.stored["phase"], self.stored["main_head"]), ("verified", TIP))
-        self.assertNotIn("flaky", self.stored["outcome"])
 
-    def test_dead_after_retry_failed_pushes_the_same_revert(self):
-        # 재시도가 실패해 revert를 만들었고 push 전에 끊겼다. 다시 검증하지 않고 같은 커밋을 올린다.
-        fake = FakeGit(parents={REVERT: TIP})
-        self.assertFalse(self.postmerge(phase="main_failed", main_head=TIP, revert_sha=REVERT, verified_head=PASSED, gitfake=fake))
-        self.assertEqual(self.push.call_args.args[3], f"{REVERT}:refs/heads/main")
-        self.assertEqual(self.fake.count("revert"), 0)
+    def test_old_retry_state_after_someone_reverted_verifies_nothing(self):
+        self.assertFalse(self.postmerge(**self.old_retry(), gitfake=FakeGit(theirs=THEIRS)))
+        self.assertEqual((self.stored["phase"], self.stored["revert_sha"]), ("reverted", THEIRS))
         self.assert_no_worktree()
+        self.push.assert_not_called()
+
+    def test_old_retry_state_setup_failure_is_unverified(self):
+        # main_failed와 같다. 남은 main_head가 지난 실패를 알려 다음 실행이 건너뛰지 않는다.
+        self.assertFalse(self.postmerge(**self.old_retry(), setup_cmd="make", setup_ok=False))
+        self.assertEqual((self.stored["phase"], self.stored["main_ok"], self.stored["main_head"]), ("base_unverified", None, TIP))
+        self.assertEqual(self.verified_labels(), [])
+        self.assertEqual(self.fake.count("revert"), 0)
 
 
 class VerifiedHeadTest(unittest.TestCase):
