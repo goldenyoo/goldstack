@@ -87,6 +87,19 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(report.handoff_observations(r, self.t05(["*"])), [])
         self.assertEqual(report.observation_paths(OBS), ["docs/internals.md"])
 
+    def test_particle_after_unquoted_path_and_extensionless_touches_still_match(self):
+        hangul = "docs/설계.md가 낡았다"
+        english = "docs/internals.md가 낡았다"
+        license_obs = "`LICENSE`를 고쳐야 한다"
+        make_obs = "Makefile 의 타깃이 낡았다"
+        r = self.run_for({"02": review_record([hangul, english, license_obs, make_obs],
+                                              verdicts((1, "범위 밖"), (2, "범위 밖"), (3, "범위 밖"), (4, "범위 밖")))})
+        self.assertEqual(report.handoff_observations(r, self.t05(["docs/설계.md"])), [("02", hangul)])
+        self.assertEqual(report.handoff_observations(r, self.t05(["docs/internals.md"])), [("02", english)])
+        self.assertEqual(report.handoff_observations(r, self.t05(["LICENSE"])), [("02", license_obs)])
+        self.assertEqual(report.handoff_observations(r, self.t05(["Makefile"])), [("02", make_obs)])
+        self.assertEqual(report.handoff_observations(r, self.t05(["docs/"])), [("02", hangul), ("02", english)])
+
     def test_paths_in_text(self):
         self.assertEqual(report.observation_paths(OBS)[0], "docs/internals.md")
         self.assertIn("src/gs/a.py", report.observation_paths("src/gs/a.py:12:3."))
