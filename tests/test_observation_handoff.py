@@ -76,6 +76,17 @@ class HandoffTest(unittest.TestCase):
         r = self.run_for({"02": review_record([OBS], verdicts((2, "범위 밖"), (0, "범위 밖")))})
         self.assertEqual(report.handoff_observations(r, self.t05(["docs/internals.md"])), [])
 
+    def test_paths_with_non_ascii_or_brackets_match_and_line_number_is_not_a_path(self):
+        korean = "`docs/설계.md:12`가 낡았다"
+        slug = "`src/app/[slug]/page.tsx`의 경계가 틀렸다"
+        spaced = "`docs/my notes.md`가 낡았다"
+        r = self.run_for({"02": review_record([korean, slug, spaced, OBS], verdicts((1, "범위 밖"), (2, "범위 밖"), (3, "범위 밖"), (4, "범위 밖")))})
+        self.assertEqual(report.handoff_observations(r, self.t05(["docs/설계.md"])), [("02", korean)])
+        self.assertEqual(report.handoff_observations(r, self.t05(["src/app/**/page.tsx"])), [("02", slug)])
+        self.assertEqual(report.handoff_observations(r, self.t05(["docs/my notes.md"])), [("02", spaced)])
+        self.assertEqual(report.handoff_observations(r, self.t05(["*"])), [])
+        self.assertEqual(report.observation_paths(OBS), ["docs/internals.md"])
+
     def test_paths_in_text(self):
         self.assertEqual(report.observation_paths(OBS)[0], "docs/internals.md")
         self.assertIn("src/gs/a.py", report.observation_paths("src/gs/a.py:12:3."))

@@ -574,15 +574,22 @@ def observation_verdict(ts, n: int, text: str) -> str:
 
 
 OUT_OF_SCOPE = "범위 밖"  # review.OBSERVATION_VERDICTS 중 이 티켓의 일이 아니라는 판정
-_PATH_TOKEN = re.compile(r"[A-Za-z0-9_./*\-]+")  # 관찰 글에서 경로 후보를 뽑는 낱말. `:148` 줄 번호 접미어는 낱말 밖이다
+_BACKTICK = re.compile(r"`([^`\n]+)`")
+_LINE_SUFFIX = re.compile(r":\d+(?::\d+)?$")  # `:148`·`:148:3` 줄 번호 접미어
+_PATH_SHAPE = re.compile(r"/|\.[A-Za-z0-9]{1,10}$")  # 경로꼴: `/`가 있거나 `.확장자`로 끝난다(`go._verifying_again`·`148`은 아니다)
 
 
 def observation_paths(text: str) -> list[str]:
-    """관찰 글 속 경로 후보(글에 나온 순서, 중복 없음). 백틱·한글·`:148` 줄 번호 접미어·문장 끝 점은 경로에 들지 않는다."""
+    """관찰 글 속 경로 후보(글에 나온 순서, 중복 없음). 백틱으로 싼 조각(공백·한글·`[slug]` 포함 가능)과 공백으로 나눈 낱말 중 경로꼴만 든다.
+
+    조각 앞뒤의 따옴표·괄호·쉼표와 끝 점, `:148` 줄 번호 접미어는 경로에 들지 않는다. 줄 번호는 따로 후보가 되지 않는다.
+    """
+    pieces = [*_BACKTICK.findall(text), *_BACKTICK.sub(" ", text).split()]
     found = []
-    for token in _PATH_TOKEN.findall(text):
-        token = token.removeprefix("./").rstrip(".")
-        if token and token not in found:
+    for piece in pieces:
+        token = _LINE_SUFFIX.sub("", piece.strip().strip("\"'()<>,;").rstrip(".:")).removeprefix("./")
+        token = _LINE_SUFFIX.sub("", token)
+        if token and _PATH_SHAPE.search(token) and token not in found:
             found.append(token)
     return found
 
