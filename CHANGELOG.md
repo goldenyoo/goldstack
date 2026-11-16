@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.2.27 — 2026-11-16
+
+### goldstack-v44
+
+- 지웠다: flaky 다시 검증(goldstack-v43 02). 판별을 통과한 파일이 전체 실행에서 다시 실패하면 같은 트리를 다시 검증하지 않고 일반 실패처럼 수리로 간다.
+- 지웠다: base 재검증(`main-retry`). base 검증이 실패하면 코드가 같아도 다시 돌리지 않고 되돌린다. 옛 state의 phase `main_retry`는 `main_failed`로 읽는다.
+- 아이디어 파일 자동 생성 범위를 줄였다: 리뷰 지적 중 재현된 미수리 결함(`defer`)만 `.goldstack/ideas/` 파일이 된다. "보고만" 지적은 심각도와 상관없이 보고서에만 남고, 사람이 회고에서 고른 것만 아이디어가 된다. 이미 있는 아이디어 파일은 그대로다.
+- 이 레포 config에 `second_reviewer_rereview = "none"`을 뒀다.
+- `docs/guide.md`·`docs/internals.md`에서 지운 동작의 설명을 걷어 냈다.
+- 버전을 `0.2.27`으로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.26 — 2026-11-16
 
 ### goldstack-v43

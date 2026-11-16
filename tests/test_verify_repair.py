@@ -14,6 +14,9 @@ goldstack-v27 03: 그 줄은 수리 worker가 실패로 끝나도 재시도 없�
 
 goldstack-v30 01: 이번 실행에서 띄운 수리 worker가 그 줄을 남기고 네트워크로 끊겨도 다시 띄우지 않는다. 표식을 일시 오류 처리보다 먼저 본다
 (MarkerBeforeNetworkTest는 가짜 codex로 끝까지, MarkerOrderTest는 _check_worker의 조건별로).
+
+goldstack-v44 01: goldstack-v43 02의 flaky 다시 검증을 지웠다. 판별이 따로 통과시킨 파일이 판별 뒤 전체 실행에서 다시 실패하면 수리다(TriagedFailureTest).
+0.2.26이 남긴 표시 verify_again "flaky"는 끊김의 다시 검증으로 읽는다(InterruptedResumeTest).
 """
 import contextlib
 import io
@@ -51,6 +54,8 @@ XARGS = "sh -c 'kill -TERM $$'; echo 'xargs: sleep: terminated with signal 15; a
 NOTHING = ":"  # 이 검증은 끊기지 않는다: BROKEN이 있으면 실패, 없으면 통과다
 HANG = 'echo $$ > "$here/verify.pid"; touch "$here/in_verify"; while :; do sleep 0.05; done'  # gs가 죽어도 돌아간다(gs_killed_in_verify)
 STALE_LINE = "지난 실행의 검증이 아직 돌고 있어 끝냈다"
+FAILED_FILE = r"^(?:FAIL|ERROR): \S+ \((test_\w+)\."  # config `[verify] failed_file`(test_verify_rerun과 같다)
+FAILS_TEST_A = "echo 'FAIL: test_x (test_a.Case.test_x)'; exit 1"  # 티켓 diff 밖의 시험 파일 test_a가 떨어진다
 
 
 def said(text):
@@ -830,6 +835,32 @@ class NotRepairedTest(Base):
         self.assertNotIn("수리", self.status("demo")[1])
 
 
+class TriagedFailureTest(Base):
+    """판별(verify 머리말)이 따로 통과시킨 파일이 판별 뒤 전체 실행에서 다시 실패했다. 끊김·시간 초과가 아니니 수리다(go._verify_failed).
+    실패 파일 test_a는 티켓 diff 밖이다: goldstack-v43 02의 flaky 다시 검증이 남아 있으면 수리 대신 같은 트리를 한 번 더 검증한다.
+    `[verify]`는 main checkout의 config에만 적고 커밋하지 않는다(실행 중인 config로 판별한다)."""
+
+    def test_triaged_file_failing_again_goes_to_repair(self):
+        self.verifies(FAILS_TEST_A, FAILS_TEST_A)  # 첫 전체 실행과 판별 뒤 전체 실행. 그 뒤 검증은 BROKEN이 없으면 통과한다
+        with (self.repo / config.CONFIG_PATH).open("a") as f:
+            f.write(f"\n[verify]\nfailed_file = '{FAILED_FILE}'\nrerun = \"echo {{file}} >> {self.bin}/rerun.calls\"\n")
+        self.worker(BREAKS, REPAIRS)
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        log = self.rundir / "01/1/verify.log"
+        self.assertIn("\n판별 통과: test_a. 전체 검증을 한 번 더 돌린다\n", log.read_text())  # 판별을 거쳤다
+        self.assertEqual(self.lines("rerun.calls"), ["test_a"])
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures, ts.network_resume, ts.reason), ("merged", 1, 0, {}, ""))
+        self.assertEqual(self.calls(), ["01", "01"])  # 구현과 수리 worker
+        self.assertEqual(self.phases(), ["worker", "review", "verify", "repair", "rereview", "verify", "finish"])
+        self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01", "failed"), ("ticket-01-repair", "passed")])
+        [rec] = ts.repairs
+        self.assertEqual((rec["verify_log"], rec["reason"], rec["result"]), (str(log), f"검증 실패(로그 {log})", state.REPAIR_PASSED))
+        self.assertIn("같은 브랜치에서 수리한다", out)
+        self.assertNotIn("수리 없이 같은 트리로", out)
+
+
 class SeatTest(Base):
     def test_repair_waits_for_a_worker_seat_ahead_of_new_tickets(self):
         for tid in ("11", "12", "13"):
@@ -1297,6 +1328,48 @@ class InterruptedResumeTest(Base):
         self.assertEqual(self.reviewers(), ["codex", "codex"])
         self.assertEqual(self.ticket_verifies(), [("ticket-01", "failed"), ("ticket-01-repair-끊김", "failed"), ("ticket-01-repair", "passed")])
         self.assertEqual(state.repair_summary(ts), "수리: 시도 1 커밋 1개 → 다시 검증 통과")
+
+    def flaky_mark(self):
+        """멈춘 다시 검증 차례의 표시를 0.2.26이 flaky 다시 검증 차례에 남긴 값으로 바꾼다(verify_again "flaky").
+        0.2.26이 함께 남긴 파일 목록·썼음 키는 넣지 않는다: 그 이름은 src·tests에 남지 않으니(티켓 확인 grep) 읽을 수 없다."""
+        path = state.path(self.rundir)
+        raw = json.loads(path.read_text())
+        mark = raw["tickets"]["01"]["network_resume"]
+        self.assertEqual((mark["done"], mark["verify_again"]), (True, go.AGAIN_INTERRUPTED))
+        mark["verify_again"] = "flaky"
+        path.write_text(json.dumps(raw, ensure_ascii=False))
+
+    def test_old_flaky_mark_is_verified_again_like_an_interrupted_verify(self):
+        self.verifies(TERM_SELF)
+        self.worker(GOOD, REPAIRS)
+        self.stop_at_verify()
+        self.flaky_mark()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("끊긴 검증을 같은 worktree에서 다시 한다", out)
+        self.assertIn("지난 검증이 끊겼다. 같은 worktree에서 다시 검증부터 잇는다", out)
+        ts = self.assert_same_attempt()
+        self.assertEqual(self.calls(), ["01"])  # 구현·수리를 다시 하지 않는다
+        self.assertEqual(self.reviewers(), ["codex"])  # 리뷰도 다시 하지 않는다
+        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
+        log = self.rundir / "01/1/verify.log"
+        self.assertEqual(ts.reason, f"검증 끊김 뒤 다시 검증 통과(로그 {log})")  # flaky 다시 검증의 이유가 아니다
+        text = log.read_text()
+        self.assertEqual(text.count("끊긴 검증을 같은 트리로 다시 돌린다"), 1)
+        self.assertNotIn("\nflaky: ", text)
+
+    def test_old_flaky_mark_interrupted_again_fails_the_attempt(self):
+        # 끊김의 다시 검증과 같이 한 번이다: 그 다시 검증이 끊기면 시도가 실패한다
+        self.verifies(TERM_SELF, TERM_SELF)
+        self.worker(GOOD, REPAIRS)
+        self.stop_at_verify()
+        self.flaky_mark()
+        code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        ts = self.ts()
+        self.assertEqual((ts.status, ts.attempts, ts.failures), ("merged", 2, 1))
+        self.assertEqual(self.ticket_verifies(), [("ticket-01-끊김", "failed"), ("ticket-01-끊김", "failed"), ("ticket-01", "passed")])
+        self.assertIn("다시 검증도 끊겼다", (self.rundir / "01/1/failure.log").read_text())
 
     def test_old_state_without_the_new_mark_is_read(self):
         self.verifies(TERM_SELF)

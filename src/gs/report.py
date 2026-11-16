@@ -785,13 +785,14 @@ def _failure_block(log: Path, command: str) -> str:
 
 def _failed_verification(r) -> tuple[str, Path] | None:
     """보고서가 실패 증거로 보일 검증(라벨, 로그). integration 실패는 not_merged, base 실패는 revert 단계에서 본다."""
+    from . import finish  # finish가 이 모듈을 import한다
     f = r.st.finish
     finish_dir = r.rundir / "finish"
     if f.get("phase") == "not_merged" and f.get("failed_verify") in ("integration", "integration-final"):
         return f["failed_verify"], finish_dir / f"{f['failed_verify']}-verify.log"
-    if f.get("phase") in ("reverted", "main_failed", "main_retry", "revert_pending") and f.get("main_ok") is False:
-        # 다시 검증(main-retry, main-recheck)이 있으면 마지막으로 돈 쪽이 최종 실패다.
-        found = [(label, finish_dir / f"{label}-verify.log") for label in ("main", "main-retry", "main-recheck")]
+    if finish.read_phase(f) in ("reverted", "main_failed", "revert_pending") and f.get("main_ok") is False:
+        # 재검증(main-recheck)이 있으면 마지막으로 돈 쪽이 최종 실패다.
+        found = [(label, finish_dir / f"{label}-verify.log") for label in ("main", "main-recheck")]
         found = [x for x in found if x[1].is_file()]
         if found:
             return max(found, key=lambda x: x[1].stat().st_mtime)
@@ -824,8 +825,9 @@ def verification_failure(r) -> str:
 
 def status_line(r) -> str:
     """spec §4 보고서 마무리 상태 줄. judge의 Summary가 아니라 r.st.finish에서 만든다."""
+    from . import finish  # finish가 이 모듈을 import한다
     f = r.st.finish
-    phase = f.get("phase") or "preparing"
+    phase = finish.read_phase(f) or "preparing"
     pr = f"PR {f['url']}" if f.get("url") else "PR 없음"
     revert = (f.get("revert_sha") or "")[:8]
     if phase == "verified":
@@ -850,8 +852,6 @@ def status_line(r) -> str:
         parts = [f"{pr} 병합", f"보고서 PR {f.get('report_pr', '')} 병합 대기"]
     elif phase == "main_failed":
         parts = [f"{r.base} 검증 실패", f"revert {revert} push 안 됨" if revert else "revert push 안 됨"]
-    elif phase == "main_retry":
-        parts = [f"{pr} 병합", f"{r.base} 검증 실패", "코드가 같아 재검증 대기"]
     elif phase == "setup_failed":
         parts = ["준비 실패", "병합 안 함"]
     elif phase == "base_unverified":
@@ -884,6 +884,7 @@ def sandbox_line(r) -> str:
 
 
 def _render(r, summary: str, tail: int) -> str:
+    from . import finish  # finish가 이 모듈을 import한다
     f = r.st.finish
     merge = f.get("merge_sha", "<PR의 mergeCommit.oid>")
     summary = strip_heading(summary)  # 옛 summary.md나 다른 경로의 답도 제목을 한 번만 낸다
@@ -902,7 +903,7 @@ def _render(r, summary: str, tail: int) -> str:
     revert_first = (f"{status_line(r)} · 다음 명령: `gs go {r.name}`\n\n" if f.get("phase") == "reverted" else "")
     text = (f"# {r.name} 결과\n\n{sandbox_line(r)}{docs_notice}## Summary\n\n{revert_first}{summary}\n\n{summary_status}\n\n"
             f"## Evidence\n\n{verification_failure(r)}{evidence(r, tail)}\n"
-            f"## Merge Danger\n\n결과: {f.get('outcome', f.get('phase', '준비'))}\n\n"
+            f"## Merge Danger\n\n결과: {finish.read_outcome(f, r.base, f.get('phase', '준비'))}\n\n"
             f"PR: {f.get('url') or '아직 없음'}\n\n"
             f"integration verify: {f.get('integration_ok')}\n\n"
             f"{r.base} verify: {f.get('main_ok', '미실행')}\n\n")
