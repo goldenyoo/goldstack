@@ -52,7 +52,7 @@ base 검증이 실패하면 코드가 integration에서 통과한 것과 같아�
 verified·reverted의 마무리 순서: integration에 보고서 커밋 → base에 보고서 커밋(직접 push·보고서 PR) → base를
 integration에 합침. 합친 뒤에는 report.md를 다시 쓰지 않아 base판과 같다. 그래서 다음 PR이 report.md에서 충돌하지 않는다.
 
-보고서 커밋에는 보고만 high·medium 지적의 아이디어 파일(findings.py)이 함께 들어간다. 첫 보고서 커밋에 들어가 보통
+보고서 커밋에는 재현된 미수리 지적의 아이디어 파일(findings.py)이 함께 들어간다. 첫 보고서 커밋에 들어가 보통
 feature PR로 base에 간다. base에 없으면(revert가 지움, 파일을 쓰기 전의 gs가 연 PR) base 보고서 커밋이 더한다.
 
 모든 push는 `git.push`로 실행 시작 때의 push 설정과 대조한다. 다르면 push하지 않고 `git.PushSettingsChanged`로 멈춘다.

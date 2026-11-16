@@ -18,15 +18,15 @@ from support import sh
 REPORT = ".goldstack/work/demo/report.md"
 IDEA = ".goldstack/ideas/demo-{}.md"
 FINDINGS = [
-    {"severity": "high", "location": "a.py:1", "claim": "높은 지적", "evidence": "근거 하나"},
-    {"severity": "medium", "location": "b.py:2", "claim": "중간 지적", "evidence": "근거 둘"},
+    {"severity": "high", "location": "a.py:1", "claim": "높은 지적", "evidence": "근거 하나 DEFER"},
+    {"severity": "medium", "location": "b.py:2", "claim": "중간 지적", "evidence": "근거 둘 DEFER"},
     {"severity": "low", "location": "c.py:3", "claim": "낮은 지적", "evidence": "근거 셋"},
 ]
 HUMAN = '---\ndate: "2026-01-01"\nseverity: "high"\nsource: "사람"\nstatus: "taken"\nfeature: "next"\n---\n사람이 고침\n'
 
 
 def finding(claim="지적", severity="high", location="a.py:1", number=1, **kw):
-    fields = {"action": review.REPORT, "why": "고칠 만큼은 아니다", "evidence": "근거", **kw}
+    fields = {"action": review.DEFER, "why": "고칠 만큼은 아니다", "evidence": "근거", **kw}
     return asdict(review.Finding(id=number, severity=severity, location=location, claim=claim, **fields))
 
 
@@ -85,6 +85,7 @@ class WriteTest(Unit):
         self.assertEqual(self.idea("01-1").read_text(encoding="utf-8"), (
             '---\ndate: "2026-11-05"\nseverity: "high"\nsource: "demo 리뷰 01"\nstatus: "open"\nfeature: ""\n---\n'
             '문자 "따옴표": 지적\n\n위치: a.py:1\n근거: 근거 내용\n판단: 고칠 만큼은 아니다\n'
+            '재현된 미수리 결함(defer): 고칠 수 있는 파일 밖을 고쳐야 해 고치지 않았다. 원래 심각도: high\n'
             f'보고서: {REPORT}\n'))
         idea = backlog.read_idea(self.idea("01-1"))
         self.assertEqual((idea.slug, idea.severity, idea.status, idea.source, idea.summary),
@@ -93,21 +94,23 @@ class WriteTest(Unit):
         self.assertEqual(self.warnings, "")
         self.save.assert_called_once()  # 파일 전에 번호를 저장한다
 
-    def test_only_report_only_high_and_medium(self):
+    def test_only_deferred_findings_make_files(self):
+        """goldstack-v44 03: 보고만 지적은 심각도·재리뷰 회차와 상관없이 파일이 되지 않는다. 재현된 미수리만 된다."""
         fix = {"action": review.FIX}
         self.ts.review = {"findings": [
-            finding("보고만 high"),
-            finding("보고만 medium", "medium"),
-            finding("low는 보고서에만", "low"),
+            finding("보고만 high", action=review.REPORT),
+            finding("보고만 medium", "medium", action=review.REPORT),
+            finding("low는 보고서에만", "low", action=review.REPORT),
             finding("수정됨", **fix, rereview=review.RESOLVED),
             finding("미해결", **fix, rereview=review.UNRESOLVED),
             finding("수정 못 함", **fix, fix_reason="한도"),
             finding("확인 못 함", **fix, rereview=review.UNCHECKED),
             finding("2차 재리뷰의 새 지적", **fix, found_round=2),
+            finding("재현된 미수리", "medium"),
         ]}
-        self.write()
+        self.assertEqual(self.write(), [IDEA.format("01-9")])
         self.assertEqual({backlog.read_idea(p).summary for p in (self.repo / ".goldstack/ideas").glob("*.md")},
-                         {"보고만 high", "보고만 medium", "2차 재리뷰의 새 지적"})
+                         {"재현된 미수리"})
 
     def test_number_is_ordinal_of_ticket_findings_across_reviewers(self):
         self.ts.review = {"findings": [finding("고친 지적", action=review.FIX, rereview=review.RESOLVED),
@@ -122,7 +125,7 @@ class WriteTest(Unit):
         self.ts.second_review = {"findings": [finding("둘째 리뷰어 지적", location="b.py:1")]}
         self.write()
         self.reload()
-        self.ts.review["findings"].append(finding("재리뷰가 더한 지적", location="c.py:1", number=2, found_round=2))
+        self.ts.review["findings"].append(finding("재리뷰가 더한 지적", location="c.py:1", number=2, found_round=1))
         self.assertEqual(self.write(), [IDEA.format("01-3")])
         self.assertEqual(backlog.read_idea(self.idea("01-2")).summary, "둘째 리뷰어 지적")
         self.assertEqual(backlog.read_idea(self.idea("01-3")).summary, "재리뷰가 더한 지적")
@@ -442,7 +445,7 @@ class OldStateTest(Unit):
             "feature": "demo", "finish": {"phase": "verified"},
             "tickets": {"01": {"status": "merged", "unknown_old_key": 1,
                                "review": {"reviewer": "codex", "findings": [{
-                                   "id": 1, "severity": "medium", "location": "", "claim": "옛 지적", "evidence": ""}]}},
+                                   "id": 1, "severity": "medium", "location": "", "claim": "옛 지적", "evidence": "", "action": "defer"}]}},
                         "02": {"status": "failed", "review": {"reviewer": "codex", "note": "리뷰 실패"}}},
         }), encoding="utf-8")
         self.r.st = state.load(self.rundir, "demo")
@@ -466,7 +469,7 @@ class DeferTest(Unit):
             finding("high defer", action=review.DEFER),
             finding("medium defer", "medium", "b.py:1", 2, action=review.DEFER),
             finding("low defer", "low", "c.py:1", 3, action=review.DEFER, why="c.py는 고칠 수 있는 파일 밖이다"),
-            finding("low 보고만", "low", "d.py:1", 4),
+            finding("low 보고만", "low", "d.py:1", 4, action=review.REPORT),
         ]}
         self.assertEqual(self.write(), [IDEA.format(f"01-{n}") for n in (1, 2, 3)])
         self.assertEqual(self.idea("01-3").read_text(encoding="utf-8"), (
@@ -480,21 +483,20 @@ class DeferTest(Unit):
             self.assertIn(f"원래 심각도: {original}\n", self.idea(f"01-{n}").read_text(encoding="utf-8"))
 
     def test_same_finding_as_report_then_defer_is_one_high_file(self):
-        """두 리뷰어의 같은 지적(첫 줄·위치)이 한 파일을 나눠 쓴다. 앞 기록이 medium 보고만이어도 defer의 high 파일이 남는다."""
-        self.ts.review = {"findings": [finding("같은 지적", "medium")]}
+        """두 리뷰어가 같은 지적(첫 줄·위치)을 냈고 앞 기록은 medium 보고만이어도 defer의 high 파일 하나만 남는다."""
+        self.ts.review = {"findings": [finding("같은 지적", "medium", action=review.REPORT)]}
         self.ts.second_review = {"findings": [finding("같은 지적", "medium", action=review.DEFER)]}
-        self.assertEqual(self.write(), [IDEA.format("01-1")])
-        self.assertEqual(self.names(), ["demo-01-1"])
-        idea = backlog.read_idea(self.idea("01-1"))
+        self.assertEqual(self.write(), [IDEA.format("01-2")])  # 번호는 그 티켓 지적의 순번이다. 보고만은 번호가 없다
+        self.assertEqual(self.names(), ["demo-01-2"])
+        idea = backlog.read_idea(self.idea("01-2"))
         self.assertEqual((idea.severity, idea.status), ("high", "open"))
-        self.assertIn("원래 심각도: medium\n", self.idea("01-1").read_text(encoding="utf-8"))
+        self.assertIn("원래 심각도: medium\n", self.idea("01-2").read_text(encoding="utf-8"))
 
-    def test_report_only_file_has_no_defer_line(self):
-        self.ts.review = {"findings": [finding("보고만 medium", "medium")]}
-        self.write()
-        text = self.idea("01-1").read_text(encoding="utf-8")
-        self.assertIn('severity: "medium"', text)
-        self.assertNotIn("재현된 미수리", text)
+    def test_report_only_finding_makes_no_file(self):
+        self.ts.review = {"findings": [finding("보고만 medium", "medium", action=review.REPORT)]}
+        self.assertEqual(self.write(), [])
+        self.assertEqual(self.names(), [])
+        self.assertEqual(findings.paths(self.r), set())
 
 
 class VerifyFinalTest(Unit):
@@ -533,8 +535,18 @@ class VerifyFinalTest(Unit):
         self.assertTrue(self.verify_final())
 
 
+DEFER_JUDGE = support.FAKE_REVIEW_JUDGE.replace(
+    '"action": "fix" if "FIX" in f["claim"] else "report"',
+    '"action": "defer" if "DEFER" in f.get("evidence", "") else "report"')
+
+
 class Scenario:
-    """직접 push·보호된 base가 함께 쓰는 확인."""
+    """직접 push·보호된 base가 함께 쓰는 확인. 가짜 판단 모델은 근거에 DEFER가 든 지적만 재현된 미수리(defer)로, 나머지는 보고만으로 정한다."""
+
+    def review_with(self, findings):
+        context = support.GoTest.review_with(self, findings)
+        (self.bin / "judge").write_text("#!/bin/bash\n" + DEFER_JUDGE)
+        return context
 
     def base_ideas(self):
         out = sh(self.remote, "git", "ls-tree", "--name-only", "main", ".goldstack/ideas/")
@@ -560,7 +572,7 @@ class Scenario:
         self.assertIn("아이디어 (열림 2)", out)
         day = state.load(self.rundir, "demo").started_at[:10]
         self.assertIn(f"high    {day}  demo-01-1  높은 지적   (demo 리뷰 01)", out)
-        self.assertIn(f"medium  {day}  demo-01-2  중간 지적   (demo 리뷰 01)", out)
+        self.assertIn(f"high    {day}  demo-01-2  중간 지적   (demo 리뷰 01)", out)
         self.assertNotIn("낮은 지적", out)
 
 
@@ -577,6 +589,23 @@ class DirectPushTest(Scenario, support.GoTest):
         self.assertIn("integration-final: 보고서만 바뀜, 건너뜀", self.final_report())
         self.assert_backlog_lists_base_ideas()
         self.assertNotIn("보고만 지적 파일", out)
+
+    def test_report_only_high_makes_no_file_but_deferred_one_does(self):
+        """goldstack-v44 03: 한 실행에 보고만 high와 재현된 미수리 하나가 있으면 보고서 커밋에는 재현된 미수리 파일만 든다."""
+        mixed = [{"severity": "high", "location": "a.py:1", "claim": "보고만 high", "evidence": "근거 하나"},
+                 {"severity": "medium", "location": "b.py:2", "claim": "재현된 미수리", "evidence": "근거 둘 DEFER"}]
+        with self.review_with(mixed):
+            code, out, err = self.go("--only", "01")
+        self.assertEqual(code, 0, out + err)
+        f = state.load(self.rundir, "demo").finish
+        self.assertEqual(f["phase"], "verified")
+        self.assertEqual(sorted(self.changed(f["merge_head"])), sorted([IDEA.format("01-2"), REPORT]))
+        self.assertEqual(self.base_ideas(), ["demo-01-2"])
+        text = self.base_idea("01-2")
+        self.assertIn('severity: "high"', text)
+        self.assertIn("재현된 미수리", text)
+        self.assertIn("원래 심각도: medium\n", text)
+        self.assertIn("보고만 high", self.final_report())  # 보고서에는 그대로 남는다
 
     def test_reverted_report_commit_brings_files_back(self):
         self.parallel(1, verify='test "$(git log -1 --format=%s)" != "Merge feature"')
@@ -681,7 +710,7 @@ class DirectPushTest(Scenario, support.GoTest):
 
 class ProtectedBaseTest(Scenario, test_resume_report.Fixture):
     def go_with_findings(self):
-        with self.G.review_with(self, FINDINGS):
+        with Scenario.review_with(self, FINDINGS):
             return self.go()
 
     def test_files_land_through_feature_pr(self):
