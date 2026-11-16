@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.2.28 — 2026-11-16
+
+### goldstack-v45
+
+- worker brief 규칙(01): 완료 조건을 어기는 것과 touches 안에서 고칠 수 있는 결함은 `## 남긴 관찰`에 남기지 말고 고친다. 관찰 절에는 touches 밖에서 고쳐야 할 것·돌리지 못한 확인·사람 판단이 필요한 것만 쓴다.
+- 보고서 관찰 표(02): 티켓의 모든 worker 로그(첫 worker·재개·수정·수리)에서 관찰을 읽고 같은 글은 한 번만 싣는다. 수정 worker가 있으면 첫 worker의 관찰이 빠지던 것을 고쳤다.
+- 마무리 줄(02): phase `verified`인데 일부만 병합됐거나 미해결·재현된 미수리 지적이 있으면 `티켓 3/4 병합 · 미해결 2`처럼 phase 뒤에 덧붙인다. `gs go` 끝 `■ 마무리:` 줄도 같다. phase 값과 다 끝난 실행의 줄은 그대로다.
+- 관찰 전달(03): 리뷰어가 `범위 밖`으로 판정한 관찰의 글 속 경로가 아직 시작하지 않은 티켓의 `touches`에 맞으면 그 티켓의 첫 worker brief에 믿을 수 없는 자료 절로 싣는다. 재개·수정·수리 brief는 그대로다.
+- grill(04): 교차 검토가 profile 관례와 spec 충돌을 보고한다. 문서 티켓의 좁은 verify에는 그 문서 파일 이름을 시험 폴더에서 grep해 나온 시험을 넣는다.
+- 시험(05): 시험 공용 git 환경이 `git maintenance`를 띄우지 않게 `maintenance.auto=false`를 둔다(`wt-integration-vanish-parallel`의 위생 수리, 원인은 확정하지 않았다).
+- `docs/internals.md`에서 없는 `go._verifying_again`·`_mark_resume(verify_again=True)`를 가리키던 문장을 지금 코드(`_again_of`, `AGAIN_INTERRUPTED`)에 맞췄다. `docs/guide.md`·`docs/internals.md`에 위 변경을 적었다.
+- 버전을 `0.2.28`로 올렸다(태그·릴리스는 만들지 않았다).
+
 ## 0.2.27 — 2026-11-16
 
 ### goldstack-v44
