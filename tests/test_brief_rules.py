@@ -60,6 +60,14 @@ class BriefRulesTest(unittest.TestCase):
                 self.assertIn(f"`{worker.OBSERVATIONS_HEADING}` 제목 아래 한 줄에 하나씩 쓴다. 없으면 절을 쓰지 않는다", text)
                 self.assertIn("리뷰가 짚지 않은 의심, 돌리지 못한 확인, touches 밖에서 고쳐야 할 것", text)
 
+    def test_first_and_fix_briefs_tell_to_fix_in_scope_defects_not_observe(self):
+        briefs = self.briefs()
+        for name in ("first", "fix1"):
+            with self.subTest(brief=name):
+                text = briefs[name]
+                self.assertIn("완료 조건을 어기는 것과 touches 안에서 고칠 수 있는 결함은 관찰로 남기지 말고 고친다", text)
+                self.assertIn("관찰 절에는 touches 밖에서 고쳐야 할 것, 돌리지 못한 확인, 사람 판단이 필요한 것만 쓴다", text)
+
     def test_every_brief_tells_to_read_only_own_task_output_file(self):
         for name, text in self.briefs().items():
             with self.subTest(brief=name):
