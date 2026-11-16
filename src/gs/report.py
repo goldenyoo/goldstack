@@ -573,6 +573,56 @@ def observation_verdict(ts, n: int, text: str) -> str:
     return "\n".join(lines) or NO_OBSERVATION_VERDICT
 
 
+OUT_OF_SCOPE = "범위 밖"  # review.OBSERVATION_VERDICTS 중 이 티켓의 일이 아니라는 판정
+_PATH_TOKEN = re.compile(r"[A-Za-z0-9_./*\-]+")  # 관찰 글에서 경로 후보를 뽑는 낱말. `:148` 줄 번호 접미어는 낱말 밖이다
+
+
+def observation_paths(text: str) -> list[str]:
+    """관찰 글 속 경로 후보(글에 나온 순서, 중복 없음). 백틱·한글·`:148` 줄 번호 접미어·문장 끝 점은 경로에 들지 않는다."""
+    found = []
+    for token in _PATH_TOKEN.findall(text):
+        token = token.removeprefix("./").rstrip(".")
+        if token and token not in found:
+            found.append(token)
+    return found
+
+
+def handoff_observations(r, ticket) -> list[tuple[str, str]]:
+    """이 실행의 다른 티켓 리뷰 기록에서 `범위 밖`으로 판정된 관찰 중 경로가 ticket의 touches에 맞는 것 (출처 티켓 id, 관찰 글)(spec 2-1).
+
+    리뷰 기록마다(두 리뷰어 모두) 첫 리뷰와 rereviews의 모든 회차를 본다: 첫 리뷰에서만 판정되고 재리뷰 회차에 없는 관찰도 싣는다.
+    회차가 프롬프트에 실은 n번 관찰 글(observations)에 그 회차의 판정(observation_verdicts)을 번호로 잇는다. 같은 글은 한 번만 싣는다.
+    경로는 글에서만 뽑고(observation_paths) 리뷰어 이유 글의 티켓 id는 보지 않는다. touches가 없으면 빈 목록이다.
+    보조 입력이라 기록이 이상해도 그 기록만 건너뛴다.
+    """
+    touches = list(getattr(ticket, "touches", None) or [])
+    if not touches or r.st is None:
+        return []
+    ids = [*r.order, *(tid for tid in r.st.tickets if tid not in r.order)]
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for tid in ids:
+        ts = r.st.tickets.get(tid)
+        if tid == ticket.id or ts is None:
+            continue
+        for rec in state.reviews(ts):
+            rounds = [rec, *(x for x in rec.get("rereviews") or [] if isinstance(x, dict))]
+            for rnd in rounds:
+                shown = rnd.get("observations") or []
+                for v in rnd.get("observation_verdicts") or []:
+                    if not isinstance(v, dict) or v.get("verdict") != OUT_OF_SCOPE:
+                        continue
+                    n = v.get("n")
+                    if not (isinstance(n, int) and 0 < n <= len(shown)) or not isinstance(shown[n - 1], str):
+                        continue
+                    text = shown[n - 1]
+                    if text in seen or not any(review.in_touches(p, touches) for p in observation_paths(text)):
+                        continue
+                    seen.add(text)
+                    out.append((tid, text))
+    return out
+
+
 @metrics.best_effort
 def observation_table(r) -> str:
     """worker가 남긴 관찰과 리뷰 판정의 표 `| 티켓 | 관찰 | 리뷰 판정 |`(spec 3-2). 관찰이 하나도 없으면 빈 문자열이다.
