@@ -146,6 +146,14 @@ class FindingStatusTest(unittest.TestCase):
                 self.assertEqual(report.status_line(r), f"마무리: verified · {label} 1" + pr)
                 self.assertIn(f"■ 마무리: verified · {label} 1", self.run_summary(go._summary, r, None))
 
+    def test_verified_status_without_order_preserves_existing_line(self):
+        r = SimpleNamespace(base="main", st=SimpleNamespace(finish={"phase": "verified"}, tickets={}))
+        for tickets in ({}, {"01": SimpleNamespace(status=state.FAILED)}):
+            with self.subTest(tickets=tickets):
+                r.st.tickets = tickets
+                self.assertEqual(report.unfinished_suffix(r), "")
+                self.assertEqual(report.status_line(r), "마무리: verified · PR 없음 병합 · main 검증 통과")
+
     def test_other_phases_do_not_gain_verified_suffix(self):
         r = self.partial_run()
         r.st.ticket("02").review = {"findings": [finding() | {"action": review.DEFER}]}

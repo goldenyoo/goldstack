@@ -843,7 +843,7 @@ def verification_failure(r) -> str:
 def unfinished_suffix(r) -> str:
     """verified 실행의 덜 끝난 부분만 ` · `로 덧붙인다. phase와 종료 판정은 바꾸지 않는다."""
     from . import finish
-    if finish.read_phase(r.st.finish) != "verified":
+    if finish.read_phase(r.st.finish) != "verified" or not hasattr(r, "order"):
         return ""
     merged = sum(r.st.tickets[tid].status == state.MERGED for tid in r.order)
     parts = [f"티켓 {merged}/{len(r.order)} 병합"] if merged < len(r.order) else []
