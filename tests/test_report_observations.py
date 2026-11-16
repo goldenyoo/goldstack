@@ -85,8 +85,9 @@ class ObservationReportTest(support.GoTest):
         self.assertEqual(code, 0, out + err)
         self.assertTrue((self.bin / "review.prompt.2").exists())  # 재리뷰가 돌았다
         risks = self.risks(self.final_report())
-        self.assertIn(TABLE_HEAD + "| 01 | FIX-OBS 수정 관찰 | 범위 밖(codex): FIX 판정 |", risks)
-        self.assertNotIn("IMPL-OBS", risks)  # 가장 최근 worker(수정 worker)의 관찰만
+        self.assertIn(TABLE_HEAD + "| 01 | IMPL-OBS 구현 관찰 | 리뷰 판정 없음 |\n"
+                      + "| 01 | FIX-OBS 수정 관찰 | 범위 밖(codex): FIX 판정 |", risks)
+        self.assertNotIn("IMPL 판정", risks)  # 판정은 여전히 가장 최근 회차만 읽는다
 
     def test_unreviewed_ticket_at_agy_limit_still_shows_observations(self):
         agy = self.bin / "agy"  # gs check가 PATH에서 찾는다. 리뷰어는 부르지 않는다
@@ -163,6 +164,38 @@ class VerdictLinkTest(unittest.TestCase):
 
     def rows(self):
         return [line for line in (report.observation_table(self.r) or "").splitlines() if line.startswith("| 01 |")]
+
+    def write_log(self, path, *observations):
+        log = self.r.rundir / path
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(json.dumps({"type": "result", "result": HEADING + "\n" +
+                                   "\n".join(f"- {text}" for text in observations)}, ensure_ascii=False) + "\n")
+        return log
+
+    def test_first_and_fix_worker_observations_both_survive(self):
+        self.write_log("01/1/worker.log", "첫 관찰 A")
+        self.write_log("01/1/fix/worker.log", "수정 관찰 B")
+        self.ts.review = self.judged("codex", ["첫 관찰 A"], (1, "지적", "첫 판정"), rereviews=[
+            self.judged("codex", ["수정 관찰 B"], (1, "수용", "수정 판정"))])
+        self.assertCountEqual(self.rows(), ["| 01 | 첫 관찰 A | 리뷰 판정 없음 |",
+                                           "| 01 | 수정 관찰 B | 수용(codex): 수정 판정 |"])
+
+    def test_all_attempts_resume_and_repair_deduplicate_text_with_matching_verdict(self):
+        self.write_log("01/1/worker.log", "관찰 A")
+        self.write_log("01/2/worker.log", "관찰 C", "관찰 A")
+        self.write_log("01/2/resume/worker.log", "관찰 D")
+        self.ts.log = str(self.write_log("01/2/repair/worker.log", "관찰 E", "관찰 A"))
+        self.write_log("02/1/worker.log", "다른 티켓")
+        self.ts.review = self.judged("codex", ["관찰 E", "관찰 A"], (2, "수용", "번호가 바뀌었다"))
+        self.assertCountEqual(self.rows(), ["| 01 | 관찰 A | 수용(codex): 번호가 바뀌었다 |",
+                                           *[f"| 01 | 관찰 {letter} | 리뷰 판정 없음 |" for letter in "BCDE"]])
+
+    def test_state_log_outside_ticket_directory_and_missing_log(self):
+        self.ts.log = str(self.write_log("elsewhere/custom.log", "관찰 C"))
+        self.assertEqual(len(self.rows()), 3)
+        self.assertIn("| 01 | 관찰 C | 리뷰 판정 없음 |", self.rows())
+        Path(self.ts.log).unlink()
+        self.assertEqual(len(self.rows()), 2)
 
     def test_record_of_another_worker_message_is_not_linked(self):
         # 수정 worker 뒤 재리뷰를 부르지 못했다: 가장 최근 회차는 구현 worker의 관찰을 판정한 첫 리뷰다

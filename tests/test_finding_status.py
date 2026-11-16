@@ -96,6 +96,65 @@ class FindingStatusTest(unittest.TestCase):
         self.r.st.ticket("outside").review = {"findings": [finding(fix_reason="한도")]}
         self.assertEqual(report.finding_counts(self.r), "리뷰 지적: 수정됨 2")
 
+    def partial_run(self):
+        r = self.r
+        r.no_merge, r.prior = False, set()
+        r.order = ["01", "02", "03", "04"]
+        for tid in r.order:
+            r.st.ticket(tid).status = state.MERGED if tid != "04" else state.FAILED
+            r.feat.tickets[tid] = SimpleNamespace(title="티켓")
+        r.st.ticket("01").review = {"findings": [finding(rereview=review.UNRESOLVED)]}
+        r.st.ticket("04").second_review = {"findings": [finding(rereview=review.UNRESOLVED) | {"severity": "low"}]}
+        r.st.ticket("outside").review = {"findings": [finding(rereview=review.UNRESOLVED)]}
+        return r
+
+    def test_partial_verified_report_and_go_summary_show_same_counts(self):
+        r = self.partial_run()
+        prefix = "마무리: verified · 티켓 3/4 병합 · 미해결 2"
+        self.assertIn("\n" + prefix + " · PR ", report._render(r, "요약", 0))
+        self.assertEqual(report.finding_counts(r), "리뷰 지적: 미해결 2")
+        self.assertIn("■ " + prefix, self.run_summary(go._summary, r, None))
+        # 실제 실행은 phase와 별도로 사람용 outcome 문장을 저장한다.
+        r.st.finish["outcome"] = "integration·main 검증 통과, PR 병합 완료"
+        self.assertIn("■ 마무리: integration·main 검증 통과, PR 병합 완료 · 티켓 3/4 병합 · 미해결 2",
+                      self.run_summary(go._summary, r, None))
+        self.assertEqual(r.st.finish["phase"], "verified")
+
+    def test_verified_suffix_counts_deferred_but_not_resolved_or_superseded(self):
+        r = self.partial_run()
+        deferred = finding() | {"action": review.DEFER, "severity": "low"}
+        r.st.ticket("02").review = {"findings": [deferred, deferred | {"superseded": True},
+            deferred | {"repair_review": review.RESOLVED, "repair_review_evidence": "수리 확인"}]}
+        suffix = " · 티켓 3/4 병합 · 미해결 2 · 재현된 미수리 1"
+        self.assertTrue(report.status_line(r).startswith("마무리: verified" + suffix + " · PR "))
+        self.assertIn("■ 마무리: verified" + suffix, self.run_summary(go._summary, r, None))
+        self.assertEqual(report.finding_counts(r), "리뷰 지적: 수정됨 1 · 미해결 2 · 재현된 미수리 1 · 대체됨 1")
+
+    def test_verified_suffix_each_condition_and_finished_run(self):
+        r = self.partial_run()
+        for tid in r.order:
+            r.st.ticket(tid).review = {}
+            r.st.ticket(tid).second_review = {}
+        pr = " · PR https://example.com/pr/1 병합 · main 검증 통과"
+        self.assertEqual(report.status_line(r), "마무리: verified · 티켓 3/4 병합" + pr)
+        r.st.ticket("04").status = state.MERGED
+        self.assertEqual(report.status_line(r), "마무리: verified" + pr)
+        self.assertIn("■ 마무리: verified", self.run_summary(go._summary, r, None))
+        for fields, label in (({"rereview": review.UNRESOLVED}, "미해결"), ({"action": review.DEFER}, "재현된 미수리")):
+            with self.subTest(label=label):
+                r.st.ticket("01").review = {"findings": [finding() | fields]}
+                self.assertEqual(report.status_line(r), f"마무리: verified · {label} 1" + pr)
+                self.assertIn(f"■ 마무리: verified · {label} 1", self.run_summary(go._summary, r, None))
+
+    def test_other_phases_do_not_gain_verified_suffix(self):
+        r = self.partial_run()
+        r.st.ticket("02").review = {"findings": [finding() | {"action": review.DEFER}]}
+        for phase, detail in (("not_merged", "integration 검증 실패"), ("preparing", "병합 전")):
+            with self.subTest(phase=phase):
+                r.st.finish["phase"] = phase
+                self.assertEqual(report.status_line(r), f"마무리: {phase} · {detail}")
+                self.assertIn(f"■ 마무리: {phase}", self.run_summary(go._summary, r, None))
+
     def test_summary_prompt_and_facts_distinguish_resolved_from_remaining(self):
         self.five_statuses()
         with mock.patch.object(report.git, "out", return_value="a.py | 1 +"), \

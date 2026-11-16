@@ -26,10 +26,11 @@ defer 지적(review.DEFER: 재현됐지만 고칠 수 있는 파일 밖을 고�
 "해소됨(재리뷰 확인)"이라 남은 high에서 빠지고 아이디어 파일(findings.py)도 쓰지 않는다. unresolved·unchecked·판정 없음은 그대로 "보고만"이다.
 티켓별 결과의 이유 칸에는 첫 리뷰가 남긴 touches 밖 경로가 `touches 밖: <경로들>` 줄로 붙는다(goldstack-v38 05. touches_outside_line). 없으면 줄이 없다.
 Evidence의 `### 남은 위험` 절(remaining_risks, 실패한 검증 절 다음)은 gs가 원본 그대로 싣는다: 격리 경고 줄 다음에 worker가 남긴 관찰 표 `| 티켓 | 관찰 | 리뷰 판정 |`
-(goldstack-v35 05, spec 3-2. observation_table). 관찰은 리뷰 기록이 아니라 티켓마다 가장 최근 worker 로그(수정·수리 worker가 있으면 그것)의
+(goldstack-v35 05, spec 3-2. observation_table). 관찰은 리뷰 기록이 아니라 티켓마다 모든 worker 로그(첫 worker·재개·수정·수리)의
 마지막 메시지 전체에서 `## 남긴 관찰` 절을 직접 뽑고(review.worker_observations), 판정은 그 시도의 리뷰 기록마다 가장 최근 회차(재리뷰 포함)에서
 번호로 잇는다. 그 회차가 실은 같은 번호의 관찰 글이 같을 때만 잇고, 아니면 `리뷰 판정 없음`이다. 그래서 리뷰를 부르지 않은 티켓(agy 상한,
-리뷰 트리 준비 실패)의 관찰도 `리뷰 판정 없음`으로 나온다. 경고도 관찰도 없으면 절이 없다.
+리뷰 트리 준비 실패)의 관찰도 `리뷰 판정 없음`으로 나온다. 같은 글은 티켓마다 한 번만 싣는다. 경고도 관찰도 없으면 절이 없다.
+verified 마무리 줄에는 일부만 병합됐거나 미해결·재현된 미수리 지적이 남으면 그 수를 덧붙인다(unfinished_suffix). gs go 끝 출력도 같은 함수를 쓴다.
 """
 from __future__ import annotations
 
@@ -122,10 +123,15 @@ def finding_status(finding: dict) -> str:
     return "수정 못 함(수정 기록 없음)"
 
 
+def _finding_counts(r) -> Counter:
+    """리뷰 지적 줄과 마무리 덧붙임이 함께 쓰는 상태별 수. 이번 범위의 두 리뷰 기록을 센다."""
+    return Counter(finding_status(f).partition("(")[0]
+                   for tid in r.order for rec in state.reviews(r.st.tickets[tid])
+                   for f in rec.get("findings", []))
+
+
 def finding_counts(r) -> str:
-    counts = Counter(finding_status(f).partition("(")[0]
-                     for tid in r.order for rec in state.reviews(r.st.tickets[tid])
-                     for f in rec.get("findings", []))
+    counts = _finding_counts(r)
     parts = [f"{label} {counts[label]}" for label in FINDING_STATUSES if counts[label]]
     return "리뷰 지적: " + " · ".join(parts) if parts else ""
 
@@ -571,15 +577,26 @@ def observation_verdict(ts, n: int, text: str) -> str:
 def observation_table(r) -> str:
     """worker가 남긴 관찰과 리뷰 판정의 표 `| 티켓 | 관찰 | 리뷰 판정 |`(spec 3-2). 관찰이 하나도 없으면 빈 문자열이다.
 
-    관찰은 리뷰 기록이 아니라 이번 범위 티켓마다 가장 최근 worker 로그(latest_worker_log)의 마지막 메시지 전체에서 직접 뽑는다
+    관찰은 리뷰 기록이 아니라 이번 범위 티켓마다 모든 worker 로그의 마지막 메시지 전체에서 직접 뽑고 같은 글은 한 번만 싣는다
     (review.worker_observations). 그래서 리뷰를 부르지 않은 티켓(agy 상한 review.LIMIT 기록, 리뷰 트리 준비 실패)의 관찰도 나온다.
     판정은 그 시도의 가장 최근 리뷰 기록에서 번호로 잇는다(observation_verdict). 관찰은 worker가 쓴 믿을 수 없는 글이라 칸 안에 그대로 둔다.
     """
     rows = []
     for tid in r.order:
         ts = r.st.tickets.get(tid)
-        for n, text in enumerate(review.worker_observations(latest_worker_log(r, tid)), 1):
-            verdict = observation_verdict(ts, n, text) if ts is not None else NO_OBSERVATION_VERDICT
+        logs = sorted((r.rundir / tid).glob("**/worker.log"), key=lambda p: p.parts[:-1])
+        if ts is not None and ts.log and (log := Path(ts.log)).is_file() and log not in logs:
+            logs.append(log)
+        observations = {}
+        for log in logs:
+            for n, text in enumerate(review.worker_observations(log), 1):
+                verdicts = observations.setdefault(text, [])
+                verdict = observation_verdict(ts, n, text) if ts is not None else NO_OBSERVATION_VERDICT
+                # 같은 글이 다른 번호로 다시 나와도 그 번호·글을 판정한 회차에만 잇는다.
+                if verdict != NO_OBSERVATION_VERDICT:
+                    verdicts.extend(v for v in verdict.splitlines() if v not in verdicts)
+        for text, verdicts in observations.items():
+            verdict = "\n".join(verdicts) or NO_OBSERVATION_VERDICT
             rows.append("| " + " | ".join(cell(v) for v in (tid, text, verdict)) + " |")
     if not rows:
         return ""
@@ -823,6 +840,18 @@ def verification_failure(r) -> str:
     return text
 
 
+def unfinished_suffix(r) -> str:
+    """verified 실행의 덜 끝난 부분만 ` · `로 덧붙인다. phase와 종료 판정은 바꾸지 않는다."""
+    from . import finish
+    if finish.read_phase(r.st.finish) != "verified":
+        return ""
+    merged = sum(r.st.tickets[tid].status == state.MERGED for tid in r.order)
+    parts = [f"티켓 {merged}/{len(r.order)} 병합"] if merged < len(r.order) else []
+    counts = _finding_counts(r)
+    parts.extend(f"{label} {counts[label]}" for label in ("미해결", DEFERRED) if counts[label])
+    return " · " + " · ".join(parts) if parts else ""
+
+
 def status_line(r) -> str:
     """spec §4 보고서 마무리 상태 줄. judge의 Summary가 아니라 r.st.finish에서 만든다."""
     from . import finish  # finish가 이 모듈을 import한다
@@ -860,7 +889,7 @@ def status_line(r) -> str:
         parts = ["병합 전"]
     if f.get("error") and phase not in ("verified", "reverted", "not_merged", "closed"):
         parts.append("오류(아래 Merge Danger)")
-    return " · ".join([f"마무리: {phase}", *parts])
+    return " · ".join([f"마무리: {phase}" + unfinished_suffix(r), *parts])
 
 
 def issue_notes(r) -> str:
