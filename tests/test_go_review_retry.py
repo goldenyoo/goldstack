@@ -319,19 +319,23 @@ class GoReviewRetryTest(support.GoTest):
             fi
             echo done > file_01; git add -A; git commit -qm done
         '''))
-        with self.review_with([{"severity": "high", "location": "file_01:1", "claim": "보고만 높은 지적", "evidence": ""}]):
+        context = self.review_with([{"severity": "high", "location": "file_01:1", "claim": "재현된 미수리 높은 지적", "evidence": "재현함"}])
+        # 아이디어 파일은 재현된 미수리(defer)만 만든다(goldstack-v44 03). 가짜 판단 모델이 모든 지적을 defer로 정한다
+        (self.bin / "judge").write_text("#!/bin/bash\n" + support.FAKE_REVIEW_JUDGE.replace(
+            '"fix" if "FIX" in f["claim"] else "report"', '"defer"'))
+        with context:
             code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         ts = state.load(self.rundir, "demo").tickets["01"]
         self.assertEqual((ts.status, ts.attempts), ("merged", 2))
         self.assertEqual(len(ts.review["findings"]), 1)  # 새 시도의 기록은 비워진 뒤 새로 쌓인다
         self.assertEqual([(e["attempt"], e["reviewer"], [f["claim"] for f in e["findings"]]) for e in ts.prior_findings],
-                         [(1, "codex", ["보고만 높은 지적"])])
+                         [(1, "codex", ["재현된 미수리 높은 지적"])])
         self.assertRegex(ts.prior_findings[0]["reviewed_head"], "^[0-9a-f]{40}$")
         report = self.final_report()
         self.assertIn("### 버려진 시도의 지적", report)
         self.assertIn("01 시도 1 리뷰(codex, ", report)
-        self.assertIn("남은 high 1(보고만 1)", report)  # 새 시도의 지적 하나만 센다
+        self.assertIn("남은 high 1(재현된 미수리 1)", report)  # 새 시도의 지적 하나만 센다
         self.assertEqual(self.integration("ls-tree", "--name-only", "gs/demo/integration", ".goldstack/ideas/").count("demo-01-"), 1)
 
     def test_judge_failure_still_retries_with_evidence_path(self):

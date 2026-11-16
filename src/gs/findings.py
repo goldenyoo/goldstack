@@ -1,8 +1,8 @@
 """고치지 않기로 한 리뷰 지적을 `.goldstack/ideas/` 파일로 넘긴다(spec 1-8, §4).
 
-대상은 상태가 "보고만"(report.finding_status)인 high·medium 지적과, 상태가 "재현된 미수리"(report.DEFERRED, 판정 defer)인 모든 지적이다.
+대상은 상태가 "재현된 미수리"(report.DEFERRED, 판정 defer)인 지적뿐이다.
 defer 지적은 리뷰어가 재현했지만 고칠 수 있는 파일 밖이라 고치지 않은 결함이라 원래 심각도와 상관없이 severity high 파일로 남기고
-본문에 원래 심각도를 적는다(goldstack-v27 01). 그 밖의 지적(보고만 low, 나머지 상태)은 보고서에만 남는다.
+본문에 원래 심각도를 적는다(goldstack-v27 01). 그 밖의 지적(보고만 포함)은 보고서에만 남고, 사람이 회고에서 골라 아이디어로 만든다.
 파일은 보고서 커밋에 함께 들어간다: integration에는 write, base의 보고서 커밋에는 copy_to_base(finish._report_commit).
 
 번호는 지적의 `idea_number`(state)에 남겨 고정한다. 처음 정할 때 그 티켓 지적의 순번(review 다음 second_review, 두 기록의
@@ -35,9 +35,7 @@ from . import frontmatter, git, report, state
 from .feature import WORK
 
 IDEAS = ".goldstack/ideas"
-SEVERITIES = ("high", "medium")
-REPORT_ONLY = "보고만"  # report.finding_status의 값
-DEFERRED = report.DEFERRED  # report.finding_status의 값. 심각도와 상관없이 대상이고 high로 쓴다
+DEFERRED = report.DEFERRED  # report.finding_status의 값. 이 상태만 대상이다. 심각도와 상관없이 high로 쓴다
 NUMBER = "idea_number"
 EVIDENCE_LIMIT = 500  # 근거 길이 제한(자). 전체는 보고서에 있다
 DROPPED = "dropped"
@@ -45,8 +43,7 @@ REPLACED_NOTE = "재시도가 병합돼 이 지적을 낸 시도의 코드는 �
 
 
 def _target(finding: dict) -> bool:
-    status = report.finding_status(finding)
-    return status == DEFERRED or (finding.get("severity") in SEVERITIES and status == REPORT_ONLY)
+    return report.finding_status(finding) == DEFERRED
 
 
 def _slug(text: str) -> str:

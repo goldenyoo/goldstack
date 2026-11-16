@@ -208,16 +208,15 @@ class JudgeScopeTest(support.GoTest):
         # 남은 high: 보고만 high(UNKNOWN) 1 + medium·low defer 2. 고친 high는 빠진다
         self.assertIn("남은 high 3(보고만 1 · 재현된 미수리 2)", report)
         self.assertIn("남은 high 3", self.out)
-        # 아이디어 파일: defer는 원래 심각도와 상관없이 high. 보고만 medium은 medium 그대로
-        for number, severity, original in ((3, "high", "medium"), (4, "high", "low"), (2, "medium", None), (5, "high", None)):
+        # 아이디어 파일: defer만 만들고 원래 심각도와 상관없이 high다. 보고만(02-2 medium, 02-5 high)은 파일이 없다(goldstack-v44 03)
+        for number, original in ((3, "medium"), (4, "low")):
             text = self.integration("show", f"gs/demo/integration:.goldstack/ideas/demo-02-{number}.md")
             data, body = frontmatter.split(text)
-            self.assertEqual((data["severity"], data["status"]), (severity, "open"), number)
-            if original:
-                self.assertIn(f"원래 심각도: {original}", body)
-            else:
-                self.assertNotIn("재현된 미수리", body)
-        self.assertNotIn("demo-02-1.md", self.integration("ls-tree", "-r", "--name-only", "gs/demo/integration"))
+            self.assertEqual((data["severity"], data["status"]), ("high", "open"), number)
+            self.assertIn(f"원래 심각도: {original}", body)
+        files = self.integration("ls-tree", "-r", "--name-only", "gs/demo/integration")
+        for number in (1, 2, 5):
+            self.assertNotIn(f"demo-02-{number}.md", files)
 
 
 class FixableTextTest(unittest.TestCase):
