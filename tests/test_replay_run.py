@@ -66,9 +66,9 @@ if [ -f "$here/findings.json" ]; then cat "$here/findings.json"; else echo '{"fi
 FAKE_JUDGE = r"""#!/bin/bash
 here="$(dirname "$0")"
 echo call >> "$here/judge.calls"
-cat > "$here/judge.input"
+in="$(mktemp)"; cat > "$in"; cp "$in" "$here/judge.input"
 if [ -f "$here/judge.fail" ]; then echo '분류 답이 아니다'; exit 0; fi
-"%(py)s" - "$(grep -o '/[^ `]*findings.json' "$here/judge.input" | head -n 1)" <<'PYEOF'
+"%(py)s" - "$(grep -o '/[^ `]*findings.json' "$in" | head -n 1)" <<'PYEOF'
 import json, sys
 fs = json.load(open(sys.argv[1]))["findings"]
 print(json.dumps({"decisions": [{"id": f["id"], "action": "fix" if "FIX" in f["claim"] else "report", "why": "가짜"}

@@ -348,12 +348,14 @@ else echo '{"findings": []}'; fi
 """
 
 # 가짜 판단 모델(리뷰 분류): claim에 FIX가 있으면 fix, 아니면 report. 프롬프트에서 findings.json 경로만 읽는다.
+# 가짜 판단은 모두 입력을 호출마다 자기 임시 파일(mktemp)에 받아 거기서 읽는다. 두 리뷰어의 판단 호출은 겹치므로 공용 파일을
+# 다시 읽으면 남의 입력으로 답한다(tests/test_fake_judge.py). judge.input은 시험이 읽을 사본이다.
 FAKE_REVIEW_JUDGE = """\
 here="$(dirname "$0")"
 echo "$@" >> "$here/judge.calls"
-cat > "$here/judge.input"
-if grep -q report-input.md "$here/judge.input"; then echo '남은 리뷰 지적과 검증 출력을 확인했다.'; exit 0; fi
-"$PY" - "$(grep -o '/[^ `]*findings.json' "$here/judge.input" | head -n 1)" <<'PYEOF'
+in="$(mktemp)"; cat > "$in"; cp "$in" "$here/judge.input"
+if grep -q report-input.md "$in"; then echo '남은 리뷰 지적과 검증 출력을 확인했다.'; exit 0; fi
+"$PY" - "$(grep -o '/[^ `]*findings.json' "$in" | head -n 1)" <<'PYEOF'
 import json, sys
 fs = json.load(open(sys.argv[1]))["findings"]
 print(json.dumps({"decisions": [{"id": f["id"], "action": "fix" if "FIX" in f["claim"] else "report", "why": "가짜"}
@@ -364,10 +366,10 @@ PYEOF
 FAKE_JUDGE = """\
 here="$(dirname "$0")"
 echo "$@" >> "$here/judge.calls"
-cat > "$here/judge.input"
-if grep -q report-input.md "$here/judge.input"; then echo '티켓의 변경을 integration에서 모아 검증했다.'; exit 0; fi
-cp "$here/judge.input" "$here/failure-judge.input"
-log=$(tail -n 1 "$here/judge.input")
+in="$(mktemp)"; cat > "$in"; cp "$in" "$here/judge.input"
+if grep -q report-input.md "$in"; then echo '티켓의 변경을 integration에서 모아 검증했다.'; exit 0; fi
+cp "$in" "$here/failure-judge.input"
+log=$(tail -n 1 "$in")
 echo '판단 모델의 실패 요약'
 head -n 4 "$log"
 """
