@@ -409,7 +409,7 @@ gs만 SIGKILL로 죽으면 돌던 검증은 새 세션에서 살아 남아 다�
 
 ### main 검증 건너뛰기 (`SKIP_MAIN`)
 
-첫 main 검증 차례(`revert_decision.next_step`이 `VERIFY_MAIN`을 고른 자리)에서만 `finish._same_as_verified`를 본다. 받아 온 base 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가 `_report_paths`(보고서와 `findings.paths`)뿐이면 `next_step`이 `SKIP_MAIN`을 답한다(`_verify_final`과 같은 기준이며 `.goldstack/` 전체를 허용하는 `_code_same`보다 좁다). 이때 `_read_and_step`은 검증하지 않고 `main-verify.log`에 "integration과 같은 코드(<sha>), 건너뜀"을 쓴 뒤 `main_ok`·`main_head`·phase `verified`를 통과 때와 같이 저장한다.
+첫 main 검증 차례(`revert_decision.next_step`이 `VERIFY_MAIN`을 고른 자리)에서만 `finish._same_as_verified`를 본다. 받아 온 base 끝이 병합 커밋 그대로이고 `verified_head`와 병합 커밋의 차이가 `_report_paths`(보고서와 `findings.paths`)뿐이면 `next_step`이 `SKIP_MAIN`을 답한다(`_verify_final`과 같은 기준이다). 이때 `_read_and_step`은 검증하지 않고 `main-verify.log`에 "integration과 같은 코드(<sha>), 건너뜀"을 쓴 뒤 `main_ok`·`main_head`·phase `verified`를 통과 때와 같이 저장한다.
 - `main_failed`, revert가 있거나 올린 상태, 외부 revert에는 적용하지 않는다(이미 확인한 실패를 덮지 않는다). 지난 검증 결과(`main_head`)가 남았으면(`checked_before`) 준비 실패로 phase가 `base_unverified`가 된 뒤에도 건너뛰지 않는다.
 - `verified_head`가 없거나(옛 state) diff를 못 읽으면 건너뛰지 않고 검증한다.
 
