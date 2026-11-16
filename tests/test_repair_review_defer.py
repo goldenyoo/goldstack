@@ -28,9 +28,9 @@ REVIEWED = "수리가 util.py의 빈 입력 처리를 고친 것을 코드로 �
 # 판단 모델: 첫 리뷰의 지적 중 claim에 DEFER가 있는 것은 defer, 나머지는 report로 나눈다.
 JUDGE = r'''#!/bin/bash
 here="$(dirname "$0")"
-cat > "$here/judge.input"
-if grep -q report-input.md "$here/judge.input"; then echo '남은 리뷰 지적을 확인했다.'; exit 0; fi
-"$PY" - "$(grep -o '/[^ `]*findings.json' "$here/judge.input" | head -n 1)" <<'PYEOF'
+in="$(mktemp)"; cat > "$in"; cp "$in" "$here/judge.input"
+if grep -q report-input.md "$in"; then echo '남은 리뷰 지적을 확인했다.'; exit 0; fi
+"$PY" - "$(grep -o '/[^ `]*findings.json' "$in" | head -n 1)" <<'PYEOF'
 import json, sys
 fs = json.load(open(sys.argv[1]))["findings"]
 print(json.dumps({"decisions": [{"id": f["id"], "action": "defer" if "DEFER" in f["claim"] else "report", "why": "가짜"} for f in fs]}))
