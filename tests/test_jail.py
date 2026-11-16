@@ -22,7 +22,7 @@ from gs import cli, jail
 from support import isolate_git_env, requires_landlock
 
 LANDLOCK = jail.abi() >= 1
-# 서명 설정을 타지 않고, commit 뒤 떼어 놓고 도는 `git maintenance`(시험이 기다릴 수 없는 프로세스)를 띄우지 않는다
+# 서명 설정을 타지 않는다
 QUIET_GIT = ("-c", "commit.gpgsign=false")
 
 
