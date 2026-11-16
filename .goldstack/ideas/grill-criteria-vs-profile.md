@@ -2,9 +2,9 @@
 date: "2026-11-16"
 severity: "medium"
 source: "/retro goldstack-v43"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v45"
 ---
 grill이 쓴 완료 조건이 `.goldstack/profile.md` 관례와 부딪혀 worker는 관례를, 리뷰어는 티켓 문구를 따랐다. 수정이 돌고 돌다 미해결로 병합됐다.
 

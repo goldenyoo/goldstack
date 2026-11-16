@@ -2,9 +2,9 @@
 date: "2026-11-16"
 severity: "high"
 source: "/retro goldstack-v43"
-status: "open"
+status: "taken"
 issues: []
-feature: ""
+feature: "goldstack-v45"
 ---
 worker가 "다른 티켓 범위"라고 남긴 관찰이 그 티켓 brief에도 보고서 "남은 위험"에도 가지 않는다. 그래서 고칠 곳이 정해진 결함이 main에 그대로 남는다.
 
