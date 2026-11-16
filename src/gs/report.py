@@ -884,6 +884,7 @@ def sandbox_line(r) -> str:
 
 
 def _render(r, summary: str, tail: int) -> str:
+    from . import finish  # finish가 이 모듈을 import한다
     f = r.st.finish
     merge = f.get("merge_sha", "<PR의 mergeCommit.oid>")
     summary = strip_heading(summary)  # 옛 summary.md나 다른 경로의 답도 제목을 한 번만 낸다
@@ -902,7 +903,7 @@ def _render(r, summary: str, tail: int) -> str:
     revert_first = (f"{status_line(r)} · 다음 명령: `gs go {r.name}`\n\n" if f.get("phase") == "reverted" else "")
     text = (f"# {r.name} 결과\n\n{sandbox_line(r)}{docs_notice}## Summary\n\n{revert_first}{summary}\n\n{summary_status}\n\n"
             f"## Evidence\n\n{verification_failure(r)}{evidence(r, tail)}\n"
-            f"## Merge Danger\n\n결과: {f.get('outcome', f.get('phase', '준비'))}\n\n"
+            f"## Merge Danger\n\n결과: {finish.read_outcome(f, r.base, f.get('phase', '준비'))}\n\n"
             f"PR: {f.get('url') or '아직 없음'}\n\n"
             f"integration verify: {f.get('integration_ok')}\n\n"
             f"{r.base} verify: {f.get('main_ok', '미실행')}\n\n")

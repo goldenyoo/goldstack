@@ -105,6 +105,13 @@ def read_phase(f: dict) -> str | None:
     return "main_failed" if phase == "main_retry" else phase
 
 
+def read_outcome(f: dict, base: str, default: str | None = None) -> str | None:
+    """finish의 결과 문구. 옛 `main_retry`가 남긴 "다시 검증 중"은 `read_phase`처럼 `main_failed`의 문구로 읽는다."""
+    if f.get("phase") == "main_retry":
+        return f"{base} 검증 실패, 병합 커밋 revert 중"
+    return f.get("outcome", default)
+
+
 def _save(r, **fields) -> None:
     r.st.finish.update(fields)
     r.save()
@@ -1059,7 +1066,7 @@ def _postmerge(r) -> bool:
     첫 검증 차례에 base가 integration에서 통과한 코드 그대로면(`SKIP_MAIN`) 검증하지 않고 `main-verify.log`에 건너뜀을 남긴 뒤 verified다."""
     f = r.st.finish
     if (phase := read_phase(f)) != f["phase"]:  # 옛 재시도 차례. 확인한 실패로 저장한다
-        _save(r, phase=phase, outcome=f"{r.base} 검증 실패, 병합 커밋 revert 중")
+        _save(r, phase=phase, outcome=read_outcome(f, r.base))
     sha, pushed = f.get("revert_sha"), f.get("revert_head")
     facts = revert_decision.Facts(phase=f["phase"], direct_push=r.cfg.git.direct_push, has_revert=bool(sha),
                                   revert_head_matches=pushed == sha, revert_pushed=bool(pushed),

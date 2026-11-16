@@ -428,6 +428,10 @@ class BaseFailureTest(support.GoTest):
         report = (wt / ".goldstack/work/demo/report.md").read_text()
         self.assertIn("마무리: main_failed · main 검증 실패 · revert push 안 됨", report)
         self.assertIn("### 검증 실패\n\n검증: `main`", report)
+        self.assertIn("결과: main 검증 실패, 병합 커밋 revert 중", report)
+        self.assertIn("■ 마무리: main 검증 실패, 병합 커밋 revert 중", out)
+        self.assertNotIn("다시 검증 중", report + out + err)
+        self.assertEqual(json.loads(state_path.read_text())["finish"]["phase"], "main_retry")  # 저장은 _postmerge가 한다
         self.assertIn("file_01", self.remote_files())  # 준비 실패는 revert하지 않는다
 
         blocked.unlink()
