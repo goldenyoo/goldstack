@@ -2,6 +2,9 @@
 
 모델에는 파일 경로만 넘긴다. 모델의 문장은 판단이고, 상태·원본 검증 출력·revert 명령은
 스크립트가 보존한다. 모델 호출 실패도 보고서에 남기며 검증 결과를 대신하지 않는다.
+코드를 읽지 않는 사람이 승인·보류·되돌리기를 고르도록, 제목·샌드박스 줄·문서 미반영 바로 다음에
+`## 판정 카드`를 붙인다(verdict_card). 판단 모델을 부르지 않고 이번 실행 state에 있는 사실만 적는다.
+없는 사실은 `확인 불가`다. `gs go` 끝 출력도 요약 줄 다음에 같은 카드를 낸다.
 마무리 전체 검증 실패에는 실패 줄·로그 경로와 파일이 겹치는 후보 티켓(추정)을 붙인다.
 수리한 티켓은 티켓별 결과의 이유 칸에 그 사실과 결과가 있다(state.repair_summary).
 "gs 검증별 측정" 표는 검증의 재시도 하나가 한 줄이다. 열 뜻: 티켓 시도 = 그때의 티켓 worker 시도, 재시도 = 한 검증 안의 재시도,
@@ -980,6 +983,12 @@ def sandbox_line(r) -> str:
     return f"샌드박스: {sandbox.LANDLOCK_LABEL}\n\n" if getattr(box, "landlock", False) else ""
 
 
+def verdict_card(r) -> str:
+    """승인·보류·되돌리기 카드. 모델 없이 state의 사실만 적고, 없는 사실은 `확인 불가`다. 본문은 verdict.py."""
+    from . import verdict
+    return verdict.verdict_card(r)
+
+
 def _render(r, summary: str, tail: int) -> str:
     from . import finish  # finish가 이 모듈을 import한다
     f = r.st.finish
@@ -998,7 +1007,8 @@ def _render(r, summary: str, tail: int) -> str:
     docs_notice = "".join(f"문서 미반영: {tid}\n\n" for tid in missing_docs)
     # 모델 요약은 병합 전에 쓰여 revert를 모른다. 상태와 다음 명령은 코드가 맨 위에 넣는다.
     revert_first = (f"{status_line(r)} · 다음 명령: `gs go {r.name}`\n\n" if f.get("phase") == "reverted" else "")
-    text = (f"# {r.name} 결과\n\n{sandbox_line(r)}{docs_notice}## Summary\n\n{revert_first}{summary}\n\n{summary_status}\n\n"
+    text = (f"# {r.name} 결과\n\n{sandbox_line(r)}{docs_notice}{verdict_card(r)}"
+            f"## Summary\n\n{revert_first}{summary}\n\n{summary_status}\n\n"
             f"## Evidence\n\n{verification_failure(r)}{evidence(r, tail)}\n"
             f"## Merge Danger\n\n결과: {finish.read_outcome(f, r.base, f.get('phase', '준비'))}\n\n"
             f"PR: {f.get('url') or '아직 없음'}\n\n"

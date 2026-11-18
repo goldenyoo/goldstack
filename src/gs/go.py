@@ -3591,6 +3591,7 @@ def _counts(r: Run, names: dict[str, str]) -> str:
 
 
 def _summary(r: Run, url: str | None) -> None:
+    """끝 출력. 마지막은 판정 카드다(report.verdict_card). 종료 코드와 finish.phase는 바꾸지 않는다."""
     if r.no_merge:
         return _only_summary(r)
     say(_counts(r, LABEL))
@@ -3600,6 +3601,7 @@ def _summary(r: Run, url: str | None) -> None:
     if remaining := report.remaining_line(r):  # 보이기만 한다: 종료 코드·finish.phase는 그대로(spec 2-2)
         say(f"■ {remaining}")
     say(f"■ PR: {url or '없음'}")
+    say(report.verdict_card(r).rstrip("\n"))
 
 
 def _only_summary(r: Run) -> None:
@@ -3611,6 +3613,8 @@ def _only_summary(r: Run) -> None:
     say("■ PR: 만들지 않음")
     if not aborted:  # 중단은 이미 다음 gs go를 말했다
         say(f"■ --only 범위만 돌았다: 병합하지 않음 → 이어서 gs go {r.name}")
+    # 지난 finish로 승인·되돌리기를 말하지 않는다. verdict_card가 no_merge를 본다.
+    say(report.verdict_card(r).rstrip("\n"))
 
 
 def _sandbox_aborted(st: state.State) -> bool:
