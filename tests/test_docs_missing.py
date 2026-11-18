@@ -35,7 +35,8 @@ class DocsMissingReportTest(unittest.TestCase):
         self.ticket("07", state.FAILED, ["docs/guide.md"])
         self.ticket("08", state.MERGED, ["src/gs/report.py"])
         text = self.render()
-        self.assertIn("# demo 결과\n\n문서 미반영: 07\n\n## Summary", text)
+        self.assertTrue(text.startswith("# demo 결과\n\n문서 미반영: 07\n\n## 판정 카드\n"), text[:400])
+        self.assertIn("\n## Summary\n\n요약\n", text)
 
     def test_docs_and_version_ticket_skipped_while_other_ticket_merged(self):
         self.ticket("07", state.SKIPPED, ["docs/guide.md", "CHANGELOG.md", "pyproject.toml"])

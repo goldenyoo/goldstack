@@ -543,15 +543,17 @@ class LandlockGoTest(support.GoTest):
     def test_report_head_line_in_landlock_mode(self):
         code, out, err = self.go("--only", "01")  # seam(GS_WORKER_CMD, GS_REVIEWER_CMD)은 가두지 않는다
         self.assertEqual(code, 0, out + err)
-        self.assertTrue(self.final_report().startswith(f"# demo 결과\n\n{LANDLOCK_LINE}\n\n## Summary\n\n"),
-                        self.final_report()[:300])
+        text = self.final_report()
+        self.assertTrue(text.startswith(f"# demo 결과\n\n{LANDLOCK_LINE}\n\n## 판정 카드\n"), text[:400])
+        self.assertIn("\n## Summary\n\n", text)
 
     def test_report_has_no_head_line_in_os_mode(self):
         (self.repo / ".goldstack" / "local.env").unlink()
         code, out, err = self.go("--only", "01")
         self.assertEqual(code, 0, out + err)
         text = self.final_report()
-        self.assertTrue(text.startswith("# demo 결과\n\n## Summary\n\n"), text[:300])
+        self.assertTrue(text.startswith("# demo 결과\n\n## 판정 카드\n"), text[:400])
+        self.assertIn("\n## Summary\n\n", text)
         self.assertNotIn("샌드박스:", text)
 
 

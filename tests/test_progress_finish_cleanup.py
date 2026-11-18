@@ -79,7 +79,7 @@ class HerdrErrorTest(test_notify.FakeServerMixin, unittest.TestCase):
         self.assertEqual(code, 1, out + err)
         self.assertIn("gs go: herdr 오류: no_session: herdr 세션 없음", err)
         self.assertIn("■ 요약: 대기 1", out)
-        self.assertTrue(out.strip().splitlines()[-1].startswith("■ PR:"), out)
+        self.assertGreater(out.index("## 판정 카드"), out.rindex("■ PR:"), out)
         self.assertEqual(fake.texts(), ["❌ demo · 미완료 · 티켓 0/1 · 보고서 .goldstack/work/demo/report.md"])
         self.assertTrue(state.load(self.rundir, "demo").finished_at)
 

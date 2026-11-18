@@ -257,13 +257,16 @@ class FindingStatusTest(unittest.TestCase):
             {**finding(), "action": review.REPORT}, finding(rereview=review.UNCHECKED, rereview_reason="한도")]}
         r.st.ticket("01").second_review = review.record("agy", f"{review.LIMIT}: 상한")
         lines = self.run_summary(go._summary, r, "https://example.com/pr/1")
-        self.assertEqual([line for line in lines if "high" in line or "건너뛴" in line],
+        banners = [line for line in lines if line.startswith("■")]
+        self.assertEqual([line for line in banners if "high" in line or "건너뛴" in line],
                          ["■ 남은 high 2(보고만 1 · 확인 못 함 1) · 건너뛴 리뷰: 01"])
-        self.assertEqual(lines[-1], "■ PR: https://example.com/pr/1")
-        self.assertTrue(lines[-2].startswith("■ 남은 high"))
+        self.assertEqual(banners[-1], "■ PR: https://example.com/pr/1")
+        self.assertTrue(banners[-2].startswith("■ 남은 high"))
+        self.assertTrue(lines[-1].startswith("## 판정 카드"))
         r.no_merge = True
         only = self.run_summary(go._summary, r, None)
-        self.assertFalse([line for line in only if "high" in line or "건너뛴" in line], only)
+        self.assertFalse([line for line in only if line.startswith("■") and ("high" in line or "건너뛴" in line)], only)
+        self.assertTrue(only[-1].startswith("## 판정 카드"))
         r.st.ticket("01").review = {}
         r.st.ticket("01").second_review = {}
         r.no_merge = False
@@ -316,8 +319,9 @@ class FindingStatusFlowTest(test_rereview.Base):
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.run_state().finish["phase"], "verified")
         lines = out.strip().splitlines()
-        self.assertEqual(lines[-2], "■ 남은 high 2(보고만 2) · 건너뛴 리뷰: 04")
-        self.assertTrue(lines[-1].startswith("■ PR:"), lines[-1])
+        pr = next(i for i, line in enumerate(lines) if line.startswith("■ PR:"))
+        self.assertEqual(lines[pr - 1], "■ 남은 high 2(보고만 2) · 건너뛴 리뷰: 04")
+        self.assertEqual(lines[pr + 1], "## 판정 카드")
         self.assertRegex(self.final_report(), r"마무리: verified · .* · 남은 high 2\(보고만 2\) · 건너뛴 리뷰: 04\n")
 
 

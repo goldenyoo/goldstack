@@ -41,9 +41,15 @@ class OnlyTest(support.GoTest):
     def base_report(self):
         return sh(self.remote, "git", "show", f"{self.BASE}:{REPORT}")
 
+    def assert_only_tail(self, out):
+        """--only 안내 줄이 있고, 그 뒤에 판정 카드가 온다."""
+        lines = out.strip().splitlines()
+        self.assertIn(LINE, lines)
+        self.assertLess(lines.index(LINE), lines.index("## 판정 카드"))
+
     def assert_stopped(self, out, tip, gh=()):
-        """멈춤의 공통 증거: 끝 줄, 원격 base 그대로, gs가 부른 gh 없음, 원격에 올린 gs 브랜치 없음."""
-        self.assertEqual(out.strip().splitlines()[-1], LINE)
+        """멈춤의 공통 증거: --only 안내와 판정 카드, 원격 base 그대로, gs가 부른 gh 없음, 원격에 올린 gs 브랜치 없음."""
+        self.assert_only_tail(out)
         self.assertEqual(self.tip(), tip)
         self.assertEqual(self.lines("gh.log"), list(gh))
         self.assertEqual(sh(self.remote, "git", "branch", "--list", "gs/demo/*"), "")
@@ -532,7 +538,7 @@ class OnlyTest(support.GoTest):
             code, out, err = self.go("--only", "09")
         self.assertEqual(code, 1, out + err)
         self.assertIn("git 오류: boom", err)
-        self.assertEqual(out.strip().splitlines()[-1], LINE)
+        self.assert_only_tail(out)
         self.assert_reads_unmerged(out)
         self.assertEqual(self.finish_state()["phase"], "verified")
 
@@ -600,7 +606,7 @@ class OnlyTest(support.GoTest):
             code, out, err = self.go("--only", "09")
         self.assertEqual(code, 1, out + err)
         self.assertIn("git 오류: boom", err)
-        self.assertEqual(out.strip().splitlines()[-1], LINE)
+        self.assert_only_tail(out)
         self.assert_reads_unmerged(out)
         self.assertEqual(self.finish_state()["phase"], "verified")
 

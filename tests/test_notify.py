@@ -179,7 +179,7 @@ class GoNotifyTest(FakeServerMixin, unittest.TestCase):
         path, body = fake.requests[0]
         self.assertEqual((path, body["chat_id"]), (f"/bot{TOKEN}/sendMessage", "42"))
         self.assertNotIn(TOKEN, out + err)
-        self.assertTrue(out.strip().splitlines()[-1].startswith("■ PR:"))  # 요약 뒤에 보낸다(출력 없음)
+        self.assertGreater(out.index("## 판정 카드"), out.index("■ PR:"))  # 카드는 요약 뒤다. 알림은 출력하지 않는다
 
     def test_failure_message(self):
         fake = self.serve()
