@@ -52,8 +52,8 @@ large = "opus/xhigh"
 
 [tiers.codex]
 small = "gpt-6-luna/medium"
-medium = "gpt-6-astra/high"
-large = "gpt-6-astra/xhigh"
+medium = "gpt-6.2-astra/high"
+large = "gpt-6.2-astra/xhigh"
 
 [tiers.agy]
 small = "gemini-3.8-flash-medium"
@@ -88,8 +88,8 @@ OLD_DEFAULTS = {
     "models.agy": ("gemini-4-argon-high",),
     "tiers.agy.medium": ("gemini-4-argon-medium",),
     "tiers.agy.large": ("gemini-4-argon-high",),
-    "tiers.codex.medium": ("gpt-6.1-sol/medium",),
-    "tiers.codex.large": ("gpt-6.1-sol/high",),
+    "tiers.codex.medium": ("gpt-6-astra/high", "gpt-6.1-sol/medium"),
+    "tiers.codex.large": ("gpt-6-astra/xhigh", "gpt-6.1-sol/high"),
 }
 
 
