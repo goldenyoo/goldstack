@@ -33,7 +33,7 @@ class TiersTest(unittest.TestCase):
         self.assertEqual(problems, [])
         expected = {
             'claude': [('sonnet', 'medium'), ('sonnet', 'high'), ('opus', 'xhigh')],
-            'codex': [('gpt-6-luna', 'medium'), ('gpt-6-astra', 'high'), ('gpt-6-astra', 'xhigh')],
+            'codex': [('gpt-6-luna', 'medium'), ('gpt-6.2-astra', 'high'), ('gpt-6.2-astra', 'xhigh')],
             'agy': [('gemini-3.8-flash-medium', ''), ('gemini-4-carbon-medium', ''), ('gemini-4-carbon-high', '')],
         }
         actual_repo, problems = config.load(Path(__file__).resolve().parents[1])

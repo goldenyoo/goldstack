@@ -13,8 +13,8 @@ OLD_TO_NEW = {
     "models.agy": ("gemini-4-argon-high", "gemini-4-carbon-high"),
     "tiers.agy.medium": ("gemini-4-argon-medium", "gemini-4-carbon-medium"),
     "tiers.agy.large": ("gemini-4-argon-high", "gemini-4-carbon-high"),
-    "tiers.codex.medium": ("gpt-6.1-sol/medium", "gpt-6-astra/high"),
-    "tiers.codex.large": ("gpt-6.1-sol/high", "gpt-6-astra/xhigh"),
+    "tiers.codex.medium": ("gpt-6-astra/high", "gpt-6.2-astra/high"),
+    "tiers.codex.large": ("gpt-6-astra/xhigh", "gpt-6.2-astra/xhigh"),
 }
 
 
@@ -27,6 +27,17 @@ def old_config(text):
 class HistoryTest(unittest.TestCase):
     setUp = test_tiers.TiersTest.setUp
     load = test_tiers.TiersTest.load
+
+    def test_older_and_retired_codex_defaults_both_upgrade_to_current(self):
+        defaults = tomllib.loads(self.default)["tiers"]["codex"]
+        for key, new in (("tiers.codex.medium", defaults["medium"]), ("tiers.codex.large", defaults["large"])):
+            self.assertEqual(config.OLD_DEFAULTS[key][0], OLD_TO_NEW[key][0])  # 6.2 직전 기본값이 맨 앞이다
+            for old in config.OLD_DEFAULTS[key]:
+                with self.subTest(key=key, old=old):
+                    text = self.default.replace(new, old)
+                    cfg, problems = self.load(text)
+                    self.assertEqual(problems, [])
+                    self.assertEqual(config.old_model_defaults(cfg), {key: new})
 
     def test_history_keys_exist_and_exclude_current_defaults(self):
         defaults = tomllib.loads(self.default)
@@ -49,7 +60,7 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(problems, [])
         self.assertEqual(config.old_model_defaults(cfg), {k: v[1] for k, v in OLD_TO_NEW.items()})
         # 같은 모델이라도 effort가 다르면 사용자 설정이다. 다른 키의 옛 값도 대상이 아니다.
-        text = old_config(self.default).replace('gpt-6.1-sol/medium', 'gpt-6.1-sol/xhigh')
+        text = old_config(self.default).replace('gpt-6-astra/high', 'gpt-6-astra/max')
         text = text.replace('gemini-4-argon-medium', 'gemini-4-argon-high')
         cfg, problems = self.load(text)
         self.assertEqual(problems, [])
@@ -85,7 +96,7 @@ class DoctorDefaultsTest(unittest.TestCase):
         self.path.write_text(old_config(self.original))
         for known in (True, False):
             with self.subTest(known=known), \
-                    mock.patch('gs.models.codex_models', return_value={'gpt-6-astra'} if known else None) as codex, \
+                    mock.patch('gs.models.codex_models', return_value={'gpt-6.2-astra'} if known else None) as codex, \
                     mock.patch('gs.models.agy_models', return_value={'gemini-4-carbon-high', 'gemini-4-carbon-medium'} if known else None) as agy:
                 suffix = '' if known else ' (목록 확인 못 함)'
                 self.assertEqual(self.rows(), [f'모델 기본값  {key}가 옛 기본값이다 → {key} = "{new}"{suffix}'
@@ -124,8 +135,8 @@ class DoctorDefaultsTest(unittest.TestCase):
         with mock.patch('gs.models.codex_models', return_value=None), mock.patch('gs.models.agy_models', return_value=None):
             code, out = self.command('doctor', '--write')
         self.assertEqual(code, 0, out)
-        self.assertIn('모델 기본값  tiers.codex.large가 옛 기본값이다 → tiers.codex.large = "gpt-6-astra/xhigh" (목록 확인 못 함)\n', out)
-        self.assertIn('tiers.codex.large: "gpt-6.1-sol/high" → "gpt-6-astra/xhigh" (옛 기본값)\n', out)
+        self.assertIn('모델 기본값  tiers.codex.large가 옛 기본값이다 → tiers.codex.large = "gpt-6.2-astra/xhigh" (목록 확인 못 함)\n', out)
+        self.assertIn('tiers.codex.large: "gpt-6-astra/xhigh" → "gpt-6.2-astra/xhigh" (옛 기본값)\n', out)
         self.assertEqual(self.path.read_text(), self.original)  # GitHub 원격이 아니어도 모델 칸은 쓴다(04)
 
 

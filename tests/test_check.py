@@ -111,9 +111,9 @@ class CheckTest(unittest.TestCase):
         self.write("01-a.md", ticket("01"))
         path = self.repo / config.CONFIG_PATH
         path.write_text(path.read_text().replace('codex = ""', 'codex = "missing-worker/high"')
-                        .replace('gpt-6-astra/xhigh', 'missing-large/xhigh'))
+                        .replace('gpt-6.2-astra/xhigh', 'missing-large/xhigh'))
         cache = self.repo / "models_cache.json"
-        cache.write_text(json.dumps({"models": [{"slug": "gpt-6-luna"}, {"slug": "gpt-6-astra"}]}))
+        cache.write_text(json.dumps({"models": [{"slug": "gpt-6-luna"}, {"slug": "gpt-6.2-astra"}]}))
         fake = self.bin / "agy"
         fake.write_text(f'#!/bin/sh\n: > "{self.repo / "agy-called"}"\nexit 1\n')
         with mock.patch.dict(os.environ, CODEX_HOME=str(self.repo), GS_AGY=str(fake)):
@@ -144,7 +144,7 @@ class CheckTest(unittest.TestCase):
         code, out, err = self.run_check()
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(self.model_lines(out), [
-            "01 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6-astra/high · 재리뷰 codex gpt-6-astra/high",
+            "01 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6.2-astra/high · 재리뷰 codex gpt-6.2-astra/high",
             "02 small 구현 codex gpt-6-luna/medium · 수정 codex gpt-6-luna/medium · 수리 codex gpt-6-luna/medium · 첫 리뷰 claude sonnet/high · 재리뷰 claude sonnet/high",
         ])
         self.assertLess(out.index("지금 시작 가능:"), out.index("01 large"))
@@ -167,7 +167,7 @@ class CheckTest(unittest.TestCase):
         code, out, err = self.run_check()
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(self.model_lines(out), [
-            "01 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6-astra/xhigh + agy gemini-4-carbon-high · 재리뷰 codex gpt-6-astra/high + agy gemini-4-carbon-medium",
+            "01 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6.2-astra/xhigh + agy gemini-4-carbon-high · 재리뷰 codex gpt-6.2-astra/high + agy gemini-4-carbon-medium",
         ])
 
     def test_actual_models_only_selected_tickets(self):
@@ -176,7 +176,7 @@ class CheckTest(unittest.TestCase):
         code, out, err = self.run_check("--only", "02")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(self.model_lines(out), [
-            "02 small 구현 claude sonnet/medium · 수정 claude sonnet/medium · 수리 claude sonnet/medium · 첫 리뷰 codex gpt-6-astra/xhigh · 재리뷰 codex gpt-6-astra/high",
+            "02 small 구현 claude sonnet/medium · 수정 claude sonnet/medium · 수리 claude sonnet/medium · 첫 리뷰 codex gpt-6.2-astra/xhigh · 재리뷰 codex gpt-6.2-astra/high",
         ])
 
     def test_worker_display_matches_adapter_for_all_families(self):

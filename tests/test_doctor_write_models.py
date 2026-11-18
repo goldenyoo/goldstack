@@ -20,7 +20,7 @@ from test_model_defaults import OLD_TO_NEW, old_config
 
 OLD = {"git.merge_method": "merge", **{key: old for key, (old, _) in OLD_TO_NEW.items()}}
 NEW = {"git.merge_method": "squash", **{key: new for key, (_, new) in OLD_TO_NEW.items()}}
-CODEX_NEW = {"gpt-6-luna", "gpt-6-astra"}
+CODEX_NEW = {"gpt-6-luna", "gpt-6.2-astra"}
 AGY_NEW = {"gemini-3.8-flash-medium", "gemini-4-carbon-medium", "gemini-4-carbon-high"}
 
 # 머리 주석·주석·다른 문자열에 옛 값을 두어 값 자리만 바뀌는지 본다. `<<'키'>>`는 바꾸기 전 literal string이다.
@@ -234,14 +234,14 @@ class DoctorWriteModelsTest(unittest.TestCase):
         self.assertEqual(cfg.git, config.GitConfig("upstream", "release/stable", "squash", False, True))
         self.assertEqual((cfg.models.judge, cfg.models.agy), ("judge-model", "gemini-4-carbon-high"))
         self.assertEqual({tier: config.model_setting(cfg, f"tiers.codex.{tier}") for tier in config.TIERS},
-                         {"small": "gpt-6-luna/medium", "medium": "gpt-6-astra/high", "large": "gpt-6-astra/xhigh"})
+                         {"small": "gpt-6-luna/medium", "medium": "gpt-6.2-astra/high", "large": "gpt-6.2-astra/xhigh"})
         self.assertEqual(changes(out), [
             change("git.merge_method", "merge", "squash", "squash만 허용(gs 지원 방식 중)"),
             change("git.direct_push", True, False, "release/stable 직접 push 금지"),
             change("git.wait_checks", False, True, "build, test"),
             change("models.agy", *OLD_TO_NEW["models.agy"]),
-            change("tiers.codex.medium", *OLD_TO_NEW["tiers.codex.medium"]),
-            change("tiers.codex.large", *OLD_TO_NEW["tiers.codex.large"]),
+            change("tiers.codex.medium", "gpt-6.1-sol/medium", OLD_TO_NEW["tiers.codex.medium"][1]),  # 두 단계 전 기본값
+            change("tiers.codex.large", "gpt-6.1-sol/high", OLD_TO_NEW["tiers.codex.large"][1]),
         ])
 
 
@@ -271,11 +271,11 @@ class InitModelsTest(unittest.TestCase):
 
     def test_history_fallback_per_family(self):
         old_agy = {"gemini-3.8-flash-medium", "gemini-4-argon-medium", "gemini-4-argon-high"}
-        lines, text = self.init({"gpt-6-luna", "gpt-6.1-sol"}, old_agy)
+        lines, text = self.init({"gpt-6-luna", "gpt-6-astra"}, old_agy)  # 6.2가 빠진 낡은 캐시
         self.assertEqual(text, old_config(self.default))
         self.assertEqual(lines, [
-            "tiers.codex.medium: gpt-6-astra/high가 이 머신 codex 목록에 없어 gpt-6.1-sol/medium로 적었다",
-            "tiers.codex.large: gpt-6-astra/xhigh가 이 머신 codex 목록에 없어 gpt-6.1-sol/high로 적었다",
+            "tiers.codex.medium: gpt-6.2-astra/high가 이 머신 codex 목록에 없어 gpt-6-astra/high로 적었다",
+            "tiers.codex.large: gpt-6.2-astra/xhigh가 이 머신 codex 목록에 없어 gpt-6-astra/xhigh로 적었다",
             "models.agy: gemini-4-carbon-high가 이 머신 agy 목록에 없어 gemini-4-argon-high로 적었다",
             "tiers.agy.medium: gemini-4-carbon-medium가 이 머신 agy 목록에 없어 gemini-4-argon-medium로 적었다",
             "tiers.agy.large: gemini-4-carbon-high가 이 머신 agy 목록에 없어 gemini-4-argon-high로 적었다",
@@ -289,6 +289,15 @@ class InitModelsTest(unittest.TestCase):
         self.assertEqual(text, expected)
         self.assertEqual(lines, [f"{key}: {OLD_TO_NEW[key][1]}가 이 머신 agy 목록에 없어 {OLD_TO_NEW[key][0]}로 적었다"
                                  for key in ("models.agy", "tiers.agy.medium", "tiers.agy.large")])
+
+    def test_codex_falls_back_past_a_missing_astra_to_sol(self):
+        lines, text = self.init({"gpt-6-luna", "gpt-6.1-sol"}, AGY_NEW)
+        self.assertEqual(text, self.default.replace("gpt-6.2-astra/high", "gpt-6.1-sol/medium")
+                         .replace("gpt-6.2-astra/xhigh", "gpt-6.1-sol/high"))
+        self.assertEqual(lines, [
+            "tiers.codex.medium: gpt-6.2-astra/high가 이 머신 codex 목록에 없어 gpt-6.1-sol/medium로 적었다",
+            "tiers.codex.large: gpt-6.2-astra/xhigh가 이 머신 codex 목록에 없어 gpt-6.1-sol/high로 적었다",
+        ])
 
     def test_history_is_read_most_recent_first(self):
         history = ("gemini-4-argon-high", "gemini-3-old-high")
@@ -304,8 +313,8 @@ class InitModelsTest(unittest.TestCase):
         lines, text = self.init({"gpt-6-luna"}, {"gemini-4-carbon-high"})
         self.assertEqual(text, self.default)
         self.assertEqual(lines, [
-            "경고: tiers.codex.medium: gpt-6-astra/high가 이 머신 codex 목록에 없다. 직접 고친다",
-            "경고: tiers.codex.large: gpt-6-astra/xhigh가 이 머신 codex 목록에 없다. 직접 고친다",
+            "경고: tiers.codex.medium: gpt-6.2-astra/high가 이 머신 codex 목록에 없다. 직접 고친다",
+            "경고: tiers.codex.large: gpt-6.2-astra/xhigh가 이 머신 codex 목록에 없다. 직접 고친다",
             "경고: tiers.agy.small: gemini-3.8-flash-medium가 이 머신 agy 목록에 없다. 직접 고친다",
             "경고: tiers.agy.medium: gemini-4-carbon-medium가 이 머신 agy 목록에 없다. 직접 고친다",
         ])
@@ -314,8 +323,8 @@ class InitModelsTest(unittest.TestCase):
         self.assertEqual(text, self.default)
         self.assertEqual(lines, [
             "경고: tiers.codex.small: gpt-6-luna/medium가 이 머신 codex 목록에 없다. 직접 고친다",
-            "경고: tiers.codex.medium: gpt-6-astra/high가 이 머신 codex 목록에 없다. 직접 고친다",
-            "경고: tiers.codex.large: gpt-6-astra/xhigh가 이 머신 codex 목록에 없다. 직접 고친다",
+            "경고: tiers.codex.medium: gpt-6.2-astra/high가 이 머신 codex 목록에 없다. 직접 고친다",
+            "경고: tiers.codex.large: gpt-6.2-astra/xhigh가 이 머신 codex 목록에 없다. 직접 고친다",
             "경고: models.agy: gemini-4-carbon-high가 이 머신 agy 목록에 없다. 직접 고친다",
             "경고: tiers.agy.small: gemini-3.8-flash-medium가 이 머신 agy 목록에 없다. 직접 고친다",
             "경고: tiers.agy.medium: gemini-4-carbon-medium가 이 머신 agy 목록에 없다. 직접 고친다",

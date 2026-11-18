@@ -460,8 +460,8 @@ csv-export: 티켓 3장, 오류 0, 경고 0
 실측(지난 실행): small 9분(14) · medium 38분(14) · large 69분(13)
 공통 모델: 판단 claude opus · 실패 요약 claude haiku
 01 small 구현 codex gpt-6-luna/medium · 수정 codex gpt-6-luna/medium · 수리 codex gpt-6-luna/medium · 첫 리뷰 claude opus/xhigh · 재리뷰 claude sonnet/high
-02 medium 구현 claude sonnet/high · 수정 claude sonnet/high · 수리 claude sonnet/high · 첫 리뷰 codex gpt-6-astra/xhigh · 재리뷰 codex gpt-6-astra/high
-03 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6-astra/xhigh + agy gemini-4-carbon-high · 재리뷰 codex gpt-6-astra/high + agy gemini-4-carbon-medium
+02 medium 구현 claude sonnet/high · 수정 claude sonnet/high · 수리 claude sonnet/high · 첫 리뷰 codex gpt-6.2-astra/xhigh · 재리뷰 codex gpt-6-astra/high
+03 large 구현 claude opus/xhigh · 수정 claude opus/xhigh · 수리 claude opus/xhigh · 첫 리뷰 codex gpt-6.2-astra/xhigh + agy gemini-4-carbon-high · 재리뷰 codex gpt-6-astra/high + agy gemini-4-carbon-medium
 ```
 티켓이 있고 spec에 `### 교차 검토` 제목이 있는데 그 절에 실제 표 행(2–5번째 칸이 모두 찬 행)도 `교차 검토 못 함:` 줄도 없으면 `gs check`가 경고한다: `spec §7 교차 검토 기록이 없다(…)`. 템플릿의 자리표시 행만 있어도 같다. 그 제목이 없는 옛 spec은 조용하다. 경고라 막지는 않으니 교차 검토를 돌려 결과를 적거나, 못 돌렸으면 이유를 `교차 검토 못 함: <이유>`로 적는다.
 
@@ -508,8 +508,8 @@ large = "opus/xhigh"
 
 [tiers.codex]
 small = "gpt-6-luna/medium"
-medium = "gpt-6-astra/high"
-large = "gpt-6-astra/xhigh"
+medium = "gpt-6.2-astra/high"
+large = "gpt-6.2-astra/xhigh"
 
 [tiers.agy]
 small = "gemini-3.8-flash-medium"   # agy는 모델 이름에 effort가 들어 있어 뒤를 생략했다

@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 미출시
+
+- 모델 기본값을 바꿨다: `[tiers.codex]` medium·large가 `gpt-6.2-astra/high`·`xhigh`(effort는 그대로). small(`gpt-6-luna/medium`)·agy·claude 칸은 그대로다. 이 레포 config도 같다. `gpt-6-astra`는 옛 기본값 이력의 맨 앞에 들어가서 `gs doctor`·`gs check`가 옛 기본값으로 알리고, `gs init`은 이 머신 목록에 6.2가 없으면 `gpt-6-astra`, 그것도 없으면 `gpt-6.1-sol`로 적는다.
+
 ## 0.2.28 — 2026-11-16
 
 ### goldstack-v45

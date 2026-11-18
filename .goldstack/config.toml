@@ -31,8 +31,8 @@ large = "opus/xhigh"
 
 [tiers.codex]
 small = "gpt-6-luna/medium"
-medium = "gpt-6-astra/high"
-large = "gpt-6-astra/xhigh"
+medium = "gpt-6.2-astra/high"
+large = "gpt-6.2-astra/xhigh"
 
 [tiers.agy]
 small = "gemini-4-carbon-high"
